@@ -317,6 +317,103 @@ impl Model {
         Some(pts)
     }
 
+    /// [`composed_iv_weighted`][Self::composed_iv_weighted] split by
+    /// physical return rail, for per-rail current attribution:
+    ///
+    /// * `.0` — the GND-referenced group (`kd·pulldown + gnd_clamp`) in
+    ///   PIN volts, for a branch pin→GND.
+    /// * `.1` — the VCC-referenced group (`ku·pullup + power_clamp`) in
+    ///   **branch volts `v = V_pin − V_rail`** (= −v_table, since those
+    ///   tables are Vcc-relative), for a branch pin→VCC. Hanging it on
+    ///   the actual rail node both books the sourced current against the
+    ///   rail and lets the table track rail droop — the Vcc-relative
+    ///   definition IS "relative to the rail", not to a constant.
+    ///
+    /// Each side is None when nothing in its group conducts. The two
+    /// groups sum to the single-branch composite when the rail sits at
+    /// the file's nominal Vcc.
+    pub fn composed_iv_split(
+        &self,
+        ku: f64,
+        kd: f64,
+        corner: Corner,
+    ) -> (Option<Vec<(f64, f64)>>, Option<Vec<(f64, f64)>>) {
+        // BOTH groups are tabulated over the FULL composite breakpoint
+        // span (all four elements, in pin volts). A group's own tables
+        // may end mid-span — e.g. a GND clamp stops at (0V, 0A) — and a
+        // table that ends where the OTHER group keeps operating would
+        // leave the solver extrapolating through the clamp's knee slope,
+        // injecting phantom current at real operating points. Evaluating
+        // every element with its own clamp-flat semantics (`iv_at`) over
+        // the shared span keeps "off beyond its table" honest, and solver
+        // extrapolation only engages beyond the characterized range —
+        // exactly as for the single-branch composite.
+        let mut breakpoints: Vec<f64> = Vec::new();
+        for (table, vcc_relative) in [
+            (self.pulldown.as_ref(), false),
+            (self.gnd_clamp.as_ref(), false),
+            (self.pullup.as_ref(), true),
+            (self.power_clamp.as_ref(), true),
+        ] {
+            let Some(table) = table else { continue };
+            for (v, _) in table.points(corner) {
+                let v_pin = if vcc_relative {
+                    match self.vcc(corner) {
+                        Some(vcc) => vcc - v,
+                        None => continue,
+                    }
+                } else {
+                    *v
+                };
+                breakpoints.push(v_pin);
+            }
+        }
+        if breakpoints.is_empty() {
+            return (None, None);
+        }
+        breakpoints.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        breakpoints.dedup_by(|a, b| (*a - *b).abs() < 1e-12);
+
+        let gnd_active = self.gnd_clamp.is_some() || (kd != 0.0 && self.pulldown.is_some());
+        let vcc_active = self.power_clamp.is_some() || (ku != 0.0 && self.pullup.is_some());
+
+        let gnd = gnd_active.then(|| {
+            breakpoints
+                .iter()
+                .map(|&v_pin| {
+                    let mut i = self
+                        .iv_at(IvElement::GndClamp, corner, v_pin)
+                        .unwrap_or(0.0);
+                    if kd != 0.0 {
+                        i += kd
+                            * self.iv_at(IvElement::Pulldown, corner, v_pin).unwrap_or(0.0);
+                    }
+                    (v_pin, i)
+                })
+                .collect::<Vec<_>>()
+        });
+        // VCC group in branch volts v = V_pin − Vcc (rail-referenced).
+        let vcc = match (vcc_active, self.vcc(corner)) {
+            (true, Some(vcc)) => Some(
+                breakpoints
+                    .iter()
+                    .map(|&v_pin| {
+                        let mut i = self
+                            .iv_at(IvElement::PowerClamp, corner, v_pin)
+                            .unwrap_or(0.0);
+                        if ku != 0.0 {
+                            i += ku
+                                * self.iv_at(IvElement::Pullup, corner, v_pin).unwrap_or(0.0);
+                        }
+                        (v_pin - vcc, i)
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        };
+        (gnd, vcc)
+    }
+
     /// C_comp for `corner`, falling back to typ.
     pub fn c_comp_at(&self, corner: Corner) -> Option<f64> {
         let idx = match corner {
@@ -513,6 +610,25 @@ pub struct Component {
 }
 
 impl Component {
+    /// The component's primary power-rail pin: the POWER row whose
+    /// signal name is exactly "VCC" (the IBIS-conventional primary
+    /// rail), else a SOLE POWER row. None when several POWER rails
+    /// exist and none is named VCC — without a [Pin Mapping] section
+    /// the file doesn't say which rail feeds which buffer, and we
+    /// don't guess.
+    pub fn power_pin(&self) -> Option<&Pin> {
+        let powers: Vec<&Pin> = self
+            .pins
+            .iter()
+            .filter(|p| p.model_name.eq_ignore_ascii_case("POWER"))
+            .collect();
+        powers
+            .iter()
+            .find(|p| p.signal_name.eq_ignore_ascii_case("VCC"))
+            .copied()
+            .or(if powers.len() == 1 { Some(powers[0]) } else { None })
+    }
+
     /// Find the pin row for an entity pin: by signal name first
     /// (case-insensitive), then by package pin number.
     pub fn pin_for(&self, name: &str) -> Option<&Pin> {
@@ -1121,6 +1237,97 @@ dV/dt_r 3.0/1.2n NA NA
         assert!(
             t_kd_off < t_ku_on,
             "expected break-before-make: kd off at {t_kd_off}, ku on at {t_ku_on}"
+        );
+    }
+
+    #[test]
+    /// The rail-split groups must reconstruct the single-branch
+    /// composite when the rail sits at nominal Vcc:
+    /// full(v) = gnd_group(v) + vcc_group(v − Vcc).
+    #[test]
+    fn split_groups_sum_to_composite() {
+        let f = parse_str(GOLDEN).unwrap();
+        let m = &f.models["CMOS_OUT"];
+        let vcc = m.vcc(Corner::Typ).unwrap();
+        for (ku, kd) in [(1.0, 0.0), (0.0, 1.0), (0.3, 0.6)] {
+            let full = m.composed_iv_weighted(ku, kd, Corner::Typ).unwrap();
+            let (gnd, vc) = m.composed_iv_split(ku, kd, Corner::Typ);
+            let interp = |pts: &Option<Vec<(f64, f64)>>, v: f64| -> f64 {
+                let Some(pts) = pts else { return 0.0 };
+                if v <= pts[0].0 { return pts[0].1; }
+                if v >= pts[pts.len() - 1].0 { return pts[pts.len() - 1].1; }
+                for w in pts.windows(2) {
+                    if v <= w[1].0 {
+                        return w[0].1
+                            + (v - w[0].0) / (w[1].0 - w[0].0) * (w[1].1 - w[0].1);
+                    }
+                }
+                pts[pts.len() - 1].1
+            };
+            for (v, i_full) in &full {
+                let sum = interp(&gnd, *v) + interp(&vc, *v - vcc);
+                assert!(
+                    (sum - i_full).abs() < 1e-9,
+                    "ku={ku} kd={kd} v={v}: split sum {sum} vs full {i_full}"
+                );
+            }
+        }
+        // power_pin picks the VCC row of the golden component.
+        let c = f.component("TESTCHIP").unwrap();
+        assert_eq!(c.power_pin().unwrap().signal_name, "VCC");
+    }
+
+    /// Rail-split DC: the GOLDEN buffer HIGH into 125Ω, stamped as TWO
+    /// branches (gnd group pin→GND, vcc group pin→VCC). The operating
+    /// point must equal the single-branch solve (3.3333V load line), and
+    /// ALL the sourced current must be booked on the VCC-referenced
+    /// branch — that is the per-rail attribution this split exists for.
+    #[test]
+    fn split_stamp_attributes_current_to_rail() {
+        use crate::circuit::{encode_iv_table, Circuit, META_IV_TABLE};
+        use crate::glacier_dc_solver::GlacierDcSolver;
+        use std::collections::HashMap;
+
+        let f = parse_str(GOLDEN).unwrap();
+        let m = &f.models["CMOS_OUT"];
+        let (gnd_pts, vcc_pts) = m.composed_iv_split(1.0, 0.0, Corner::Typ);
+        let vcc_pts = vcc_pts.expect("pullup group");
+
+        let mut c = Circuit::new();
+        c.add_node("VCC".into(), None);
+        c.add_node("PIN".into(), None);
+        c.add_node("GND".into(), None);
+        c.add_branch("vs".into(), "VCC", "GND", "VoltageSource".into(), 5.0, None);
+        c.add_branch("load".into(), "PIN", "GND", "Resistor".into(), 125.0, None);
+        let mut meta = HashMap::new();
+        meta.insert(META_IV_TABLE.to_string(), encode_iv_table(&vcc_pts));
+        c.add_branch_with_metadata(
+            "buf_vcc".into(), "PIN", "VCC", "IbisBuffer".into(), 0.0, None, meta,
+        );
+        if let Some(pts) = &gnd_pts {
+            let mut meta = HashMap::new();
+            meta.insert(META_IV_TABLE.to_string(), encode_iv_table(pts));
+            c.add_branch_with_metadata(
+                "buf_gnd".into(), "PIN", "GND", "IbisBuffer".into(), 0.0, None, meta,
+            );
+        }
+
+        let r = GlacierDcSolver::new().solve(c.clone()).expect("solve");
+        let node = |n: &str| c.nodes().find(|(_, x)| x.name == n).unwrap().0;
+        let vpin = r.node_voltages[&node("PIN")];
+        assert!((vpin - 10.0 / 3.0).abs() < 1e-3, "pin {vpin} vs load-line 3.3333V");
+
+        // The rail source must carry the load current: i(vs) ≈ v/125.
+        let vs_edge = c.branches().find(|(_, b)| b.name == "vs").unwrap().0;
+        let i_rail = r.branch_currents.get(&vs_edge).copied().unwrap_or(0.0).abs();
+        let i_load = vpin / 125.0;
+        assert!(
+            (i_rail - i_load).abs() < 1e-4,
+            "rail current {i_rail} A should equal load current {i_load} A"
+        );
+        eprintln!(
+            "split stamp: pin {vpin:.4}V, rail supplies {:.2}mA (= load {:.2}mA)",
+            i_rail * 1e3, i_load * 1e3
         );
     }
 

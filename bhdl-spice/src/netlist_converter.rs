@@ -425,6 +425,42 @@ impl NetlistToSpiceConverter {
                     crate::ibis::Corner::parse(&ibis_ref.corner).unwrap_or_default()
                 });
 
+                // Per-rail attribution: the net wired to the component's
+                // primary POWER row (see Component::power_pin). Buffers
+                // then stamp as TWO branches — pulldown+GND-clamp to GND,
+                // pullup+POWER-clamp to this rail — so sourced current is
+                // booked against the rail that physically supplies it (and
+                // the Vcc-relative tables track actual rail voltage). None
+                // ⇒ single pin→GND composite as before.
+                let rail_net: Option<(String, Option<f64>)> = component.power_pin().and_then(|pp| {
+                    netlist.pin_instances.values().find_map(|pi2| {
+                        if pi2.instance != instance_id {
+                            return None;
+                        }
+                        let pin2 = netlist.pins.get(pi2.pin_def)?;
+                        let target2 = ibis_ref
+                            .pin_map
+                            .iter()
+                            .find(|(p, _)| p.eq_ignore_ascii_case(&pin2.name))
+                            .map(|(_, sig)| sig.as_str())
+                            .unwrap_or(pin2.name.as_str());
+                        if target2.eq_ignore_ascii_case(&pp.signal_name)
+                            || target2.eq_ignore_ascii_case(&pp.pin)
+                        {
+                            let net = netlist.nets.get(pi2.net?)?;
+                            let v = match net.net_class {
+                                bhdl_netlist::types::NetClass::Power { voltage, .. } => {
+                                    Some(voltage)
+                                }
+                                _ => None,
+                            };
+                            net.name.clone().map(|n| (n, v))
+                        } else {
+                            None
+                        }
+                    })
+                });
+
                 for pi in netlist.pin_instances.values() {
                     if pi.instance != instance_id { continue; }
                     let Some(net_id) = pi.net else { continue };
@@ -478,28 +514,86 @@ impl NetlistToSpiceConverter {
                         }
                         None => Default::default(),
                     });
-                    let Some(points) = model.composed_iv(state, corner) else { continue };
-                    let mut meta = HashMap::new();
-                    meta.insert(crate::circuit::META_IV_TABLE.to_string(), crate::circuit::encode_iv_table(&points));
-                    meta.insert(META_PARENT_INSTANCE.to_string(), instance.name.clone());
-                    meta.insert(
-                        "sim_model_provenance".to_string(),
-                        format!("ibis:{}#{}:{:?}", path.display(), model.name, corner),
-                    );
+                    let (ku, kd) = match state {
+                        crate::ibis::BufferState::High => (1.0, 0.0),
+                        crate::ibis::BufferState::Low => (0.0, 1.0),
+                        crate::ibis::BufferState::HiZ => (0.0, 0.0),
+                    };
+                    // Split by return rail ONLY when the board rail sits
+                    // inside the file's own characterized [Voltage Range]:
+                    // the Vcc-relative tables ride the rail by definition,
+                    // but riding a rail volts outside the measurement
+                    // domain would be silent extrapolation of vendor data
+                    // (the 16U2's gpio buffer is a 1.8V-domain model — on
+                    // a 5V board it must NOT be rigid-shifted to 5V).
+                    // Unknown rail voltage ⇒ can't validate ⇒ composite.
+                    let rail_matches = match (&rail_net, model.vcc(corner)) {
+                        (Some((_, Some(v_rail))), Some(vcc)) => {
+                            let lo = model.voltage_range[1].unwrap_or(vcc * 0.9);
+                            let hi = model.voltage_range[2].unwrap_or(vcc * 1.1);
+                            let (lo, hi) = (lo.min(hi), lo.max(hi));
+                            *v_rail >= lo - 1e-6 && *v_rail <= hi + 1e-6
+                        }
+                        _ => false,
+                    };
+                    if let (Some((rn, Some(v_rail))), Some(vcc), false) =
+                        (&rail_net, model.vcc(corner), rail_matches)
+                    {
+                        info!(
+                            "ibis: {}.{} model {} characterized at Vcc {vcc}V but rail '{rn}' is {v_rail}V — outside the file's range, keeping the GND-referenced composite (no rail attribution)",
+                            instance.name, pin.name, model.name
+                        );
+                    }
+                    let (gnd_points, vcc_points) = if rail_matches {
+                        model.composed_iv_split(ku, kd, corner)
+                    } else {
+                        (model.composed_iv(state, corner), None)
+                    };
+                    if gnd_points.is_none() && vcc_points.is_none() {
+                        continue;
+                    }
+                    let provenance =
+                        format!("ibis:{}#{}:{:?}", path.display(), model.name, corner);
                     let branch_name = format!("{}_{}_ibis", instance.name, pin.name);
-                    circuit.add_branch_with_metadata(
-                        branch_name.clone(),
-                        &net_name,
-                        &gnd_name,
-                        "IbisBuffer".to_string(),
-                        0.0,
-                        Some(instance_id),
-                        meta,
-                    );
+                    let vcc_branch_name = format!("{}_{}_ibis_vcc", instance.name, pin.name);
+                    if let Some(points) = &gnd_points {
+                        let mut meta = HashMap::new();
+                        meta.insert(crate::circuit::META_IV_TABLE.to_string(), crate::circuit::encode_iv_table(points));
+                        meta.insert(META_PARENT_INSTANCE.to_string(), instance.name.clone());
+                        meta.insert("sim_model_provenance".to_string(), provenance.clone());
+                        circuit.add_branch_with_metadata(
+                            branch_name.clone(),
+                            &net_name,
+                            &gnd_name,
+                            "IbisBuffer".to_string(),
+                            0.0,
+                            Some(instance_id),
+                            meta,
+                        );
+                    }
+                    if let (Some(points), Some((rail, _))) = (&vcc_points, &rail_net) {
+                        let mut meta = HashMap::new();
+                        meta.insert(crate::circuit::META_IV_TABLE.to_string(), crate::circuit::encode_iv_table(points));
+                        meta.insert(META_PARENT_INSTANCE.to_string(), instance.name.clone());
+                        meta.insert("sim_model_provenance".to_string(), provenance.clone());
+                        circuit.add_branch_with_metadata(
+                            vcc_branch_name.clone(),
+                            &net_name,
+                            rail,
+                            "IbisBuffer".to_string(),
+                            0.0,
+                            Some(instance_id),
+                            meta,
+                        );
+                    }
                     if let Some(events) = wave_events {
-                        self.ibis_drives.push(crate::ibis_transient::IbisDrive::new(
+                        let mut drive = crate::ibis_transient::IbisDrive::new(
                             branch_name, model.clone(), corner, state, events,
-                        )?);
+                        )?;
+                        if rail_matches && vcc_points.is_some() {
+                            drive.vcc_branch = Some(vcc_branch_name);
+                        }
+                        self.ibis_drives.push(drive);
                     }
                     // Die capacitance: C_comp as a real Capacitor branch
                     // at the pin. Invisible to the DC solve (caps are
@@ -516,8 +610,12 @@ impl NetlistToSpiceConverter {
                     }
                     stamped_pins.insert(pin.name.clone());
                     info!(
-                        "ibis: stamped {}.{} on '{}' as {} buffer (state {:?}, model {})",
-                        instance.name, pin.name, net_name, model.model_type, state, model.name
+                        "ibis: stamped {}.{} on '{}' as {} buffer (state {:?}, model {}{})",
+                        instance.name, pin.name, net_name, model.model_type, state, model.name,
+                        match (&rail_net, rail_matches) {
+                            (Some((r, _)), true) => format!(", rail {r}"),
+                            _ => String::new(),
+                        }
                     );
                 }
                 } // per-ref loop

@@ -55,6 +55,10 @@ pub struct IbisDrive {
     pub initial: BufferState,
     /// Events sorted by time (sorted at construction).
     pub events: Vec<IbisEdgeEvent>,
+    /// Companion branch for the VCC-referenced element group (pullup +
+    /// POWER clamp), when the converter stamped the buffer split by
+    /// return rail. None ⇒ `branch` carries the full composite.
+    pub vcc_branch: Option<String>,
     rising_coeffs: Option<Vec<(f64, f64, f64)>>,
     falling_coeffs: Option<Vec<(f64, f64, f64)>>,
 }
@@ -92,6 +96,7 @@ impl IbisDrive {
             corner,
             initial,
             events,
+            vcc_branch: None,
             rising_coeffs,
             falling_coeffs,
         })
@@ -265,8 +270,15 @@ pub fn run_transient_ibis_ic(
             return Err(SpiceError::NodeNotFound(p.clone()));
         }
     }
-    let drive_of: HashMap<&str, &IbisDrive> =
-        drives.iter().map(|d| (d.branch.as_str(), d)).collect();
+    // Both stamped branches of a split buffer map to the same drive;
+    // the bool = "is the VCC-referenced branch".
+    let mut drive_of: HashMap<&str, (&IbisDrive, bool)> = HashMap::new();
+    for d in drives {
+        drive_of.insert(d.branch.as_str(), (d, false));
+        if let Some(vb) = &d.vcc_branch {
+            drive_of.insert(vb.as_str(), (d, true));
+        }
+    }
     for d in drives {
         if !circuit.branches().any(|(_, b)| b.name == d.branch) {
             return Err(SpiceError::InvalidModel(format!(
@@ -370,13 +382,19 @@ pub fn run_transient_ibis_ic(
                 }
                 "IbisBuffer" => {
                     match drive_of.get(branch.name.as_str()) {
-                        Some(d) => {
+                        Some((d, is_vcc)) => {
                             let (ku, kd) = d.ku_kd_at(t_clamped);
-                            // None = nothing conducts at these weights
-                            // (Hi-Z with no clamp tables) — honest absence.
-                            if let Some(pts) =
+                            // Split-stamped buffers re-encode each branch
+                            // from its own element group; a lone branch
+                            // carries the full composite. None = nothing
+                            // conducts at these weights — honest absence.
+                            let pts = if d.vcc_branch.is_some() {
+                                let (g, v) = d.model.composed_iv_split(ku, kd, d.corner);
+                                if *is_vcc { v } else { g }
+                            } else {
                                 d.model.composed_iv_weighted(ku, kd, d.corner)
-                            {
+                            };
+                            if let Some(pts) = pts {
                                 let mut meta = branch.metadata.clone();
                                 meta.insert(
                                     META_IV_TABLE.to_string(),
