@@ -102,6 +102,39 @@ pub fn pathfinder_route(
         }
     }
 
+    // Negotiation may hit max_iterations with residual overflow. Copper
+    // that crosses another net must NEVER ship: rip the lowest-priority
+    // routes occupying overused cells until the board is legal. An
+    // unrouted net is an honest, visible failure (metrics + the
+    // oracle's unconnected list); an illegal track is a silent lie.
+    if grid.max_overflow() > 0 {
+        for &net_idx in net_order.iter().rev() {
+            if grid.max_overflow() == 0 {
+                break;
+            }
+            if routes[net_idx].is_empty() {
+                continue;
+            }
+            let occupies_overuse = routes[net_idx].segments.iter().any(|seg| {
+                let a = grid.point_to_cell(seg.start.0, seg.start.1, seg.layer);
+                let b = grid.point_to_cell(seg.end.0, seg.end.1, seg.layer);
+                grid.cells_between(a, b).iter().any(|c| {
+                    let cell = grid.get(*c);
+                    !cell.blocked && cell.demand > cell.capacity
+                })
+            });
+            if occupies_overuse {
+                remove_route_demand(grid, &routes[net_idx]);
+                let net_name = nets[net_idx].name.clone();
+                log::warn!(
+                    "pathfinder: ripping unconverged net '{net_name}' — residual \
+                     overflow after {max_iterations} iterations (unrouted beats illegal)"
+                );
+                routes[net_idx] = Route::empty(routes[net_idx].net_id);
+            }
+        }
+    }
+
     routes
 }
 
@@ -371,25 +404,8 @@ fn path_to_segments(
 }
 
 fn add_route_demand(grid: &mut RoutingGrid, route: &Route) {
-    for seg in &route.segments {
-        // Add demand to ALL cells along the segment path — and for
-        // DIAGONAL steps, to the two cardinal companion cells as well:
-        // a diagonal geometrically grazes both, and without charging
-        // them a second net can route the opposite diagonal through the
-        // same cell-pair square (a physical X crossing the per-cell
-        // capacity model cannot see — the oracle's tracks_crossing
-        // family).
-        let start = grid.point_to_cell(seg.start.0, seg.start.1, seg.layer);
-        let end = grid.point_to_cell(seg.end.0, seg.end.1, seg.layer);
-        let path = grid.cells_between(start, end);
-        for cell in &path {
-            grid.get_mut(*cell).demand += 1;
-        }
-        for w in path.windows(2) {
-            for comp in diagonal_companions(w[0], w[1]) {
-                grid.get_mut(comp).demand += 1;
-            }
-        }
+    for cell in route_cells(grid, route) {
+        grid.get_mut(cell).demand += 1;
     }
     for via in &route.vias {
         let from = grid.point_to_cell(via.x, via.y, via.from_layer);
@@ -397,6 +413,32 @@ fn add_route_demand(grid: &mut RoutingGrid, route: &Route) {
         grid.get_mut(from).demand += 1;
         grid.get_mut(to).demand += 1;
     }
+}
+
+/// Every cell a route occupies or grazes, each counted ONCE per route:
+/// the path cells plus, for DIAGONAL steps, the two cardinal companion
+/// cells the diagonal geometrically crosses. Without companions a
+/// second net can route the opposite diagonal through the same
+/// cell-pair square — a physical X the per-cell model can't see (the
+/// oracle's tracks_crossing family). Deduped per route because a net's
+/// own zigzag grazes the same companion twice — a net cannot conflict
+/// with itself, and double-charging made the ripper rip its own route.
+pub(crate) fn route_cells(grid: &RoutingGrid, route: &Route) -> std::collections::HashSet<CellCoord> {
+    let mut cells = std::collections::HashSet::new();
+    for seg in &route.segments {
+        let start = grid.point_to_cell(seg.start.0, seg.start.1, seg.layer);
+        let end = grid.point_to_cell(seg.end.0, seg.end.1, seg.layer);
+        let path = grid.cells_between(start, end);
+        for c in &path {
+            cells.insert(*c);
+        }
+        for w in path.windows(2) {
+            for comp in diagonal_companions(w[0], w[1]) {
+                cells.insert(comp);
+            }
+        }
+    }
+    cells
 }
 
 /// The two cardinal cells a diagonal step grazes; empty for cardinal steps.
@@ -411,25 +453,17 @@ fn diagonal_companions(a: CellCoord, b: CellCoord) -> Vec<CellCoord> {
 }
 
 fn remove_route_demand(grid: &mut RoutingGrid, route: &Route) {
-    for seg in &route.segments {
-        let start = grid.point_to_cell(seg.start.0, seg.start.1, seg.layer);
-        let end = grid.point_to_cell(seg.end.0, seg.end.1, seg.layer);
-        let path = grid.cells_between(start, end);
-        for cell in &path {
-            grid.get_mut(*cell).demand = grid.get_mut(*cell).demand.saturating_sub(1);
-        }
-        for w in path.windows(2) {
-            for comp in diagonal_companions(w[0], w[1]) {
-                let c = grid.get_mut(comp);
-                c.demand = c.demand.saturating_sub(1);
-            }
-        }
+    for cell in route_cells(grid, route) {
+        let c = grid.get_mut(cell);
+        c.demand = c.demand.saturating_sub(1);
     }
     for via in &route.vias {
         let from = grid.point_to_cell(via.x, via.y, via.from_layer);
         let to = grid.point_to_cell(via.x, via.y, via.to_layer);
-        grid.get_mut(from).demand = grid.get_mut(from).demand.saturating_sub(1);
-        grid.get_mut(to).demand = grid.get_mut(to).demand.saturating_sub(1);
+        let f = grid.get_mut(from);
+        f.demand = f.demand.saturating_sub(1);
+        let t = grid.get_mut(to);
+        t.demand = t.demand.saturating_sub(1);
     }
 }
 

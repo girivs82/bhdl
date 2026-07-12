@@ -425,13 +425,20 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         let mut via_grid = RoutingGrid::build(&board);
         for route in &final_routes {
             if !route.is_empty() {
-                for seg in &route.segments {
-                    let start = via_grid.point_to_cell(seg.start.0, seg.start.1, seg.layer);
-                    let end = via_grid.point_to_cell(seg.end.0, seg.end.1, seg.layer);
-                    for cell in via_grid.cells_between(start, end) {
-                        let gc = via_grid.get_mut(cell);
-                        gc.capacity = gc.capacity.saturating_sub(1);
-                    }
+                // Full geometric footprint of the pass-1 route — path
+                // cells AND diagonal companions. Reducing only the path
+                // cells let a pass-2 net route the OPPOSITE diagonal
+                // through a pass-1 diagonal's square: a physical X
+                // between the two passes that neither pass could see.
+                // BLOCK, don't zero-capacity: capacity-0 cells are
+                // exempt from present-cost and overflow accounting (the
+                // pin-terminal rule), so pass-2 routed straight through
+                // pass-1 copper at zero cost, invisibly — the recurring
+                // "VCC diagonal through auto_* vertical" crossing. A
+                // blocked cell is truly unroutable (own terminals still
+                // enter via the sink exception).
+                for cell in pathfinder::route_cells(&via_grid, route) {
+                    via_grid.get_mut(cell).blocked = true;
                 }
             }
         }
@@ -480,6 +487,66 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
 
     info!("Routing complete: {} pass1, {} pass2",
         routed_pass1, final_routes.iter().filter(|r| !r.is_empty()).count() - routed_pass1);
+
+    // 5.9. GEOMETRIC final validation — the cell model has deliberate
+    // blind spots (blocked pad-halo cells are exempt from overflow so
+    // terminal access can't wedge convergence), and any region two nets
+    // may both legally enter carries demand invisible to negotiation.
+    // The guarantee therefore lives at the geometry level: no two
+    // different-net segments on one layer may intersect or come closer
+    // than clearance. Offending lower-priority nets are ripped whole —
+    // an unrouted net is an honest, visible failure; illegal copper is
+    // not allowed to ship.
+    {
+        let clearance = board.config.min_spacing_mm;
+        let mut ripped = 0usize;
+        loop {
+            let mut offender: Option<usize> = None;
+            'scan: for i in 0..final_routes.len() {
+                if final_routes[i].is_empty() {
+                    continue;
+                }
+                for j in (i + 1)..final_routes.len() {
+                    if final_routes[j].is_empty() {
+                        continue;
+                    }
+                    for sa in &final_routes[i].segments {
+                        for sb in &final_routes[j].segments {
+                            if sa.layer != sb.layer {
+                                continue;
+                            }
+                            let min_gap =
+                                sa.width_mm / 2.0 + sb.width_mm / 2.0 + clearance;
+                            if segments_too_close(
+                                sa.start, sa.end, sb.start, sb.end, min_gap,
+                            ) {
+                                let wi = board.nets.get(i).map(|n| n.weight).unwrap_or(1.0);
+                                let wj = board.nets.get(j).map(|n| n.weight).unwrap_or(1.0);
+                                offender = Some(if wj <= wi { j } else { i });
+                                break 'scan;
+                            }
+                        }
+                    }
+                }
+            }
+            match offender {
+                Some(k) => {
+                    let name = board.nets.get(k).map(|n| n.name.clone()).unwrap_or_default();
+                    log::warn!(
+                        "geometric validation: ripping net '{name}' — its copper \
+                         intersects or under-clears another net's (cell-model blind \
+                         spot); unrouted beats illegal"
+                    );
+                    final_routes[k] = Route::empty(final_routes[k].net_id);
+                    ripped += 1;
+                    if ripped > board.nets.len() {
+                        break;
+                    }
+                }
+                None => break,
+            }
+        }
+    }
 
     // 6. DRC
     if std::env::var("BHDL_PNR_DEBUG_CLEARANCE").is_ok() {
@@ -562,4 +629,35 @@ fn debug_check_foreign_pads(board: &Board, routes: &[Route], tag: &str) {
             }
         }
     }
+}
+
+/// True when segment AB and segment CD (as center-lines) intersect or
+/// pass within `min_gap` of each other.
+fn segments_too_close(
+    a: (f64, f64),
+    b: (f64, f64),
+    c: (f64, f64),
+    d: (f64, f64),
+    min_gap: f64,
+) -> bool {
+    fn orient(p: (f64, f64), q: (f64, f64), r: (f64, f64)) -> f64 {
+        (q.0 - p.0) * (r.1 - p.1) - (q.1 - p.1) * (r.0 - p.0)
+    }
+    let (o1, o2) = (orient(a, b, c), orient(a, b, d));
+    let (o3, o4) = (orient(c, d, a), orient(c, d, b));
+    if o1 * o2 < 0.0 && o3 * o4 < 0.0 {
+        return true;
+    }
+    fn seg_pt(p: (f64, f64), q: (f64, f64), r: (f64, f64)) -> f64 {
+        let (dx, dy) = (q.0 - p.0, q.1 - p.1);
+        let l2 = dx * dx + dy * dy;
+        let t = if l2 == 0.0 {
+            0.0
+        } else {
+            (((r.0 - p.0) * dx + (r.1 - p.1) * dy) / l2).clamp(0.0, 1.0)
+        };
+        let (nx, ny) = (p.0 + t * dx, p.1 + t * dy);
+        ((r.0 - nx).powi(2) + (r.1 - ny).powi(2)).sqrt()
+    }
+    seg_pt(a, b, c).min(seg_pt(a, b, d)).min(seg_pt(c, d, a)).min(seg_pt(c, d, b)) < min_gap
 }

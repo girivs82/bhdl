@@ -115,7 +115,12 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
     out.push('\n');
 
     // ── Components ──
-    for comp in &board.components {
+    // Reference-label placement: pick a collision-free slot per part
+    // (vs bodies, pads, tracks, board edge, and other labels) instead of
+    // the fixed above-the-part offset that landed text on neighbors'
+    // copper (the oracle's silk_over_copper / silk_overlap families).
+    let label_slots = place_reference_labels(board, routes);
+    for (ci, comp) in board.components.iter().enumerate() {
         let (cu, mask, paste, silk) = match comp.side {
             BoardSide::Top => ("F.Cu", "F.Mask", "F.Paste", "F.SilkS"),
             BoardSide::Bottom => ("B.Cu", "B.Mask", "B.Paste", "B.SilkS"),
@@ -133,10 +138,16 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
             "  (footprint \"{}\" (layer \"{}\") (at {} {} {:.1})\n",
             comp.package, cu, comp.x, comp.y, rot_deg
         ));
+        // Convert the label's GLOBAL slot into footprint-local coords
+        // (KiCad transforms property positions like pads: R_kicad(rot)).
+        let (gx, gy) = label_slots[ci];
+        let (odx, ody) = (gx - comp.x, gy - comp.y);
+        let a = rot_deg.to_radians();
+        let ldx = odx * a.cos() - ody * a.sin();
+        let ldy = odx * a.sin() + ody * a.cos();
         out.push_str(&format!(
-            "    (property \"Reference\" \"{}\" (at 0 {} 0) (layer \"{}\") (effects (font (size 1 1) (thickness 0.15))))\n",
+            "    (property \"Reference\" \"{}\" (at {ldx:.3} {ldy:.3} 0) (layer \"{}\") (effects (font (size 1 1) (thickness 0.15))))\n",
             comp.refdes,
-            -(comp.height_mm / 2.0 + 1.0),
             silk
         ));
         out.push_str(&format!(
@@ -267,4 +278,80 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
 
     out.push_str(")\n");
     out
+}
+
+
+/// Choose a global position for each component's reference label such
+/// that its text box avoids component bodies, pads, routed tracks, the
+/// board edge, and previously placed labels. Candidates ring the part;
+/// the fallback (fully crowded neighborhoods) keeps the classic
+/// above-the-part slot.
+fn place_reference_labels(board: &Board, routes: &[Route]) -> Vec<(f64, f64)> {
+    let bw = board.config.outline.width();
+    let bh = board.config.outline.height();
+
+    // Obstacles: rotated component bboxes (+margin) and track segments.
+    let mut obstacles: Vec<(f64, f64, f64, f64)> = Vec::new();
+    for c in &board.components {
+        let (rw, rh) = c.rotated_bbox();
+        obstacles.push((
+            c.x - rw / 2.0 - 0.15,
+            c.y - rh / 2.0 - 0.15,
+            c.x + rw / 2.0 + 0.15,
+            c.y + rh / 2.0 + 0.15,
+        ));
+    }
+    for r in routes {
+        for s in &r.segments {
+            let (x0, x1) = (s.start.0.min(s.end.0), s.start.0.max(s.end.0));
+            let (y0, y1) = (s.start.1.min(s.end.1), s.start.1.max(s.end.1));
+            let m = s.width_mm / 2.0 + 0.15;
+            obstacles.push((x0 - m, y0 - m, x1 + m, y1 + m));
+        }
+    }
+
+    let overlaps = |r: (f64, f64, f64, f64), obs: &[(f64, f64, f64, f64)]| -> bool {
+        obs.iter()
+            .any(|o| r.0 < o.2 && r.2 > o.0 && r.1 < o.3 && r.3 > o.1)
+    };
+
+    let mut placed: Vec<(f64, f64, f64, f64)> = Vec::new();
+    let mut slots = Vec::with_capacity(board.components.len());
+    for c in &board.components {
+        let tw = 0.95 * c.refdes.len() as f64 + 0.4; // ~1mm font
+        let th = 1.3;
+        let (rw, rh) = c.rotated_bbox();
+        let candidates = [
+            (c.x, c.y - rh / 2.0 - th / 2.0 - 0.3),           // above
+            (c.x, c.y + rh / 2.0 + th / 2.0 + 0.3),           // below
+            (c.x - rw / 2.0 - tw / 2.0 - 0.3, c.y),           // left
+            (c.x + rw / 2.0 + tw / 2.0 + 0.3, c.y),           // right
+            (c.x - rw / 2.0 - tw / 2.0 - 0.3, c.y - rh / 2.0 - th / 2.0 - 0.3),
+            (c.x + rw / 2.0 + tw / 2.0 + 0.3, c.y - rh / 2.0 - th / 2.0 - 0.3),
+            (c.x - rw / 2.0 - tw / 2.0 - 0.3, c.y + rh / 2.0 + th / 2.0 + 0.3),
+            (c.x + rw / 2.0 + tw / 2.0 + 0.3, c.y + rh / 2.0 + th / 2.0 + 0.3),
+        ];
+        let mut chosen = candidates[0];
+        for cand in candidates {
+            let rect = (
+                cand.0 - tw / 2.0,
+                cand.1 - th / 2.0,
+                cand.0 + tw / 2.0,
+                cand.1 + th / 2.0,
+            );
+            let inside = rect.0 > 0.3 && rect.1 > 0.3 && rect.2 < bw - 0.3 && rect.3 < bh - 0.3;
+            if inside && !overlaps(rect, &obstacles) && !overlaps(rect, &placed) {
+                chosen = cand;
+                break;
+            }
+        }
+        placed.push((
+            chosen.0 - tw / 2.0,
+            chosen.1 - th / 2.0,
+            chosen.0 + tw / 2.0,
+            chosen.1 + th / 2.0,
+        ));
+        slots.push(chosen);
+    }
+    slots
 }

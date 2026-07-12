@@ -1761,6 +1761,7 @@ async fn run_layout(
       }}
     }}
   }},
+  "meta": {{ "filename": "board.kicad_pro", "version": 1 }},
   "net_settings": {{
     "classes": [
       {{
@@ -1768,9 +1769,20 @@ async fn run_layout(
         "clearance": {sp},
         "track_width": {tw},
         "via_diameter": 0.6,
-        "via_drill": 0.3
+        "via_drill": 0.3,
+        "bus_width": 12,
+        "diff_pair_gap": 0.25,
+        "diff_pair_via_gap": 0.25,
+        "diff_pair_width": 0.2,
+        "line_style": 0,
+        "microvia_diameter": 0.3,
+        "microvia_drill": 0.1,
+        "pcb_color": "rgba(0, 0, 0, 0.000)",
+        "schematic_color": "rgba(0, 0, 0, 0.000)",
+        "wire_width": 6
       }}
-    ]
+    ],
+    "meta": {{ "version": 3 }}
   }}
 }}
 "#,
