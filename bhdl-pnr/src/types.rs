@@ -504,13 +504,15 @@ impl PnrNet {
     /// Power nets are routed as traces since a 4-layer board has at most 1 power
     /// plane but typically multiple power rails (VIN, 5V, 3.3V, 1.8V, etc.).
     /// On 1-layer or 2-layer boards (no dedicated ground layer), even GND is routed.
-    pub fn is_plane_connected(&self, stack: &LayerStack) -> bool {
-        match &self.net_class {
-            PnrNetClass::Ground => {
-                stack.layers.iter().any(|l| l.kind == LayerKind::Ground)
-            }
-            _ => false,
-        }
+    pub fn is_plane_connected(&self, _stack: &LayerStack) -> bool {
+        // ALWAYS route. "The plane will connect it" was an assumption
+        // the exporter couldn't back: headless KiCad DRC uses SAVED
+        // zone fills and we emit none, so every SMD pad of a
+        // plane-skipped net counted as unconnected (38 GND pins on the
+        // dense fixture). Until pour FILLS are computed and emitted,
+        // plane nets get real, verifiable tracks; zones remain bonus
+        // copper. (P1 continuation: compute fills → re-enable skips.)
+        false
     }
 }
 

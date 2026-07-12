@@ -437,6 +437,14 @@ pub fn build_board(
         nets[pnr_net_idx].pins.dedup();
     }
 
+    if std::env::var("BHDL_PNR_DEBUG_NETS").is_ok() {
+        for net in &nets {
+            log::warn!(
+                "NET '{}' class={:?} pins={} ",
+                net.name, net.net_class, net.pins.len()
+            );
+        }
+    }
     // Set pin.net back-references
     for net in &nets {
         for &(comp_id, pin_id) in &net.pins {

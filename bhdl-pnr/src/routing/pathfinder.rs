@@ -425,12 +425,42 @@ fn add_route_demand(grid: &mut RoutingGrid, route: &Route) {
 /// with itself, and double-charging made the ripper rip its own route.
 pub(crate) fn route_cells(grid: &RoutingGrid, route: &Route) -> std::collections::HashSet<CellCoord> {
     let mut cells = std::collections::HashSet::new();
+    let pitch = if grid.x_coords.len() > 1 {
+        grid.x_coords[1] - grid.x_coords[0]
+    } else {
+        0.3
+    };
     for seg in &route.segments {
+        // Width-aware footprint: a track wider than one cell claims the
+        // ring of cells its copper (+ half the spacing rule) covers —
+        // without this, a 1mm power track claimed only its center-line
+        // cells and neighbors routed inside its actual copper.
+        let extra = (((seg.width_mm / 2.0 + pitch / 2.0) / pitch) - 0.5).ceil() as i64;
+        let extra = extra.max(0);
         let start = grid.point_to_cell(seg.start.0, seg.start.1, seg.layer);
         let end = grid.point_to_cell(seg.end.0, seg.end.1, seg.layer);
         let path = grid.cells_between(start, end);
         for c in &path {
             cells.insert(*c);
+            if extra > 0 {
+                for dr in -extra..=extra {
+                    for dc in -extra..=extra {
+                        let r = c.row as i64 + dr;
+                        let co = c.col as i64 + dc;
+                        if r >= 0
+                            && co >= 0
+                            && (r as usize) < grid.rows()
+                            && (co as usize) < grid.cols()
+                        {
+                            cells.insert(CellCoord {
+                                layer: c.layer,
+                                row: r as usize,
+                                col: co as usize,
+                            });
+                        }
+                    }
+                }
+            }
         }
         for w in path.windows(2) {
             for comp in diagonal_companions(w[0], w[1]) {
