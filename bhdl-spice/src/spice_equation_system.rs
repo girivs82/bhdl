@@ -39,15 +39,36 @@ pub enum ComponentEquation {
 }
 
 /// PWL interpolation shared by the TableIV residual and Jacobian.
+/// Extrapolation conductance floor beyond a table's characterized range.
+///
+/// Flat (zero-slope) clamping outside the table is a NEWTON TRAP: once
+/// an iterate overshoots past the last breakpoint, the Jacobian reports
+/// zero local conductance and the only restoring force is GSHUNT (1e-9 S)
+/// — floating Hi-Z IBIS pins were observed parked at ±16 MV with the
+/// solver unable to walk back (Uno @ min corner, whose tables end 0.15V
+/// lower than typ). Beyond the characterized range ANY model is an
+/// extrapolation policy; we extend the end segment's own slope, floored
+/// at 1 µS so the extension is always restoring (a µS adds only µA/V —
+/// operating points INSIDE the table are untouched).
+const TABLE_EXTRAP_G_MIN: f64 = 1e-6;
+
 fn table_iv_interp(points: &[(f64, f64)], v: f64) -> f64 {
     if points.is_empty() {
         return 0.0;
     }
-    if v <= points[0].0 {
-        return points[0].1;
+    let end_slope = |a: (f64, f64), b: (f64, f64)| -> f64 {
+        let g = if b.0 > a.0 { (b.1 - a.1) / (b.0 - a.0) } else { 0.0 };
+        g.max(TABLE_EXTRAP_G_MIN)
+    };
+    let first = points[0];
+    let last = points[points.len() - 1];
+    if v <= first.0 {
+        let g = if points.len() >= 2 { end_slope(first, points[1]) } else { TABLE_EXTRAP_G_MIN };
+        return first.1 + g * (v - first.0);
     }
-    if v >= points[points.len() - 1].0 {
-        return points[points.len() - 1].1;
+    if v >= last.0 {
+        let g = if points.len() >= 2 { end_slope(points[points.len() - 2], last) } else { TABLE_EXTRAP_G_MIN };
+        return last.1 + g * (v - last.0);
     }
     for w in points.windows(2) {
         let (v0, i0) = w[0];
@@ -56,7 +77,7 @@ fn table_iv_interp(points: &[(f64, f64)], v: f64) -> f64 {
             return i0 + (v - v0) / (v1 - v0) * (i1 - i0);
         }
     }
-    points[points.len() - 1].1
+    last.1
 }
 
 /// Local dI/dV — central difference over the interpolant (smooths the

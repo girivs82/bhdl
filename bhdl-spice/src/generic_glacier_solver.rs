@@ -8,7 +8,7 @@
 //! - Numerical convergence
 
 use nalgebra::{DMatrix, DVector};
-use log::{info, debug};
+use log::{info, debug, warn};
 use std::collections::HashMap;
 
 use crate::errors::{SpiceError, Result};
@@ -370,7 +370,27 @@ impl GenericGlacierSolver {
         // Get final residual
         let final_residual = system.evaluate_residuals(variables);
         stats.final_error = final_residual.norm();
-        
+
+        // Name the worst offenders — "convergence failed" without saying
+        // WHERE costs a bisection session every time it fires.
+        let mut worst: Vec<(usize, f64)> = final_residual
+            .iter()
+            .enumerate()
+            .map(|(i, r)| (i, r.abs()))
+            .collect();
+        worst.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        for (i, r) in worst.iter().take(3) {
+            let name = variables
+                .get(*i)
+                .map(|v| v.name.clone())
+                .unwrap_or_else(|| format!("var#{i}"));
+            let val = variables.get(*i).map(|v| v.value).unwrap_or(f64::NAN);
+            warn!(
+                "  non-converged: |residual| {:.3e} at '{}' (value {:.4})",
+                r, name, val
+            );
+        }
+
         Err(SpiceError::ConvergenceFailed(iteration))
     }
     
