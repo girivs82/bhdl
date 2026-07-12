@@ -499,6 +499,68 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
     // not allowed to ship.
     {
         let clearance = board.config.min_spacing_mm;
+
+        // Foreign-copper obstacles per layer: every pad's rotated rect
+        // (real P0 geometry) tagged with its net — a track must keep
+        // clearance from every pad that is not its own net. This was
+        // the validator's blind spot on dense boards (~200
+        // shorting_items per board, all track-vs-PAD).
+        struct PadRect {
+            net: Option<NetId>,
+            layer_top: bool,
+            layer_bot: bool,
+            cx: f64,
+            cy: f64,
+            hx: f64,
+            hy: f64,
+        }
+        let mut pad_rects: Vec<PadRect> = Vec::new();
+        let n_layers = board.layer_stack.layers.len();
+        for comp in &board.components {
+            let cos_t = comp.theta.cos();
+            let sin_t = comp.theta.sin();
+            let quarter =
+                ((comp.theta / std::f64::consts::FRAC_PI_2).round() as i64).rem_euclid(2);
+            for pin in &comp.pins {
+                let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
+                let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+                let (pw, ph, thru) = match &pin.pad {
+                    Some(p) => (p.width_mm, p.height_mm, p.drill_mm.is_some()),
+                    None => (0.8, 0.8, false),
+                };
+                let (pw, ph) = if quarter == 1 { (ph, pw) } else { (pw, ph) };
+                let on_top = thru || matches!(comp.side, BoardSide::Top);
+                let on_bot = thru || matches!(comp.side, BoardSide::Bottom);
+                pad_rects.push(PadRect {
+                    net: pin.net,
+                    layer_top: on_top,
+                    layer_bot: on_bot,
+                    cx: gx,
+                    cy: gy,
+                    hx: pw / 2.0,
+                    hy: ph / 2.0,
+                });
+            }
+        }
+        let pad_on_layer = |p: &PadRect, layer: usize| -> bool {
+            (layer == 0 && p.layer_top) || (layer == n_layers - 1 && p.layer_bot)
+        };
+        // Min distance from segment AB to an axis-aligned rect ≈ distance
+        // to the rect's center clamped by extents: sample-based (rects
+        // are small vs segments; 9 samples along the segment suffice at
+        // 0.3mm cells).
+        let seg_hits_rect = |a: (f64, f64), b: (f64, f64), p: &PadRect, gap: f64| -> bool {
+            for i in 0..=8 {
+                let t = i as f64 / 8.0;
+                let x = a.0 + t * (b.0 - a.0);
+                let y = a.1 + t * (b.1 - a.1);
+                if (x - p.cx).abs() < p.hx + gap && (y - p.cy).abs() < p.hy + gap {
+                    return true;
+                }
+            }
+            false
+        };
+
         let mut ripped = 0usize;
         loop {
             let mut offender: Option<usize> = None;
@@ -506,6 +568,21 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                 if final_routes[i].is_empty() {
                     continue;
                 }
+                let net_id = final_routes[i].net_id;
+                // Track vs foreign PAD.
+                for sa in &final_routes[i].segments {
+                    let gap = sa.width_mm / 2.0 + clearance;
+                    for p in &pad_rects {
+                        if p.net == Some(net_id) || !pad_on_layer(p, sa.layer) {
+                            continue;
+                        }
+                        if seg_hits_rect(sa.start, sa.end, p, gap) {
+                            offender = Some(i);
+                            break 'scan;
+                        }
+                    }
+                }
+                // Track vs foreign track.
                 for j in (i + 1)..final_routes.len() {
                     if final_routes[j].is_empty() {
                         continue;
@@ -534,7 +611,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                     let name = board.nets.get(k).map(|n| n.name.clone()).unwrap_or_default();
                     log::warn!(
                         "geometric validation: ripping net '{name}' — its copper \
-                         intersects or under-clears another net's (cell-model blind \
+                         intersects or under-clears foreign copper (cell-model blind \
                          spot); unrouted beats illegal"
                     );
                     final_routes[k] = Route::empty(final_routes[k].net_id);
