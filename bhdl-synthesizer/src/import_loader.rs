@@ -94,9 +94,13 @@ impl ImportLoader {
                 .resolve_import(import_path)
                 .map_err(|e| anyhow::anyhow!("{}", e))?
         } else {
-            // Legacy: literal path (works for `bhdl-stdlib/…` when run
-            // from the workspace root).
-            Path::new(import_path).to_path_buf()
+            // No resolver: shared search order — importing file's dir,
+            // input dir, -I roots, $BHDL_LIB_PATH, then the legacy
+            // literal-path-from-cwd fallback.
+            bhdl_common::import_search::resolve_relative(
+                import_path,
+                Path::new(&self.base_path),
+            )
         };
         
         println!("IMPORT_LOADER: Loading modules {:?} from: {}", module_names, full_path.display());

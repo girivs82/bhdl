@@ -1381,19 +1381,11 @@ fn process_import(import: &ImportStmt, context: &mut Pass1Context) {
     }
 }
 
-// Resolve import path relative to base
+// Resolve import path relative to base, falling back to the shared
+// search order (input dir, -I roots, $BHDL_LIB_PATH, cwd) so imports
+// like "bhdl-stdlib/…" work from any working directory.
 fn resolve_import_path(import_path: &str, base_path: &Path) -> PathBuf {
-    // Handle different import path formats
-    if import_path.starts_with("bhdl-stdlib/") {
-        // Standard library import
-        PathBuf::from(import_path)
-    } else if import_path.starts_with('/') {
-        // Absolute path
-        PathBuf::from(import_path)
-    } else {
-        // Relative path
-        base_path.join(import_path)
-    }
+    bhdl_common::import_search::resolve_relative(import_path, base_path)
 }
 
 // Load and parse a module file

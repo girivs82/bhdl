@@ -40,10 +40,10 @@ impl ModuleResolver {
             }
         }
         
-        // Try relative to current directory
-        let cwd_stdlib = PathBuf::from("bhdl-stdlib");
-        if cwd_stdlib.exists() {
-            return Some(cwd_stdlib);
+        // Try the shared import search order (input dir, -I roots,
+        // $BHDL_LIB_PATH, cwd)
+        if let Some(stdlib) = bhdl_common::import_search::locate_dir("bhdl-stdlib") {
+            return Some(stdlib);
         }
         
         // Try environment variable

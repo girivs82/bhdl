@@ -351,7 +351,16 @@ async fn main() -> Result<()> {
         }
     }
     let cli = Cli::parse();
-    
+
+    // Install the process-wide import search context so direct-relative
+    // import strings ("bhdl-stdlib/…") resolve from any working
+    // directory: input file's dir, then -I roots, then $BHDL_LIB_PATH,
+    // then cwd (legacy).
+    bhdl_common::import_search::set_search_context(
+        cli.input.parent().map(|p| p.to_path_buf()),
+        &cli.lib_path,
+    );
+
     // Initialize logging: --verbose defaults to debug, otherwise info;
     // RUST_LOG (when set) takes precedence over both.
     let default_level = if cli.verbose { "debug" } else { "info" };
@@ -387,7 +396,8 @@ async fn main() -> Result<()> {
     let (input_content, supply_syntheses) =
         match bhdl_synthesizer::supply_synthesis::desugar_supplies(
             &input_content,
-            std::path::Path::new("bhdl-stdlib"),
+            &bhdl_common::import_search::locate_dir("bhdl-stdlib")
+                .unwrap_or_else(|| PathBuf::from("bhdl-stdlib")),
         ) {
             Ok(Some(d)) => {
                 for su in &d.supplies {
@@ -2171,10 +2181,7 @@ fn snap_catalog_values(netlist: &mut bhdl_netlist::Netlist) {
 /// manifest, so its `library_roots()` is exactly the stdlib — it never
 /// affects import resolution.
 fn catalog_discovery_resolver() -> Option<bhdl_common::library::LibraryResolver> {
-    let stdlib = std::path::PathBuf::from("bhdl-stdlib");
-    if !stdlib.is_dir() {
-        return None;
-    }
+    let stdlib = bhdl_common::import_search::locate_dir("bhdl-stdlib")?;
     bhdl_common::library::LibraryResolver::new(None, &[], None, Some(stdlib)).ok()
 }
 

@@ -24,6 +24,7 @@ pub mod symbol;
 pub mod layout_meta;
 pub mod sku;
 pub mod variant;
+pub mod import_search;
 pub mod library;
 pub mod source;
 pub mod constraint_provenance;

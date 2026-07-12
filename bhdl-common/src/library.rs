@@ -530,9 +530,12 @@ impl LibraryResolver {
             if let Some(root) = &self.stdlib_root {
                 return Ok(root.clone());
             }
-            // No explicit stdlib root configured: treat the namespace
-            // dir as a literal relative path (today's behaviour).
-            return Ok(PathBuf::from(ns));
+            // No explicit stdlib root configured: locate `bhdl-stdlib`
+            // through the shared search order (input dir, -I roots,
+            // $BHDL_LIB_PATH, cwd); fall back to the literal relative
+            // path (legacy behaviour) if none exists.
+            return Ok(crate::import_search::locate_dir(ns)
+                .unwrap_or_else(|| PathBuf::from(ns)));
         }
 
         // 2. Must be declared.

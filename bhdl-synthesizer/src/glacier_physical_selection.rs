@@ -428,9 +428,16 @@ fn default_provider_spec() -> Option<String> {
                     return Some(cand.to_string_lossy().into_owned());
                 }
                 if !dir.pop() {
-                    return None;
+                    break;
                 }
             }
+            // Foreign cwd: the shared import search order (input dir +
+            // ancestors, -I roots, $BHDL_LIB_PATH) finds the workspace DB.
+            let cand = bhdl_common::import_search::resolve_relative(
+                "data/jlcpcb-components.sqlite3",
+                std::path::Path::new("."),
+            );
+            cand.exists().then(|| cand.to_string_lossy().into_owned())
         })?;
     let exe = std::env::current_exe()
         .ok()

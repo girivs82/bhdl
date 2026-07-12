@@ -2329,14 +2329,11 @@ impl NetlistGenerator {
             return out;
         }
         // Prefer the user's installed resolver; otherwise a discovery resolver
-        // rooted at the bundled stdlib (the same locating rule catalog
-        // discovery uses — `bhdl-stdlib` relative to the cwd).
+        // rooted at the bundled stdlib (located through the shared import
+        // search order — input dir, -I roots, $BHDL_LIB_PATH, cwd).
         let Some(resolver) = global_library_resolver().or_else(|| {
-            let stdlib = std::path::PathBuf::from("bhdl-stdlib");
-            stdlib
-                .is_dir()
-                .then(|| bhdl_common::library::LibraryResolver::new(None, &[], None, Some(stdlib)).ok())
-                .flatten()
+            let stdlib = bhdl_common::import_search::locate_dir("bhdl-stdlib")?;
+            bhdl_common::library::LibraryResolver::new(None, &[], None, Some(stdlib)).ok()
         }) else {
             return out;
         };
