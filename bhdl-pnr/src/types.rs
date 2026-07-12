@@ -450,6 +450,28 @@ pub struct PinPosition {
     pub dx: f64,
     pub dy: f64,
     pub net: Option<NetId>,
+    /// Real pad geometry from the footprint source (IPC-7351 generator
+    /// or imported KiCad footprint). None only on the estimated-pin
+    /// fallback path — the exporter then emits a visibly-default pad.
+    pub pad: Option<PadGeom>,
+}
+
+/// Pad geometry carried through to fabrication output.
+#[derive(Debug, Clone)]
+pub struct PadGeom {
+    pub width_mm: f64,
+    pub height_mm: f64,
+    pub shape: PadShapeKind,
+    /// Some(drill) = through-hole pad on all copper layers.
+    pub drill_mm: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PadShapeKind {
+    Rect,
+    RoundRect,
+    Circle,
+    Oval,
 }
 
 // ── Net ────────────────────────────────────────────────────────────────

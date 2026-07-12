@@ -119,8 +119,11 @@ fn shortest_path_3d(
         return Route::empty(net.id);
     }
 
-    // Map pins to grid cells
-    let pin_cells: Vec<CellCoord> = net
+    // Map pins to grid cells, keeping the EXACT pad coordinate per cell:
+    // the fabricated track must land on pad copper, not the cell center
+    // (a 1 mm cell center can sit off the pad entirely — KiCad's DRC
+    // reads that as an unconnected track).
+    let pin_targets: Vec<(CellCoord, (f64, f64))> = net
         .pins
         .iter()
         .filter_map(|&(comp_id, pin_id)| {
@@ -138,9 +141,10 @@ fn shortest_path_3d(
                 BoardSide::Bottom => grid.num_layers - 1,
             };
 
-            Some(grid.point_to_cell(gx, gy, layer))
+            Some((grid.point_to_cell(gx, gy, layer), (gx, gy)))
         })
         .collect();
+    let pin_cells: Vec<CellCoord> = pin_targets.iter().map(|(c, _)| *c).collect();
 
     if pin_cells.len() < 2 {
         return Route::empty(net.id);
@@ -183,6 +187,23 @@ fn shortest_path_3d(
                 all_vias.extend(vias);
             }
             None => break, // Unroutable — stop
+        }
+    }
+
+    // Pad-escape stubs: connect each routed terminal's cell center to
+    // the exact pad coordinate so the copper actually touches the pad.
+    for (cell, (px, py)) in &pin_targets {
+        if !source_set.contains(cell) {
+            continue; // pin never joined the tree (unrouted) — no stub
+        }
+        let (cx, cy) = grid.cell_center(*cell);
+        if (cx - px).hypot(cy - py) > 1e-6 {
+            all_segments.push(RouteSegment {
+                layer: cell.layer,
+                start: (cx, cy),
+                end: (*px, *py),
+                width_mm: net.required_trace_width_mm,
+            });
         }
     }
 

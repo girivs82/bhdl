@@ -194,6 +194,23 @@ pub fn build_board(
                         dx: pad.x_position,
                         dy: pad.y_position,
                         net: None,
+                        pad: Some(crate::types::PadGeom {
+                            width_mm: pad.width,
+                            height_mm: pad.height,
+                            shape: match pad.shape {
+                                bhdl_components::types::component::PadShape::Circle => {
+                                    crate::types::PadShapeKind::Circle
+                                }
+                                bhdl_components::types::component::PadShape::Oval => {
+                                    crate::types::PadShapeKind::Oval
+                                }
+                                bhdl_components::types::component::PadShape::RoundedRectangle => {
+                                    crate::types::PadShapeKind::RoundRect
+                                }
+                                _ => crate::types::PadShapeKind::Rect,
+                            },
+                            drill_mm: pad.drill_diameter,
+                        }),
                     }
                 })
                 .collect()
@@ -496,6 +513,21 @@ fn extract_interface_constraints(
         };
         if module.attributes.is_empty() {
             continue;
+        }
+        // Phantom entity-definition stubs: an instance named exactly like
+        // its module with ZERO net-connected pins is a template artifact,
+        // not a part — it duplicated every real footprint in the KiCad
+        // export (same refdes, no nets) until the DRC oracle flagged the
+        // ghosts as shorts. A REAL floating part keeps its (connected)
+        // siblings' company via the name guard and still gets placed.
+        if instance.name == module.name {
+            let has_connection = netlist
+                .pin_instances
+                .values()
+                .any(|pi| pi.instance == inst_id && pi.net.is_some());
+            if !has_connection {
+                continue;
+            }
         }
         let attrs: Vec<(&str, &str)> = module
             .attributes
@@ -914,6 +946,7 @@ fn estimate_pin_positions(
                 dx,
                 dy: 0.0,
                 net: None,
+                pad: None,
             });
         }
     } else {
@@ -934,6 +967,7 @@ fn estimate_pin_positions(
                 dx,
                 dy,
                 net: None,
+                pad: None,
             });
         }
     }
