@@ -413,11 +413,84 @@ fn derive_i2c_pullup(
             fmt_r(r_min), t_budget * 1e9
         );
     };
+    let (_, volts) = solve_with_r(netlist, id, r, ctx)?;
+
+    // MEASURED V_OL at the chosen value: drive the bus's own IBIS pin
+    // low (ibis_state_<PIN>="low" stamped temporarily) and solve — the
+    // real pulldown table sinking through the real R, not the spec's
+    // 3mA assumption. Absent driver model ⇒ the check is UNCHECKED,
+    // visibly (absence-ledger principle).
+    let v_ol: Option<f64> = (|| {
+        let mut conv = ctx.converter(netlist);
+        let circuit = conv.convert(netlist).ok()?;
+        let (inst_name, pin_name) = circuit.branches().find_map(|(_, b)| {
+            if b.component_type != "IbisBuffer" || !b.name.ends_with("_ibis") {
+                return None;
+            }
+            let on_bus = b.nodes.first().and_then(|i| {
+                circuit.nodes().find(|(idx, _)| idx == i).map(|(_, n)| n.name == bus)
+            })?;
+            if !on_bus {
+                return None;
+            }
+            let stem = b.name.trim_end_matches("_ibis");
+            let parent = b
+                .metadata
+                .get(bhdl_spice::circuit::META_PARENT_INSTANCE)
+                .cloned()?;
+            let pin = stem.strip_prefix(&format!("{parent}_"))?.to_string();
+            Some((parent, pin))
+        })?;
+        let (iid, _) = netlist.instances.iter().find(|(_, i)| i.name == inst_name)?;
+        let attr = format!("ibis_state_{pin_name}");
+        let prev = netlist.instances[iid].attributes.get(&attr).cloned();
+        netlist.instances[iid].attributes.insert(attr.clone(), "low".to_string());
+        let solved = solve_with_r(netlist, id, r, ctx).ok().map(|(_, v)| v.get(&bus).copied());
+        match prev {
+            Some(p) => { netlist.instances[iid].attributes.insert(attr, p); }
+            None => { netlist.instances[iid].attributes.remove(&attr); }
+        }
+        solved.flatten()
+    })();
+
+    // Standby current: what the largest-passing-R policy bought. The
+    // bus-low case uses the MEASURED V_OL when available.
+    let v_low = v_ol.unwrap_or(0.0);
+    let i_standby = (v_rail - v_low) / r;
+    let seed_r = parse_engineering(
+        netlist.instances[id]
+            .attributes
+            .get("derive_seed")
+            .map(String::as_str)
+            .unwrap_or(""),
+    )
+    .filter(|v| *v > 0.0);
+    let seed_cmp = seed_r
+        .map(|sr| format!(" (vs {:.0}µA at {} seed)", (v_rail - v_low) / sr * 1e6, fmt_r(sr)))
+        .unwrap_or_default();
+    let v_ol_txt = match v_ol {
+        Some(v) if v <= 0.4 => format!("MEASURED V_OL {:.0}mV ≤ 400mV", v * 1e3),
+        Some(v) => format!("MEASURED V_OL {:.0}mV EXCEEDS 400mV", v * 1e3),
+        None => "V_OL UNCHECKED (no vendor model drives this bus)".to_string(),
+    };
+    if let Some(v) = v_ol {
+        if v > 0.4 {
+            bail!(
+                "chosen {} fails the MEASURED V_OL check: {:.0}mV > 400mV — the real \
+                 driver sinks less than the spec's 3mA assumption; no E24 value \
+                 satisfies both rise budget and V_OL on this bus",
+                fmt_r(r), v * 1e3
+            );
+        }
+    }
+    // Restore the winner (the V_OL probe re-solved at r already, but be
+    // explicit — early exits must never leave a probe value stamped).
     let (_, _) = solve_with_r(netlist, id, r, ctx)?;
+    let _ = volts;
     let detail = format!(
-        "{khz:.0}kHz I2C: rise budget {:.0}ns, MEASURED 30–70% {:.0}ns at {}; \
-         R_min {} from V_OL≤0.4V@3mA against {v_rail}V rail",
-        t_budget * 1e9, t_r * 1e9, fmt_r(r), fmt_r(r_min)
+        "{khz:.0}kHz I2C: rise budget {:.0}ns, MEASURED 30–70% {:.0}ns at {}; {v_ol_txt}; \
+         standby {:.0}µA{seed_cmp}; R_min {} from V_OL≤0.4V@3mA against {v_rail}V rail",
+        t_budget * 1e9, t_r * 1e9, fmt_r(r), i_standby * 1e6, fmt_r(r_min)
     );
     netlist.instances[id]
         .attributes
