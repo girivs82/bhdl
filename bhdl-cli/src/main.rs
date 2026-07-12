@@ -341,6 +341,15 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // `bhdl vendor <status|install ...>` is board-independent — intercept
+    // before clap, whose grammar requires an input FILE for every other
+    // command.
+    {
+        let args: Vec<String> = std::env::args().collect();
+        if args.get(1).map(String::as_str) == Some("vendor") {
+            return cmd_vendor(&args[2..]);
+        }
+    }
     let cli = Cli::parse();
     
     // Initialize logging: --verbose defaults to debug, otherwise info;
@@ -2386,6 +2395,124 @@ fn run_ibis_transient_traces(
         })
         .collect();
     (traces, duration)
+}
+
+/// `bhdl vendor status|install` — the vendor-file distribution story
+/// (bhdl_common::vendor). Vendor simulation data is licensed
+/// use-not-redistribute, so the repo commits a MANIFEST (path + sha256 +
+/// provenance) and the user obtains the files; `install` verifies a
+/// download against the manifest and places it in the local store.
+fn cmd_vendor(args: &[String]) -> Result<()> {
+    use bhdl_common::vendor::{
+        resolve, sha256_file, store_relpath, store_root, VendorManifest,
+    };
+
+    let usage = "usage: bhdl vendor status | bhdl vendor install <file-or-dir>...";
+    let action = args.first().map(String::as_str).unwrap_or("");
+
+    let cwd = std::env::current_dir()?;
+    let manifest_path = VendorManifest::find_upwards(&cwd)
+        .ok_or_else(|| anyhow::anyhow!(
+            "no vendor/MANIFEST.toml found walking up from {} — run inside a BHDL              project tree", cwd.display()))?;
+    let manifest = VendorManifest::load(&manifest_path).map_err(|e| anyhow::anyhow!(e))?;
+    let repo_root = manifest_path.parent().and_then(|p| p.parent()).map(|p| p.to_path_buf());
+
+    match action {
+        "status" => {
+            println!("{}", "Vendor files (manifest: see vendor/MANIFEST.toml)".bold());
+            let mut missing = 0;
+            for f in &manifest.files {
+                match resolve(&f.path, repo_root.as_deref()) {
+                    Some(found) => {
+                        let hash = sha256_file(&found)?;
+                        if hash == f.sha256 {
+                            println!("  {} {}  ({})", "✓".green(), f.path, found.display());
+                        } else {
+                            println!(
+                                "  {} {}  ({}) — sha256 MISMATCH: file differs from the                                  one the stdlib was validated against",
+                                "✗".red(), f.path, found.display()
+                            );
+                        }
+                    }
+                    None => {
+                        missing += 1;
+                        println!("  {} {}  MISSING", "✗".red(), f.path);
+                        println!("      obtain: {}", f.source);
+                        println!("      license: {}", f.license);
+                    }
+                }
+            }
+            if missing > 0 {
+                println!();
+                println!(
+                    "  install downloaded files with: bhdl vendor install <file-or-dir>"
+                );
+            }
+            Ok(())
+        }
+        "install" => {
+            let sources = &args[1..];
+            if sources.is_empty() {
+                anyhow::bail!("{usage}");
+            }
+            // Collect candidate files from the given files/dirs (recursive).
+            let mut candidates: Vec<PathBuf> = Vec::new();
+            fn walk(p: &Path, out: &mut Vec<PathBuf>) {
+                if p.is_file() {
+                    out.push(p.to_path_buf());
+                } else if p.is_dir() {
+                    if let Ok(rd) = std::fs::read_dir(p) {
+                        for e in rd.flatten() {
+                            walk(&e.path(), out);
+                        }
+                    }
+                }
+            }
+            for s in sources {
+                walk(Path::new(s), &mut candidates);
+            }
+            let store = store_root()
+                .ok_or_else(|| anyhow::anyhow!("cannot determine vendor store (no HOME, no BHDL_VENDOR_DIR)"))?;
+
+            let mut installed = 0;
+            for f in &manifest.files {
+                let base = Path::new(&f.path)
+                    .file_name()
+                    .map(|b| b.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let Some(src) = candidates.iter().find(|c| {
+                    c.file_name().map(|b| b.to_string_lossy().eq_ignore_ascii_case(&base))
+                        .unwrap_or(false)
+                }) else {
+                    continue;
+                };
+                let hash = sha256_file(src)?;
+                if hash != f.sha256 {
+                    println!(
+                        "  {} {} — sha256 mismatch, NOT installed (expected the exact                          file the stdlib was validated against; got {hash})",
+                        "✗".red(), src.display()
+                    );
+                    continue;
+                }
+                let dest = store.join(store_relpath(&f.path));
+                if let Some(parent) = dest.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::copy(src, &dest)?;
+                println!("  {} {} → {}", "✓".green(), f.path, dest.display());
+                installed += 1;
+            }
+            if installed == 0 {
+                anyhow::bail!(
+                    "nothing installed: no candidate matched a manifest entry by name                      (and hash) — see `bhdl vendor status` for what is expected"
+                );
+            }
+            println!();
+            println!("  {} {installed} file(s) in store {}", "✓".green(), store.display());
+            Ok(())
+        }
+        _ => anyhow::bail!("{usage}"),
+    }
 }
 
 /// `transient` — solve the board through time while its IBIS buffers

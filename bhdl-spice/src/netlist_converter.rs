@@ -387,22 +387,25 @@ impl NetlistToSpiceConverter {
                 let mut stamped_pins: std::collections::HashSet<String> =
                     std::collections::HashSet::new();
                 for ibis_ref in ibis_refs {
-                // Resolve the file: as-written, then relative to base dir.
-                let raw = std::path::PathBuf::from(&ibis_ref.path);
-                let path = if raw.exists() {
-                    raw
-                } else if let Some(base) = &self.ibis_base_dir {
-                    base.join(&ibis_ref.path)
-                } else {
-                    raw
-                };
+                // Resolve the file through the vendor search path:
+                // as-written → board dir → local vendor store
+                // ($BHDL_VENDOR_DIR / ~/.bhdl/vendor — see
+                // bhdl_common::vendor). Missing files keep the as-written
+                // path so the §5 warn names what was looked for.
+                let path = bhdl_common::vendor::resolve(
+                    &ibis_ref.path,
+                    self.ibis_base_dir.as_deref(),
+                )
+                .unwrap_or_else(|| std::path::PathBuf::from(&ibis_ref.path));
                 let parsed = file_cache.entry(path.clone()).or_insert_with(|| {
                     match crate::ibis::parse_file(&path) {
                         Ok(f) => Some(f),
                         Err(e) => {
                             warn!(
                                 "ibis model for '{}': cannot read {} ({e}) — \
-                                 falling through to the next model form (§5 ladder)",
+                                 falling through to the next model form (§5 ladder). \
+                                 Vendor files install via `bhdl vendor install <download>` \
+                                 (see vendor/MANIFEST.toml; `bhdl vendor status` lists them)",
                                 entity, path.display()
                             );
                             None

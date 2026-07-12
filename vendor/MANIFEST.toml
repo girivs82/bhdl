@@ -1,0 +1,33 @@
+# BHDL vendor-file manifest.
+#
+# These files carry vendor simulation data (IBIS) that stdlib entities
+# reference by the paths below. Their licenses permit USE and
+# MODIFICATION but NOT REDISTRIBUTION, so the repository commits only
+# this manifest; the files themselves are gitignored (see .gitignore:
+# vendor/ibis/).
+#
+# To set up:
+#   1. Download the vendor archive named under `source` from the
+#      vendor's site.
+#   2. `bhdl vendor install <downloaded-dir-or-file>` — verifies each
+#      file's sha256 against this manifest and places it in the local
+#      store (~/.bhdl/vendor, or $BHDL_VENDOR_DIR).
+#   3. `bhdl vendor status` — shows what is present/missing.
+#
+# The sha256 values pin the EXACT files the stdlib's simulation results
+# were validated against; a vendor re-release with different content is
+# reported as a mismatch, never silently accepted.
+
+[[file]]
+path = "vendor/ibis/megaavr/m16u2m32.ibs"
+sha256 = "ec794daea7aa5dd1c8646cb2c68c769bb4707320f727c23f5dada19f15d68e27"
+source = "Microchip 'megaAVR IBIS Models' archive (microchip.com — ATmega16U2 product page, Documents > Modeling files)"
+license = "Atmel/Microchip IBIS model license: free use and modification; redistribution not permitted"
+used_by = ["bhdl-stdlib/actives/atmega16u2.bhdl"]
+
+[[file]]
+path = "vendor/ibis/megaavr/m04_tqfp32_dm_dp_avrusb16k_3v.ibs"
+sha256 = "efb1b2ca285308a89ad596e18338f83557afcbcef5dfc44023be2c46c641e213"
+source = "Microchip 'megaAVR IBIS Models' archive (same download as m16u2m32.ibs — the USB D+/D- transceiver buffers ship as separate avrusb dm_dp files)"
+license = "Atmel/Microchip IBIS model license: free use and modification; redistribution not permitted"
+used_by = ["bhdl-stdlib/actives/atmega16u2.bhdl"]

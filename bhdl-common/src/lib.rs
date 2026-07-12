@@ -4,6 +4,7 @@
 //! all BHDL crates to ensure consistency and reduce duplication.
 
 pub mod component_types;
+pub mod vendor;
 pub mod pin_metadata;
 pub mod analysis_interface;
 pub mod intent;
