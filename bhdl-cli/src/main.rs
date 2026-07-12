@@ -1275,7 +1275,7 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
         // board source's directory.
         converter.set_ibis_models(
             analysis.model_recipes.iter()
-                .filter_map(|(e, r)| r.ibis.clone().map(|i| (e.clone(), i)))
+                .filter_map(|(e, r)| (!r.ibis.is_empty()).then(|| (e.clone(), r.ibis.clone())))
                 .collect(),
             source_path.parent().map(|p| p.to_path_buf()).unwrap_or_default(),
         );
@@ -2532,7 +2532,7 @@ async fn cmd_bom(
         ));
         conv.set_ibis_models(
             analysis.model_recipes.iter()
-                .filter_map(|(e, r)| r.ibis.clone().map(|i| (e.clone(), i)))
+                .filter_map(|(e, r)| (!r.ibis.is_empty()).then(|| (e.clone(), r.ibis.clone())))
                 .collect(),
             std::env::current_dir().unwrap_or_default(),
         );

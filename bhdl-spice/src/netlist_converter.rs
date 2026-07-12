@@ -116,7 +116,7 @@ pub struct NetlistToSpiceConverter {
     /// ⇒ every regulator uses the hardcoded fallback.
     model_overrides: HashMap<String, bhdl_common::model::EvaluatedModel>,
     /// Vendor IBIS references by entity name (§5 vendor-model form #1).
-    ibis_models: HashMap<String, bhdl_common::model::IbisRef>,
+    ibis_models: HashMap<String, Vec<bhdl_common::model::IbisRef>>,
     /// Directory .ibs paths resolve against.
     ibis_base_dir: Option<std::path::PathBuf>,
 }
@@ -147,7 +147,7 @@ impl NetlistToSpiceConverter {
     /// source's dir). Files are parsed lazily at convert() and cached.
     pub fn set_ibis_models(
         &mut self,
-        refs: std::collections::HashMap<String, bhdl_common::model::IbisRef>,
+        refs: std::collections::HashMap<String, Vec<bhdl_common::model::IbisRef>>,
         base_dir: std::path::PathBuf,
     ) {
         self.ibis_models = refs;
@@ -358,7 +358,13 @@ impl NetlistToSpiceConverter {
             for (instance_id, instance) in &netlist.instances {
                 let Some(entity) = netlist.modules.get(instance.definition).map(|m| m.name.clone())
                 else { continue };
-                let Some(ibis_ref) = self.ibis_models.get(&entity) else { continue };
+                let Some(ibis_refs) = self.ibis_models.get(&entity) else { continue };
+                // Per pin, the FIRST declared ref that resolves it wins —
+                // the 16U2 declares its GPIO file first and the USB-pad
+                // file second, each covering disjoint pins.
+                let mut stamped_pins: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
+                for ibis_ref in ibis_refs {
                 // Resolve the file: as-written, then relative to base dir.
                 let raw = std::path::PathBuf::from(&ibis_ref.path);
                 let path = if raw.exists() {
@@ -399,6 +405,7 @@ impl NetlistToSpiceConverter {
                     if pi.instance != instance_id { continue; }
                     let Some(net_id) = pi.net else { continue };
                     let Some(pin) = netlist.pins.get(pi.pin_def) else { continue };
+                    if stamped_pins.contains(&pin.name) { continue; }
                     let Some(net_name) = netlist.nets.get(net_id).and_then(|n| n.name.clone())
                     else { continue };
                     // Explicit map overrides, then the .ibs [Pin] table.
@@ -433,11 +440,13 @@ impl NetlistToSpiceConverter {
                         Some(instance_id),
                         meta,
                     );
+                    stamped_pins.insert(pin.name.clone());
                     info!(
                         "ibis: stamped {}.{} on '{}' as {} buffer (state {:?}, model {})",
                         instance.name, pin.name, net_name, model.model_type, state, model.name
                     );
                 }
+                } // per-ref loop
             }
         }
 

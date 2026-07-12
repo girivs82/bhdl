@@ -844,6 +844,64 @@ Model_type   Input
         assert!(i_led > 2e-3 && i_led < 4e-3, "LED current {i_led} out of band");
     }
 
+    /// The 16U2's REAL USB D+ transceiver buffer (avrusb16k dm/dp file,
+    /// model gpiopu3b01fc, 3.3V pad domain) driving the full-speed idle
+    /// J-state: D+ HIGH into the host's 15kΩ pulldown. Expected operating
+    /// point = the vendor table's own root (self-consistent, no hand-typed
+    /// numbers). Existence-gated.
+    #[test]
+    fn real_16u2_usb_dp_idle() {
+        use crate::circuit::{encode_iv_table, Circuit, META_IV_TABLE};
+        use crate::glacier_dc_solver::GlacierDcSolver;
+        use std::collections::HashMap;
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../vendor/ibis/megaavr/m04_tqfp32_dm_dp_avrusb16k_3v.ibs");
+        if !path.exists() {
+            eprintln!("real_16u2_usb_dp_idle: vendor file absent — skipped");
+            return;
+        }
+        let ib = parse_file(&path).unwrap();
+        let comp = ib.component("megausblc").expect("component");
+        let dp = comp.pin_for("dp").expect("dp pin");
+        let m = ib.resolve_model(&dp.model_name).expect("dp model");
+        assert!(m.pullup.is_some() && m.gnd_clamp.is_some(), "full buffer expected");
+        let pts = m.composed_iv(BufferState::High, Corner::Typ).unwrap();
+
+        let interp = |v: f64| -> f64 {
+            if v <= pts[0].0 { return pts[0].1; }
+            if v >= pts[pts.len()-1].0 { return pts[pts.len()-1].1; }
+            for w in pts.windows(2) {
+                if v <= w[1].0 {
+                    return w[0].1 + (v - w[0].0) / (w[1].0 - w[0].0) * (w[1].1 - w[0].1);
+                }
+            }
+            pts[pts.len()-1].1
+        };
+        let (mut lo, mut hi) = (0.0_f64, 3.6_f64);
+        for _ in 0..60 {
+            let mid = (lo + hi) / 2.0;
+            if interp(mid) + mid / 15000.0 > 0.0 { hi = mid } else { lo = mid }
+        }
+        let expected = (lo + hi) / 2.0;
+        // USB FS spec wants V_OH ≥ 2.8V into 15kΩ — the vendor data should land there.
+        assert!(expected > 2.8 && expected < 3.6, "implausible J-state {expected}");
+
+        let mut c = Circuit::new();
+        c.add_node("DP".into(), None);
+        c.add_node("GND".into(), None);
+        let mut meta = HashMap::new();
+        meta.insert(META_IV_TABLE.to_string(), encode_iv_table(&pts));
+        c.add_branch_with_metadata(
+            "dp_buf".into(), "DP", "GND", "IbisBuffer".into(), 0.0, None, meta,
+        );
+        c.add_branch("host_pd".into(), "DP", "GND", "Resistor".into(), 15000.0, None);
+        let result = GlacierDcSolver::new().solve(c.clone()).expect("solve");
+        let v = result.node_voltages[&c.nodes().find(|(_, n)| n.name == "DP").unwrap().0];
+        assert!((v - expected).abs() < 2e-3, "solver {v} vs table root {expected}");
+        eprintln!("16U2 USB D+ idle J-state into 15kΩ: {v:.4}V (USB spec V_OH ≥ 2.8V)");
+    }
+
     /// The full fixture topology (rail source + buffer HIGH + 124Ω E-snapped
     /// load): the operating point must survive the system context. Load line
     /// on the pullup segment: 0.016·v − 0.08 + v/124 = 0 ⇒ v ≈ 3.3243V.

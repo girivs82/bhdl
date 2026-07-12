@@ -111,6 +111,10 @@ entity ATmega16U2_QFN32(part_no: string = "ATMEGA16U2-MU") {
             // gitignored vendor/ibis/ tree; when absent, the §5 ladder
             // degrades gracefully (WARN, no stamp) and nothing is fabricated.
             ibis "vendor/ibis/megaavr/m16u2m32.ibs" component "atmega16U2_20_mlf32" corner typ;
+            // USB PHY pads: the main file marks DP/DM as NC — Atmel ships
+            // the transceiver buffers separately (avrusb16k = this die
+            // family; 3V variant = the pads' internal-regulator domain).
+            ibis "vendor/ibis/megaavr/m04_tqfp32_dm_dp_avrusb16k_3v.ibs" component "megausblc" corner typ map { D_P = dp; D_N = dm; };
         }
     }
     attribute family          = "AVR";

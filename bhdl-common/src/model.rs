@@ -41,7 +41,10 @@ pub struct ModelRecipe {
     pub entity_name: String,
     pub nodes: Vec<ModelNode>,
     /// `ibis "path" component "NAME" [corner typ] [map { PIN = signal; }];`
-    pub ibis: Option<IbisRef>,
+    /// An entity may declare several (e.g. the 16U2: one file for GPIO
+    /// buffers, another for the USB PHY pads) — per pin, the first ref
+    /// that resolves wins.
+    pub ibis: Vec<IbisRef>,
 }
 
 /// A vendor IBIS model reference from a `model { }` block.
@@ -71,7 +74,7 @@ pub struct EvaluatedModel {
 
 impl ModelRecipe {
     pub fn new(entity_name: String) -> Self {
-        Self { entity_name, nodes: Vec::new(), ibis: None }
+        Self { entity_name, nodes: Vec::new(), ibis: Vec::new() }
     }
 
     pub fn has_nodes(&self) -> bool {

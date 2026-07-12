@@ -2406,17 +2406,17 @@ pub fn extract_model_recipes(
                             }
                         }
                     }
-                    recipe.ibis = Some(bhdl_common::model::IbisRef {
+                    recipe.ibis.push(bhdl_common::model::IbisRef {
                         path: path.clone(),
                         component,
                         corner,
                         pin_map,
                     });
                 }
-                if recipe.has_nodes() || recipe.ibis.is_some() {
+                if recipe.has_nodes() || !recipe.ibis.is_empty() {
                     println!("  Extracted model recipe for '{entity_name}': {} node(s){}",
                              recipe.nodes.len(),
-                             if recipe.ibis.is_some() { " + ibis ref" } else { "" });
+                             if recipe.ibis.is_empty() { "" } else { " + ibis ref(s)" });
                     all.insert(entity_name.clone(), recipe);
                 }
             }
