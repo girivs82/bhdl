@@ -317,7 +317,22 @@ fn derive_i2c_pullup(
     // Largest E24 R whose MEASURED 30–70% rise meets the budget: the bus
     // released from 0V into the pull-up, loaded by every attached pin's
     // real input structure (IBIS clamps + C_comp stamp from the board).
-    let mut chosen: Option<(f64, f64)> = None; // (r, t_r)
+    // Policy: where in the feasible window [R_min, R_max_pass] to land.
+    // Rise time is MEASURED; the current/noise side of the trade-off has
+    // no noise model, so the point choice is AUTHOR INTENT:
+    //   min_power (default) — largest passing R, minimum standby current
+    //   max_drive           — strongest legal pull-up (noise-robust, more current)
+    //   balanced            — geometric middle of the window
+    let policy = netlist.instances[id]
+        .attributes
+        .get("derive_policy")
+        .map(|s| s.trim_matches('"').to_string())
+        .unwrap_or_else(|| "min_power".to_string());
+    if !matches!(policy.as_str(), "min_power" | "max_drive" | "balanced") {
+        bail!("unknown derive_policy '{policy}' (known: min_power, max_drive, balanced)");
+    }
+
+    let mut chosen: Option<(f64, f64)> = None; // (r_max_pass, its t_r)
     let mut reached_vih = false;
     let mut candidates = e24_ladder(r_min, 100e3);
     candidates.reverse();
@@ -413,6 +428,56 @@ fn derive_i2c_pullup(
             fmt_r(r_min), t_budget * 1e9
         );
     };
+    // `r` currently = R_max_pass (the window's high edge). Apply policy.
+    let r_hi = r;
+    let r_lo = e24_ladder(r_min, r_hi).into_iter().next().unwrap_or(r_hi);
+    let r = match policy.as_str() {
+        "max_drive" => r_lo,
+        "balanced" => {
+            let mid = (r_lo * r_hi).sqrt();
+            e24_ladder(r_lo, r_hi)
+                .into_iter()
+                .min_by(|a, b| {
+                    (a - mid).abs().partial_cmp(&(b - mid).abs()).unwrap()
+                })
+                .unwrap_or(r_hi)
+        }
+        _ => r_hi,
+    };
+    // Re-measure the rise AT the chosen value (a smaller R rises faster,
+    // but the report must carry ITS measured number, not the edge's).
+    let t_r = if (r - r_hi).abs() > 1e-9 {
+        let (_, mut ic2) = solve_with_r(netlist, id, r, ctx)?;
+        ic2.insert(bus.clone(), 0.0);
+        let mut conv2 = ctx.converter(netlist);
+        let circuit2 = conv2.convert(netlist)?;
+        let dur2 = (t_budget * 2.0f64).max(100e-9);
+        let params2 = bhdl_spice::transient::TransientParams::new(
+            "",
+            bhdl_spice::transient::Stimulus::Constant(0.0),
+            vec![bus.clone()],
+            dur2,
+            dur2 / 400.0,
+        );
+        let tr2 = bhdl_spice::ibis_transient::run_transient_ibis_ic(
+            &circuit2, &params2, &[], Some(&ic2),
+        )
+        .context("rise-time transient (policy point)")?;
+        let trace2 = &tr2.probe_voltages[&bus];
+        let v_t2 = ic2.get(&bus).copied().unwrap_or(v_rail).max(0.7 * v_rail);
+        let cross2 = |lvl: f64| -> Option<f64> {
+            tr2.times.iter().zip(trace2).find(|(_, v)| **v >= lvl).map(|(t, _)| *t)
+        };
+        match (cross2(0.3 * v_t2), cross2(0.7 * v_t2)) {
+            (Some(a), Some(b)) => b - a,
+            // The DC target was already validated on the window sweep; a
+            // faster R that somehow fails here is a real problem.
+            _ => bail!("policy point {} failed the rise re-measurement", fmt_r(r)),
+        }
+    } else {
+        t_r
+    };
+
     let (_, volts) = solve_with_r(netlist, id, r, ctx)?;
 
     // MEASURED V_OL at the chosen value: drive the bus's own IBIS pin
@@ -488,9 +553,10 @@ fn derive_i2c_pullup(
     let (_, _) = solve_with_r(netlist, id, r, ctx)?;
     let _ = volts;
     let detail = format!(
-        "{khz:.0}kHz I2C: rise budget {:.0}ns, MEASURED 30–70% {:.0}ns at {}; {v_ol_txt}; \
-         standby {:.0}µA{seed_cmp}; R_min {} from V_OL≤0.4V@3mA against {v_rail}V rail",
-        t_budget * 1e9, t_r * 1e9, fmt_r(r), i_standby * 1e6, fmt_r(r_min)
+        "{khz:.0}kHz I2C: feasible {}–{} (V_OL floor to rise budget {:.0}ns), \
+         policy {policy} → {}; MEASURED 30–70% {:.0}ns; {v_ol_txt}; \
+         standby {:.0}µA{seed_cmp}",
+        fmt_r(r_lo), fmt_r(r_hi), t_budget * 1e9, fmt_r(r), t_r * 1e9, i_standby * 1e6
     );
     netlist.instances[id]
         .attributes
