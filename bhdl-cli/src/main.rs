@@ -180,6 +180,11 @@ enum Commands {
         /// Fixed timestep, e.g. "0.05n" (default: duration / 400)
         #[arg(long)]
         timestep: Option<String>,
+
+        /// Sweep all three silicon corners (typ/min/max) instead of the
+        /// stanza-declared corner; corners without table data are skipped
+        #[arg(long)]
+        corners: bool,
     },
 
     /// Run complete pipeline (parse -> analyze -> synthesize -> visualize)
@@ -451,8 +456,8 @@ async fn main() -> Result<()> {
             run_spice(&source_file, &analysis, output, use_metadata, cli.sku.as_deref()).await?;
         }
         
-        Some(Commands::Transient { output, probe, duration, timestep }) => {
-            cmd_transient(&source_file, &cli.input, output, probe, duration, timestep).await?;
+        Some(Commands::Transient { output, probe, duration, timestep, corners }) => {
+            cmd_transient(&source_file, &cli.input, output, probe, duration, timestep, corners).await?;
         }
         Some(Commands::Pipeline { output_dir, no_viz, no_spice }) => {
             run_pipeline(&source_file, &cli.input, output_dir, no_viz, no_spice).await?;
@@ -1315,8 +1320,35 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
                         let mut ann = build_simulation_annotations(&result, &circuit_ref);
                         ann.port_currents = compute_port_currents(&result, &circuit_ref, &netlist);
                         ann.stimulus = run_chain_stimulus(&netlist, &circuit_ref);
-                        ann.transients = run_ibis_transient_traces(
-                            converter.take_ibis_drives(), &circuit_ref, &result);
+                        // Corner sweep: typ (with settle extension) sets
+                        // the window; min/max re-stamp the IBIS models at
+                        // their corners and run the SAME window so the
+                        // panel overlays a true envelope. A corner whose
+                        // tables are absent contributes nothing.
+                        ann.transients = {
+                            let (mut traces, dur) = run_ibis_transient_traces(
+                                converter.take_ibis_drives(), &circuit_ref, &result,
+                                "typ", None);
+                            if !traces.is_empty() {
+                                for (corner, label) in [
+                                    (bhdl_spice::ibis::Corner::Min, "min"),
+                                    (bhdl_spice::ibis::Corner::Max, "max"),
+                                ] {
+                                    converter.set_ibis_corner_override(Some(corner));
+                                    let Ok(c2) = converter.convert(&netlist) else { continue };
+                                    let drives2 = converter.take_ibis_drives();
+                                    let Ok((r2, cref2)) =
+                                        bhdl_spice::input_draw::solve_dc_with_input_draws(
+                                            c2, &regulator_hints(&netlist))
+                                    else { continue };
+                                    let (t2, _) = run_ibis_transient_traces(
+                                        drives2, &cref2, &r2, label, Some(dur));
+                                    traces.extend(t2);
+                                }
+                                converter.set_ibis_corner_override(None);
+                            }
+                            traces
+                        };
                         Some(ann)
                     }
                     Err(e) => {
@@ -2233,9 +2265,11 @@ fn run_ibis_transient_traces(
     drives: Vec<bhdl_spice::ibis_transient::IbisDrive>,
     circuit: &bhdl_spice::circuit::Circuit,
     dc_result: &bhdl_spice::DcAnalysisResult,
-) -> Vec<bhdl_schematic::TransientTrace> {
+    corner: &str,
+    fixed_duration: Option<f64>,
+) -> (Vec<bhdl_schematic::TransientTrace>, f64) {
     if drives.is_empty() {
-        return Vec::new();
+        return (Vec::new(), 0.0);
     }
     let ic: std::collections::HashMap<String, f64> = circuit
         .nodes()
@@ -2278,16 +2312,17 @@ fn run_ibis_transient_traces(
         probes.push((net, spec));
     }
     if probes.is_empty() {
-        return Vec::new();
+        return (Vec::new(), 0.0);
     }
 
     let horizon = drives.iter().map(|d| d.horizon()).fold(0.0, f64::max);
     if horizon <= 0.0 {
-        return Vec::new();
+        return (Vec::new(), 0.0);
     }
-    let mut duration = horizon * 1.5;
+    let mut duration = fixed_duration.unwrap_or(horizon * 1.5);
+    let attempts = if fixed_duration.is_some() { 1 } else { 4 };
     let mut result = None;
-    for _ in 0..4 {
+    for _ in 0..attempts {
         let params = bhdl_spice::transient::TransientParams::new(
             "",
             bhdl_spice::transient::Stimulus::Constant(0.0),
@@ -2318,16 +2353,16 @@ fn run_ibis_transient_traces(
                 duration *= 2.0;
             }
             Err(e) => {
-                info!("ibis transient trace failed: {e} — no scope panel");
-                return Vec::new();
+                info!("ibis transient trace ({corner}) failed: {e} — no scope panel");
+                return (Vec::new(), 0.0);
             }
         }
     }
-    let Some(r) = result else { return Vec::new() };
+    let Some(r) = result else { return (Vec::new(), 0.0) };
 
     // Decimate to ≤160 samples per trace for the SVG.
     let stride = (r.times.len() / 160).max(1);
-    probes
+    let traces: Vec<bhdl_schematic::TransientTrace> = probes
         .into_iter()
         .map(|(net, spec)| {
             let tr = &r.probe_voltages[&net];
@@ -2341,9 +2376,16 @@ fn run_ibis_transient_traces(
                 times.push(*r.times.last().unwrap());
                 volts.push(*tr.last().unwrap());
             }
-            bhdl_schematic::TransientTrace { net, spec, times, volts }
+            bhdl_schematic::TransientTrace {
+                net,
+                spec,
+                corner: corner.to_string(),
+                times,
+                volts,
+            }
         })
-        .collect()
+        .collect();
+    (traces, duration)
 }
 
 /// `transient` — solve the board through time while its IBIS buffers
@@ -2356,6 +2398,7 @@ async fn cmd_transient(
     extra_probes: Vec<String>,
     duration: Option<String>,
     timestep: Option<String>,
+    corners: bool,
 ) -> Result<()> {
     println!("{}", "Transient IBIS simulation...".bold());
 
@@ -2396,6 +2439,18 @@ async fn cmd_transient(
             .collect(),
         source_path.parent().map(|p| p.to_path_buf()).unwrap_or_default(),
     );
+    // Corner plan: the stanza-declared corner alone, or the full sweep.
+    let corner_plan: Vec<(Option<bhdl_spice::ibis::Corner>, &str)> = if corners {
+        vec![
+            (Some(bhdl_spice::ibis::Corner::Typ), "typ"),
+            (Some(bhdl_spice::ibis::Corner::Min), "min"),
+            (Some(bhdl_spice::ibis::Corner::Max), "max"),
+        ]
+    } else {
+        vec![(None, "declared")]
+    };
+
+    converter.set_ibis_corner_override(corner_plan[0].0);
     let circuit = converter.convert(&netlist).context("Circuit conversion failed")?;
     let drives = converter.take_ibis_drives();
     if drives.is_empty() {
@@ -2451,71 +2506,122 @@ async fn cmd_transient(
         "✓".green(), drives.len(), horizon * 1e9, duration * 1e9, timestep * 1e9
     );
 
-    // DC operating point first: the board settles (rails up, caps
-    // charged, regulator draws in place) before any edge fires. The
-    // input-draw pass also returns the final circuit WITH the draw
-    // branches, which is what must be integrated.
-    let (dc_result, circuit) = bhdl_spice::input_draw::solve_dc_with_input_draws(
-        circuit,
-        &regulator_hints(&netlist),
-    )
-    .context("DC operating-point solve failed (needed for initial conditions)")?;
-    let ic: std::collections::HashMap<String, f64> = circuit
-        .nodes()
-        .map(|(idx, n)| {
-            let v = if n.is_ground {
-                0.0
-            } else {
-                dc_result.node_voltages.get(&idx).copied().unwrap_or(0.0)
-            };
-            (n.name.clone(), v)
-        })
-        .collect();
-    println!(
-        "  {} DC operating point solved ({} iterations) — initial conditions set",
-        "✓".green(), dc_result.iterations
-    );
-
-    let params = bhdl_spice::transient::TransientParams::new(
-        "", // no external stimulus: rails + edges drive the board
-        bhdl_spice::transient::Stimulus::Constant(0.0),
-        probes.clone(),
-        duration,
-        timestep,
-    );
-    let result =
-        bhdl_spice::ibis_transient::run_transient_ibis_ic(&circuit, &params, &drives, Some(&ic))
-            .context("transient solve failed")?;
+    // One (label, result) per corner that actually has data. Each corner
+    // re-stamps the IBIS models at ITS tables AND re-solves ITS DC
+    // operating point before any edge fires: the corner shifts the
+    // starting point too, not just the edge.
+    let mut runs: Vec<(&str, bhdl_spice::transient::TransientResult)> = Vec::new();
+    for (i, (ov, label)) in corner_plan.iter().enumerate() {
+        let (drives_c, circuit_c) = if i == 0 {
+            (drives.clone(), circuit.clone())
+        } else {
+            converter.set_ibis_corner_override(*ov);
+            let c = converter.convert(&netlist).context("Circuit conversion failed")?;
+            (converter.take_ibis_drives(), c)
+        };
+        if drives_c.is_empty() {
+            println!("  {} corner {label}: no table data — skipped", "→".cyan());
+            continue;
+        }
+        // A corner that can't solve is reported and skipped, not fatal —
+        // the sweep's job is to show which corners stand and which don't.
+        let (dc_result, circuit_c) = match bhdl_spice::input_draw::solve_dc_with_input_draws(
+            circuit_c,
+            &regulator_hints(&netlist),
+        ) {
+            Ok(x) => x,
+            Err(e) => {
+                eprintln!(
+                    "  {}",
+                    format!("corner {label}: DC operating point did not converge ({e}) — skipped")
+                        .yellow()
+                );
+                continue;
+            }
+        };
+        let ic: std::collections::HashMap<String, f64> = circuit_c
+            .nodes()
+            .map(|(idx, n)| {
+                let v = if n.is_ground {
+                    0.0
+                } else {
+                    dc_result.node_voltages.get(&idx).copied().unwrap_or(0.0)
+                };
+                (n.name.clone(), v)
+            })
+            .collect();
+        println!(
+            "  {} corner {label}: DC operating point solved ({} iterations)",
+            "✓".green(), dc_result.iterations
+        );
+        let params = bhdl_spice::transient::TransientParams::new(
+            "", // no external stimulus: rails + edges drive the board
+            bhdl_spice::transient::Stimulus::Constant(0.0),
+            probes.clone(),
+            duration,
+            timestep,
+        );
+        let result = match bhdl_spice::ibis_transient::run_transient_ibis_ic(
+            &circuit_c, &params, &drives_c, Some(&ic),
+        ) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!(
+                    "  {}",
+                    format!("corner {label}: transient did not converge ({e}) — skipped").yellow()
+                );
+                continue;
+            }
+        };
+        runs.push((label, result));
+    }
+    if runs.is_empty() {
+        anyhow::bail!("no corner had usable IBIS table data");
+    }
 
     println!();
-    println!("  {:<24} {:>10} {:>10} {:>10} {:>10}", "net", "v(0)", "v(end)", "min", "max");
+    println!(
+        "  {:<24} {:<9} {:>10} {:>10} {:>10} {:>10}",
+        "net", "corner", "v(0)", "v(end)", "min", "max"
+    );
     for p in &probes {
-        let tr = &result.probe_voltages[p];
-        let min = tr.iter().cloned().fold(f64::MAX, f64::min);
-        let max = tr.iter().cloned().fold(f64::MIN, f64::max);
-        println!(
-            "  {:<24} {:>9.4}V {:>9.4}V {:>9.4}V {:>9.4}V",
-            p, tr.first().unwrap_or(&0.0), tr.last().unwrap_or(&0.0), min, max
-        );
+        for (label, result) in &runs {
+            let tr = &result.probe_voltages[p];
+            let min = tr.iter().cloned().fold(f64::MAX, f64::min);
+            let max = tr.iter().cloned().fold(f64::MIN, f64::max);
+            println!(
+                "  {:<24} {:<9} {:>9.4}V {:>9.4}V {:>9.4}V {:>9.4}V",
+                p, label, tr.first().unwrap_or(&0.0), tr.last().unwrap_or(&0.0), min, max
+            );
+        }
     }
 
     if let Some(path) = output {
+        // Same window and step across corners ⇒ one shared time column;
+        // one voltage column per net per corner.
+        let times = &runs[0].1.times;
         let mut csv = String::from("time_s");
         for p in &probes {
-            csv.push(',');
-            csv.push_str(p);
+            for (label, _) in &runs {
+                csv.push_str(&format!(",{p}@{label}"));
+            }
         }
         csv.push('\n');
-        for (i, t) in result.times.iter().enumerate() {
+        for (i, t) in times.iter().enumerate() {
             csv.push_str(&format!("{t:.6e}"));
             for p in &probes {
-                csv.push_str(&format!(",{:.6e}", result.probe_voltages[p][i]));
+                for (_, result) in &runs {
+                    csv.push_str(&format!(",{:.6e}", result.probe_voltages[p][i]));
+                }
             }
             csv.push('\n');
         }
         fs::write(&path, csv)?;
         println!();
-        println!("  {} trace written to {} ({} samples)", "✓".green(), path.display(), result.times.len());
+        println!(
+            "  {} trace written to {} ({} samples × {} corner(s))",
+            "✓".green(), path.display(), times.len(), runs.len()
+        );
     }
     Ok(())
 }

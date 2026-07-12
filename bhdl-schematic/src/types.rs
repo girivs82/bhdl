@@ -265,9 +265,17 @@ pub struct TransientTrace {
     pub net: String,
     /// The schedule that produced it, e.g. "rise@2n".
     pub spec: String,
+    /// Silicon corner this trace was solved at: "typ", "min" or "max".
+    /// The scope panel overlays same-net corners as an envelope.
+    #[serde(default = "default_corner")]
+    pub corner: String,
     /// Decimated sample times (seconds) and voltages, same length.
     pub times: Vec<f64>,
     pub volts: Vec<f64>,
+}
+
+fn default_corner() -> String {
+    "typ".to_string()
 }
 
 /// One transient stimulus-response run over a signal chain.

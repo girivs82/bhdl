@@ -123,6 +123,9 @@ pub struct NetlistToSpiceConverter {
     /// directives during convert(); consumed by the transient command
     /// via [`take_ibis_drives`][Self::take_ibis_drives].
     ibis_drives: Vec<crate::ibis_transient::IbisDrive>,
+    /// When set, every IBIS stamp uses THIS silicon corner instead of the
+    /// one each `ibis` stanza declares — the corner-sweep surface.
+    ibis_corner_override: Option<crate::ibis::Corner>,
 }
 
 impl NetlistToSpiceConverter {
@@ -138,7 +141,14 @@ impl NetlistToSpiceConverter {
             ibis_models: HashMap::new(),
             ibis_base_dir: None,
             ibis_drives: Vec::new(),
+            ibis_corner_override: None,
         }
+    }
+
+    /// Override the silicon corner for ALL IBIS stamps (sweep surface).
+    /// None (default) = each stanza's own declared corner.
+    pub fn set_ibis_corner_override(&mut self, corner: Option<crate::ibis::Corner>) {
+        self.ibis_corner_override = corner;
     }
 
     /// Take the IBIS drives built from `ibis_wave_<PIN>` directives during
@@ -411,7 +421,9 @@ impl NetlistToSpiceConverter {
                     );
                     continue;
                 };
-                let corner = crate::ibis::Corner::parse(&ibis_ref.corner).unwrap_or_default();
+                let corner = self.ibis_corner_override.unwrap_or_else(|| {
+                    crate::ibis::Corner::parse(&ibis_ref.corner).unwrap_or_default()
+                });
 
                 for pi in netlist.pin_instances.values() {
                     if pi.instance != instance_id { continue; }
@@ -472,7 +484,7 @@ impl NetlistToSpiceConverter {
                     meta.insert(META_PARENT_INSTANCE.to_string(), instance.name.clone());
                     meta.insert(
                         "sim_model_provenance".to_string(),
-                        format!("ibis:{}#{}:{}", path.display(), model.name, ibis_ref.corner),
+                        format!("ibis:{}#{}:{:?}", path.display(), model.name, corner),
                     );
                     let branch_name = format!("{}_{}_ibis", instance.name, pin.name);
                     circuit.add_branch_with_metadata(

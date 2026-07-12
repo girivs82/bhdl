@@ -2162,17 +2162,30 @@ fn draw_transient_panel(
     svg.text(40.0, y, "MEASURED TRANSIENT (ibis_wave)", "sim");
     y += 14.0;
 
-    for (i, tr) in traces.iter().enumerate() {
+    // One panel per (net, spec); same-net corner traces overlay as an
+    // envelope (min/max dashed, typ solid on top).
+    let mut groups: Vec<(&str, &str, Vec<&crate::types::TransientTrace>)> = Vec::new();
+    for tr in traces {
+        if tr.times.len() < 2 || tr.volts.len() != tr.times.len() {
+            continue;
+        }
+        match groups.iter_mut().find(|(n, s, _)| *n == tr.net && *s == tr.spec) {
+            Some((_, _, v)) => v.push(tr),
+            None => groups.push((&tr.net, &tr.spec, vec![tr])),
+        }
+    }
+
+    for (i, (net, spec, grp)) in groups.iter().enumerate() {
         let col = i % 3;
         let row = i / 3;
         let x = 40.0 + col as f64 * (PW + GAP);
         let py = y + row as f64 * (PH + 56.0);
-        if tr.times.len() < 2 || tr.volts.len() != tr.times.len() {
-            continue;
-        }
-        let (t0, t1) = (tr.times[0], *tr.times.last().unwrap());
-        let vmin = tr.volts.iter().cloned().fold(f64::MAX, f64::min);
-        let vmax = tr.volts.iter().cloned().fold(f64::MIN, f64::max);
+
+        // Common scale across the group so the envelope reads directly.
+        let t0 = grp.iter().map(|t| t.times[0]).fold(f64::MAX, f64::min);
+        let t1 = grp.iter().map(|t| *t.times.last().unwrap()).fold(f64::MIN, f64::max);
+        let vmin = grp.iter().flat_map(|t| &t.volts).cloned().fold(f64::MAX, f64::min);
+        let vmax = grp.iter().flat_map(|t| &t.volts).cloned().fold(f64::MIN, f64::max);
         let span_v = (vmax - vmin).max(1e-9);
         let span_t = (t1 - t0).max(1e-15);
 
@@ -2182,36 +2195,64 @@ fn draw_transient_panel(
             r##"<rect x="{x:.1}" y="{py:.1}" width="{PW:.1}" height="{PH:.1}" fill="none" stroke="#999" stroke-width="1"/>"##
         );
         svg.solid(Rect { x0: x - 2.0, y0: py - 14.0, x1: x + PW + 2.0, y1: py + PH + 30.0 });
-        // Trace — the solved samples, scaled into the frame with a 6px
-        // vertical margin.
+
+        // Corner traces first (dashed, muted), typ solid on top.
         let m = 6.0;
-        let mut pts = String::new();
-        for (t, v) in tr.times.iter().zip(&tr.volts) {
-            let px = x + (t - t0) / span_t * PW;
-            let pv = py + PH - m - (v - vmin) / span_v * (PH - 2.0 * m);
-            let _ = write!(pts, "{px:.1},{pv:.1} ");
+        let mut ordered: Vec<&&crate::types::TransientTrace> = grp.iter().collect();
+        ordered.sort_by_key(|t| if t.corner == "typ" { 1 } else { 0 });
+        let mut typ: Option<&crate::types::TransientTrace> = None;
+        for tr in ordered {
+            let mut pts = String::new();
+            for (t, v) in tr.times.iter().zip(&tr.volts) {
+                let px = x + (t - t0) / span_t * PW;
+                let pv = py + PH - m - (v - vmin) / span_v * (PH - 2.0 * m);
+                let _ = write!(pts, "{px:.1},{pv:.1} ");
+            }
+            let (stroke, width, dash) = if tr.corner == "typ" {
+                typ = Some(tr);
+                ("#06c", 1.6, "")
+            } else {
+                ("#8ab", 1.2, r#" stroke-dasharray="3 2""#)
+            };
+            let _ = writeln!(
+                svg.body,
+                r##"<polyline points="{}" fill="none" stroke="{stroke}" stroke-width="{width}"{dash}/>"##,
+                pts.trim_end()
+            );
         }
-        let _ = writeln!(
-            svg.body,
-            r##"<polyline points="{}" fill="none" stroke="#06c" stroke-width="1.6"/>"##,
-            pts.trim_end()
-        );
-        // Labels: net + schedule above; endpoint voltages and span below.
-        svg.text(x, py - 4.0, &format!("{} — {}", tr.net, tr.spec), "ref");
-        svg.text(
-            x, py + PH + 14.0,
-            &format!(
-                "{} → {}  ({} span, {} pk-pk)",
-                fmt_sim_v(tr.volts[0]),
-                fmt_sim_v(*tr.volts.last().unwrap()),
-                fmt_time_span(span_t),
-                fmt_sim_v(span_v),
-            ),
-            "sim",
-        );
+
+        // Labels: net + schedule above; typ endpoints and span below, with
+        // the corner-spread note when an envelope is drawn.
+        svg.text(x, py - 4.0, &format!("{net} — {spec}"), "ref");
+        let lead = typ.or_else(|| grp.first().copied());
+        if let Some(tr) = lead {
+            // Name exactly the corners that drew — a corner whose solve
+            // failed is absent, and the note must not claim it.
+            let mut extra: Vec<&str> = grp
+                .iter()
+                .filter(|t| t.corner != "typ")
+                .map(|t| t.corner.as_str())
+                .collect();
+            extra.sort();
+            let note = if extra.is_empty() {
+                String::new()
+            } else {
+                format!(", {} dashed", extra.join("/"))
+            };
+            svg.text(
+                x, py + PH + 14.0,
+                &format!(
+                    "{} → {}  ({} span{note})",
+                    fmt_sim_v(tr.volts[0]),
+                    fmt_sim_v(*tr.volts.last().unwrap()),
+                    fmt_time_span(span_t),
+                ),
+                "sim",
+            );
+        }
         svg.grow(x + PW + 20.0, py + PH + 40.0);
     }
-    let rows = traces.len().div_ceil(3);
+    let rows = groups.len().div_ceil(3);
     40.0 + rows as f64 * (PH + 56.0) + 20.0
 }
 
