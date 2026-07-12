@@ -120,7 +120,14 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
             BoardSide::Top => ("F.Cu", "F.Mask", "F.Paste", "F.SilkS"),
             BoardSide::Bottom => ("B.Cu", "B.Mask", "B.Paste", "B.SilkS"),
         };
-        let rot_deg = comp.theta.to_degrees();
+        // KiCad's canvas is Y-DOWN: its positive rotation is the mirror
+        // of the engine's y-up math. Emitting θ' = −θ makes KiCad's pad
+        // transform algebraically identical to the engine's
+        //   (gx = x + dx·cosθ − dy·sinθ, gy = y + dx·sinθ + dy·cosθ)
+        // so pads land exactly where the router believed them to be.
+        // (Found by the DRC oracle: rotated SOT-23 pads mirrored about
+        // the component center, shorting tracks against the wrong pad.)
+        let rot_deg = (-comp.theta.to_degrees()).rem_euclid(360.0);
 
         out.push_str(&format!(
             "  (footprint \"{}\" (layer \"{}\") (at {} {} {:.1})\n",

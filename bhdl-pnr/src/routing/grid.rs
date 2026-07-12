@@ -25,16 +25,21 @@ pub struct GridCell {
     pub history: f64,
     pub present: f64,
     pub blocked: bool,
+    /// Net that owns this blocked cell (a pad + its clearance halo).
+    /// The owning net may enter (terminal access / escape); every other
+    /// net sees a hard block — pad clearance by construction.
+    pub owner: Option<NetId>,
 }
 
 impl Default for GridCell {
     fn default() -> Self {
         GridCell {
-            capacity: 4,
+            capacity: 1,
             demand: 0,
             history: 0.0,
             present: 0.0,
             blocked: false,
+            owner: None,
         }
     }
 }
@@ -53,7 +58,14 @@ impl RoutingGrid {
     /// Default cell_size_mm = 1.0 gives good results for PCB placement.
     /// Smaller cells → better routing quality but more memory/time.
     pub fn build(board: &Board) -> Self {
-        Self::build_uniform(board, 1.0)
+        // Clearance by construction: one track per cell, cell size = the
+        // track pitch (min width + min spacing). Adjacent-cell tracks are
+        // then legally spaced automatically — the 1 mm/capacity-4 grid
+        // emitted multiple tracks at the SAME cell center (overlapping
+        // copper), the dominant violation family in the P0 oracle
+        // baseline.
+        let pitch = (board.config.min_trace_width_mm + board.config.min_spacing_mm).max(0.25);
+        Self::build_uniform(board, pitch)
     }
 
     /// Build a uniform grid with specified cell size.
@@ -83,16 +95,8 @@ impl RoutingGrid {
         for (l, layer) in board.layer_stack.layers.iter().enumerate() {
             let base_cap = match layer.kind {
                 LayerKind::Ground | LayerKind::Power => 0,
-                LayerKind::Signal => {
-                    // Capacity proportional to cell size: wider cells hold more traces
-                    // A 1mm cell with 0.15mm trace + 0.15mm spacing fits ~3 traces
-                    let traces_per_cell = (cell_size_mm / (board.config.min_trace_width_mm + board.config.min_spacing_mm)).floor() as usize;
-                    traces_per_cell.max(1)
-                }
-                LayerKind::Mixed => {
-                    let traces = (cell_size_mm / (board.config.min_trace_width_mm + board.config.min_spacing_mm)).floor() as usize;
-                    (traces / 2).max(1)
-                }
+                LayerKind::Signal => 1,
+                LayerKind::Mixed => 1,
             };
             for row in &mut grid.cells[l] {
                 for cell in row.iter_mut() {
@@ -104,7 +108,7 @@ impl RoutingGrid {
         // Mark blocked cells around component PADS (not the entire body).
         // Traces can run between pads on the same layer — standard PCB practice.
         // Only the pad areas + keepaway are actually unroutable.
-        let pad_keepaway = board.config.min_spacing_mm + 0.1; // pad clearance
+        let halo = board.config.min_spacing_mm + board.config.min_trace_width_mm / 2.0;
         for comp in &board.components {
             let layer_idx = match comp.side {
                 BoardSide::Top => 0,
@@ -114,20 +118,34 @@ impl RoutingGrid {
             let sin_t = comp.theta.sin();
 
             for pin in &comp.pins {
-                // Global pad position
+                // Real pad geometry (P0), expanded by (spacing + trace/2):
+                // a track CENTER must keep that distance from the pad edge.
+                // Cells are tagged with the pad's NET — the owning net may
+                // enter (terminal access/escape), others see a hard block.
+                // Through-hole pads block every copper layer.
                 let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
                 let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
-
-                // Block a small area around each pad (pad size + keepaway)
-                // Use a generous pad size estimate (actual IPC pad is ~0.5-1.5mm)
-                let pad_w = 1.0 + pad_keepaway;
-                let pad_h = 0.6 + pad_keepaway;
-                mark_rect_blocked(
-                    &mut grid.cells[layer_idx],
-                    gx - pad_w / 2.0, gy - pad_h / 2.0,
-                    gx + pad_w / 2.0, gy + pad_h / 2.0,
-                    &grid.x_coords, &grid.y_coords,
-                );
+                let (pw, ph, thru) = match &pin.pad {
+                    Some(p) => (p.width_mm, p.height_mm, p.drill_mm.is_some()),
+                    None => (0.8, 0.8, false),
+                };
+                let quarter = ((comp.theta / std::f64::consts::FRAC_PI_2).round() as i64)
+                    .rem_euclid(2);
+                let (pw, ph) = if quarter == 1 { (ph, pw) } else { (pw, ph) };
+                let (hx, hy) = (pw / 2.0 + halo, ph / 2.0 + halo);
+                let pad_layers: Vec<usize> = if thru {
+                    (0..num_layers).collect()
+                } else {
+                    vec![layer_idx]
+                };
+                for l in pad_layers {
+                    mark_rect_blocked_owned(
+                        &mut grid.cells[l],
+                        gx - hx, gy - hy, gx + hx, gy + hy,
+                        &grid.x_coords, &grid.y_coords,
+                        pin.net,
+                    );
+                }
             }
         }
 
@@ -314,6 +332,38 @@ impl RoutingGrid {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
+
+fn mark_rect_blocked_owned(
+    layer_cells: &mut [Vec<GridCell>],
+    x_min: f64, y_min: f64, x_max: f64, y_max: f64,
+    x_coords: &[f64], y_coords: &[f64],
+    owner: Option<NetId>,
+) {
+    let rows = y_coords.len().saturating_sub(1);
+    let cols = x_coords.len().saturating_sub(1);
+    for r in 0..rows.min(layer_cells.len()) {
+        let (cy0, cy1) = (y_coords[r], y_coords[r + 1]);
+        if cy1 < y_min || cy0 > y_max {
+            continue;
+        }
+        for c in 0..cols.min(layer_cells[r].len()) {
+            let (cx0, cx1) = (x_coords[c], x_coords[c + 1]);
+            if cx1 < x_min || cx0 > x_max {
+                continue;
+            }
+            let cell = &mut layer_cells[r][c];
+            cell.blocked = true;
+            // First owner wins; a cell contested by two DIFFERENT nets'
+            // halos stays blocked for both (owner cleared) — neither may
+            // route through the shared gap.
+            match cell.owner {
+                None => cell.owner = owner,
+                Some(o) if Some(o) != owner => cell.owner = None,
+                _ => {}
+            }
+        }
+    }
+}
 
 fn mark_rect_blocked(
     layer_cells: &mut [Vec<GridCell>],

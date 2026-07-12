@@ -405,6 +405,9 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         false, // no vias
     );
 
+    if std::env::var("BHDL_PNR_DEBUG_CLEARANCE").is_ok() {
+        debug_check_foreign_pads(&board, &final_routes, "after-pass1");
+    }
     let routed_pass1 = final_routes.iter().filter(|r| !r.is_empty()).count();
     let needs_via: Vec<usize> = final_routes.iter().enumerate()
         .filter(|(i, r)| {
@@ -479,6 +482,9 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         routed_pass1, final_routes.iter().filter(|r| !r.is_empty()).count() - routed_pass1);
 
     // 6. DRC
+    if std::env::var("BHDL_PNR_DEBUG_CLEARANCE").is_ok() {
+        debug_check_foreign_pads(&board, &final_routes, "final");
+    }
     let drc_violations = legalization::check_drc(&board, &final_routes);
 
     // 7. Metrics
@@ -522,4 +528,38 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         },
         drc_violations,
     })
+}
+
+/// Env-gated diagnostic: sample every route segment against every
+/// foreign pad rect (+spacing) and report intrusions with full context.
+fn debug_check_foreign_pads(board: &Board, routes: &[Route], tag: &str) {
+    for route in routes {
+        for seg in &route.segments {
+            for comp in &board.components {
+                let cos_t = comp.theta.cos();
+                let sin_t = comp.theta.sin();
+                for pin in &comp.pins {
+                    if pin.net == Some(route.net_id) {
+                        continue;
+                    }
+                    let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
+                    let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+                    let (pw, ph) = pin.pad.as_ref().map(|p| (p.width_mm, p.height_mm)).unwrap_or((0.8, 0.8));
+                    let (hx, hy) = (pw / 2.0 + 0.15, ph / 2.0 + 0.15);
+                    for i in 0..=10 {
+                        let t = i as f64 / 10.0;
+                        let x = seg.start.0 + t * (seg.end.0 - seg.start.0);
+                        let y = seg.start.1 + t * (seg.end.1 - seg.start.1);
+                        if (x - gx).abs() < hx && (y - gy).abs() < hy {
+                            log::warn!(
+                                "CLEARANCE[{tag}] net route seg {:?}->{:?} intrudes {}.{} pad at ({gx:.2},{gy:.2}) net {:?} (route net {:?})",
+                                seg.start, seg.end, comp.refdes, pin.name, pin.net, route.net_id
+                            );
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

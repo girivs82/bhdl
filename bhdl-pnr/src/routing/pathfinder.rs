@@ -269,7 +269,10 @@ fn dijkstra_to_any(
             // never be pushed onto the heap would make the net spuriously
             // unroutable. Terminals only; we still never tunnel through other
             // components' pads.
-            if gc.blocked && !sinks.contains(&nbr) {
+            if gc.blocked
+                    && !sinks.contains(&nbr)
+                    && gc.owner != Some(net.id)
+                {
                 continue;
             }
 
@@ -296,7 +299,10 @@ fn dijkstra_to_any(
                 let gc = grid.get(nbr);
                 // Same terminal exception as the planar case: a via may land
                 // on a blocked cell only if it is this net's own pin terminal.
-                if gc.blocked && !sinks.contains(&nbr) {
+                if gc.blocked
+                    && !sinks.contains(&nbr)
+                    && gc.owner != Some(net.id)
+                {
                     continue;
                 }
 
