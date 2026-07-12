@@ -1643,6 +1643,79 @@ fn display_label(inst: &bhdl_netlist::Instance) -> String {
 
 /// Render the sign-off rows as a Markdown table plus a one-line summary.
 /// Returns `None` if there are no stress-bearing passives to report.
+/// The derived-values section of the sign-off report: every part whose
+/// value the toolchain DERIVED by simulation (`derive_rule` markers),
+/// with the author's seed, the landed value, and the rule's
+/// spec-vs-MEASURED basis — including derivations that were SKIPPED
+/// (seed kept), which the engineer must see for the same reason ERC024
+/// shows unchecked axes: a skipped derivation is a hole, not a pass.
+pub fn format_derived_values(netlist: &bhdl_netlist::Netlist) -> Option<String> {
+    let mut rows: Vec<(String, String, String, String, String)> = netlist
+        .instances
+        .iter()
+        .filter_map(|(_, inst)| {
+            let rule = inst.attributes.get("derive_rule")?;
+            let detail = inst
+                .attributes
+                .get("derive_detail")
+                .cloned()
+                .unwrap_or_else(|| "no derivation ran (pre-solve path?)".to_string());
+            let seed = inst
+                .attributes
+                .get("derive_seed")
+                .cloned()
+                .unwrap_or_else(|| "—".to_string());
+            let value = inst
+                .attributes
+                .get("value")
+                .cloned()
+                .unwrap_or_else(|| "—".to_string());
+            let display = match inst.attributes.get("refdes") {
+                Some(r) => format!("{} ({})", inst.name, r.trim_matches('"')),
+                None => inst.name.clone(),
+            };
+            Some((
+                display,
+                rule.trim_matches('"').to_string(),
+                seed,
+                value,
+                detail,
+            ))
+        })
+        .collect();
+    if rows.is_empty() {
+        return None;
+    }
+    rows.sort();
+    let mut out = String::new();
+    out.push_str("
+### Derived values (simulation-driven)
+
+");
+    out.push_str("| Part | Rule | Seed | Derived | Basis (spec vs MEASURED) |
+");
+    out.push_str("|------|------|------|---------|---------------------------|
+");
+    let mut skipped = 0;
+    for (display, rule, seed, value, detail) in &rows {
+        if detail.contains("SKIPPED") {
+            skipped += 1;
+        }
+        out.push_str(&format!(
+            "| {display} | {rule} | {seed} | {value} | {detail} |
+"
+        ));
+    }
+    if skipped > 0 {
+        out.push_str(&format!(
+            "
+_{skipped} derivation(s) SKIPPED (seed kept) — see the basis column; a skipped derivation is an unverified value, not a pass._
+"
+        ));
+    }
+    Some(out)
+}
+
 pub fn format_signoff_report(rows: &[SignoffRow]) -> Option<String> {
     if rows.is_empty() {
         return None;

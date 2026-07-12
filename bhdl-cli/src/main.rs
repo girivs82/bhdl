@@ -3216,6 +3216,11 @@ async fn cmd_bom(
                         {
                             print!("{report}");
                         }
+                        if let Some(derived) =
+                            bhdl_synthesizer::signoff::format_derived_values(&netlist)
+                        {
+                            print!("{derived}");
+                        }
                         // Control-loop stability (analytic, datasheet model),
                         // one assessment per regulator stage.
                         let stages = bhdl_synthesizer::signoff::compute_stability(

@@ -143,6 +143,11 @@ pub fn derive_values(
     let base_dir = source_path.parent().map(|p| p.to_path_buf());
     for (id, rule, seed) in marked {
         let name = netlist.instances[id].name.clone();
+        // Stamp the seed BEFORE derivation overwrites the value — the
+        // sign-off report shows both sides of every derivation.
+        netlist.instances[id]
+            .attributes
+            .insert("derive_seed".to_string(), seed.clone());
         let ctx = Ctx { analysis, base_dir: base_dir.clone() };
         let row = match rule.as_str() {
             "led_current" => derive_led_current(netlist, id, &ctx)
@@ -373,12 +378,17 @@ fn derive_i2c_pullup(
             // V_IH at DC: the attached pin models clamp the bus — the
             // vendor model is characterized at a different voltage
             // domain than this rail. The MEASUREMENT is infeasible, not
-            // the design: keep the author's seed, loudly.
+            // the design: keep the author's seed, loudly. The sweep
+            // mutated the value attr per candidate — RESTORE the seed,
+            // or the last candidate tried would silently ship.
             let seed_txt = netlist.instances[id]
                 .attributes
-                .get("value")
+                .get("derive_seed")
                 .cloned()
                 .unwrap_or_default();
+            netlist.instances[id]
+                .attributes
+                .insert("value".to_string(), seed_txt.clone());
             let detail = format!(
                 "derivation SKIPPED (seed kept): bus '{bus}' cannot reach \
                  V_IH = 0.7·{v_rail}V at DC with ANY pull-up — the attached pin \
