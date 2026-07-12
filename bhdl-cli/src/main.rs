@@ -177,7 +177,7 @@ enum Commands {
         #[arg(long)]
         duration: Option<String>,
 
-        /// Fixed timestep, e.g. "0.05n" (default: duration / 2000)
+        /// Fixed timestep, e.g. "0.05n" (default: duration / 400)
         #[arg(long)]
         timestep: Option<String>,
     },
@@ -1315,6 +1315,8 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
                         let mut ann = build_simulation_annotations(&result, &circuit_ref);
                         ann.port_currents = compute_port_currents(&result, &circuit_ref, &netlist);
                         ann.stimulus = run_chain_stimulus(&netlist, &circuit_ref);
+                        ann.transients = run_ibis_transient_traces(
+                            converter.take_ibis_drives(), &circuit_ref, &result);
                         Some(ann)
                     }
                     Err(e) => {
@@ -2220,6 +2222,130 @@ async fn cmd_list_skus(source_file: &SourceFile) -> Result<()> {
     Ok(())
 }
 
+/// Run the board's scheduled IBIS edges (`ibis_wave_<PIN>`) through the
+/// time-domain solver and return decimated traces of each driven net for
+/// the schematic's scope panel. The solved DC operating point seeds the
+/// initial conditions. Duration extends (up to 8× the edge horizon) until
+/// the trace has settled, so slow load RCs aren't cut mid-flight.
+/// Best-effort: a failed solve returns no traces — an absent panel, never
+/// a fabricated one.
+fn run_ibis_transient_traces(
+    drives: Vec<bhdl_spice::ibis_transient::IbisDrive>,
+    circuit: &bhdl_spice::circuit::Circuit,
+    dc_result: &bhdl_spice::DcAnalysisResult,
+) -> Vec<bhdl_schematic::TransientTrace> {
+    if drives.is_empty() {
+        return Vec::new();
+    }
+    let ic: std::collections::HashMap<String, f64> = circuit
+        .nodes()
+        .map(|(idx, n)| {
+            let v = if n.is_ground {
+                0.0
+            } else {
+                dc_result.node_voltages.get(&idx).copied().unwrap_or(0.0)
+            };
+            (n.name.clone(), v)
+        })
+        .collect();
+
+    // One probe per driven net, keeping the drive's schedule for the label.
+    let mut probes: Vec<(String, String)> = Vec::new(); // (net, spec)
+    for d in &drives {
+        let net = circuit
+            .branches()
+            .find(|(_, b)| b.name == d.branch)
+            .and_then(|(_, b)| {
+                let idx = b.nodes[0];
+                circuit.nodes().find(|(i, _)| *i == idx).map(|(_, n)| n.name.clone())
+            });
+        let Some(net) = net else { continue };
+        if probes.iter().any(|(n, _)| *n == net) {
+            continue;
+        }
+        let spec = d
+            .events
+            .iter()
+            .map(|e| {
+                format!(
+                    "{}@{}n",
+                    if e.rising { "rise" } else { "fall" },
+                    (e.t * 1e9 * 1000.0).round() / 1000.0
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        probes.push((net, spec));
+    }
+    if probes.is_empty() {
+        return Vec::new();
+    }
+
+    let horizon = drives.iter().map(|d| d.horizon()).fold(0.0, f64::max);
+    if horizon <= 0.0 {
+        return Vec::new();
+    }
+    let mut duration = horizon * 1.5;
+    let mut result = None;
+    for _ in 0..4 {
+        let params = bhdl_spice::transient::TransientParams::new(
+            "",
+            bhdl_spice::transient::Stimulus::Constant(0.0),
+            probes.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
+            duration,
+            // Coarse-ish steps on purpose: h sets the capacitor companion
+            // conductance (C/h) — very small h turns every decoupling cap
+            // into a sub-mΩ short and Newton diverges on real boards. 400
+            // steps resolves any edge the panel can display.
+            duration / 400.0,
+        );
+        match bhdl_spice::ibis_transient::run_transient_ibis_ic(circuit, &params, &drives, Some(&ic)) {
+            Ok(r) => {
+                // Settled when every probe moved <1% of its own range over
+                // the final 10% of the run.
+                let settled = probes.iter().all(|(n, _)| {
+                    let tr = &r.probe_voltages[n];
+                    let range = tr.iter().cloned().fold(f64::MIN, f64::max)
+                        - tr.iter().cloned().fold(f64::MAX, f64::min);
+                    let tail = tr.len().saturating_sub(tr.len() / 10);
+                    (tr[tail.min(tr.len() - 1)] - tr[tr.len() - 1]).abs() <= 0.01 * range.max(1e-9)
+                });
+                let done = settled;
+                result = Some(r);
+                if done {
+                    break;
+                }
+                duration *= 2.0;
+            }
+            Err(e) => {
+                info!("ibis transient trace failed: {e} — no scope panel");
+                return Vec::new();
+            }
+        }
+    }
+    let Some(r) = result else { return Vec::new() };
+
+    // Decimate to ≤160 samples per trace for the SVG.
+    let stride = (r.times.len() / 160).max(1);
+    probes
+        .into_iter()
+        .map(|(net, spec)| {
+            let tr = &r.probe_voltages[&net];
+            let mut times = Vec::new();
+            let mut volts = Vec::new();
+            for i in (0..r.times.len()).step_by(stride) {
+                times.push(r.times[i]);
+                volts.push(tr[i]);
+            }
+            if *times.last().unwrap() != *r.times.last().unwrap() {
+                times.push(*r.times.last().unwrap());
+                volts.push(*tr.last().unwrap());
+            }
+            bhdl_schematic::TransientTrace { net, spec, times, volts }
+        })
+        .collect()
+}
+
 /// `transient` — solve the board through time while its IBIS buffers
 /// switch per their `ibis_wave_<PIN>` directives. The board's own rail
 /// sources power the circuit; the edges are the stimulus.
@@ -2316,7 +2442,10 @@ async fn cmd_transient(
     };
     let horizon = drives.iter().map(|d| d.horizon()).fold(0.0, f64::max);
     let duration = parse_t(&duration, "duration")?.unwrap_or(horizon * 1.5);
-    let timestep = parse_t(&timestep, "timestep")?.unwrap_or(duration / 2000.0);
+    // Default h = duration/400: h sets the cap-companion conductance
+    // (C/h); much smaller steps turn rail decoupling into sub-mΩ shorts
+    // and the per-step Newton diverges on real boards.
+    let timestep = parse_t(&timestep, "timestep")?.unwrap_or(duration / 400.0);
     println!(
         "  {} {} drive(s), horizon {:.3}ns — simulating {:.3}ns at {:.4}ns steps",
         "✓".green(), drives.len(), horizon * 1e9, duration * 1e9, timestep * 1e9

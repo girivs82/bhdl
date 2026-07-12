@@ -2147,6 +2147,86 @@ pub fn render_sheet_tree(
     out
 }
 
+/// Draw the measured IBIS-edge traces as oscillogram insets: framed
+/// axes, the SOLVED polyline, endpoint voltages and the time span. Three
+/// panels per row. Returns the vertical space consumed.
+fn draw_transient_panel(
+    svg: &mut Svg,
+    traces: &[crate::types::TransientTrace],
+    y0: f64,
+) -> f64 {
+    const PW: f64 = 260.0; // panel width
+    const PH: f64 = 96.0;  // plot height
+    const GAP: f64 = 28.0;
+    let mut y = y0 + 26.0;
+    svg.text(40.0, y, "MEASURED TRANSIENT (ibis_wave)", "sim");
+    y += 14.0;
+
+    for (i, tr) in traces.iter().enumerate() {
+        let col = i % 3;
+        let row = i / 3;
+        let x = 40.0 + col as f64 * (PW + GAP);
+        let py = y + row as f64 * (PH + 56.0);
+        if tr.times.len() < 2 || tr.volts.len() != tr.times.len() {
+            continue;
+        }
+        let (t0, t1) = (tr.times[0], *tr.times.last().unwrap());
+        let vmin = tr.volts.iter().cloned().fold(f64::MAX, f64::min);
+        let vmax = tr.volts.iter().cloned().fold(f64::MIN, f64::max);
+        let span_v = (vmax - vmin).max(1e-9);
+        let span_t = (t1 - t0).max(1e-15);
+
+        // Frame.
+        let _ = writeln!(
+            svg.body,
+            r##"<rect x="{x:.1}" y="{py:.1}" width="{PW:.1}" height="{PH:.1}" fill="none" stroke="#999" stroke-width="1"/>"##
+        );
+        svg.solid(Rect { x0: x - 2.0, y0: py - 14.0, x1: x + PW + 2.0, y1: py + PH + 30.0 });
+        // Trace — the solved samples, scaled into the frame with a 6px
+        // vertical margin.
+        let m = 6.0;
+        let mut pts = String::new();
+        for (t, v) in tr.times.iter().zip(&tr.volts) {
+            let px = x + (t - t0) / span_t * PW;
+            let pv = py + PH - m - (v - vmin) / span_v * (PH - 2.0 * m);
+            let _ = write!(pts, "{px:.1},{pv:.1} ");
+        }
+        let _ = writeln!(
+            svg.body,
+            r##"<polyline points="{}" fill="none" stroke="#06c" stroke-width="1.6"/>"##,
+            pts.trim_end()
+        );
+        // Labels: net + schedule above; endpoint voltages and span below.
+        svg.text(x, py - 4.0, &format!("{} — {}", tr.net, tr.spec), "ref");
+        svg.text(
+            x, py + PH + 14.0,
+            &format!(
+                "{} → {}  ({} span, {} pk-pk)",
+                fmt_sim_v(tr.volts[0]),
+                fmt_sim_v(*tr.volts.last().unwrap()),
+                fmt_time_span(span_t),
+                fmt_sim_v(span_v),
+            ),
+            "sim",
+        );
+        svg.grow(x + PW + 20.0, py + PH + 40.0);
+    }
+    let rows = traces.len().div_ceil(3);
+    40.0 + rows as f64 * (PH + 56.0) + 20.0
+}
+
+fn fmt_time_span(t: f64) -> String {
+    if t >= 1e-3 {
+        format!("{:.1}ms", t * 1e3)
+    } else if t >= 1e-6 {
+        format!("{:.1}µs", t * 1e6)
+    } else if t >= 1e-9 {
+        format!("{:.1}ns", t * 1e9)
+    } else {
+        format!("{:.0}ps", t * 1e12)
+    }
+}
+
 fn render_sheet_svg_with_blocks(
     netlist: &Netlist,
     title: &str,
@@ -2662,6 +2742,11 @@ fn render_sheet_svg_with_blocks(
             x += 150.0;
         }
         y += 124.0;
+    }
+
+    // ── Measured transient traces: a scope panel per driven net ──
+    if let Some(traces) = decor.sim.map(|s| s.transients.as_slice()).filter(|t| !t.is_empty()) {
+        y += draw_transient_panel(&mut svg, traces, y);
     }
 
     svg.flush_sims();

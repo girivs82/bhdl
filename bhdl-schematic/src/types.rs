@@ -250,6 +250,24 @@ pub struct SimulationAnnotations {
     /// MEASURED at the chain output (never derived from nominal gain).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stimulus: Option<StimulusResponse>,
+    /// Time-domain traces from scheduled IBIS buffer edges
+    /// (`ibis_wave_<PIN>` directives): the SOLVED voltage of each driven
+    /// net, drawn as a scope panel on the sheet. Measured samples, never
+    /// an idealized edge.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transients: Vec<TransientTrace>,
+}
+
+/// One measured time-domain trace at a net driven by a scheduled IBIS edge.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransientTrace {
+    /// The driven pin's net.
+    pub net: String,
+    /// The schedule that produced it, e.g. "rise@2n".
+    pub spec: String,
+    /// Decimated sample times (seconds) and voltages, same length.
+    pub times: Vec<f64>,
+    pub volts: Vec<f64>,
 }
 
 /// One transient stimulus-response run over a signal chain.

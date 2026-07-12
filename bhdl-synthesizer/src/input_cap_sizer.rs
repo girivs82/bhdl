@@ -830,6 +830,7 @@ mod tests {
             power_nets: HashSet::new(),
             internal_nets: HashSet::new(),
             stimulus: None,
+            transients: Vec::new(),
         };
         ann.net_voltages.insert("VIN".to_string(), 24.0);
         ann.net_voltages.insert("V5_BUCK".to_string(), 5.0);
@@ -893,6 +894,7 @@ mod tests {
             power_nets: HashSet::new(),
             internal_nets: HashSet::new(),
             stimulus: None,
+            transients: Vec::new(),
         };
         let results = size_input_filter_caps(&mut nl, &ann);
         assert!(results.is_empty(), "no candidates = no results");
