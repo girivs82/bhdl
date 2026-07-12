@@ -440,6 +440,19 @@ impl NetlistToSpiceConverter {
                         Some(instance_id),
                         meta,
                     );
+                    // Die capacitance: C_comp as a real Capacitor branch
+                    // at the pin. Invisible to the DC solve (caps are
+                    // open), integrated by the transient routes.
+                    if let Some(cc) = model.c_comp_at(corner) {
+                        circuit.add_branch(
+                            format!("{}_{}_ccomp", instance.name, pin.name),
+                            &net_name,
+                            &gnd_name,
+                            "Capacitor".to_string(),
+                            cc,
+                            Some(instance_id),
+                        );
+                    }
                     stamped_pins.insert(pin.name.clone());
                     info!(
                         "ibis: stamped {}.{} on '{}' as {} buffer (state {:?}, model {})",

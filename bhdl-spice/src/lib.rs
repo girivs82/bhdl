@@ -6,6 +6,7 @@
 
 pub mod circuit;
 pub mod ibis;
+pub mod ibis_transient;
 pub mod components;
 pub mod components_v2;
 pub mod analysis;

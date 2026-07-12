@@ -97,6 +97,66 @@ pub struct Ramp {
     pub dv_dt_f: [Option<(f64, f64)>; 3],
 }
 
+/// One `[Rising Waveform]` / `[Falling Waveform]` section: the pin
+/// voltage vs time measured into a named resistive fixture. Multiple
+/// sections per model (different fixtures) enable the two-waveform
+/// Ku/Kd switching-coefficient solve.
+#[derive(Debug, Clone, Default)]
+pub struct Waveform {
+    /// `R_fixture=` ohms.
+    pub r_fixture: Option<f64>,
+    /// `V_fixture=` volts (typ); `V_fixture_min/max=` per corner.
+    pub v_fixture: [Option<f64>; 3],
+    /// (time, voltage) points as written, per corner.
+    pub typ: Vec<(f64, f64)>,
+    pub min: Vec<(f64, f64)>,
+    pub max: Vec<(f64, f64)>,
+}
+
+impl Waveform {
+    pub fn points(&self, corner: Corner) -> &[(f64, f64)] {
+        match corner {
+            Corner::Typ => &self.typ,
+            Corner::Min => &self.min,
+            Corner::Max => &self.max,
+        }
+    }
+
+    /// Fixture voltage for `corner`, falling back to typ (the file's own
+    /// declaration order — V_fixture is mandatory, the corner variants
+    /// optional).
+    pub fn v_fix(&self, corner: Corner) -> Option<f64> {
+        let idx = match corner {
+            Corner::Typ => 0,
+            Corner::Min => 1,
+            Corner::Max => 2,
+        };
+        self.v_fixture[idx].or(self.v_fixture[0])
+    }
+
+    /// Piecewise-linear voltage at time `t`, clamped to the end values
+    /// outside the table span. None if the corner column is empty.
+    pub fn v_at(&self, corner: Corner, t: f64) -> Option<f64> {
+        let pts = self.points(corner);
+        if pts.is_empty() {
+            return None;
+        }
+        if t <= pts[0].0 {
+            return Some(pts[0].1);
+        }
+        if t >= pts[pts.len() - 1].0 {
+            return Some(pts[pts.len() - 1].1);
+        }
+        for w in pts.windows(2) {
+            if t <= w[1].0 {
+                let f = (t - w[0].0) / (w[1].0 - w[0].0);
+                return Some(w[0].1 + f * (w[1].1 - w[0].1));
+            }
+        }
+        Some(pts[pts.len() - 1].1)
+    }
+}
+
 /// One `[Model]` section.
 #[derive(Debug, Clone, Default)]
 pub struct Model {
@@ -113,6 +173,8 @@ pub struct Model {
     pub gnd_clamp: Option<IvTable>,
     pub power_clamp: Option<IvTable>,
     pub ramp: Ramp,
+    pub rising: Vec<Waveform>,
+    pub falling: Vec<Waveform>,
 }
 
 impl Model {
@@ -184,17 +246,41 @@ impl Model {
         state: BufferState,
         corner: Corner,
     ) -> Option<Vec<(f64, f64)>> {
-        let mut elements: Vec<IvElement> = vec![IvElement::GndClamp, IvElement::PowerClamp];
-        match state {
-            BufferState::High => elements.push(IvElement::Pullup),
-            BufferState::Low => elements.push(IvElement::Pulldown),
-            BufferState::HiZ => {}
+        let (ku, kd) = match state {
+            BufferState::High => (1.0, 0.0),
+            BufferState::Low => (0.0, 1.0),
+            BufferState::HiZ => (0.0, 0.0),
+        };
+        self.composed_iv_weighted(ku, kd, corner)
+    }
+
+    /// [`composed_iv`][Self::composed_iv] generalized to fractional drive
+    /// weights: `i(v) = ku·I_pullup(v) + kd·I_pulldown(v) + clamps(v)`.
+    /// This is the transient form — Ku(t)/Kd(t) from
+    /// [`switching_coefficients`][Self::switching_coefficients] describe
+    /// the buffer mid-transition. Weights of exactly 0 drop the element
+    /// (so Hi-Z composes clamps only, as before).
+    pub fn composed_iv_weighted(
+        &self,
+        ku: f64,
+        kd: f64,
+        corner: Corner,
+    ) -> Option<Vec<(f64, f64)>> {
+        let mut elements: Vec<(IvElement, f64)> = vec![
+            (IvElement::GndClamp, 1.0),
+            (IvElement::PowerClamp, 1.0),
+        ];
+        if ku != 0.0 {
+            elements.push((IvElement::Pullup, ku));
+        }
+        if kd != 0.0 {
+            elements.push((IvElement::Pulldown, kd));
         }
 
         // Union of breakpoints, in pin volts.
         let mut breakpoints: Vec<f64> = Vec::new();
         let mut any = false;
-        for el in &elements {
+        for (el, _) in &elements {
             let (table, vcc_relative) = match el {
                 IvElement::Pulldown => (self.pulldown.as_ref(), false),
                 IvElement::GndClamp => (self.gnd_clamp.as_ref(), false),
@@ -223,12 +309,181 @@ impl Model {
             .map(|v_pin| {
                 let i: f64 = elements
                     .iter()
-                    .filter_map(|el| self.iv_at(*el, corner, v_pin))
+                    .filter_map(|(el, w)| self.iv_at(*el, corner, v_pin).map(|i| w * i))
                     .sum();
                 (v_pin, i)
             })
             .collect();
         Some(pts)
+    }
+
+    /// C_comp for `corner`, falling back to typ.
+    pub fn c_comp_at(&self, corner: Corner) -> Option<f64> {
+        let idx = match corner {
+            Corner::Typ => 0,
+            Corner::Min => 1,
+            Corner::Max => 2,
+        };
+        self.c_comp[idx].or(self.c_comp[0])
+    }
+
+    /// Switching coefficients Ku(t)/Kd(t) for one edge, from the file's
+    /// own transient data — best available method, never fabricated:
+    ///
+    /// 1. **Two waveforms** with distinct fixtures: at each time point the
+    ///    pin KCL of each fixture gives one equation
+    ///    `Ku·I_pu(V) + Kd·I_pd(V) + I_clamps(V) + C_comp·dV/dt +
+    ///    (V − V_fix)/R_fix = 0`; two fixtures → a 2×2 solve for (Ku, Kd).
+    /// 2. **One waveform**: the standard `Kd = 1 − Ku` reduction.
+    /// 3. **No waveforms**: `[Ramp]` linearization — dV/dt covers the
+    ///    20–80% swing, so a linear full transition lasts `dt/0.6`.
+    ///
+    /// Rows are `(t_seconds, ku, kd)` with t starting at the waveform
+    /// table's own origin; coefficients are clamped to [0, 1] (table
+    /// noise in flat regions otherwise produces small excursions).
+    /// Returns None when the model has no drive elements or no transient
+    /// data at all for the edge.
+    pub fn switching_coefficients(
+        &self,
+        rising: bool,
+        corner: Corner,
+    ) -> Option<Vec<(f64, f64, f64)>> {
+        if self.pullup.is_none() && self.pulldown.is_none() {
+            return None;
+        }
+        let waves: Vec<&Waveform> = (if rising { &self.rising } else { &self.falling })
+            .iter()
+            .filter(|w| {
+                !w.points(corner).is_empty()
+                    && w.r_fixture.map(|r| r > 0.0).unwrap_or(false)
+                    && w.v_fix(corner).is_some()
+            })
+            .collect();
+
+        if waves.is_empty() {
+            // [Ramp] fallback — linear coefficient sweep over dt/0.6.
+            let idx = match corner {
+                Corner::Typ => 0,
+                Corner::Min => 1,
+                Corner::Max => 2,
+            };
+            let slot = if rising { &self.ramp.dv_dt_r } else { &self.ramp.dv_dt_f };
+            let (_dv, dt) = slot[idx].or(slot[0])?;
+            if dt <= 0.0 {
+                return None;
+            }
+            let t_full = dt / 0.6;
+            return Some(if rising {
+                vec![(0.0, 0.0, 1.0), (t_full, 1.0, 0.0)]
+            } else {
+                vec![(0.0, 1.0, 0.0), (t_full, 0.0, 1.0)]
+            });
+        }
+
+        // Prefer a pair with distinct fixture VOLTAGES (best conditioning:
+        // the same pin voltage sees genuinely different fixture currents),
+        // else distinct resistances.
+        let pair: Option<(&Waveform, &Waveform)> = waves
+            .iter()
+            .enumerate()
+            .flat_map(|(i, a)| waves.iter().skip(i + 1).map(move |b| (*a, *b)))
+            .find(|(a, b)| (a.v_fix(corner).unwrap() - b.v_fix(corner).unwrap()).abs() > 1e-3)
+            .or_else(|| {
+                waves
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(i, a)| waves.iter().skip(i + 1).map(move |b| (*a, *b)))
+                    .find(|(a, b)| {
+                        (a.r_fixture.unwrap() - b.r_fixture.unwrap()).abs()
+                            > 1e-3 * a.r_fixture.unwrap()
+                    })
+            });
+
+        let c_comp = self.c_comp_at(corner).unwrap_or(0.0);
+        let clamps = |v: f64| -> f64 {
+            self.iv_at(IvElement::GndClamp, corner, v).unwrap_or(0.0)
+                + self.iv_at(IvElement::PowerClamp, corner, v).unwrap_or(0.0)
+        };
+        // Residual fixture-side current for waveform `w` at (t, V): every
+        // term of the pin KCL except the Ku/Kd drive terms.
+        let rest = |w: &Waveform, v: f64, dv_dt: f64| -> f64 {
+            clamps(v) + c_comp * dv_dt + (v - w.v_fix(corner).unwrap()) / w.r_fixture.unwrap()
+        };
+        let dv_dt_of = |w: &Waveform, t: f64| -> f64 {
+            let d = 1e-12;
+            let a = w.v_at(corner, t - d).unwrap_or(0.0);
+            let b = w.v_at(corner, t + d).unwrap_or(0.0);
+            (b - a) / (2.0 * d)
+        };
+        let clamp01 = |x: f64| x.clamp(0.0, 1.0);
+
+        // Merged time grid over the participating waveforms.
+        let grid_of = |ws: &[&Waveform]| -> Vec<f64> {
+            let mut g: Vec<f64> = ws
+                .iter()
+                .flat_map(|w| w.points(corner).iter().map(|(t, _)| *t))
+                .collect();
+            g.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            g.dedup_by(|a, b| (*a - *b).abs() < 1e-15);
+            g
+        };
+
+        let out: Vec<(f64, f64, f64)> = match pair {
+            Some((w1, w2)) => {
+                let grid = grid_of(&[w1, w2]);
+                let mut prev = if rising { (0.0, 1.0) } else { (1.0, 0.0) };
+                grid.into_iter()
+                    .map(|t| {
+                        let v1 = w1.v_at(corner, t).unwrap();
+                        let v2 = w2.v_at(corner, t).unwrap();
+                        let a1 = self.iv_at(IvElement::Pullup, corner, v1).unwrap_or(0.0);
+                        let b1 = self.iv_at(IvElement::Pulldown, corner, v1).unwrap_or(0.0);
+                        let a2 = self.iv_at(IvElement::Pullup, corner, v2).unwrap_or(0.0);
+                        let b2 = self.iv_at(IvElement::Pulldown, corner, v2).unwrap_or(0.0);
+                        let r1 = -rest(w1, v1, dv_dt_of(w1, t));
+                        let r2 = -rest(w2, v2, dv_dt_of(w2, t));
+                        let det = a1 * b2 - a2 * b1;
+                        let scale = (a1.abs() + a2.abs()).max(1e-15)
+                            * (b1.abs() + b2.abs()).max(1e-15);
+                        let (ku, kd) = if det.abs() > 1e-6 * scale {
+                            ((r1 * b2 - r2 * b1) / det, (a1 * r2 - a2 * r1) / det)
+                        } else {
+                            // Ill-conditioned (waveforms at the same
+                            // operating point) — hold the previous values.
+                            prev
+                        };
+                        let ku = clamp01(ku);
+                        let kd = clamp01(kd);
+                        prev = (ku, kd);
+                        (t, ku, kd)
+                    })
+                    .collect()
+            }
+            None => {
+                // Single usable fixture: Kd = 1 − Ku.
+                let w = waves[0];
+                let grid = grid_of(&[w]);
+                let mut prev = if rising { (0.0, 1.0) } else { (1.0, 0.0) };
+                grid.into_iter()
+                    .map(|t| {
+                        let v = w.v_at(corner, t).unwrap();
+                        let a = self.iv_at(IvElement::Pullup, corner, v).unwrap_or(0.0);
+                        let b = self.iv_at(IvElement::Pulldown, corner, v).unwrap_or(0.0);
+                        let r = -rest(w, v, dv_dt_of(w, t));
+                        let denom = a - b;
+                        let ku = if denom.abs() > 1e-12 {
+                            clamp01((r - b) / denom)
+                        } else {
+                            prev.0
+                        };
+                        let kd = clamp01(1.0 - ku);
+                        prev = (ku, kd);
+                        (t, ku, kd)
+                    })
+                    .collect()
+            }
+        };
+        Some(out)
     }
 }
 
@@ -337,6 +592,10 @@ pub fn parse_str(text: &str) -> Result<IbisFile, IbisError> {
         Pins,
         Iv(IvElement),
         Ramp,
+        /// Data rows of the most recent [Rising/Falling Waveform]
+        /// section (true = rising). The Waveform struct itself was
+        /// already pushed onto the model when the header was seen.
+        Wave(bool),
         ModelSelector(String),
         VoltageRange,
     }
@@ -441,6 +700,18 @@ pub fn parse_str(text: &str) -> Result<IbisFile, IbisError> {
                 "gnd clamp" => section = Section::Iv(IvElement::GndClamp),
                 "power clamp" => section = Section::Iv(IvElement::PowerClamp),
                 "ramp" => section = Section::Ramp,
+                "rising waveform" => {
+                    if let Some(m) = cur_model.as_mut() {
+                        m.rising.push(Waveform::default());
+                        section = Section::Wave(true);
+                    }
+                }
+                "falling waveform" => {
+                    if let Some(m) = cur_model.as_mut() {
+                        m.falling.push(Waveform::default());
+                        section = Section::Wave(false);
+                    }
+                }
                 "end" => break,
                 _ => { /* unmodeled section — data rows fall through Section::None and are skipped */ }
             }
@@ -515,6 +786,41 @@ pub fn parse_str(text: &str) -> Result<IbisFile, IbisError> {
                     } else if toks.first().map(|t| t.eq_ignore_ascii_case("dv/dt_f")).unwrap_or(false) {
                         for (i, t) in toks.iter().skip(1).take(3).enumerate() {
                             m.ramp.dv_dt_f[i] = parse_ratio(t);
+                        }
+                    }
+                }
+            }
+            Section::Wave(rising) => {
+                let Some(m) = cur_model.as_mut() else { continue };
+                let Some(w) = (if *rising { m.rising.last_mut() } else { m.falling.last_mut() })
+                else { continue };
+                // Fixture sub-parameters: `R_fixture= 50.0000` (GENIBIS
+                // spacing) or `R_fixture=50`. Split on '=' first.
+                if let Some((key, val)) = line.split_once('=') {
+                    let key = key.trim().to_ascii_lowercase();
+                    let val = val.trim();
+                    match key.as_str() {
+                        "r_fixture" => w.r_fixture = num(val),
+                        "v_fixture" => w.v_fixture[0] = num(val),
+                        "v_fixture_min" => w.v_fixture[1] = num(val),
+                        "v_fixture_max" => w.v_fixture[2] = num(val),
+                        // L_fixture / C_fixture etc: unmodeled — the
+                        // vendor sweep shows GENIBIS emits none.
+                        _ => {}
+                    }
+                    continue;
+                }
+                // Data row: time then typ/min/max voltages.
+                if toks.len() >= 2 {
+                    if let Some(t) = num(toks[0]) {
+                        if let Some(v) = toks.get(1).and_then(|x| num(x)) {
+                            w.typ.push((t, v));
+                        }
+                        if let Some(v) = toks.get(2).and_then(|x| num(x)) {
+                            w.min.push((t, v));
+                        }
+                        if let Some(v) = toks.get(3).and_then(|x| num(x)) {
+                            w.max.push((t, v));
                         }
                     }
                 }
@@ -715,6 +1021,106 @@ Model_type   Input
         assert!(
             (v - 10.0 / 3.0).abs() < 1e-3,
             "expected 3.3333V at the load line, got {v}"
+        );
+    }
+
+    #[test]
+    fn waveform_sections_parse() {
+        let text = r#"
+[IBIS Ver] 4.2
+[File Name] w.ibs
+[Component] T
+[Pin] signal_name model_name
+1 OUT M
+[Model] M
+Model_type Output
+[Voltage Range] 5.0 NA NA
+[Pulldown]
+0.0 0.0 NA NA
+5.0 50mA NA NA
+[Pullup]
+0.0 0.0 NA NA
+5.0 -50mA NA NA
+[Rising Waveform]
+R_fixture= 50.0000
+V_fixture= 0.0
+V_fixture_min= 0.0
+V_fixture_max= 0.0
+|time V(typ) V(min) V(max)
+0.0S 0.1V NA NA
+1.0nS 0.5V NA NA
+2.0nS 2.0V NA NA
+[Rising Waveform]
+R_fixture= 2.0000k
+V_fixture= 5.0
+0.0S 4.0V NA NA
+2.0nS 4.9V NA NA
+[Falling Waveform]
+R_fixture=50
+V_fixture=5.0
+0.0S 4.9V NA NA
+2.0nS 2.5V NA NA
+[Ramp]
+dV/dt_r 3.0/1.2n NA NA
+[End]
+"#;
+        let f = parse_str(text).unwrap();
+        let m = &f.models["M"];
+        assert_eq!(m.rising.len(), 2);
+        assert_eq!(m.falling.len(), 1);
+        let w0 = &m.rising[0];
+        assert_eq!(w0.r_fixture, Some(50.0));
+        assert_eq!(w0.v_fixture[0], Some(0.0));
+        assert_eq!(w0.typ.len(), 3);
+        assert!((w0.typ[1].0 - 1e-9).abs() < 1e-15);
+        // interpolation midway between rows
+        assert!((w0.v_at(Corner::Typ, 1.5e-9).unwrap() - 1.25).abs() < 1e-9);
+        // '=' with no space also parses
+        assert_eq!(m.falling[0].r_fixture, Some(50.0));
+        assert_eq!(m.rising[1].v_fixture[0], Some(5.0));
+    }
+
+    /// [Ramp]-only model: coefficients are the linear sweep over the
+    /// full-swing time dt/0.6, endpoints exactly (0,1) → (1,0).
+    #[test]
+    fn switching_coefficients_ramp_fallback() {
+        let f = parse_str(GOLDEN).unwrap();
+        let m = &f.models["CMOS_OUT"];
+        let ks = m.switching_coefficients(true, Corner::Typ).unwrap();
+        assert_eq!(ks.len(), 2);
+        assert_eq!(ks[0], (0.0, 0.0, 1.0));
+        let (t, ku, kd) = ks[1];
+        assert!((ku, kd) == (1.0, 0.0));
+        // GOLDEN [Ramp] dV/dt_r = 2.0/1.0n → t_full = 1.0n/0.6.
+        assert!((t - 1.0e-9 / 0.6).abs() < 1e-15, "t_full = {t}");
+    }
+
+    /// REAL Atmel data (existence-gated): two-waveform Ku/Kd extraction
+    /// on the 16U2 gpio model — starts at (0,1), ends at (1,≈0), and the
+    /// pulldown lets go before the pullup takes over (break-before-make,
+    /// straight from the vendor tables).
+    #[test]
+    fn real_16u2_gpio_switching_coefficients() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../vendor/ibis/megaavr/m16u2m32.ibs");
+        if !path.exists() {
+            eprintln!("real_16u2_gpio_switching_coefficients: vendor file absent — skipped");
+            return;
+        }
+        let f = parse_file(&path).unwrap();
+        let m = &f.models["gpio"];
+        assert_eq!(m.rising.len(), 4);
+        let ks = m.switching_coefficients(true, Corner::Typ).unwrap();
+        let (t0, ku0, kd0) = ks[0];
+        let (_, kun, kdn) = *ks.last().unwrap();
+        assert_eq!(t0, 0.0);
+        assert!(ku0 < 0.05 && kd0 > 0.95, "start ({ku0},{kd0})");
+        assert!(kun > 0.95 && kdn < 0.05, "end ({kun},{kdn})");
+        let t_kd_off = ks.iter().find(|(_, _, kd)| *kd < 0.5).unwrap().0;
+        let t_ku_on = ks.iter().find(|(_, ku, _)| *ku > 0.5).unwrap().0;
+        assert!(
+            t_kd_off < t_ku_on,
+            "expected break-before-make: kd off at {t_kd_off}, ku on at {t_ku_on}"
         );
     }
 
