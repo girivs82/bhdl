@@ -851,20 +851,26 @@ fn footprint_extent(fp: &bhdl_components::ComponentFootprint) -> (f64, f64) {
 /// Real physical components have `component_class` set by the synthesizer
 /// (e.g., "resistor", "capacitor", "voltage_regulator"). Power symbols don't.
 fn is_power_symbol(
-    _module_def: &bhdl_netlist::ModuleDefinition,
+    module_def: &bhdl_netlist::ModuleDefinition,
     instance: &bhdl_netlist::Instance,
 ) -> bool {
-    // Physical components always have component_class from the synthesizer
-    if instance.attributes.contains_key("component_class") {
-        // But "power_source" / "ground_symbol" classes ARE power symbols
-        let cc = instance.attributes.get("component_class").unwrap();
-        return cc == "power_source" || cc == "ground_symbol";
+    // component_class may live on the INSTANCE (stamped by synthesis /
+    // GLACIER selection) or only on the MODULE — same-file entities keep
+    // it at the entity level. Checking the instance alone silently
+    // dropped every same-file IC from the board (u1/SinkDriver on the
+    // led_derive fixture was never placed, its netted pads never routed).
+    let cc = instance
+        .attributes
+        .get("component_class")
+        .or_else(|| module_def.attributes.get("component_class"));
+    match cc {
+        Some(c) => {
+            let c = c.trim_matches('"');
+            matches!(c, "power_source" | "ground_symbol" | "power" | "ground" | "power_symbol" | "net")
+        }
+        // No class anywhere = a netlist-level symbol, not a part.
+        None => true,
     }
-
-    // No component_class = not a physical component = power/ground symbol
-    // Real components (Res, Cap, LED, AP63205, etc.) always get component_class
-    // set during synthesis/GLACIER physical selection
-    true
 }
 
 fn categorize_component(entity_type: &str, attrs: &HashMap<String, String>) -> String {

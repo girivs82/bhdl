@@ -2185,11 +2185,20 @@ impl NetlistGenerator {
         use bhdl_analyzer::attribute_extraction::extract_module_attributes_resolved as extract_attrs;
 
         // Which entity names need the stdlib fallback (loader has no attrs)?
+        // Entity AST source: the import loader for imported entities, the
+        // generator's own local_entities capture for SAME-FILE entities —
+        // without the latter, a same-file IC got no component_class and
+        // downstream consumers (PnR is_power_symbol, BOM class filter)
+        // silently dropped it from the board.
+        let entity_ast = |name: &str| -> Option<&bhdl_ast::Entity> {
+            self.import_loader
+                .get_entity(name)
+                .or_else(|| self.local_entities.get(name))
+        };
         let fallback_names: std::collections::HashSet<String> = id_names
             .iter()
             .filter(|(_, name)| {
-                self.import_loader
-                    .get_entity(name)
+                entity_ast(name)
                     .map(|e| extract_attrs(e).is_empty())
                     .unwrap_or(true)
             })
@@ -2220,9 +2229,7 @@ impl NetlistGenerator {
                 // value that is still just the entity-level copy and replace
                 // it with the per-instance resolution; a value matching
                 // neither is a genuine per-instance choice and is kept.
-                let stale_attrs: std::collections::HashMap<String, Vec<String>> = self
-                    .import_loader
-                    .get_entity(&name)
+                let stale_attrs: std::collections::HashMap<String, Vec<String>> = entity_ast(&name)
                     .map(|e| {
                         let mut stale: std::collections::HashMap<String, Vec<String>> =
                             std::collections::HashMap::new();
@@ -2237,9 +2244,7 @@ impl NetlistGenerator {
                         stale
                     })
                     .unwrap_or_default();
-                let mut attrs = self
-                    .import_loader
-                    .get_entity(&name)
+                let mut attrs = entity_ast(&name)
                     .map(|e| bhdl_analyzer::attribute_extraction::extract_module_attributes_resolved_with(e, &inst_args))
                     .filter(|a| !a.is_empty())
                     .or_else(|| stdlib_attrs.get(&name).cloned())?;
