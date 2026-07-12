@@ -59,6 +59,12 @@ pub struct IbisDrive {
     /// POWER clamp), when the converter stamped the buffer split by
     /// return rail. None ⇒ `branch` carries the full composite.
     pub vcc_branch: Option<String>,
+    /// Effective package lead inductance of the driven pin (per-pin
+    /// override else the [Package] lump), set by the converter when the
+    /// file carries it. Consumers estimate ground bounce as L·di/dt
+    /// from the recorded branch current. None = data absent, no
+    /// estimate — never a guessed inductance.
+    pub pkg_l: Option<f64>,
     rising_coeffs: Option<Vec<(f64, f64, f64)>>,
     falling_coeffs: Option<Vec<(f64, f64, f64)>>,
 }
@@ -97,6 +103,7 @@ impl IbisDrive {
             initial,
             events,
             vcc_branch: None,
+            pkg_l: None,
             rising_coeffs,
             falling_coeffs,
         })
@@ -321,6 +328,12 @@ pub fn run_transient_ibis_ic(
         .iter()
         .map(|name| (name.clone(), Vec::with_capacity(n_steps + 1)))
         .collect();
+    // Total pin current per drive (gnd + vcc branch when split): the
+    // ground-bounce estimate needs di/dt of what the lead carries.
+    let mut branch_currents: HashMap<String, Vec<f64>> = drives
+        .iter()
+        .map(|d| (d.branch.clone(), Vec::with_capacity(n_steps + 1)))
+        .collect();
 
     times.push(0.0);
     let v0 = params.stimulus.at(0.0);
@@ -475,9 +488,28 @@ pub fn run_transient_ibis_ic(
             probe_voltages.get_mut(name).unwrap()
                 .push(v_by_name.get(name).copied().unwrap_or(0.0));
         }
+        for d in drives {
+            let mut i_total = 0.0;
+            for bname in std::iter::once(d.branch.as_str())
+                .chain(d.vcc_branch.as_deref())
+            {
+                if let Some((e, _)) = c.branches().find(|(_, b)| b.name == bname) {
+                    i_total += result.branch_currents.get(&e).copied().unwrap_or(0.0);
+                }
+            }
+            branch_currents.get_mut(&d.branch).unwrap().push(i_total);
+        }
     }
 
-    Ok(TransientResult { times, probe_voltages })
+    // Pad the t = 0 slot by duplicating the first solved step, so every
+    // trace matches `times` in length without inventing a pre-solve
+    // current (a fake 0 would fabricate a di/dt spike at the start).
+    for trace in branch_currents.values_mut() {
+        let first = trace.first().copied().unwrap_or(0.0);
+        trace.insert(0, first);
+    }
+
+    Ok(TransientResult { times, probe_voltages, branch_currents })
 }
 
 /// Emit a Norton companion (`i = g_eq·v + i_eq`) as a Resistor plus a

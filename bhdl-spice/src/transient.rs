@@ -209,6 +209,11 @@ pub struct TransientResult {
     pub times: Vec<f64>,
     /// Per-probe voltage traces, keyed by node name. Same length as `times`.
     pub probe_voltages: HashMap<String, Vec<f64>>,
+    /// Solved branch-current traces for driven IBIS buffers (the IBIS
+    /// transient route records these; other routes leave it empty).
+    /// Keyed by branch name; same length as `times`, with the t = 0
+    /// entry duplicated from the first solved step.
+    pub branch_currents: HashMap<String, Vec<f64>>,
 }
 
 impl TransientResult {
@@ -354,7 +359,7 @@ pub fn run_transient(
         }
     }
 
-    Ok(TransientResult { times, probe_voltages })
+    Ok(TransientResult { times, probe_voltages, branch_currents: HashMap::new() })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1174,7 +1179,7 @@ pub fn run_transient_nonlinear(
         }
     }
 
-    Ok(TransientResult { times, probe_voltages })
+    Ok(TransientResult { times, probe_voltages, branch_currents: HashMap::new() })
 }
 
 /// Build the per-timestep companion circuit handed to GLACIER.

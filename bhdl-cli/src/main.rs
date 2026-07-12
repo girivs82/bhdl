@@ -2739,6 +2739,48 @@ async fn cmd_transient(
         anyhow::bail!("no corner had usable IBIS table data");
     }
 
+    // Ground-bounce estimate per drive: peak |L·di/dt| of the SOLVED
+    // pin current through the package lead inductance the vendor file
+    // declares ([Package] lump or per-pin override). No inductance in
+    // the file ⇒ no estimate, visibly.
+    println!();
+    for d in &drives {
+        for (label, result) in &runs {
+            let Some(trace) = result.branch_currents.get(&d.branch) else { continue };
+            if trace.len() < 3 {
+                continue;
+            }
+            match d.pkg_l {
+                Some(l) => {
+                    let mut peak = 0.0f64;
+                    let mut di_peak = 0.0f64;
+                    for w in trace.windows(2).zip(result.times.windows(2)) {
+                        let (iw, tw) = w;
+                        let dt = tw[1] - tw[0];
+                        if dt <= 0.0 {
+                            continue;
+                        }
+                        let didt = (iw[1] - iw[0]) / dt;
+                        if didt.abs() > di_peak {
+                            di_peak = didt.abs();
+                        }
+                        peak = peak.max((l * didt).abs());
+                    }
+                    println!(
+                        "  {} {} [{label}]: ground-bounce estimate peak {:.1}mV (pkg L {:.2}nH × di/dt peak {:.2}mA/ns)",
+                        "→".cyan(), d.branch, peak * 1e3, l * 1e9, di_peak * 1e-6
+                    );
+                }
+                None => {
+                    println!(
+                        "  {} {} [{label}]: ground-bounce UNCHECKED — the .ibs file carries no [Package]/per-pin inductance",
+                        "→".cyan(), d.branch
+                    );
+                }
+            }
+        }
+    }
+
     println!();
     println!(
         "  {:<24} {:<9} {:>10} {:>10} {:>10} {:>10}",

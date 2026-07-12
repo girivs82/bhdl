@@ -593,12 +593,40 @@ pub enum IvElement {
     PowerClamp,
 }
 
+/// `[Package]` — lumped package parasitics per corner (typ/min/max).
+/// The lead's series R/L and shunt C; per-pin overrides may refine
+/// these in the [Pin] table's R_pin/L_pin/C_pin columns.
+#[derive(Debug, Clone, Default)]
+pub struct PackageRlc {
+    pub r_pkg: [Option<f64>; 3],
+    pub l_pkg: [Option<f64>; 3],
+    pub c_pkg: [Option<f64>; 3],
+}
+
+impl PackageRlc {
+    /// Lead inductance for `corner`, falling back to typ.
+    pub fn l(&self, corner: Corner) -> Option<f64> {
+        let idx = match corner {
+            Corner::Typ => 0,
+            Corner::Min => 1,
+            Corner::Max => 2,
+        };
+        self.l_pkg[idx].or(self.l_pkg[0])
+    }
+}
+
 /// One `[Pin]` row of a `[Component]`.
 #[derive(Debug, Clone)]
 pub struct Pin {
     pub pin: String,         // package pin number/name ("29", "A4")
     pub signal_name: String, // vendor's signal name ("PD2", "DQ0")
     pub model_name: String,  // model or model-selector name; "NC"/"GND"/"POWER" specials
+    /// Per-pin parasitic overrides (R_pin/L_pin/C_pin columns) — most
+    /// GENIBIS files declare the columns but leave them empty, in which
+    /// case the [Package] lump applies.
+    pub r_pin: Option<f64>,
+    pub l_pin: Option<f64>,
+    pub c_pin: Option<f64>,
 }
 
 /// One `[Component]` section.
@@ -607,6 +635,7 @@ pub struct Component {
     pub name: String,
     pub manufacturer: String,
     pub pins: Vec<Pin>,
+    pub package: PackageRlc,
 }
 
 impl Component {
@@ -627,6 +656,12 @@ impl Component {
             .find(|p| p.signal_name.eq_ignore_ascii_case("VCC"))
             .copied()
             .or(if powers.len() == 1 { Some(powers[0]) } else { None })
+    }
+
+    /// Effective lead inductance for a pin at `corner`: the per-pin
+    /// override when the file carries one, else the [Package] lump.
+    pub fn pin_inductance(&self, pin: &Pin, corner: Corner) -> Option<f64> {
+        pin.l_pin.or_else(|| self.package.l(corner))
     }
 
     /// Find the pin row for an entity pin: by signal name first
@@ -708,6 +743,7 @@ pub fn parse_str(text: &str) -> Result<IbisFile, IbisError> {
         Pins,
         Iv(IvElement),
         Ramp,
+        Package,
         /// Data rows of the most recent [Rising/Falling Waveform]
         /// section (true = rising). The Waveform struct itself was
         /// already pushed onto the model when the header was seen.
@@ -795,6 +831,7 @@ pub fn parse_str(text: &str) -> Result<IbisFile, IbisError> {
                     }
                 }
                 "pin" => section = Section::Pins,
+                "package" => section = Section::Package,
                 "model selector" => section = Section::ModelSelector(arg),
                 "model" => {
                     flush_model(&mut out, cur_model.take());
@@ -847,7 +884,25 @@ pub fn parse_str(text: &str) -> Result<IbisFile, IbisError> {
                             pin: toks[0].to_string(),
                             signal_name: toks[1].to_string(),
                             model_name: toks[2].to_string(),
+                            r_pin: toks.get(3).and_then(|t| num(t)),
+                            l_pin: toks.get(4).and_then(|t| num(t)),
+                            c_pin: toks.get(5).and_then(|t| num(t)),
                         });
+                    }
+                }
+            }
+            Section::Package => {
+                if let Some(c) = cur_component.as_mut() {
+                    let slot = match toks.first().map(|t| t.to_ascii_lowercase()).as_deref() {
+                        Some("r_pkg") => Some(&mut c.package.r_pkg),
+                        Some("l_pkg") => Some(&mut c.package.l_pkg),
+                        Some("c_pkg") => Some(&mut c.package.c_pkg),
+                        _ => None,
+                    };
+                    if let Some(slot) = slot {
+                        for (i, t) in toks.iter().skip(1).take(3).enumerate() {
+                            slot[i] = num(t);
+                        }
                     }
                 }
             }
@@ -1329,6 +1384,28 @@ dV/dt_r 3.0/1.2n NA NA
             "split stamp: pin {vpin:.4}V, rail supplies {:.2}mA (= load {:.2}mA)",
             i_rail * 1e3, i_load * 1e3
         );
+    }
+
+    /// REAL Atmel data (existence-gated): the PDIP-28 [Package] lump.
+    #[test]
+    fn real_package_parasitics() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../vendor/ibis/megaavr/m1682p28.ibs");
+        if !path.exists() {
+            eprintln!("real_package_parasitics: vendor file absent — skipped");
+            return;
+        }
+        let f = parse_file(&path).unwrap();
+        let c = f.component("atmega168_20_pdip28").unwrap();
+        assert!((c.package.l_pkg[0].unwrap() - 7.11e-9).abs() < 1e-12);
+        assert!((c.package.l_pkg[1].unwrap() - 3.72e-9).abs() < 1e-12);
+        assert!((c.package.r_pkg[0].unwrap() - 42e-3).abs() < 1e-6);
+        assert!((c.package.c_pkg[2].unwrap() - 2.2e-12).abs() < 1e-15);
+        // This file declares the per-pin columns but leaves them empty:
+        // the effective inductance falls back to the lump.
+        let pin = c.pin_for("PD5").unwrap();
+        assert!(pin.l_pin.is_none());
+        assert!((c.pin_inductance(pin, Corner::Typ).unwrap() - 7.11e-9).abs() < 1e-12);
     }
 
     #[test]

@@ -596,6 +596,10 @@ impl NetlistToSpiceConverter {
                         if rail_matches && vcc_points.is_some() {
                             drive.vcc_branch = Some(vcc_branch_name);
                         }
+                        // Package lead inductance for the ground-bounce
+                        // estimate: per-pin override else [Package] lump;
+                        // None when the file carries neither.
+                        drive.pkg_l = component.pin_inductance(pin_row, corner);
                         self.ibis_drives.push(drive);
                     }
                     // Die capacitance: C_comp as a real Capacitor branch
