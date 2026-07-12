@@ -179,17 +179,17 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
     }
     
     // Debug: Print available power domains
-    println!("DEBUG: Available power domains for component inference:");
+    log::debug!("Available power domains for component inference:");
     let mut domains_sorted: Vec<_> = power_context.domains.iter().collect();
     domains_sorted.sort_by_key(|(name, _)| name.as_str());
     for (name, domain) in domains_sorted {
-        println!("  - {}: {}V @ {}A", name, domain.voltage, domain.max_current);
+        log::debug!("  - {}: {}V @ {}A", name, domain.voltage, domain.max_current);
     }
-    println!("DEBUG: Component domain assignments:");
+    log::debug!("Component domain assignments:");
     let mut assignments_sorted: Vec<_> = power_context.component_domains.iter().collect();
     assignments_sorted.sort();
     for (comp, domain) in assignments_sorted {
-        println!("  - {} -> {}", comp, domain);
+        log::debug!("  - {} -> {}", comp, domain);
     }
     
     analyze_components_for_inference(source_file.syntax(), &mut component_inference, &power_context, &entity_param_names);
@@ -557,26 +557,26 @@ fn visit_node_for_component_inference(
             // Process flow expressions which contain inline component instantiations in v2.0
             use bhdl_ast::flow::{FlowExpr, FlowElement};
             
-            println!("DEBUG: Found FLOW_EXPR node");
+            log::debug!("Found FLOW_EXPR node");
             if let Some(flow_expr) = FlowExpr::cast(node.clone()) {
-                println!("DEBUG: Successfully cast to FlowExpr");
+                log::debug!("Successfully cast to FlowExpr");
                 // Process each element in the flow expression
                 for element in flow_expr.elements() {
                     match &element {
                         FlowElement::ComponentInstantiation(comp_inst) => {
-                            println!("DEBUG: Found ComponentInstantiation in flow");
+                            log::debug!("Found ComponentInstantiation in flow");
                             process_component_instantiation_v2(&comp_inst, component_inference, power_context, entity_param_names);
                         }
                         FlowElement::Identifier(token) => {
-                            println!("DEBUG: Found Identifier in flow: {}", token.text());
+                            log::debug!("Found Identifier in flow: {}", token.text());
                         }
                         FlowElement::ConditionalExpr(_) => {
-                            println!("DEBUG: Found ConditionalExpr in flow");
+                            log::debug!("Found ConditionalExpr in flow");
                         }
                     }
                 }
             } else {
-                println!("DEBUG: Failed to cast FLOW_EXPR to FlowExpr");
+                log::debug!("Failed to cast FLOW_EXPR to FlowExpr");
             }
         }
         bhdl_ast::SyntaxKind::CONNECTION_STMT => {
@@ -621,7 +621,7 @@ fn visit_node_for_component_inference(
                     });
                 
                 if let Some(component_type) = component_type {
-                    println!("DEBUG: Processing inline component: {}", component_type);
+                    log::debug!("Processing inline component: {}", component_type);
                     
                     // Process as v2.0 inline instantiation
                     use bhdl_ast::flow::ComponentInstantiation;
@@ -636,7 +636,7 @@ fn visit_node_for_component_inference(
             use bhdl_ast::ComponentInst;
             
             if let Some(comp_inst) = ComponentInst::cast(node.clone()) {
-                println!("DEBUG: Processing ComponentInst (common module)");
+                log::debug!("Processing ComponentInst (common module)");
                 process_component_inst_common(&comp_inst, component_inference, power_context);
                 return; // Don't process children since we handled it
             }
@@ -659,7 +659,7 @@ fn visit_node_for_component_inference(
             if let Some(component_type) = component_type {
                 // Try to extract instance name from connection context
                 let instance_name = extract_instance_name_from_context(node);
-                println!("DEBUG: COMPONENT_INST '{}' with extracted instance name: {:?}", component_type, instance_name);
+                log::debug!("COMPONENT_INST '{}' with extracted instance name: {:?}", component_type, instance_name);
                 
                 // Try to get component instance name and its assigned power domain
                 let supply_voltage = if let Some(inst_name) = get_component_instance_name(node) {
@@ -765,7 +765,7 @@ fn visit_node_for_component_inference(
 
                 // Debug: Print voltage being used
                 if let Some(voltage) = requirements.supply_voltage {
-                    println!("DEBUG: Component '{}' using supply voltage: {}V", component_type, voltage);
+                    log::debug!("Component '{}' using supply voltage: {}V", component_type, voltage);
                 }
                 
                 // Infer component parameters
@@ -778,7 +778,7 @@ fn visit_node_for_component_inference(
                     }
                     component_inference.add_inferred_component(suggestion);
                 } else {
-                    println!("DEBUG: No suggestion returned for '{}'", component_type);
+                    log::debug!("No suggestion returned for '{}'", component_type);
                 }
             }
         }
@@ -813,7 +813,7 @@ fn process_component_instantiation_v2(
     if let Some(param_block) = comp_inst.parameters() {
         if param_block.has_placeholder() {
             has_placeholder = true;
-            println!("DEBUG: Component {} has placeholder parameters - marking for SPICE resolution", component_type);
+            log::debug!("Component {} has placeholder parameters - marking for SPICE resolution", component_type);
             
             // Extract any constraints from the placeholder
             if let Some(placeholder) = param_block.placeholder() {
@@ -830,7 +830,7 @@ fn process_component_instantiation_v2(
     let mut extracted_params = Vec::new();
     let mut parameter_overrides = std::collections::HashMap::new();
     if !has_placeholder {
-        println!("DEBUG: Extracting normal parameters for {}", component_type);
+        log::debug!("Extracting normal parameters for {}", component_type);
         // Only extract normal parameters if there's no placeholder.
         // Positional parameters bind to the entity's DECLARED parameter
         // names in order (ElectrolyticCap(100µF, 25V) → value, voltage) —
@@ -893,7 +893,7 @@ fn process_component_instantiation_v2(
     // Try to extract instance name from the connection context
     // Look for patterns like "D1: LED(red)" in the parent connection statement
     let extracted_name = extract_instance_name_from_context(comp_inst.syntax());
-    println!("DEBUG: Extracted instance name from context: {:?}", extracted_name);
+    log::debug!("Extracted instance name from context: {:?}", extracted_name);
     
     let instance_name = extracted_name.unwrap_or_else(|| {
             // If no explicit name found, generate one based on component type
@@ -905,7 +905,7 @@ fn process_component_instantiation_v2(
             format!("{}{}", get_refdes_prefix(&component_type), instance_id)
         });
     
-    println!("DEBUG: Processing v2.0 component instantiation: {} (type: {}) with {} parameters", 
+    log::debug!("Processing v2.0 component instantiation: {} (type: {}) with {} parameters", 
              instance_name, component_type, extracted_params.len());
     
     // Get supply voltage from power context
@@ -945,7 +945,7 @@ fn process_component_instantiation_v2(
     
     // Add explicit parameters to the circuit context
     if !extracted_params.is_empty() {
-        println!("DEBUG: Component {} has {} extracted parameters", component_type, extracted_params.len());
+        log::debug!("Component {} has {} extracted parameters", component_type, extracted_params.len());
         let mut explicit_params_map = std::collections::HashMap::new();
         for param in &extracted_params {
             let value_str = match &param.value {
@@ -961,7 +961,7 @@ fn process_component_instantiation_v2(
                 ParameterValue::Integer(i) => i.to_string(),
                 ParameterValue::Boolean(b) => b.to_string(),
             };
-            println!("DEBUG: Adding param '{}' = '{}'", param.name, value_str);
+            log::debug!("Adding param '{}' = '{}'", param.name, value_str);
             explicit_params_map.insert(param.name.clone(), value_str);
         }
         circuit_context.explicit_params = Some(explicit_params_map);
@@ -1045,7 +1045,7 @@ fn process_component_instantiation_v2(
             circuit_context: spice_context,
         });
         
-        println!("DEBUG: Added unresolved component {} for SPICE resolution", instance_name);
+        log::debug!("Added unresolved component {} for SPICE resolution", instance_name);
     } else {
         // Normal inference for components with specified values
         if let Some(mut suggestion) = component_inference.infer_component_parameters(
@@ -1093,17 +1093,17 @@ fn process_component_inst_common(
         .map(|t| t.text().to_string())
         .unwrap_or_else(|| "Unknown".to_string());
     
-    println!("DEBUG: Processing component type: {}", component_type);
+    log::debug!("Processing component type: {}", component_type);
     
     // Check if this component has placeholder parameters (for SPICE generation)
     let mut has_placeholder = false;
     let mut placeholder_constraints = Vec::new();
     
     if let Some(param_block) = comp_inst.param_assign_block() {
-        println!("DEBUG: Component {} has param block", component_type);
+        log::debug!("Component {} has param block", component_type);
         if param_block.has_placeholder() {
             has_placeholder = true;
-            println!("DEBUG: Component {} has placeholder parameters - marking for SPICE resolution", component_type);
+            log::debug!("Component {} has placeholder parameters - marking for SPICE resolution", component_type);
             
             // Extract any constraints from the placeholder
             if let Some(placeholder) = param_block.placeholder() {
@@ -1123,12 +1123,12 @@ fn process_component_inst_common(
     if !has_placeholder {
         // First check for param_list (used by interfaces)
         if let Some(param_list) = comp_inst.param_list() {
-            println!("DEBUG: Extracting parameters from param list for {}", component_type);
+            log::debug!("Extracting parameters from param list for {}", component_type);
             for param in param_list.params() {
                 if let (Some(name), Some(value)) = (param.name(), param.value()) {
                     let param_name = name.text().to_string();
                     let param_value = value.syntax().text().to_string().trim_matches('"').to_string();
-                    println!("DEBUG: Found param '{}' = '{}'", param_name, param_value);
+                    log::debug!("Found param '{}' = '{}'", param_name, param_value);
                     
                     // Store in parameter_overrides for interfaces
                     parameter_overrides.insert(param_name.clone(), param_value.clone());
@@ -1145,7 +1145,7 @@ fn process_component_inst_common(
         }
         // Then check for param_assign_block (used by components)
         else if let Some(param_block) = comp_inst.param_assign_block() {
-            println!("DEBUG: Extracting parameters from param block for {}", component_type);
+            log::debug!("Extracting parameters from param block for {}", component_type);
             for param_assign in param_block.assignments() {
                 if let Some(value) = param_assign.value() {
                     // Get parameter name, or use empty string for positional parameters
@@ -1154,7 +1154,7 @@ fn process_component_inst_common(
                         .unwrap_or_else(|| String::new());
                     
                     let param_value = value.syntax().text().to_string();
-                    println!("DEBUG: Found param '{}' = '{}'", param_name, param_value);
+                    log::debug!("Found param '{}' = '{}'", param_name, param_value);
                     
                     // Parse parameter value based on name or content
                     let parsed_value = if param_name == "package" {
@@ -1187,7 +1187,7 @@ fn process_component_inst_common(
         format!("{}{}", get_refdes_prefix(&component_type), instance_id)
     });
     
-    println!("DEBUG: Component instance name: {}", instance_name);
+    log::debug!("Component instance name: {}", instance_name);
     
     // Get supply voltage from power context
     // First check if component is assigned to a domain
@@ -1218,7 +1218,7 @@ fn process_component_inst_common(
     
     // Add explicit parameters to the circuit context
     if !extracted_params.is_empty() {
-        println!("DEBUG: Component {} has {} extracted parameters", component_type, extracted_params.len());
+        log::debug!("Component {} has {} extracted parameters", component_type, extracted_params.len());
         let mut explicit_params_map = std::collections::HashMap::new();
         for param in &extracted_params {
             let value_str = match &param.value {
@@ -1234,7 +1234,7 @@ fn process_component_inst_common(
                 ParameterValue::Integer(i) => i.to_string(),
                 ParameterValue::Boolean(b) => b.to_string(),
             };
-            println!("DEBUG: Adding param '{}' = '{}'", param.name, value_str);
+            log::debug!("Adding param '{}' = '{}'", param.name, value_str);
             explicit_params_map.insert(param.name.clone(), value_str);
         }
         circuit_context.explicit_params = Some(explicit_params_map);
@@ -1307,7 +1307,7 @@ fn process_component_inst_common(
             circuit_context: spice_context,
         });
         
-        println!("DEBUG: Added unresolved component {} for SPICE resolution", instance_name);
+        log::debug!("Added unresolved component {} for SPICE resolution", instance_name);
     } else {
         // Normal inference for components with specified values
         if let Some(mut suggestion) = component_inference.infer_component_parameters(
@@ -1339,16 +1339,16 @@ fn process_connection_for_components(
 ) {
     use bhdl_ast::flow::{FlowExpr, FlowElement};
     
-    println!("DEBUG: process_connection_for_components called for: {}", node.text());
+    log::debug!("process_connection_for_components called for: {}", node.text());
     
     // Look for flow expressions within the connection statement
     for child in node.children() {
         if let Some(flow_expr) = FlowExpr::cast(child.clone()) {
-            println!("DEBUG: Found FlowExpr in connection");
+            log::debug!("Found FlowExpr in connection");
             // Process each element in the flow expression
             for element in flow_expr.elements() {
                 if let FlowElement::ComponentInstantiation(comp_inst) = element {
-                    println!("DEBUG: Found ComponentInstantiation in flow");
+                    log::debug!("Found ComponentInstantiation in flow");
                     process_component_instantiation_v2(&comp_inst, component_inference, power_context, entity_param_names);
                 }
             }
@@ -1401,7 +1401,7 @@ fn get_refdes_prefix(component_type: &str) -> &'static str {
 fn extract_instance_name_from_context(node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguage>) -> Option<String> {
     use bhdl_ast::SyntaxKind;
     
-    println!("DEBUG: extract_instance_name_from_context called for node: {}", node.text());
+    log::debug!("extract_instance_name_from_context called for node: {}", node.text());
     
     // In BHDL v2.0, the pattern "name: Component(...)" creates a component handle
     // According to the spec section 5.5:
@@ -1429,7 +1429,7 @@ fn extract_instance_name_from_context(node: &rowan::SyntaxNode<bhdl_parser::Bhdl
                     // Clean up the handle (remove any leading arrows or operators)
                     let handle = handle.trim_start_matches("->").trim();
                     if !handle.is_empty() && handle.chars().all(|c| c.is_alphanumeric() || c == '_') {
-                        println!("DEBUG: Extracted instance name from context: {}", handle);
+                        log::debug!("Extracted instance name from context: {}", handle);
                         return Some(handle.to_string());
                     }
                 }
@@ -1447,7 +1447,7 @@ fn extract_instance_name_from_context(node: &rowan::SyntaxNode<bhdl_parser::Bhdl
         }
     }
     
-    println!("DEBUG: No instance name found in context");
+    log::debug!("No instance name found in context");
     None
 }
 

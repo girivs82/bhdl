@@ -168,7 +168,7 @@ impl HierarchicalContext {
         
         // Check if we're in a module context
         let in_module = self.current_module().is_some();
-        println!("DEBUG: resolve_net('{}'), in_module: {}", net_name, in_module);
+        log::debug!("resolve_net('{}'), in_module: {}", net_name, in_module);
         
         if in_module {
             // Check if net already exists in local context
@@ -195,12 +195,12 @@ impl HierarchicalContext {
             Ok(net_id)
         } else {
             // Top level net - check if it already exists (e.g., power/ground nets)
-            println!("DEBUG: Looking for existing net '{}'", net_name);
+            log::debug!("Looking for existing net '{}'", net_name);
             for (net_id, net) in netlist.nets.iter() {
                 if let Some(existing_name) = &net.name {
-                    println!("DEBUG: Checking net {:?} with name '{}'", net_id, existing_name);
+                    log::debug!("Checking net {:?} with name '{}'", net_id, existing_name);
                     if existing_name == net_name {
-                        println!("DEBUG: Found existing top-level net: {} -> {:?}", net_name, net_id);
+                        log::debug!("Found existing top-level net: {} -> {:?}", net_name, net_id);
                         return Ok(net_id);
                     }
                 }
@@ -558,10 +558,10 @@ fn process_board_body(
     }
     
     // Process connections and extract component instances
-    println!("=== Scanning board children for connections ===");
+    log::debug!("=== Scanning board children for connections ===");
     info!("=== Scanning board children for connections ===");
     for child in board.syntax().children() {
-        println!("Board child kind: {:?}, text preview: '{}'", child.kind(), 
+        log::debug!("Board child kind: {:?}, text preview: '{}'", child.kind(), 
               child.text().to_string().chars().take(50).collect::<String>());
         info!("Board child kind: {:?}, text preview: '{}'", child.kind(), 
               child.text().to_string().chars().take(50).collect::<String>());
@@ -569,7 +569,7 @@ fn process_board_body(
             SyntaxKind::COMPONENT_INST => {
                 // Process component instances directly
                 if let Some(comp_inst) = bhdl_ast::common::ComponentInst::cast(child) {
-                    println!("Processing COMPONENT_INST: {}", comp_inst.syntax().text());
+                    log::debug!("Processing COMPONENT_INST: {}", comp_inst.syntax().text());
                     info!("Processing COMPONENT_INST: {}", comp_inst.syntax().text());
                     create_component_instance(&comp_inst, netlist, context, analysis, import_preprocessor)?;
                 }
@@ -876,7 +876,7 @@ fn process_connection_in_module(
                         // Check for @ prefixed net reference
                         if endpoint.starts_with('@') {
                             let net_name = &endpoint[1..];
-                            println!("DEBUG: First pass found net reference @{}", net_name);
+                            log::debug!("First pass found net reference @{}", net_name);
                             let net_id = context.resolve_net(net_name, netlist)?;
                             current_net_id = Some(net_id);
                             break; // Found a net, stop scanning
@@ -894,7 +894,7 @@ fn process_connection_in_module(
                             // This might be a simple net name like GND, VIN, VOUT
                             // Try to resolve it - if it exists, use it
                             if let Ok(net_id) = context.resolve_net(endpoint, netlist) {
-                                println!("DEBUG: First pass found existing net '{}'", endpoint);
+                                log::debug!("First pass found existing net '{}'", endpoint);
                                 current_net_id = Some(net_id);
                                 break; // Found a net, stop scanning
                             }
@@ -904,7 +904,7 @@ fn process_connection_in_module(
                     // Process each endpoint
                     for (i, part) in parts.iter().enumerate() {
                         let endpoint = part.trim().trim_end_matches(';');
-                        println!("DEBUG: Processing connection endpoint {}: '{}'", i, endpoint);
+                        log::debug!("Processing connection endpoint {}: '{}'", i, endpoint);
                         
                         // Parse the endpoint to determine its type
                         if endpoint.starts_with('@') {
@@ -913,14 +913,14 @@ fn process_connection_in_module(
                             
                             // Skip if we already processed this net reference
                             if parts.len() == 2 && i == 1 && current_net_id.is_some() {
-                                println!("DEBUG: Skipping already processed net reference @{}", net_name);
+                                log::debug!("Skipping already processed net reference @{}", net_name);
                                 continue;
                             }
                             
-                            println!("DEBUG: Processing net reference @{}", net_name);
+                            log::debug!("Processing net reference @{}", net_name);
                             let net_id = context.resolve_net(net_name, netlist)?;
                             current_net_id = Some(net_id);
-                            println!("DEBUG: Net reference: {} -> {:?}", net_name, net_id);
+                            log::debug!("Net reference: {} -> {:?}", net_name, net_id);
                         } else if let Some(dot_pos) = endpoint.rfind('.') {
                             // Component pin reference like R1.2 or LED1.cathode
                             // Also handles inline assignment like R1: Res(330).1
@@ -948,14 +948,14 @@ fn process_connection_in_module(
                                     // Connect this pin to the current net
                                     let net_id = current_net_id.get_or_insert_with(|| {
                                         // Create an unnamed net for this connection
-                                        println!("DEBUG: Creating unnamed net for connection");
+                                        log::debug!("Creating unnamed net for connection");
                                         netlist.add_net(None)
                                     });
                                     
                                     if let Err(e) = netlist.connect(*net_id, ConnectionPoint::PinInstance(pin_inst_id)) {
                                         warn!("Failed to connect {}.{}: {}", inst_name, pin_name, e);
                                     } else {
-                                        println!("DEBUG: Connected {}.{} to net {:?}", inst_name, pin_name, net_id);
+                                        log::debug!("Connected {}.{} to net {:?}", inst_name, pin_name, net_id);
                                     }
                                 } else {
                                     warn!("    Pin {} not found on instance {}", pin_name, inst_name);
@@ -1683,7 +1683,7 @@ fn process_connection_stmt_as_flow(
     import_preprocessor: Option<&crate::import_preprocessor::ImportPreprocessor>,
 ) -> Result<()> {
     let full_text = node.text().to_string();
-    println!("=== Processing CONNECTION_STMT as flow ===");
+    log::debug!("=== Processing CONNECTION_STMT as flow ===");
     info!("Processing CONNECTION_STMT as flow: '{}'", full_text);
 
     // Strip trailing semicolon and any `for` clause
@@ -1717,7 +1717,7 @@ fn process_connection_stmt_as_flow(
     }
 
     let parts = extract_flow_chain_ast(node);
-    println!("Parsed {} parts from bare connection", parts.len());
+    log::debug!("Parsed {} parts from bare connection", parts.len());
     info!("Parsed {} parts from bare connection", parts.len());
 
     // Bundle expansion (v0.3 interfaces): if every part is an
@@ -3024,14 +3024,14 @@ fn process_flow_parts(
 
     for (i, part) in parts.iter().enumerate() {
         let endpoint = part.trim();
-        println!("\nProcessing flow part {}: '{}'", i, endpoint);
+        log::debug!("Processing flow part {}: '{}'", i, endpoint);
         info!("Processing flow part {}: '{}'", i, endpoint);
 
         if endpoint.starts_with('@') {
             // Net reference like @VCC or @GND
             let ref_net_name = &endpoint[1..];
             let ref_net_id = context.resolve_net(ref_net_name, netlist)?;
-            println!("  Net reference: @{} (id: {:?})", ref_net_name, ref_net_id);
+            log::debug!("Net reference: @{} (id: {:?})", ref_net_name, ref_net_id);
             info!("  Net reference: @{} (id: {:?})", ref_net_name, ref_net_id);
 
             // If the previous part left a component pin dangling (last_net_id == None,
@@ -3065,7 +3065,7 @@ fn process_flow_parts(
                         "1"
                     };
 
-                    println!("  Inline component: {} = {}(...).{}", instance_name, component_type, pin_name);
+                    log::debug!("Inline component: {} = {}(...).{}", instance_name, component_type, pin_name);
                     info!("  Inline component: {} = {}(...).{}", instance_name, component_type, pin_name);
 
                     let inst_id = create_inline_component_instance(
@@ -3078,13 +3078,13 @@ fn process_flow_parts(
                         import_preprocessor
                     )?;
 
-                    println!("  Created instance {:?} for {}", inst_id, instance_name);
+                    log::debug!("Created instance {:?} for {}", inst_id, instance_name);
 
                     if let Some(net_id) = last_net_id {
                         connect_pin_to_net(netlist, inst_id, pin_name, net_id,
                             &format!("{}.{}", instance_name, pin_name), "previous net")?;
                     } else {
-                        println!("  Warning: No previous net to connect to for {}.{}", instance_name, pin_name);
+                        log::warn!("No previous net to connect to for {}.{}", instance_name, pin_name);
                     }
 
                     // `->` uniformly MERGES its two endpoints: keep `last_net_id`
@@ -3104,7 +3104,7 @@ fn process_flow_parts(
             let instance_name = &endpoint[..dot_pos];
             let pin_name = &endpoint[dot_pos + 1..];
 
-            println!("  Component pin: {}.{}", instance_name, pin_name);
+            log::debug!("Component pin: {}.{}", instance_name, pin_name);
             info!("  Component pin: {}.{}", instance_name, pin_name);
 
             // Context-aware: prefer module-qualified instance when
@@ -3123,7 +3123,7 @@ fn process_flow_parts(
                         endpoint
                     ).replace(".", "_").replace(":", "_");
                     let new_net_id = netlist.add_net(Some(net_name.clone()));
-                    println!("  Created intermediate net '{}' ({:?})", net_name, new_net_id);
+                    log::debug!("Created intermediate net '{}' ({:?})", net_name, new_net_id);
                     new_net_id
                 } else {
                     // First element in the chain is a pin reference (e.g. `led1.K -> GND`).
@@ -3131,7 +3131,7 @@ fn process_flow_parts(
                     // when the next element (e.g. GND) is resolved.
                     let net_name = format!("auto_{}", endpoint).replace(".", "_");
                     let new_net_id = netlist.add_net(Some(net_name.clone()));
-                    println!("  Created auto-net '{}' ({:?}) for first-element pin", net_name, new_net_id);
+                    log::debug!("Created auto-net '{}' ({:?}) for first-element pin", net_name, new_net_id);
                     new_net_id
                 };
 
@@ -3153,7 +3153,7 @@ fn process_flow_parts(
             // threading, `VCC -> R1 -> GND`) or a power/ground/intermediate
             // net name like VCC, GND, divider (without @ prefix). Instance
             // names take precedence: a declared part is never a net.
-            println!("  Simple identifier: '{}'", endpoint);
+            log::debug!("Simple identifier: '{}'", endpoint);
             info!("  Simple identifier: '{}'", endpoint);
 
             if let Some(inst_id) = find_instance_by_name_in_context(netlist, context, endpoint) {
@@ -3178,7 +3178,7 @@ fn process_flow_parts(
                     // If there's an existing intermediate/auto net, merge it into the resolved net
                     if let Some(prev_net_id) = last_net_id {
                         if prev_net_id != resolved_net_id {
-                            println!("  Merging previous net {:?} with resolved net {:?}", prev_net_id, resolved_net_id);
+                            log::debug!("Merging previous net {:?} with resolved net {:?}", prev_net_id, resolved_net_id);
                             info!("  Merging previous net {:?} with resolved net {:?}", prev_net_id, resolved_net_id);
                             merge_nets(resolved_net_id, prev_net_id, netlist)?;
                         }
@@ -3191,11 +3191,11 @@ fn process_flow_parts(
 
                     last_net_id = Some(resolved_net_id);
                     last_was_component_pin = false;
-                    println!("  Resolved '{}' to net {:?}", endpoint, resolved_net_id);
+                    log::debug!("Resolved '{}' to net {:?}", endpoint, resolved_net_id);
                     info!("  Resolved '{}' to net {:?}", endpoint, resolved_net_id);
                 }
                 Err(e) => {
-                    println!("  Warning: Could not resolve '{}' as net: {}", endpoint, e);
+                    log::warn!("Could not resolve '{}' as net: {}", endpoint, e);
                     warn!("  Could not resolve '{}' as net: {}", endpoint, e);
                 }
             }
@@ -3281,7 +3281,7 @@ fn thread_chain_through_instance(
             // entry pin, merged later if a net reference follows elsewhere.
             let name = format!("auto_{}_{}", endpoint, pin_names[0]).replace('.', "_");
             let net = netlist.add_net(Some(name.clone()));
-            println!("  Created auto-net '{}' ({:?}) for chain-opening instance", name, net);
+            log::debug!("Created auto-net '{}' ({:?}) for chain-opening instance", name, net);
             net
         }
     };
@@ -3290,7 +3290,7 @@ fn thread_chain_through_instance(
 
     let exit_name = format!("net_{}_{}", endpoint, pin_names[1]).replace('.', "_");
     let exit_net = netlist.add_net(Some(exit_name.clone()));
-    println!("  Threaded chain through '{}': {} in, {} out on '{}'",
+    log::debug!("Threaded chain through '{}': {} in, {} out on '{}'",
         endpoint, pin_names[0], pin_names[1], exit_name);
     info!("  Threaded chain through '{}': {} in, {} out on '{}'",
         endpoint, pin_names[0], pin_names[1], exit_name);
@@ -3321,7 +3321,7 @@ fn connect_pin_to_net(
     if let Some(pin_inst_id) = netlist.find_pin_instance(inst_id, pin_name) {
         netlist.connect(net_id, ConnectionPoint::PinInstance(pin_inst_id))
             .map_err(|e| anyhow::anyhow!("Failed to connect pin: {}", e))?;
-        println!("  Connected {} to {}", desc, target_desc);
+        log::debug!("Connected {} to {}", desc, target_desc);
         info!("  Connected {} to {}", desc, target_desc);
     } else {
         let alt_pins = match pin_name {
@@ -3334,7 +3334,7 @@ fn connect_pin_to_net(
             if let Some(pin_inst_id) = netlist.find_pin_instance(inst_id, alt) {
                 netlist.connect(net_id, ConnectionPoint::PinInstance(pin_inst_id))
                     .map_err(|e| anyhow::anyhow!("Failed to connect pin: {}", e))?;
-                println!("  Connected {} to {} (using pin '{}')", desc, target_desc, alt);
+                log::debug!("Connected {} to {} (using pin '{}')", desc, target_desc, alt);
                 info!("  Connected {} to {} (using pin '{}')", desc, target_desc, alt);
                 connected = true;
                 break;
@@ -3357,7 +3357,7 @@ fn connect_pin_to_net(
                 if let Some(pin_inst_id) = netlist.find_pin_instance(inst_id, member) {
                     netlist.connect(net_id, ConnectionPoint::PinInstance(pin_inst_id))
                         .map_err(|e| anyhow::anyhow!("Failed to connect pin: {}", e))?;
-                    println!("  Connected {} to {} (bus member '{}')", desc, target_desc, member);
+                    log::debug!("Connected {} to {} (bus member '{}')", desc, target_desc, member);
                     info!("  Connected {} to {} (bus member '{}')", desc, target_desc, member);
                     connected = true;
                 }

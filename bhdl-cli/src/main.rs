@@ -318,16 +318,11 @@ enum Commands {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     
-    // Initialize logging
-    if cli.verbose {
-        env_logger::Builder::from_default_env()
-            .filter_level(log::LevelFilter::Debug)
-            .init();
-    } else {
-        env_logger::Builder::from_default_env()
-            .filter_level(log::LevelFilter::Info)
-            .init();
-    }
+    // Initialize logging: --verbose defaults to debug, otherwise info;
+    // RUST_LOG (when set) takes precedence over both.
+    let default_level = if cli.verbose { "debug" } else { "info" };
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(default_level))
+        .init();
     
     // Configure Cargo-style library resolution (proprietary / external
     // stdlibs). Activates only when the board opts in — a `bhdl.toml`

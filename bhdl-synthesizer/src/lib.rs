@@ -491,13 +491,13 @@ impl NetlistGenerator {
         
         // Phase 0b: Initialize database mapper if needed
         if self.database_mapper.is_none() && self.config.include_component_inference && self.config.database_path.is_some() {
-            println!("DEBUG: Attempting to initialize database mapper");
+            log::debug!("Attempting to initialize database mapper");
             if let Err(e) = self.initialize_database_mapper().await {
                 warn!("Failed to initialize database mapper: {}", e);
-                println!("DEBUG: Database mapper initialization failed: {}", e);
+                log::debug!("Database mapper initialization failed: {}", e);
                 // Continue without database mapper - will use fallback
             } else {
-                println!("DEBUG: Database mapper initialized successfully");
+                log::debug!("Database mapper initialized successfully");
             }
         }
         
@@ -510,14 +510,14 @@ impl NetlistGenerator {
         // Phase 2: Generate database component instances if mapper is available
         info!("Phase 2: Generating component instances...");
         if self.database_mapper.is_some() {
-            println!("DEBUG: Using database component mapper for instance generation");
-            println!("DEBUG: About to call generate_database_component_instances");
+            log::debug!("Using database component mapper for instance generation");
+            log::debug!("About to call generate_database_component_instances");
             let result = self.generate_database_component_instances(analysis, ast).await;
-            println!("DEBUG: Returned from generate_database_component_instances with result: {:?}", result.is_ok());
+            log::debug!("Returned from generate_database_component_instances with result: {:?}", result.is_ok());
             result?;
         } else {
             // Fallback to semantic instance generation if database unavailable
-            println!("DEBUG: Using semantic instance generation (no database mapper)");
+            log::debug!("Using semantic instance generation (no database mapper)");
             self.generate_instances_with_semantics(analysis)?;
         }
         info!("Phase 2 complete: {} instances created", self.netlist.instances.len());
@@ -854,7 +854,7 @@ impl NetlistGenerator {
                         .map_err(|e| anyhow::anyhow!("Failed to create pin instances: {}", e))?;
 
                     // Transfer component parameters from analyzer to instance attributes
-                    println!("DEBUG: Calling populate_instance_attributes for instance '{}' (id: {:?})", instance_name, instance_id);
+                    log::debug!("Calling populate_instance_attributes for instance '{}' (id: {:?})", instance_name, instance_id);
                     populate_instance_attributes(&mut self.netlist, instance_id, &instance_name, analysis);
 
                     self.ast_to_module.insert(component_type.clone(), module_id);
@@ -2944,14 +2944,14 @@ pub fn populate_instance_attributes(
     handle_name: &str, 
     analysis: &AnalysisResult
 ) {
-    println!("DEBUG: populate_instance_attributes called!");
-    println!("DEBUG: Transferring parameters for instance {:?} (handle: {})", instance_id, handle_name);
+    log::debug!("populate_instance_attributes called!");
+    log::debug!("Transferring parameters for instance {:?} (handle: {})", instance_id, handle_name);
     
     let inference_components = analysis.component_inference.get_inferred_components();
-    println!("DEBUG: Total inferred components: {}", inference_components.len());
+    log::debug!("Total inferred components: {}", inference_components.len());
     
     for (idx, component) in inference_components.iter().enumerate() {
-        println!("DEBUG: Component {}: type={}, instance_name={:?}, params={}",
+        log::debug!("Component {}: type={}, instance_name={:?}, params={}",
                  idx, component.component_type, component.instance_name, component.parameters.len());
     }
     
@@ -2994,7 +2994,7 @@ pub fn populate_instance_attributes(
     for component in inference_components {
         if let Some(instance_name) = &component.instance_name {
             if instance_name == handle_name {
-                println!("DEBUG: Found inference data for handle '{}', component type: {}", handle_name, component.component_type);
+                log::debug!("Found inference data for handle '{}', component type: {}", handle_name, component.component_type);
                 
                 // Extract parameters from the component suggestion
                 for param in &component.parameters {
@@ -3016,7 +3016,7 @@ pub fn populate_instance_attributes(
                         _ => continue, // Skip unsupported parameter types
                     };
                     
-                    println!("DEBUG: Setting parameter '{}' = '{}' for instance {:?}", param.name, param_value, instance_id);
+                    log::debug!("Setting parameter '{}' = '{}' for instance {:?}", param.name, param_value, instance_id);
                     
                     // Store the parameter in the netlist instance attributes.
                     // Two provenance classes, two policies:
@@ -3036,9 +3036,9 @@ pub fn populate_instance_attributes(
                         } else {
                             instance.attributes.entry(param.name.clone()).or_insert(param_value);
                         }
-                        println!("DEBUG: Successfully stored parameter in netlist instance");
+                        log::debug!("Successfully stored parameter in netlist instance");
                     } else {
-                        println!("DEBUG: Failed to find instance {:?} in netlist", instance_id);
+                        log::debug!("Failed to find instance {:?} in netlist", instance_id);
                     }
                 }
                 
@@ -3047,7 +3047,7 @@ pub fn populate_instance_attributes(
         }
     }
     
-    println!("DEBUG: No component inference data found for handle '{}' (instance {:?})", handle_name, instance_id);
+    log::debug!("No component inference data found for handle '{}' (instance {:?})", handle_name, instance_id);
 }
 
 /// 🔬 NEW FUNCTION: Apply simulation-based component selection using unified simulation results
