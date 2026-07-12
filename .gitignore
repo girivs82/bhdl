@@ -86,3 +86,6 @@ tests/scratch/
 
 # Local catalogue DBs (see data/README.md) — big binaries, never committed
 /data/*.sqlite3*
+
+# Vendor IBIS models — Atmel license permits use, not redistribution.
+vendor/ibis/

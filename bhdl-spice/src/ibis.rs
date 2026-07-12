@@ -401,7 +401,10 @@ pub fn parse_str(text: &str) -> Result<IbisFile, IbisError> {
             let Some(close) = rest.find(']') else {
                 return Err(IbisError { line: lineno, message: "unterminated [keyword]".into() });
             };
-            let keyword = rest[..close].trim().to_ascii_lowercase();
+            // Real generators vary keyword spelling: GENIBIS emits
+            // `[GND_clamp]` / `[POWER_clamp]` (underscores) where the spec
+            // writes `[GND Clamp]`. Normalize separators before matching.
+            let keyword = rest[..close].trim().to_ascii_lowercase().replace('_', " ");
             let arg = rest[close + 1..].trim().to_string();
             section = Section::None;
             match keyword.as_str() {
@@ -722,6 +725,77 @@ Model_type   Input
         let (dv, dt) = m.ramp.dv_dt_r[0].unwrap();
         assert!((dv - 2.0).abs() < 1e-12);
         assert!((dt - 1.0e-9).abs() < 1e-18);
+    }
+
+    /// Real vendor files (Atmel AT32UC3A3/A4, GENIBIS output) — parse all
+    /// three package variants and solve a REAL GPIO buffer against a load.
+    /// Gated on the files' presence: the Atmel license permits use but not
+    /// redistribution, so vendor/ibis/ is gitignored and this test skips
+    /// cleanly where the files are absent.
+    #[test]
+    fn real_atmel_uc3a3_files() {
+        use crate::circuit::{encode_iv_table, Circuit, META_IV_TABLE};
+        use crate::glacier_dc_solver::GlacierDcSolver;
+        use std::collections::HashMap;
+
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../vendor/ibis");
+        if !dir.join("u3a33t44.ibs").exists() {
+            eprintln!("real_atmel_uc3a3_files: vendor files absent — skipped");
+            return;
+        }
+        // All three package variants must parse with populated tables.
+        for f in ["u3a33t44.ibs", "u3a33c44.ibs", "u3a43c00.ibs"] {
+            let ib = parse_file(&dir.join(f)).expect(f);
+            assert!(!ib.components.is_empty(), "{f}: no components");
+            assert!(ib.models.len() >= 16, "{f}: models missing");
+            let clamps: usize = ib.models.values()
+                .map(|m| m.gnd_clamp.as_ref().map(|t| t.typ.len()).unwrap_or(0))
+                .sum();
+            assert!(clamps > 0, "{f}: clamp tables empty (keyword normalization?)");
+        }
+
+        // Solve the TQFP144 GPIO buffer (ct33x3b01up, i/o) HIGH into 150Ω.
+        let ib = parse_file(&dir.join("u3a33t44.ibs")).unwrap();
+        let m = &ib.models["ct33x3b01up"];
+        let pts = m.composed_iv(BufferState::High, Corner::Typ).unwrap();
+        let interp = |v: f64| -> f64 {
+            if v <= pts[0].0 { return pts[0].1; }
+            if v >= pts[pts.len()-1].0 { return pts[pts.len()-1].1; }
+            for w in pts.windows(2) {
+                if v <= w[1].0 {
+                    let t = (v - w[0].0) / (w[1].0 - w[0].0);
+                    return w[0].1 + t * (w[1].1 - w[0].1);
+                }
+            }
+            pts[pts.len()-1].1
+        };
+        // The table's own root of interp(v) + v/150 = 0 in (0, Vcc), by
+        // bisection — the expected operating point from the vendor's data.
+        let (mut lo, mut hi) = (0.0_f64, 3.3_f64);
+        for _ in 0..60 {
+            let mid = (lo + hi) / 2.0;
+            if interp(mid) + mid / 150.0 > 0.0 { hi = mid } else { lo = mid }
+        }
+        let expected = (lo + hi) / 2.0;
+        assert!(expected > 2.0 && expected < 3.3, "implausible root {expected}");
+
+        let mut c = Circuit::new();
+        c.add_node("PIN".into(), None);
+        c.add_node("GND".into(), None);
+        let mut meta = HashMap::new();
+        meta.insert(META_IV_TABLE.to_string(), encode_iv_table(&pts));
+        c.add_branch_with_metadata(
+            "buf".into(), "PIN", "GND", "IbisBuffer".into(), 0.0, None, meta,
+        );
+        c.add_branch("rload".into(), "PIN", "GND", "Resistor".into(), 150.0, None);
+        let result = GlacierDcSolver::new().solve(c.clone()).expect("solve");
+        let idx = c.nodes().find(|(_, n)| n.name == "PIN").unwrap().0;
+        let v = result.node_voltages[&idx];
+        assert!(
+            (v - expected).abs() < 2e-3,
+            "solver {v} vs table root {expected}"
+        );
+        eprintln!("real UC3A3 GPIO HIGH into 150Ω: {v:.4}V (table root {expected:.4}V)");
     }
 
     /// The full fixture topology (rail source + buffer HIGH + 124Ω E-snapped
