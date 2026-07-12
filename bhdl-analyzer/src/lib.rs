@@ -1809,6 +1809,11 @@ pub fn validate_constructor_args(
                         // SPICE converter — same machine-passthrough class
                         // as supply_*.
                         || arg.starts_with("ibis_")
+                        // Value-derivation directives: `derive_rule` marks
+                        // the written value as a SEED the toolchain refines
+                        // by simulation (bhdl-cli value_deriver); companions
+                        // like derive_i2c_khz parameterize the rule.
+                        || arg.starts_with("derive_")
                     {
                         continue;
                     }

@@ -6,7 +6,11 @@ import { ATmega328P_DIP28 } from "bhdl-stdlib/actives/atmega328p.bhdl";
 import { Cap, Res } from "bhdl-stdlib/passives/capacitor.bhdl";
 
 board ATmega328P_I2C_Used {
-    power VCC = 5V @ 200mA;
+    // 1.8V operation (datasheet-legal for the 328P) — this matches the
+    // vendor IBIS model's characterized domain ([Voltage Range] 2.0V
+    // typ, 1.8..2.2), so the pull-up derivation measures real pad
+    // behavior instead of an out-of-domain clamp fighting the rail.
+    power VCC = 1.8V @ 200mA;
     ground GND;
 
     mcu: ATmega328P_DIP28();
@@ -20,4 +24,19 @@ board ATmega328P_I2C_Used {
     // Wire I²C — PC4/PC5 get nets via the interface binding.
     mcu.PC4 -> @SDA_BUS;
     mcu.PC5 -> @SCL_BUS;
+
+    // NOTE what the derivation revealed: the vendor pad model
+    // (gpiopad_lv) was characterized with the megaAVR's INTERNAL
+    // pull-up enabled — its GND-clamp table carries a linear ~36kΩ
+    // sourcing ramp toward Vcc. The derived external pull-up is
+    // therefore larger than a bare-RC formula would give: the sim
+    // measures the internal pull-up helping the rise. That is exactly
+    // the class of silicon behavior value derivation exists to catch.
+    //
+    // Declared bus loading: trace + connector + downstream devices,
+    // 50pF per line. The pull-up deriver sizes against THIS (plus the
+    // MCU pad's own IBIS C_comp) — an undeclared bus would derive a
+    // pull-up for a nearly-unloaded net, which is honest but useless.
+    @SDA_BUS -> c_sda: Cap(50pF).1;  c_sda.2 -> @GND;
+    @SCL_BUS -> c_scl: Cap(50pF).1;  c_scl.2 -> @GND;
 }

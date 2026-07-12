@@ -209,8 +209,11 @@ entity ATmega328P_DIP28(part_no: string = "ATMEGA328P-PU") {
 
         // I²C pullups on PC4 (SDA) and PC5 (SCL). Gated on the
         // board wiring those pins — see compute_live_children.
-        PC4  -> R_pu_sda: Res(4.7kΩ).1;  R_pu_sda.2 -> VCC;
-        PC5  -> R_pu_scl: Res(4.7kΩ).1;  R_pu_scl.2 -> VCC;
+        // 4.7kΩ is the SEED; derive_rule hands the final value to the
+        // simulation-driven deriver (largest E24 meeting the I2C rise
+        // budget against the bus's real measured loading).
+        PC4  -> R_pu_sda: Res(4.7kΩ, derive_rule="i2c_pullup").1;  R_pu_sda.2 -> VCC;
+        PC5  -> R_pu_scl: Res(4.7kΩ, derive_rule="i2c_pullup").1;  R_pu_scl.2 -> VCC;
     }
 }
 

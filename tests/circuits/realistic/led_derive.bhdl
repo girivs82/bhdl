@@ -1,0 +1,40 @@
+// Simulation-derived LED series resistor (derive_rule="led_current").
+//
+// The driver sinks the LED (active-low, like the Uno's TX LED) through
+// a resistor whose written 1kΩ is only a SEED: the deriver sweeps E24
+// candidates through full DC solves — the driver's real IBIS V_OL and
+// the LED's exponential model both participate — and lands the value
+// whose MEASURED current is closest to the LED's declared 20mA
+// forward_current without exceeding max_current.
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
+
+entity SinkDriver() {
+    pin VCC:  power in;
+    pin OUT1: signal out;
+    pin GND:  ground;
+
+    attribute component_class = "ic_logic";
+    attribute i_quiescent = 1mA;
+
+    simulation {
+        model {
+            ibis "test_buffer.ibs" component "TESTCHIP" corner typ;
+        }
+    }
+}
+
+board LedDerive {
+    power VCC = 5V @ 100mA;
+    ground GND;
+
+    u1: SinkDriver(ibis_state_OUT1="low");
+    @VCC -> u1.VCC;
+    u1.GND -> @GND;
+
+    // VCC → LED → R(derived) → sinking pin.
+    @VCC -> led1: LED(color="green").A;
+    led1.K -> r_led: Res(1kΩ, derive_rule="led_current").1;
+    r_led.2 -> u1.OUT1;
+}

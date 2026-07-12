@@ -9,6 +9,8 @@
 //! - Component role detection
 
 use clap::{Parser, Subcommand};
+
+mod value_deriver;
 use anyhow::{Result, Context};
 use colored::*;
 use std::fs;
@@ -1305,6 +1307,7 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
 
     // Snap computed passive values to catalog E-series before sim/viz.
     snap_catalog_values(&mut netlist);
+    run_value_derivation(&mut netlist, &analysis, source_path)?;
 
     // Run GLACIER DC simulation for voltage/current annotation
     let sim_annotations = {
@@ -1661,6 +1664,7 @@ async fn run_layout(
 
     // Snap computed passive values to catalog E-series before layout/sim.
     snap_catalog_values(&mut netlist);
+    run_value_derivation(&mut netlist, &analysis, source_path)?;
 
     // 5. GLACIER DC
     let sim_annotations = {
@@ -2404,6 +2408,27 @@ fn run_ibis_transient_traces(
     (traces, duration)
 }
 
+/// Run simulation-driven value derivation (`derive_rule` markers) and
+/// print the report. Hard error when a requested derivation can't run.
+fn run_value_derivation(
+    netlist: &mut bhdl_netlist::netlist::Netlist,
+    analysis: &bhdl_analyzer::AnalysisResult,
+    source_path: &Path,
+) -> Result<()> {
+    let rows = value_deriver::derive_values(netlist, analysis, source_path)?;
+    if rows.is_empty() {
+        return Ok(());
+    }
+    println!("  {} {} value(s) derived by simulation:", "✓".green(), rows.len());
+    for r in &rows {
+        println!(
+            "    {} {} [{}]: {} → {}  ({})",
+            "→".cyan(), r.instance, r.rule, r.seed, r.derived, r.detail
+        );
+    }
+    Ok(())
+}
+
 /// `bhdl vendor status|install` — the vendor-file distribution story
 /// (bhdl_common::vendor). Vendor simulation data is licensed
 /// use-not-redistribute, so the repo commits a MANIFEST (path + sha256 +
@@ -2560,6 +2585,7 @@ async fn cmd_transient(
         &analysis.entity_attr_param_refs,
     );
     snap_catalog_values(&mut netlist);
+    run_value_derivation(&mut netlist, &analysis, source_path)?;
 
     let mut converter = NetlistToSpiceConverter::new();
     converter.set_model_overrides(bhdl_synthesizer::model_evaluator::evaluate_model_overrides(
@@ -2815,6 +2841,11 @@ async fn cmd_bom(
     //      out with a list (same anti-silent-fallback principle as
     //      Stage 6 device discovery).
     apply_sku_variant(&analysis, &mut netlist, sku)?;
+
+    // 4.52. Simulation-driven value derivation (`derive_rule` markers) —
+    //       before any solve or catalog snap so the BOM, sign-off and
+    //       stress all see the DERIVED value.
+    run_value_derivation(&mut netlist, &analysis, &source_path.to_path_buf())?;
 
     // 4.55. Optional GLACIER DC solve (`--simulate`): derive each passive's
     //       stress from the simulated operating point. This stamps the
