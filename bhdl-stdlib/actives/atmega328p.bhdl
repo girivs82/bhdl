@@ -138,6 +138,15 @@ entity ATmega328P_DIP28(part_no: string = "ATMEGA328P-PU") {
     simulation {
         model {
             node VCC draws = 0.012;
+            // DOCUMENTED SUBSTITUTION: Microchip publishes no IBIS model
+            // for the ATmega328P (slow-edge 8-bit part; SI analysis was
+            // never demanded). The ATmega168 is the SAME 48/88/168/328
+            // die family — identical I/O pad design, identical PDIP-28
+            // pinout and signal names — so its official model is the
+            // industry-standard stand-in. sim_model_provenance names the
+            // actual file+component on every stamped pin; nothing is
+            // silently relabeled.
+            ibis "vendor/ibis/megaavr/m1682p28.ibs" component "atmega168_20_pdip28" corner typ;
         }
     }
     attribute architecture    = "8-bit RISC";

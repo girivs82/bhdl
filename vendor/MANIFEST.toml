@@ -31,3 +31,10 @@ sha256 = "efb1b2ca285308a89ad596e18338f83557afcbcef5dfc44023be2c46c641e213"
 source = "Microchip 'megaAVR IBIS Models' archive (same download as m16u2m32.ibs — the USB D+/D- transceiver buffers ship as separate avrusb dm_dp files)"
 license = "Atmel/Microchip IBIS model license: free use and modification; redistribution not permitted"
 used_by = ["bhdl-stdlib/actives/atmega16u2.bhdl"]
+
+[[file]]
+path = "vendor/ibis/megaavr/m1682p28.ibs"
+sha256 = "5f19e6493b35cdb0aba6af7706ad3cf5838630810ad3a07c0e87cacb040af9a6"
+source = "Microchip 'megaAVR IBIS Models' archive (same download as m16u2m32.ibs) — ATmega168 PDIP-28. DOCUMENTED SUBSTITUTION for the ATmega328P, which has no official IBIS model: same 48/88/168/328 die family, identical I/O pads, pinout and signal names"
+license = "Atmel/Microchip IBIS model license: free use and modification; redistribution not permitted"
+used_by = ["bhdl-stdlib/actives/atmega328p.bhdl"]
