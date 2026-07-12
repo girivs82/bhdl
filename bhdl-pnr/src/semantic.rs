@@ -116,10 +116,34 @@ pub fn build_board(
             if instance.name != module.name {
                 return true;
             }
-            netlist
+            let connected = netlist
                 .pin_instances
                 .values()
-                .any(|pi| pi.instance == inst_id && pi.net.is_some())
+                .any(|pi| pi.instance == inst_id && pi.net.is_some());
+            if connected {
+                return true;
+            }
+            // A true phantom always SHADOWS a connected sibling of the
+            // same module (the duplicate-footprint signature). A lone
+            // module-named unconnected instance is a real part on a
+            // minimal board (anonymous instances are auto-named after
+            // their module) — filtering those emptied 12 corpus boards.
+            let has_connected_sibling = netlist.instances.iter().any(|(oid, other)| {
+                oid != inst_id
+                    // By module NAME, not ModuleId: the phantom stub and
+                    // the real instance carry SEPARATE ModuleDefinition
+                    // entries with the same name.
+                    && netlist
+                        .modules
+                        .get(other.definition)
+                        .map(|m| m.name == module.name)
+                        .unwrap_or(false)
+                    && netlist
+                        .pin_instances
+                        .values()
+                        .any(|pi| pi.instance == oid && pi.net.is_some())
+            });
+            !has_connected_sibling
         })
         .collect();
 

@@ -1700,11 +1700,24 @@ async fn run_layout(
     }
 
     // 7. Build PnR board
-    let mut board = semantic::build_board(
+    let board_result = semantic::build_board(
         &netlist,
         sim_annotations.as_ref(),
         SemanticConfig::default(),
-    ).map_err(|e| anyhow::anyhow!("Board construction failed: {}", e))?;
+    );
+    let mut board = match board_result {
+        Ok(b) => b,
+        Err(e) if e.to_string().contains("no instances")
+            || e.to_string().contains("EmptyNetlist")
+            || format!("{e:?}").contains("EmptyNetlist") =>
+        {
+            // A board with nothing to place is a no-op, not a failure —
+            // several corpus fixtures are pure syntax/power tests.
+            println!("  {} nothing to lay out (no placeable instances) — skipping", "→".cyan());
+            return Ok(());
+        }
+        Err(e) => return Err(anyhow::anyhow!("Board construction failed: {}", e)),
+    };
     // Attach placement recipes from analyzer (vendor datasheet layouts)
     board.placement_recipes = analysis.placement_recipes.clone();
     if !board.placement_recipes.is_empty() {
