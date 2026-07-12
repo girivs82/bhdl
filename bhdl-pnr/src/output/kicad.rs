@@ -177,9 +177,16 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
             } else {
                 ""
             };
+            // KiCad quirk: a pad's angle in the FILE is absolute
+            // (footprint angle + pad-relative angle), not inherited.
+            // Without it, pad POSITIONS rotate with the footprint but
+            // the pad RECTANGLES stay axis-aligned — a rotated SOT-23's
+            // 1.35mm-wide pads 0.95mm apart overlap each other (the
+            // oracle's A-shorts-K family) and tracks legally spaced
+            // from the true rotated pad sit inside the unrotated rect.
             out.push_str(&format!(
-                "    (pad \"{}\" {} {} (at {} {}) (size {} {}){}{} (layers {}){})\n",
-                pin.name, pad_type, shape, pin.dx, pin.dy, size_x, size_y,
+                "    (pad \"{}\" {} {} (at {} {} {:.1}) (size {} {}){}{} (layers {}){})\n",
+                pin.name, pad_type, shape, pin.dx, pin.dy, rot_deg, size_x, size_y,
                 drill_clause, rr, layers, net_clause
             ));
         }

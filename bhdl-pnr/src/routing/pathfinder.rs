@@ -372,12 +372,23 @@ fn path_to_segments(
 
 fn add_route_demand(grid: &mut RoutingGrid, route: &Route) {
     for seg in &route.segments {
-        // Add demand to ALL cells along the segment path
+        // Add demand to ALL cells along the segment path — and for
+        // DIAGONAL steps, to the two cardinal companion cells as well:
+        // a diagonal geometrically grazes both, and without charging
+        // them a second net can route the opposite diagonal through the
+        // same cell-pair square (a physical X crossing the per-cell
+        // capacity model cannot see — the oracle's tracks_crossing
+        // family).
         let start = grid.point_to_cell(seg.start.0, seg.start.1, seg.layer);
         let end = grid.point_to_cell(seg.end.0, seg.end.1, seg.layer);
         let path = grid.cells_between(start, end);
         for cell in &path {
             grid.get_mut(*cell).demand += 1;
+        }
+        for w in path.windows(2) {
+            for comp in diagonal_companions(w[0], w[1]) {
+                grid.get_mut(comp).demand += 1;
+            }
         }
     }
     for via in &route.vias {
@@ -388,6 +399,17 @@ fn add_route_demand(grid: &mut RoutingGrid, route: &Route) {
     }
 }
 
+/// The two cardinal cells a diagonal step grazes; empty for cardinal steps.
+fn diagonal_companions(a: CellCoord, b: CellCoord) -> Vec<CellCoord> {
+    if a.layer != b.layer || a.row == b.row || a.col == b.col {
+        return Vec::new();
+    }
+    vec![
+        CellCoord { layer: a.layer, row: a.row, col: b.col },
+        CellCoord { layer: a.layer, row: b.row, col: a.col },
+    ]
+}
+
 fn remove_route_demand(grid: &mut RoutingGrid, route: &Route) {
     for seg in &route.segments {
         let start = grid.point_to_cell(seg.start.0, seg.start.1, seg.layer);
@@ -395,6 +417,12 @@ fn remove_route_demand(grid: &mut RoutingGrid, route: &Route) {
         let path = grid.cells_between(start, end);
         for cell in &path {
             grid.get_mut(*cell).demand = grid.get_mut(*cell).demand.saturating_sub(1);
+        }
+        for w in path.windows(2) {
+            for comp in diagonal_companions(w[0], w[1]) {
+                let c = grid.get_mut(comp);
+                c.demand = c.demand.saturating_sub(1);
+            }
         }
     }
     for via in &route.vias {

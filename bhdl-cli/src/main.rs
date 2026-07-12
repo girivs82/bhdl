@@ -1747,11 +1747,42 @@ async fn run_layout(
     bhdl_pnr::output::verify::print_report(&report);
 
     let pcb = bhdl_pnr::output::kicad::export_kicad_pcb(&result.board, &result.routes);
+    // Sibling .kicad_pro: KiCad stores netclass rules in the PROJECT
+    // file, and its DRC falls back to defaults (0.2mm clearance) without
+    // one — the board must travel with OUR derived rules or the oracle
+    // grades against someone else's. kicad-cli picks it up by basename.
+    let project_json = format!(
+        r#"{{
+  "board": {{
+    "design_settings": {{
+      "rules": {{
+        "min_clearance": {sp},
+        "min_track_width": {tw}
+      }}
+    }}
+  }},
+  "net_settings": {{
+    "classes": [
+      {{
+        "name": "Default",
+        "clearance": {sp},
+        "track_width": {tw},
+        "via_diameter": 0.6,
+        "via_drill": 0.3
+      }}
+    ]
+  }}
+}}
+"#,
+        sp = result.board.config.min_spacing_mm,
+        tw = result.board.config.min_trace_width_mm,
+    );
     let output_path = output.unwrap_or_else(|| {
         let stem = source_path.file_stem().unwrap_or_default().to_string_lossy();
         PathBuf::from(format!("{}.kicad_pcb", stem))
     });
     std::fs::write(&output_path, &pcb)?;
+    std::fs::write(output_path.with_extension("kicad_pro"), &project_json)?;
     println!("\n  {} KiCad PCB: {} ({} bytes)", "✓".green(), output_path.display(), pcb.len());
 
     // HTML visualization (always generate, or only with --html flag)

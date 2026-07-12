@@ -149,6 +149,29 @@ impl RoutingGrid {
             }
         }
 
+        // Block the copper-to-edge band on every layer: KiCad's board
+        // setup demands 0.5mm copper edge clearance by default, and a
+        // track center must additionally keep half its width inside
+        // that. Cells whose center falls inside the band are unroutable.
+        let edge_band = 0.5 + board.config.min_trace_width_mm / 2.0;
+        for l in 0..num_layers {
+            let rows_n = grid.y_coords.len().saturating_sub(1);
+            let cols_n = grid.x_coords.len().saturating_sub(1);
+            for r in 0..rows_n {
+                let cy = (grid.y_coords[r] + grid.y_coords[r + 1]) / 2.0;
+                for c in 0..cols_n {
+                    let cx = (grid.x_coords[c] + grid.x_coords[c + 1]) / 2.0;
+                    if cx < edge_band
+                        || cy < edge_band
+                        || cx > outline_w - edge_band
+                        || cy > outline_h - edge_band
+                    {
+                        grid.cells[l][r][c].blocked = true;
+                    }
+                }
+            }
+        }
+
         // Block cells for mounting holes (all layers)
         for hole in &board.config.mounting_holes {
             let r = hole.drill_mm / 2.0 + hole.keepout_mm;
