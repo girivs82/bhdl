@@ -29,6 +29,7 @@ fn make_component(
         .map(|(i, (dx, dy))| PinPosition {
             pin_id: pins.insert(()),
             name: format!("{}", i + 1),
+            pad: None,
             dx: *dx,
             dy: *dy,
             net: None,

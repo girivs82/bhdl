@@ -45,12 +45,12 @@ fn netted_board() -> Board {
     };
 
     let comp_a = mk(a, "A", 10.0, 25.0, vec![
-        PinPosition { pin_id: a0, name: "1".into(), dx: -2.0, dy: 1.0, net: Some(clk) },
-        PinPosition { pin_id: a1, name: "2".into(), dx: -2.0, dy: -1.0, net: Some(d0) },
+        PinPosition { pin_id: a0, name: "1".into(), dx: -2.0, dy: 1.0, net: Some(clk), pad: None },
+        PinPosition { pin_id: a1, name: "2".into(), dx: -2.0, dy: -1.0, net: Some(d0), pad: None },
     ]);
     let comp_b = mk(b, "B", 40.0, 25.0, vec![
-        PinPosition { pin_id: b0, name: "1".into(), dx: 2.0, dy: 1.0, net: Some(clk) },
-        PinPosition { pin_id: b1, name: "2".into(), dx: 2.0, dy: -1.0, net: Some(d0) },
+        PinPosition { pin_id: b0, name: "1".into(), dx: 2.0, dy: 1.0, net: Some(clk), pad: None },
+        PinPosition { pin_id: b1, name: "2".into(), dx: 2.0, dy: -1.0, net: Some(d0), pad: None },
     ]);
 
     let mk_net = |id, name: &str, pins: Vec<(ComponentId, PinId)>| PnrNet {

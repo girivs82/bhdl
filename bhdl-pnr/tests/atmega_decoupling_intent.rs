@@ -47,6 +47,7 @@ fn mcu(ids: &mut Ids, x: f64, y: f64) -> (Component, ComponentId, Vec<PinId>) {
             dx: *dx,
             dy: *dy,
             net: None,
+            pad: None,
         })
         .collect();
     let pin_ids = pins.iter().map(|p| p.pin_id).collect();
@@ -75,8 +76,8 @@ fn mcu(ids: &mut Ids, x: f64, y: f64) -> (Component, ComponentId, Vec<PinId>) {
 fn cap(ids: &mut Ids, name: &str, x: f64, y: f64, intent: LayoutIntent) -> (Component, ComponentId) {
     let id = ids.comp.insert(());
     let pins = vec![
-        PinPosition { pin_id: ids.pin.insert(()), name: "1".into(), dx: -0.5, dy: 0.0, net: None },
-        PinPosition { pin_id: ids.pin.insert(()), name: "2".into(), dx: 0.5, dy: 0.0, net: None },
+        PinPosition { pin_id: ids.pin.insert(()), name: "1".into(), dx: -0.5, dy: 0.0, net: None, pad: None },
+        PinPosition { pin_id: ids.pin.insert(()), name: "2".into(), dx: 0.5, dy: 0.0, net: None, pad: None },
     ];
     let c = Component {
         id,

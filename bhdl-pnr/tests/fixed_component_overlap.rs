@@ -35,6 +35,7 @@ fn comp(
         dx: 0.0,
         dy: 0.0,
         net: None,
+            pad: None,
     };
     Component {
         id,
