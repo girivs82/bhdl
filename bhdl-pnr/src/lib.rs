@@ -488,16 +488,176 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
     info!("Routing complete: {} pass1, {} pass2",
         routed_pass1, final_routes.iter().filter(|r| !r.is_empty()).count() - routed_pass1);
 
-    // 5.9. GEOMETRIC final validation — the cell model has deliberate
-    // blind spots (blocked pad-halo cells are exempt from overflow so
-    // terminal access can't wedge convergence), and any region two nets
-    // may both legally enter carries demand invisible to negotiation.
-    // The guarantee therefore lives at the geometry level: no two
-    // different-net segments on one layer may intersect or come closer
-    // than clearance. Offending lower-priority nets are ripped whole —
-    // an unrouted net is an honest, visible failure; illegal copper is
-    // not allowed to ship.
+    // 5.9. Geometric validation with RECOVERY: a ripped net is not
+    // abandoned — it gets rerouted (vias allowed) on a grid where all
+    // surviving copper's footprint is blocked, then re-validated. Up to
+    // three rounds; whatever still can't route legally stays unrouted
+    // (honest) rather than shipping illegal copper.
     {
+        let mut round = 0;
+        loop {
+            let ripped = validate_and_rip(&board, &mut final_routes);
+            if ripped.is_empty() || round >= 3 {
+                break;
+            }
+            round += 1;
+            info!(
+                "geometric recovery round {round}: rerouting {} ripped net(s) with vias",
+                ripped.len()
+            );
+            let mut rec_grid = RoutingGrid::build(&board);
+            for (i, route) in final_routes.iter().enumerate() {
+                if !route.is_empty() && !ripped.contains(&i) {
+                    for cell in pathfinder::route_cells(&rec_grid, route) {
+                        rec_grid.get_mut(cell).blocked = true;
+                    }
+                }
+            }
+            let rec_nets: Vec<PnrNet> = board
+                .nets
+                .iter()
+                .enumerate()
+                .map(|(i, net)| {
+                    if ripped.contains(&i) {
+                        net.clone()
+                    } else {
+                        PnrNet { pins: Vec::new(), ..net.clone() }
+                    }
+                })
+                .collect();
+            let rec_routes = pathfinder::pathfinder_route(
+                &mut rec_grid, &rec_nets, &board, 100, 1.0, 1.0, true,
+            );
+            for &i in &ripped {
+                if !rec_routes[i].is_empty() {
+                    final_routes[i] = rec_routes[i].clone();
+                }
+            }
+        }
+    }
+
+    // 6. DRC
+    if std::env::var("BHDL_PNR_DEBUG_CLEARANCE").is_ok() {
+        debug_check_foreign_pads(&board, &final_routes, "final");
+    }
+    let drc_violations = legalization::check_drc(&board, &final_routes);
+
+    // 7. Metrics
+    let hpwl = analytical::compute_hpwl(&board);
+    let total_length: f64 = final_routes.iter().map(|r| r.total_length()).sum();
+    let total_vias: usize = final_routes.iter().map(|r| r.via_count()).sum();
+    let routed_count = final_routes.iter().filter(|r| !r.is_empty()).count();
+    let plane_nets = board.nets.iter()
+        .filter(|n| n.pins.len() >= 2 && n.is_plane_connected(&board.layer_stack))
+        .count();
+    let total_nets = board.nets.iter()
+        .filter(|n| n.pins.len() >= 2 && !n.is_plane_connected(&board.layer_stack))
+        .count();
+
+    let routability = if total_nets > 0 {
+        routed_count as f64 / total_nets as f64 * 100.0
+    } else {
+        100.0
+    };
+
+    info!(
+        "P&R complete: HPWL={:.1}mm, routed={:.1}mm, vias={}, routability={:.0}% ({}/{} signal, {} plane), DRC={}",
+        hpwl, total_length, total_vias, routability,
+        routed_count, total_nets, plane_nets, drc_violations.len()
+    );
+
+    Ok(PnrResult {
+        board,
+        routes: final_routes,
+        metrics: PnrMetrics {
+            hpwl_mm: hpwl,
+            total_routed_length_mm: total_length,
+            via_count: total_vias,
+            max_congestion: final_grid.max_overflow() as f64,
+            routability_pct: if total_nets > 0 {
+                routability
+            } else {
+                100.0
+            },
+            iterations: config.max_iterations,
+        },
+        drc_violations,
+    })
+}
+
+/// Env-gated diagnostic: sample every route segment against every
+/// foreign pad rect (+spacing) and report intrusions with full context.
+fn debug_check_foreign_pads(board: &Board, routes: &[Route], tag: &str) {
+    for route in routes {
+        for seg in &route.segments {
+            for comp in &board.components {
+                let cos_t = comp.theta.cos();
+                let sin_t = comp.theta.sin();
+                for pin in &comp.pins {
+                    if pin.net == Some(route.net_id) {
+                        continue;
+                    }
+                    let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
+                    let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+                    let (pw, ph) = pin.pad.as_ref().map(|p| (p.width_mm, p.height_mm)).unwrap_or((0.8, 0.8));
+                    let (hx, hy) = (pw / 2.0 + 0.15, ph / 2.0 + 0.15);
+                    for i in 0..=10 {
+                        let t = i as f64 / 10.0;
+                        let x = seg.start.0 + t * (seg.end.0 - seg.start.0);
+                        let y = seg.start.1 + t * (seg.end.1 - seg.start.1);
+                        if (x - gx).abs() < hx && (y - gy).abs() < hy {
+                            log::warn!(
+                                "CLEARANCE[{tag}] net route seg {:?}->{:?} intrudes {}.{} pad at ({gx:.2},{gy:.2}) net {:?} (route net {:?})",
+                                seg.start, seg.end, comp.refdes, pin.name, pin.net, route.net_id
+                            );
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// True when segment AB and segment CD (as center-lines) intersect or
+/// pass within `min_gap` of each other.
+fn segments_too_close(
+    a: (f64, f64),
+    b: (f64, f64),
+    c: (f64, f64),
+    d: (f64, f64),
+    min_gap: f64,
+) -> bool {
+    fn orient(p: (f64, f64), q: (f64, f64), r: (f64, f64)) -> f64 {
+        (q.0 - p.0) * (r.1 - p.1) - (q.1 - p.1) * (r.0 - p.0)
+    }
+    let (o1, o2) = (orient(a, b, c), orient(a, b, d));
+    let (o3, o4) = (orient(c, d, a), orient(c, d, b));
+    if o1 * o2 < 0.0 && o3 * o4 < 0.0 {
+        return true;
+    }
+    fn seg_pt(p: (f64, f64), q: (f64, f64), r: (f64, f64)) -> f64 {
+        let (dx, dy) = (q.0 - p.0, q.1 - p.1);
+        let l2 = dx * dx + dy * dy;
+        let t = if l2 == 0.0 {
+            0.0
+        } else {
+            (((r.0 - p.0) * dx + (r.1 - p.1) * dy) / l2).clamp(0.0, 1.0)
+        };
+        let (nx, ny) = (p.0 + t * dx, p.1 + t * dy);
+        ((r.0 - nx).powi(2) + (r.1 - ny).powi(2)).sqrt()
+    }
+    seg_pt(a, b, c).min(seg_pt(a, b, d)).min(seg_pt(c, d, a)).min(seg_pt(c, d, b)) < min_gap
+}
+
+/// Geometric final validation + rip (the shipping guarantee): no two
+/// different-net copper items (track-track or track-PAD) on one layer
+/// may intersect or under-clear. The cell model has deliberate blind
+/// spots (blocked pad-halo cells exempt from overflow), so the last
+/// word is geometry. Returns the indices of nets ripped this call.
+fn validate_and_rip(board: &Board, final_routes: &mut [Route]) -> Vec<usize> {
+    let mut ripped_nets: Vec<usize> = Vec::new();
+
         let clearance = board.config.min_spacing_mm;
 
         // Foreign-copper obstacles per layer: every pad's rotated rect
@@ -615,6 +775,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                          spot); unrouted beats illegal"
                     );
                     final_routes[k] = Route::empty(final_routes[k].net_id);
+                    ripped_nets.push(k);
                     ripped += 1;
                     if ripped > board.nets.len() {
                         break;
@@ -623,118 +784,6 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                 None => break,
             }
         }
-    }
-
-    // 6. DRC
-    if std::env::var("BHDL_PNR_DEBUG_CLEARANCE").is_ok() {
-        debug_check_foreign_pads(&board, &final_routes, "final");
-    }
-    let drc_violations = legalization::check_drc(&board, &final_routes);
-
-    // 7. Metrics
-    let hpwl = analytical::compute_hpwl(&board);
-    let total_length: f64 = final_routes.iter().map(|r| r.total_length()).sum();
-    let total_vias: usize = final_routes.iter().map(|r| r.via_count()).sum();
-    let routed_count = final_routes.iter().filter(|r| !r.is_empty()).count();
-    let plane_nets = board.nets.iter()
-        .filter(|n| n.pins.len() >= 2 && n.is_plane_connected(&board.layer_stack))
-        .count();
-    let total_nets = board.nets.iter()
-        .filter(|n| n.pins.len() >= 2 && !n.is_plane_connected(&board.layer_stack))
-        .count();
-
-    let routability = if total_nets > 0 {
-        routed_count as f64 / total_nets as f64 * 100.0
-    } else {
-        100.0
-    };
-
-    info!(
-        "P&R complete: HPWL={:.1}mm, routed={:.1}mm, vias={}, routability={:.0}% ({}/{} signal, {} plane), DRC={}",
-        hpwl, total_length, total_vias, routability,
-        routed_count, total_nets, plane_nets, drc_violations.len()
-    );
-
-    Ok(PnrResult {
-        board,
-        routes: final_routes,
-        metrics: PnrMetrics {
-            hpwl_mm: hpwl,
-            total_routed_length_mm: total_length,
-            via_count: total_vias,
-            max_congestion: final_grid.max_overflow() as f64,
-            routability_pct: if total_nets > 0 {
-                routability
-            } else {
-                100.0
-            },
-            iterations: config.max_iterations,
-        },
-        drc_violations,
-    })
-}
-
-/// Env-gated diagnostic: sample every route segment against every
-/// foreign pad rect (+spacing) and report intrusions with full context.
-fn debug_check_foreign_pads(board: &Board, routes: &[Route], tag: &str) {
-    for route in routes {
-        for seg in &route.segments {
-            for comp in &board.components {
-                let cos_t = comp.theta.cos();
-                let sin_t = comp.theta.sin();
-                for pin in &comp.pins {
-                    if pin.net == Some(route.net_id) {
-                        continue;
-                    }
-                    let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
-                    let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
-                    let (pw, ph) = pin.pad.as_ref().map(|p| (p.width_mm, p.height_mm)).unwrap_or((0.8, 0.8));
-                    let (hx, hy) = (pw / 2.0 + 0.15, ph / 2.0 + 0.15);
-                    for i in 0..=10 {
-                        let t = i as f64 / 10.0;
-                        let x = seg.start.0 + t * (seg.end.0 - seg.start.0);
-                        let y = seg.start.1 + t * (seg.end.1 - seg.start.1);
-                        if (x - gx).abs() < hx && (y - gy).abs() < hy {
-                            log::warn!(
-                                "CLEARANCE[{tag}] net route seg {:?}->{:?} intrudes {}.{} pad at ({gx:.2},{gy:.2}) net {:?} (route net {:?})",
-                                seg.start, seg.end, comp.refdes, pin.name, pin.net, route.net_id
-                            );
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// True when segment AB and segment CD (as center-lines) intersect or
-/// pass within `min_gap` of each other.
-fn segments_too_close(
-    a: (f64, f64),
-    b: (f64, f64),
-    c: (f64, f64),
-    d: (f64, f64),
-    min_gap: f64,
-) -> bool {
-    fn orient(p: (f64, f64), q: (f64, f64), r: (f64, f64)) -> f64 {
-        (q.0 - p.0) * (r.1 - p.1) - (q.1 - p.1) * (r.0 - p.0)
-    }
-    let (o1, o2) = (orient(a, b, c), orient(a, b, d));
-    let (o3, o4) = (orient(c, d, a), orient(c, d, b));
-    if o1 * o2 < 0.0 && o3 * o4 < 0.0 {
-        return true;
-    }
-    fn seg_pt(p: (f64, f64), q: (f64, f64), r: (f64, f64)) -> f64 {
-        let (dx, dy) = (q.0 - p.0, q.1 - p.1);
-        let l2 = dx * dx + dy * dy;
-        let t = if l2 == 0.0 {
-            0.0
-        } else {
-            (((r.0 - p.0) * dx + (r.1 - p.1) * dy) / l2).clamp(0.0, 1.0)
-        };
-        let (nx, ny) = (p.0 + t * dx, p.1 + t * dy);
-        ((r.0 - nx).powi(2) + (r.1 - ny).powi(2)).sqrt()
-    }
-    seg_pt(a, b, c).min(seg_pt(a, b, d)).min(seg_pt(c, d, a)).min(seg_pt(c, d, b)) < min_gap
+    
+    ripped_nets
 }

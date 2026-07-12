@@ -304,7 +304,7 @@ fn dijkstra_to_any(
             // components' pads.
             if gc.blocked
                     && !sinks.contains(&nbr)
-                    && gc.owner != Some(net.id)
+                    && (gc.contested_full || !gc.owners.contains(&Some(net.id)))
                 {
                 continue;
             }
@@ -334,7 +334,7 @@ fn dijkstra_to_any(
                 // on a blocked cell only if it is this net's own pin terminal.
                 if gc.blocked
                     && !sinks.contains(&nbr)
-                    && gc.owner != Some(net.id)
+                    && (gc.contested_full || !gc.owners.contains(&Some(net.id)))
                 {
                     continue;
                 }

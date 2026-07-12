@@ -15,6 +15,12 @@ pub struct RoutingGrid {
     pub y_coords: Vec<f64>,            // Row boundaries (mm)
     pub num_layers: usize,
     pub via_cost: f64,
+    /// Diagonal moves. OFF by default: at pitch-sized cells two nets'
+    /// parallel diagonals in adjacent cells sit 0.212mm apart (< the
+    /// 0.3mm rule) and opposite diagonals cross — Manhattan-only makes
+    /// every produced spacing legal by construction. 45° geometry
+    /// returns as a verified post-pass (P1 continuation).
+    pub allow_diagonal: bool,
 }
 
 /// Single grid cell on one layer.
@@ -25,10 +31,15 @@ pub struct GridCell {
     pub history: f64,
     pub present: f64,
     pub blocked: bool,
-    /// Net that owns this blocked cell (a pad + its clearance halo).
-    /// The owning net may enter (terminal access / escape); every other
-    /// net sees a hard block — pad clearance by construction.
-    pub owner: Option<NetId>,
+    /// Nets that own this blocked cell (a pad + its clearance halo).
+    /// TWO slots: adjacent pads' halos overlap on fine-pitch parts, and
+    /// blocking contested cells for everyone walled pins into their own
+    /// halos (the dense-board unroutability). An owning net may enter
+    /// (terminal access / escape); others see a hard block. Three-way
+    /// contests block all — the geometric validator is the backstop.
+    pub owners: [Option<NetId>; 2],
+    /// ≥3 different nets' halos meet here: blocked for everyone.
+    pub contested_full: bool,
 }
 
 impl Default for GridCell {
@@ -39,7 +50,8 @@ impl Default for GridCell {
             history: 0.0,
             present: 0.0,
             blocked: false,
-            owner: None,
+            owners: [None, None],
+            contested_full: false,
         }
     }
 }
@@ -86,6 +98,7 @@ impl RoutingGrid {
             x_coords,
             y_coords,
             num_layers,
+            allow_diagonal: false,
             // Via cost: base cost + area penalty. Should be modest enough
             // to encourage layer changes when routing is congested on one layer.
             via_cost: 2.0 + board.layer_stack.via_blockage_mm2() * 3.0,
@@ -268,6 +281,9 @@ impl RoutingGrid {
 
         // 4 diagonal (cost = √2 ≈ 1.414)
         // Only allow diagonal if both adjacent cardinal cells are passable (no corner cutting)
+        if !self.allow_diagonal {
+            return nbrs;
+        }
         let diag = std::f64::consts::SQRT_2;
         if r > 0 && co > 0 && !self.cells[c.layer][r-1][co].blocked && !self.cells[c.layer][r][co-1].blocked {
             nbrs.push((CellCoord { row: r-1, col: co-1, ..c }, diag));
@@ -376,13 +392,17 @@ fn mark_rect_blocked_owned(
             }
             let cell = &mut layer_cells[r][c];
             cell.blocked = true;
-            // First owner wins; a cell contested by two DIFFERENT nets'
-            // halos stays blocked for both (owner cleared) — neither may
-            // route through the shared gap.
-            match cell.owner {
-                None => cell.owner = owner,
-                Some(o) if Some(o) != owner => cell.owner = None,
-                _ => {}
+            match owner {
+                None => cell.contested_full = true, // NC pad: nobody enters
+                Some(o) => {
+                    if cell.owners[0].is_none() || cell.owners[0] == Some(o) {
+                        cell.owners[0] = Some(o);
+                    } else if cell.owners[1].is_none() || cell.owners[1] == Some(o) {
+                        cell.owners[1] = Some(o);
+                    } else {
+                        cell.contested_full = true;
+                    }
+                }
             }
         }
     }
