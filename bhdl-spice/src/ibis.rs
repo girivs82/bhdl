@@ -798,6 +798,52 @@ Model_type   Input
         eprintln!("real UC3A3 GPIO HIGH into 150Ω: {v:.4}V (table root {expected:.4}V)");
     }
 
+    /// The Uno's TX-LED path against Atmel's REAL 16U2 gpio buffer:
+    /// 5V → LED (exponential) → 1kΩ → pin driven LOW (megaAVR pulldown
+    /// table). Mixed nonlinearities in one solve. Existence-gated like the
+    /// UC3 test. Sanity band: the pin clamps low (< 0.5V) and the LED
+    /// conducts 2–4mA — the current the schematic used to ASSUME is now
+    /// measured through vendor silicon data.
+    #[test]
+    fn real_16u2_led_path() {
+        use crate::circuit::{encode_iv_table, Circuit, META_IV_TABLE};
+        use crate::glacier_dc_solver::GlacierDcSolver;
+        use std::collections::HashMap;
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../vendor/ibis/megaavr/m16u2m32.ibs");
+        if !path.exists() {
+            eprintln!("real_16u2_led_path: vendor file absent — skipped");
+            return;
+        }
+        let ib = parse_file(&path).unwrap();
+        let m = &ib.models["gpio"];
+        let pts = m.composed_iv(BufferState::Low, Corner::Typ).unwrap();
+
+        let mut c = Circuit::new();
+        for n in ["VCC", "led_k", "pin", "GND"] {
+            c.add_node(n.into(), None);
+        }
+        c.add_branch("vcc".into(), "VCC", "GND", "VoltageSource".into(), 5.0, None);
+        c.add_branch("led".into(), "VCC", "led_k", "LED".into(), 0.0, None);
+        c.add_branch("r".into(), "led_k", "pin", "Resistor".into(), 1000.0, None);
+        let mut meta = HashMap::new();
+        meta.insert(META_IV_TABLE.to_string(), encode_iv_table(&pts));
+        c.add_branch_with_metadata(
+            "pd4".into(), "pin", "GND", "IbisBuffer".into(), 0.0, None, meta,
+        );
+
+        let result = GlacierDcSolver::new().solve(c.clone()).expect("solve");
+        let vpin = result.node_voltages
+            [&c.nodes().find(|(_, n)| n.name == "pin").unwrap().0];
+        let vled_k = result.node_voltages
+            [&c.nodes().find(|(_, n)| n.name == "led_k").unwrap().0];
+        let i_led = (vled_k - vpin) / 1000.0;
+        eprintln!("16U2 PD4 LOW sinking TX LED: pin {vpin:.3}V, I_led {:.3}mA", i_led * 1e3);
+        assert!(vpin < 0.5, "pin should clamp low, got {vpin}");
+        assert!(i_led > 2e-3 && i_led < 4e-3, "LED current {i_led} out of band");
+    }
+
     /// The full fixture topology (rail source + buffer HIGH + 124Ω E-snapped
     /// load): the operating point must survive the system context. Load line
     /// on the pullup segment: 0.016·v − 0.08 + v/124 = 0 ⇒ v ≈ 3.3243V.

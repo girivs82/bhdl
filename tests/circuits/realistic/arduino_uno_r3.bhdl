@@ -126,7 +126,10 @@ board ArduinoUnoR3 {
     Z2.B -> @GND;
 
     // ── ATmega16U2 USB bridge ──
-    U3: ATmega16U2_QFN32();
+    // TX/RX LEDs are active-low from PD4/PD5: drive both LOW (LEDs lit) so
+    // the DC solve runs the LED current through Atmel's REAL gpio pulldown
+    // curve (vendor IBIS on the entity) instead of assuming it.
+    U3: ATmega16U2_QFN32(ibis_state_PD4="low", ibis_state_PD5="low");
     @VCC_5V -> U3.VCC;
     @VCC_5V -> U3.AVCC;
     @VCC_5V -> U3.UVCC;
