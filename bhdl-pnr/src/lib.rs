@@ -785,19 +785,92 @@ fn validate_and_rip(board: &Board, final_routes: &mut [Route]) -> Vec<usize> {
                             .find(|(s, l)| si >= *s && si < *s + *l)
                     });
                     match span {
-                        Some((s, l)) => {
-                            log::warn!(
-                                "geometric validation: amputating one branch of '{name}' \
-                                 ({l} segment(s)) — unrouted sink beats illegal copper"
-                            );
+                        Some((s, _l)) => {
+                            // Amputate the branch AND its whole subtree:
+                            // children attach mid-path, and cutting only
+                            // the parent strands them as dangling copper.
                             let r = &mut final_routes[k];
-                            r.segments.drain(s..s + l);
-                            r.path_spans.retain(|&(ps, _)| ps != s);
-                            for (ps, _) in r.path_spans.iter_mut() {
-                                if *ps > s {
-                                    *ps -= l;
+                            let root = r
+                                .path_spans
+                                .iter()
+                                .position(|&(ps, _)| ps == s)
+                                .unwrap_or(0);
+                            let n = r.path_spans.len();
+                            let mut doomed = vec![false; n];
+                            doomed[root] = true;
+                            loop {
+                                let mut grew = false;
+                                for i in 0..n {
+                                    if !doomed[i] {
+                                        if let Some(Some(pp)) =
+                                            r.path_parents.get(i)
+                                        {
+                                            if doomed[*pp] {
+                                                doomed[i] = true;
+                                                grew = true;
+                                            }
+                                        }
+                                    }
+                                }
+                                if !grew {
+                                    break;
                                 }
                             }
+                            let cut: usize = (0..n)
+                                .filter(|&i| doomed[i])
+                                .map(|i| r.path_spans[i].1)
+                                .sum();
+                            log::warn!(
+                                "geometric validation: amputating a subtree of '{name}' \
+                                 ({} branch(es), {cut} segment(s)) — unrouted sinks beat \
+                                 illegal copper",
+                                doomed.iter().filter(|d| **d).count()
+                            );
+                            // Rebuild segments/spans/parents without the
+                            // doomed spans (high-to-low keeps indices
+                            // valid during drain).
+                            let mut order: Vec<usize> =
+                                (0..n).filter(|&i| doomed[i]).collect();
+                            order.sort_by_key(|&i| std::cmp::Reverse(r.path_spans[i].0));
+                            for &i in &order {
+                                let (ps, pl) = r.path_spans[i];
+                                r.segments.drain(ps..ps + pl);
+                                for j in 0..n {
+                                    if !doomed[j] && r.path_spans[j].0 > ps {
+                                        r.path_spans[j].0 -= pl;
+                                    }
+                                }
+                            }
+                            // Compact spans/parents, remapping parent
+                            // indices to the surviving order.
+                            let mut remap = vec![usize::MAX; n];
+                            let mut next = 0usize;
+                            for i in 0..n {
+                                if !doomed[i] {
+                                    remap[i] = next;
+                                    next += 1;
+                                }
+                            }
+                            let spans: Vec<(usize, usize)> = (0..n)
+                                .filter(|&i| !doomed[i])
+                                .map(|i| r.path_spans[i])
+                                .collect();
+                            let parents: Vec<Option<usize>> = (0..n)
+                                .filter(|&i| !doomed[i])
+                                .map(|i| {
+                                    r.path_parents.get(i).copied().flatten().and_then(
+                                        |pp| {
+                                            if doomed[pp] {
+                                                None
+                                            } else {
+                                                Some(remap[pp])
+                                            }
+                                        },
+                                    )
+                                })
+                                .collect();
+                            r.path_spans = spans;
+                            r.path_parents = parents;
                         }
                         None => {
                             log::warn!(

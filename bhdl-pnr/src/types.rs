@@ -581,6 +581,12 @@ pub struct Route {
     /// net (one bad segment was converting a 36/37-complete power tree
     /// into 37 unconnected pins). Empty = no structure known; rip whole.
     pub path_spans: Vec<(usize, usize)>,
+    /// Parent span index per span (Steiner attachment): amputating a
+    /// span must take its whole SUBTREE — children attach mid-path, and
+    /// cutting only the parent strands them as dangling copper (the
+    /// oracle's track_dangling). None = attached at the source pin (or
+    /// a trunk stub).
+    pub path_parents: Vec<Option<usize>>,
 }
 
 impl Route {
@@ -590,6 +596,7 @@ impl Route {
             segments: Vec::new(),
             vias: Vec::new(),
             path_spans: Vec::new(),
+            path_parents: Vec::new(),
         }
     }
 

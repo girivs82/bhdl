@@ -343,6 +343,17 @@ fn shortest_path_3d(
         0.0
     };
     let mut path_spans: Vec<(usize, usize)> = Vec::new();
+    let mut path_parents: Vec<Option<usize>> = Vec::new();
+    // Stubs emitted inside their branch's span: each path's last cell is
+    // its sink — the sink's pad-escape stub belongs to THAT branch, so
+    // amputating the branch removes its stub with it (previously stubs
+    // were separate spans and amputation left them dangling — the
+    // oracle's track_dangling family).
+    let mut stub_of: std::collections::HashMap<CellCoord, Vec<(f64, f64)>> =
+        std::collections::HashMap::new();
+    for (c, p) in &pin_targets {
+        stub_of.entry(*c).or_default().push(*p);
+    }
     for (p, rec) in path_recs.iter().enumerate() {
         let span_start = all_segments.len();
         for w in 0..rec.cells.len().saturating_sub(1) {
@@ -357,28 +368,50 @@ fn shortest_path_3d(
             all_segments.extend(segs);
             all_vias.extend(vias);
         }
+        if let Some(last) = rec.cells.last() {
+            if let Some(stubs) = stub_of.remove(last) {
+                let (cx, cy) = grid.cell_center(*last);
+                for (px, py) in stubs {
+                    if (cx - px).hypot(cy - py) > 1e-6 {
+                        all_segments.push(RouteSegment {
+                            layer: last.layer,
+                            start: (cx, cy),
+                            end: (px, py),
+                            width_mm: crate::stackup::trace_width_for_current(share, 1.0, 10.0)
+                                .max(0.15)
+                                .min(net.required_trace_width_mm),
+                        });
+                    }
+                }
+            }
+        }
         path_spans.push((span_start, all_segments.len() - span_start));
+        path_parents.push(rec.parent.map(|(pp, _)| pp));
     }
 
-    // Pad-escape stubs: connect each routed terminal's cell center to
-    // the exact pad coordinate so the copper actually touches the pad.
-    for (cell, (px, py)) in &pin_targets {
+    // Remaining pad-escape stubs (the source pin, and any pin whose
+    // cell joined the tree mid-path rather than as a path end): own
+    // spans — they serve the shared trunk, not one branch.
+    for (cell, stubs) in &stub_of {
         if !source_set.contains(cell) {
             continue; // pin never joined the tree (unrouted) — no stub
         }
-        let (cx, cy) = grid.cell_center(*cell);
-        if (cx - px).hypot(cy - py) > 1e-6 {
-            path_spans.push((all_segments.len(), 1));
-            all_segments.push(RouteSegment {
-                layer: cell.layer,
-                start: (cx, cy),
-                end: (*px, *py),
-                // Escape stubs carry the pin's own share, not the rail
-                // trunk width.
-                width_mm: crate::stackup::trace_width_for_current(share, 1.0, 10.0)
-                    .max(0.15)
-                    .min(net.required_trace_width_mm),
-            });
+        for (px, py) in stubs {
+            let (cx, cy) = grid.cell_center(*cell);
+            if (cx - px).hypot(cy - py) > 1e-6 {
+                path_spans.push((all_segments.len(), 1));
+                path_parents.push(None);
+                all_segments.push(RouteSegment {
+                    layer: cell.layer,
+                    start: (cx, cy),
+                    end: (*px, *py),
+                    // Escape stubs carry the pin's own share, not the
+                    // rail trunk width.
+                    width_mm: crate::stackup::trace_width_for_current(share, 1.0, 10.0)
+                        .max(0.15)
+                        .min(net.required_trace_width_mm),
+                });
+            }
         }
     }
 
@@ -387,6 +420,7 @@ fn shortest_path_3d(
         segments: all_segments,
         vias: all_vias,
         path_spans,
+        path_parents,
     }
 }
 
