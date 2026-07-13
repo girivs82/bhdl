@@ -575,6 +575,12 @@ pub struct Route {
     pub net_id: NetId,
     pub segments: Vec<RouteSegment>,
     pub vias: Vec<RouteVia>,
+    /// Segment spans per Steiner path (start index, length): each span
+    /// connects ONE sink to the tree. Lets the geometric validator
+    /// amputate a single offending branch instead of ripping the whole
+    /// net (one bad segment was converting a 36/37-complete power tree
+    /// into 37 unconnected pins). Empty = no structure known; rip whole.
+    pub path_spans: Vec<(usize, usize)>,
 }
 
 impl Route {
@@ -583,6 +589,7 @@ impl Route {
             net_id,
             segments: Vec::new(),
             vias: Vec::new(),
+            path_spans: Vec::new(),
         }
     }
 

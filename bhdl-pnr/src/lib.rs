@@ -727,21 +727,21 @@ fn validate_and_rip(board: &Board, final_routes: &mut [Route]) -> Vec<usize> {
 
         let mut ripped = 0usize;
         loop {
-            let mut offender: Option<usize> = None;
+            let mut offender: Option<(usize, Option<usize>)> = None;
             'scan: for i in 0..final_routes.len() {
                 if final_routes[i].is_empty() {
                     continue;
                 }
                 let net_id = final_routes[i].net_id;
                 // Track vs foreign PAD.
-                for sa in &final_routes[i].segments {
+                for (si, sa) in final_routes[i].segments.iter().enumerate() {
                     let gap = sa.width_mm / 2.0 + clearance;
                     for p in &pad_rects {
                         if p.net == Some(net_id) || !pad_on_layer(p, sa.layer) {
                             continue;
                         }
                         if seg_hits_rect(sa.start, sa.end, p, gap) {
-                            offender = Some(i);
+                            offender = Some((i, Some(si)));
                             break 'scan;
                         }
                     }
@@ -763,7 +763,7 @@ fn validate_and_rip(board: &Board, final_routes: &mut [Route]) -> Vec<usize> {
                             ) {
                                 let wi = board.nets.get(i).map(|n| n.weight).unwrap_or(1.0);
                                 let wj = board.nets.get(j).map(|n| n.weight).unwrap_or(1.0);
-                                offender = Some(if wj <= wi { j } else { i });
+                                offender = Some(if wj <= wi { (j, None) } else { (i, None) });
                                 break 'scan;
                             }
                         }
@@ -771,17 +771,45 @@ fn validate_and_rip(board: &Board, final_routes: &mut [Route]) -> Vec<usize> {
                 }
             }
             match offender {
-                Some(k) => {
+                Some((k, seg_idx)) => {
                     let name = board.nets.get(k).map(|n| n.name.clone()).unwrap_or_default();
-                    log::warn!(
-                        "geometric validation: ripping net '{name}' — its copper \
-                         intersects or under-clears foreign copper (cell-model blind \
-                         spot); unrouted beats illegal"
-                    );
-                    final_routes[k] = Route::empty(final_routes[k].net_id);
-                    ripped_nets.push(k);
+                    // AMPUTATE the offending Steiner branch when the
+                    // route carries path structure: one bad segment must
+                    // cost ONE sink, not the whole 37-pin power tree.
+                    let span = seg_idx.and_then(|si| {
+                        final_routes[k]
+                            .path_spans
+                            .iter()
+                            .copied()
+                            .find(|(s, l)| si >= *s && si < *s + *l)
+                    });
+                    match span {
+                        Some((s, l)) => {
+                            log::warn!(
+                                "geometric validation: amputating one branch of '{name}' \
+                                 ({l} segment(s)) — unrouted sink beats illegal copper"
+                            );
+                            let r = &mut final_routes[k];
+                            r.segments.drain(s..s + l);
+                            r.path_spans.retain(|&(ps, _)| ps != s);
+                            for (ps, _) in r.path_spans.iter_mut() {
+                                if *ps > s {
+                                    *ps -= l;
+                                }
+                            }
+                        }
+                        None => {
+                            log::warn!(
+                                "geometric validation: ripping net '{name}' — its copper \
+                                 intersects or under-clears foreign copper; unrouted \
+                                 beats illegal"
+                            );
+                            final_routes[k] = Route::empty(final_routes[k].net_id);
+                            ripped_nets.push(k);
+                        }
+                    }
                     ripped += 1;
-                    if ripped > board.nets.len() {
+                    if ripped > board.nets.len() * 8 {
                         break;
                     }
                 }

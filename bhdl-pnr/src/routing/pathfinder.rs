@@ -245,6 +245,62 @@ fn shortest_path_3d(
             // tree, so there is nothing more to try this iteration.
             None => {
                 unreached = remaining_sinks.len();
+                // Frontier diagnosis: dump the wall around one
+                // unreached sink — what blocks each neighbor and why.
+                if std::env::var("BHDL_PNR_DEBUG_FRONTIER").is_ok() {
+                    if let Some(sink) = remaining_sinks.iter().next() {
+                        log::warn!(
+                            "FRONTIER net '{}' sink {:?} (in tree: {}):",
+                            net.name, sink, source_set.contains(sink)
+                        );
+                        for dr in -2i64..=2 {
+                            let mut row = String::new();
+                            for dc in -2i64..=2 {
+                                let r = sink.row as i64 + dr;
+                                let c = sink.col as i64 + dc;
+                                let ch = if r < 0
+                                    || c < 0
+                                    || (r as usize) >= grid.rows()
+                                    || (c as usize) >= grid.cols()
+                                {
+                                    'X' // off-board
+                                } else {
+                                    let cell = grid.get(CellCoord {
+                                        layer: sink.layer,
+                                        row: r as usize,
+                                        col: c as usize,
+                                    });
+                                    if dr == 0 && dc == 0 {
+                                        'S' // the sink itself
+                                    } else if cell.hard {
+                                        'H'
+                                    } else if cell.nc_blocked {
+                                        'N'
+                                    } else if cell.blocked
+                                        && cell.owners.contains(&net.id)
+                                    {
+                                        'o' // ours — passable
+                                    } else if cell.blocked {
+                                        'F' // foreign-owned or ownerless block
+                                    } else if cell.demand >= cell.capacity {
+                                        'd' // congested
+                                    } else {
+                                        '.' // free
+                                    }
+                                };
+                                row.push(ch);
+                            }
+                            log::warn!("  {row}");
+                        }
+                        // Also: is the sink cell itself blocked and why?
+                        let sc = grid.get(*sink);
+                        log::warn!(
+                            "  sink cell: blocked={} hard={} nc={} owners_has_net={} demand={}/{} layer={}",
+                            sc.blocked, sc.hard, sc.nc_blocked,
+                            sc.owners.contains(&net.id), sc.demand, sc.capacity, sink.layer
+                        );
+                    }
+                }
                 break;
             }
         }
@@ -286,7 +342,9 @@ fn shortest_path_3d(
     } else {
         0.0
     };
+    let mut path_spans: Vec<(usize, usize)> = Vec::new();
     for (p, rec) in path_recs.iter().enumerate() {
+        let span_start = all_segments.len();
         for w in 0..rec.cells.len().saturating_sub(1) {
             let a = rec.cells[w];
             let b = rec.cells[w + 1];
@@ -299,6 +357,7 @@ fn shortest_path_3d(
             all_segments.extend(segs);
             all_vias.extend(vias);
         }
+        path_spans.push((span_start, all_segments.len() - span_start));
     }
 
     // Pad-escape stubs: connect each routed terminal's cell center to
@@ -309,11 +368,16 @@ fn shortest_path_3d(
         }
         let (cx, cy) = grid.cell_center(*cell);
         if (cx - px).hypot(cy - py) > 1e-6 {
+            path_spans.push((all_segments.len(), 1));
             all_segments.push(RouteSegment {
                 layer: cell.layer,
                 start: (cx, cy),
                 end: (*px, *py),
-                width_mm: net.required_trace_width_mm,
+                // Escape stubs carry the pin's own share, not the rail
+                // trunk width.
+                width_mm: crate::stackup::trace_width_for_current(share, 1.0, 10.0)
+                    .max(0.15)
+                    .min(net.required_trace_width_mm),
             });
         }
     }
@@ -322,6 +386,7 @@ fn shortest_path_3d(
         net_id: net.id,
         segments: all_segments,
         vias: all_vias,
+        path_spans,
     }
 }
 

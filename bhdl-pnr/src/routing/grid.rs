@@ -184,8 +184,18 @@ impl RoutingGrid {
                         || cx > outline_w - edge_band
                         || cy > outline_h - edge_band
                     {
-                        grid.cells[l][r][c].blocked = true;
-                        grid.cells[l][r][c].hard = true;
+                        let cell = &mut grid.cells[l][r][c];
+                        cell.blocked = true;
+                        // Do NOT stomp pad-owned cells: an edge-placed
+                        // (user-fixed) connector's pins must remain
+                        // reachable through their own halos — the wall
+                        // dump showed entire pin rows hard-banded and
+                        // unroutable by construction. The pad's own
+                        // edge-clearance status is the DRC oracle's
+                        // call, not a routing veto.
+                        if cell.owners.is_empty() {
+                            cell.hard = true;
+                        }
                     }
                 }
             }
