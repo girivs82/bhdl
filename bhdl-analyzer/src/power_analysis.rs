@@ -189,7 +189,7 @@ pub enum BoardPortDir {
 #[derive(Debug)]
 pub struct PowerAnalysisContext {
     /// All power domains in the design
-    pub domains: HashMap<String, PowerDomain>,
+    pub domains: std::collections::BTreeMap<String, PowerDomain>,
     /// Board-level boundary ports (explicit `port` decls + desugared
     /// power/ground decls), in source order.
     pub board_ports: Vec<BoardPortInfo>,
@@ -198,7 +198,7 @@ pub struct PowerAnalysisContext {
     /// Generated power sequence
     pub power_sequence: Vec<PowerSequenceStep>,
     /// Domain assignments for components
-    pub component_domains: HashMap<String, String>,
+    pub component_domains: std::collections::BTreeMap<String, String>,
     /// Analysis errors
     pub errors: Vec<PowerAnalysisError>,
     /// Analysis warnings
@@ -270,11 +270,11 @@ impl PowerAnalysisContext {
     /// Create a new power analysis context with standard domains pre-populated
     pub fn new() -> Self {
         let mut ctx = Self {
-            domains: HashMap::new(),
+            domains: std::collections::BTreeMap::new(),
             board_ports: Vec::new(),
             level_shifted_signals: Vec::new(),
             power_sequence: Vec::new(),
-            component_domains: HashMap::new(),
+            component_domains: std::collections::BTreeMap::new(),
             errors: Vec::new(),
             warnings: Vec::new(),
         };
@@ -587,7 +587,7 @@ pub fn analyze_power_domains(
     load_power_domains_from_symbols(&mut context, global_scope);
     
     // Load power domains from definition scopes (board scopes)
-    for (_, scope) in definition_scopes {
+    for (_, scope) in crate::definition_scopes_sorted(definition_scopes) {
         load_power_domains_from_symbols(&mut context, scope);
     }
     

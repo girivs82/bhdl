@@ -80,7 +80,7 @@ pub struct SequencingConstraints {
 /// Power sequence generator
 #[derive(Debug)]
 pub struct PowerSequenceGenerator {
-    pub domains: HashMap<String, PowerDomain>,
+    pub domains: std::collections::BTreeMap<String, PowerDomain>,
     pub constraints: SequencingConstraints,
     pub startup_sequence: Vec<PowerSequenceStep>,
     pub shutdown_sequence: Vec<PowerSequenceStep>,
@@ -92,7 +92,7 @@ impl PowerSequenceGenerator {
     /// Create a new power sequence generator
     pub fn new() -> Self {
         Self {
-            domains: HashMap::new(),
+            domains: std::collections::BTreeMap::new(),
             constraints: SequencingConstraints::default(),
             startup_sequence: Vec::new(),
             shutdown_sequence: Vec::new(),

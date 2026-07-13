@@ -177,7 +177,7 @@ pub(crate) fn find_rail_voltage(rail_name: &str, analysis: &AnalysisResult) -> f
     }
 
     // Check definition scopes (power domains are typically in board scope)
-    for (_, scope) in &analysis.definition_scopes {
+    for (_, scope) in bhdl_analyzer::definition_scopes_sorted(&analysis.definition_scopes) {
         if let Some(sym) = scope.get_nets().get(rail_name) {
             if sym.kind == SymbolKind::Net {
                 if let Some(ref attr) = sym.net_attributes {

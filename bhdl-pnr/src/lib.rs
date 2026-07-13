@@ -498,8 +498,9 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
     // (honest) rather than shipping illegal copper.
     {
         let mut round = 0;
+        let mut banned_vias: Vec<(usize, (f64, f64))> = Vec::new();
         loop {
-            let ripped = validate_and_rip(&board, &mut final_routes);
+            let ripped = validate_and_rip(&board, &mut final_routes, &mut banned_vias);
             if ripped.is_empty() || round >= 3 {
                 break;
             }
@@ -508,33 +509,82 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                 "geometric recovery round {round}: rerouting {} ripped net(s) with vias",
                 ripped.len()
             );
-            let mut rec_grid = RoutingGrid::build(&board);
-            for (i, route) in final_routes.iter().enumerate() {
-                if !route.is_empty() && !ripped.contains(&i) {
-                    for cell in pathfinder::route_cells(&rec_grid, route) {
-                        let c = rec_grid.get_mut(cell);
-                        c.blocked = true;
-                        c.hard = true;
+            // Partial (amputated) routes EXTEND from their surviving
+            // tree; only fully-ripped nets reroute from scratch.
+            let (partial, whole): (Vec<usize>, Vec<usize>) =
+                ripped.iter().partition(|&&i| !final_routes[i].is_empty());
+            for &i in &partial {
+                let mut ext_grid = RoutingGrid::build(&board);
+                for (j, route) in final_routes.iter().enumerate() {
+                    if j != i && !route.is_empty() {
+                        for cell in pathfinder::route_cells(&ext_grid, route) {
+                            let c = ext_grid.get_mut(cell);
+                            c.blocked = true;
+                            c.hard = true;
+                        }
                     }
                 }
+                let mut route = final_routes[i].clone();
+                let banned: Vec<(f64, f64)> = banned_vias
+                    .iter()
+                    .filter(|(k, _)| *k == i)
+                    .map(|&(_, xy)| xy)
+                    .collect();
+                let got = pathfinder::extend_route(
+                    &mut ext_grid, &board.nets[i], &board, &mut route, 1.0, 1.0, &banned,
+                );
+                if got > 0 {
+                    info!(
+                        "recovery: extended '{}' to {got} previously-cut sink(s)",
+                        board.nets[i].name
+                    );
+                    final_routes[i] = route;
+                }
             }
-            let rec_nets: Vec<PnrNet> = board
-                .nets
-                .iter()
-                .enumerate()
-                .map(|(i, net)| {
-                    if ripped.contains(&i) {
-                        net.clone()
-                    } else {
-                        PnrNet { pins: Vec::new(), ..net.clone() }
+            // Whole-ripped nets recover SEQUENTIALLY, fat nets first:
+            // jointly renegotiating several power nets on a mostly
+            // hard-blocked grid just makes them contend for the last
+            // free corridor until all overflow-rip. One at a time, each
+            // gets the full remaining freedom, and its copper commits
+            // (hard) before the next tries.
+            let mut whole_sorted = whole.clone();
+            whole_sorted.sort_by(|&a, &b| {
+                let wa = board.nets[a].required_trace_width_mm;
+                let wb = board.nets[b].required_trace_width_mm;
+                wb.partial_cmp(&wa).unwrap_or(std::cmp::Ordering::Equal).then(a.cmp(&b))
+            });
+            for &i in &whole_sorted {
+                let mut rec_grid = RoutingGrid::build(&board);
+                for (j, route) in final_routes.iter().enumerate() {
+                    if j != i && !route.is_empty() {
+                        for cell in pathfinder::route_cells(&rec_grid, route) {
+                            let c = rec_grid.get_mut(cell);
+                            c.blocked = true;
+                            c.hard = true;
+                        }
                     }
-                })
-                .collect();
-            let rec_routes = pathfinder::pathfinder_route(
-                &mut rec_grid, &rec_nets, &board, 100, 1.0, 1.0, true,
-            );
-            for &i in &ripped {
+                }
+                let rec_nets: Vec<PnrNet> = board
+                    .nets
+                    .iter()
+                    .enumerate()
+                    .map(|(k, net)| {
+                        if k == i {
+                            net.clone()
+                        } else {
+                            PnrNet { pins: Vec::new(), ..net.clone() }
+                        }
+                    })
+                    .collect();
+                let rec_routes = pathfinder::pathfinder_route(
+                    &mut rec_grid, &rec_nets, &board, 100, 1.0, 1.0, true,
+                );
                 if !rec_routes[i].is_empty() {
+                    info!(
+                        "recovery: rerouted whole net '{}' ({} segments)",
+                        board.nets[i].name,
+                        rec_routes[i].segments.len()
+                    );
                     final_routes[i] = rec_routes[i].clone();
                 }
             }
@@ -660,7 +710,23 @@ fn segments_too_close(
 /// may intersect or under-clear. The cell model has deliberate blind
 /// spots (blocked pad-halo cells exempt from overflow), so the last
 /// word is geometry. Returns the indices of nets ripped this call.
-fn validate_and_rip(board: &Board, final_routes: &mut [Route]) -> Vec<usize> {
+fn segment_point_too_close(a: (f64, f64), b: (f64, f64), p: (f64, f64), gap: f64) -> bool {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let len2 = dx * dx + dy * dy;
+    let t = if len2 <= 1e-12 {
+        0.0
+    } else {
+        (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / len2).clamp(0.0, 1.0)
+    };
+    let (cx, cy) = (a.0 + t * dx, a.1 + t * dy);
+    (p.0 - cx).hypot(p.1 - cy) < gap
+}
+
+fn validate_and_rip(
+    board: &Board,
+    final_routes: &mut [Route],
+    banned_vias: &mut Vec<(usize, (f64, f64))>,
+) -> Vec<usize> {
     let mut ripped_nets: Vec<usize> = Vec::new();
 
         let clearance = board.config.min_spacing_mm;
@@ -678,6 +744,7 @@ fn validate_and_rip(board: &Board, final_routes: &mut [Route]) -> Vec<usize> {
             cy: f64,
             hx: f64,
             hy: f64,
+            drill_r: f64,
         }
         let mut pad_rects: Vec<PadRect> = Vec::new();
         let n_layers = board.layer_stack.layers.len();
@@ -689,9 +756,14 @@ fn validate_and_rip(board: &Board, final_routes: &mut [Route]) -> Vec<usize> {
             for pin in &comp.pins {
                 let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
                 let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
-                let (pw, ph, thru) = match &pin.pad {
-                    Some(p) => (p.width_mm, p.height_mm, p.drill_mm.is_some()),
-                    None => (0.8, 0.8, false),
+                let (pw, ph, thru, drill_r) = match &pin.pad {
+                    Some(p) => (
+                        p.width_mm,
+                        p.height_mm,
+                        p.drill_mm.is_some(),
+                        p.drill_mm.unwrap_or(0.0) / 2.0,
+                    ),
+                    None => (0.8, 0.8, false, 0.0),
                 };
                 let (pw, ph) = if quarter == 1 { (ph, pw) } else { (pw, ph) };
                 let on_top = thru || matches!(comp.side, BoardSide::Top);
@@ -704,6 +776,7 @@ fn validate_and_rip(board: &Board, final_routes: &mut [Route]) -> Vec<usize> {
                     cy: gy,
                     hx: pw / 2.0,
                     hy: ph / 2.0,
+                    drill_r,
                 });
             }
         }
@@ -727,6 +800,7 @@ fn validate_and_rip(board: &Board, final_routes: &mut [Route]) -> Vec<usize> {
         };
 
         let mut ripped = 0usize;
+        let mut whole_rip_mode = false;
         loop {
             let mut offender: Option<(usize, Option<usize>)> = None;
             'scan: for i in 0..final_routes.len() {
@@ -747,13 +821,171 @@ fn validate_and_rip(board: &Board, final_routes: &mut [Route]) -> Vec<usize> {
                         }
                     }
                 }
+                // Dangling track ends: an endpoint must touch same-net
+                // copper — another segment (incl. mid-segment T-joints),
+                // a via, or a pad of this net. The oracle reports
+                // orphans as track_dangling; amputation bookkeeping can
+                // miss cases, so the validator is the guarantee.
+                {
+                    let rt = &final_routes[i];
+                    let mut dangle: Option<usize> = None;
+                    'ends: for (si, sa) in rt.segments.iter().enumerate() {
+                        for pt in [sa.start, sa.end] {
+                            let mut touched = rt.segments.iter().enumerate().any(|(sj, sb)| {
+                                sj != si
+                                    && sb.layer == sa.layer
+                                    && segment_point_too_close(sb.start, sb.end, pt, 0.01)
+                            });
+                            if !touched {
+                                touched = rt.vias.iter().any(|v| {
+                                    (v.x - pt.0).hypot(v.y - pt.1) < 0.01
+                                });
+                            }
+                            if !touched {
+                                touched = pad_rects.iter().any(|p| {
+                                    p.net == Some(net_id)
+                                        && pad_on_layer(p, sa.layer)
+                                        && (pt.0 - p.cx).abs() < p.hx + 0.01
+                                        && (pt.1 - p.cy).abs() < p.hy + 0.01
+                                });
+                            }
+                            if !touched {
+                                dangle = Some(si);
+                                break 'ends;
+                            }
+                        }
+                    }
+                    if let Some(si) = dangle {
+                        log::debug!(
+                            "validator: dangling track end on net '{}'",
+                            board.nets[i].name
+                        );
+                        offender = Some((i, Some(si)));
+                        break 'scan;
+                    }
+                }
+                // VIA vs foreign copper: the barrel needs via_pad/2 +
+                // clearance; the hole needs drill/2 + the board hole
+                // clearance (KiCad default 0.25). A via touches every
+                // layer, so any foreign pad or track qualifies. The
+                // offender maps to the via's span so amputation takes
+                // the branch (and its vias) together.
+                let via_r = board.layer_stack.via.pad_mm / 2.0;
+                let hole_margin = board.layer_stack.via.drill_mm / 2.0 + 0.25;
+                let via_span_seg = |r: &Route, vi: usize| -> Option<usize> {
+                    r.via_spans
+                        .iter()
+                        .position(|&(vs, vl)| vl > 0 && vi >= vs && vi < vs + vl)
+                        .and_then(|s| r.path_spans.get(s).map(|&(ps, _)| ps))
+                };
+                for (vi, v) in final_routes[i].vias.iter().enumerate() {
+                    let pad_margin = (via_r + clearance).max(hole_margin);
+                    let mut bad = false;
+                    // Same-route drilled-hole spacing: two of this net's
+                    // own vias too close is hole_to_hole just the same.
+                    let hole_gap = board.layer_stack.via.drill_mm + 0.25;
+                    for (vj, vb) in final_routes[i].vias.iter().enumerate() {
+                        if vj < vi && (v.x - vb.x).hypot(v.y - vb.y) < hole_gap {
+                            bad = true;
+                            break;
+                        }
+                    }
+                    for p in &pad_rects {
+                        if p.net == Some(net_id) {
+                            continue;
+                        }
+                        if (v.x - p.cx).abs() < p.hx + pad_margin
+                            && (v.y - p.cy).abs() < p.hy + pad_margin
+                        {
+                            bad = true;
+                            break;
+                        }
+                        // hole_to_hole: drill-to-drill spacing for THT
+                        // pads (board setup default 0.25mm).
+                        if p.drill_r > 0.0
+                            && (v.x - p.cx).hypot(v.y - p.cy)
+                                < p.drill_r + board.layer_stack.via.drill_mm / 2.0 + 0.25
+                        {
+                            bad = true;
+                            break;
+                        }
+                    }
+                    if !bad {
+                        'tracks: for (j, other) in final_routes.iter().enumerate() {
+                            if j == i || other.is_empty() {
+                                continue;
+                            }
+                            for sb in &other.segments {
+                                let margin =
+                                    (via_r + sb.width_mm / 2.0 + clearance).max(hole_margin);
+                                if segment_point_too_close(sb.start, sb.end, (v.x, v.y), margin)
+                                {
+                                    bad = true;
+                                    break 'tracks;
+                                }
+                            }
+                            for vb in &other.vias {
+                                if (v.x - vb.x).hypot(v.y - vb.y)
+                                    < (2.0 * via_r + clearance).max(hole_margin + via_r)
+                                {
+                                    bad = true;
+                                    break 'tracks;
+                                }
+                            }
+                        }
+                    }
+                    // via_dangling: the via must land on copper on BOTH
+                    // layers it spans — a segment endpoint at its center
+                    // on that layer, or a THT pad of its own net.
+                    if !bad {
+                        for check_layer in [v.from_layer, v.to_layer] {
+                            // Point-ON-segment, not endpoint match:
+                            // collinear runs are merged at emission, so
+                            // a T-joint via can land mid-segment.
+                            let mut touched = final_routes[i].segments.iter().any(|sg| {
+                                sg.layer == check_layer
+                                    && segment_point_too_close(
+                                        sg.start,
+                                        sg.end,
+                                        (v.x, v.y),
+                                        0.01,
+                                    )
+                            });
+                            if !touched {
+                                touched = pad_rects.iter().any(|p| {
+                                    p.net == Some(net_id)
+                                        && p.drill_r > 0.0
+                                        && (v.x - p.cx).abs() < p.hx
+                                        && (v.y - p.cy).abs() < p.hy
+                                });
+                            }
+                            if !touched {
+                                bad = true;
+                                break;
+                            }
+                        }
+                    }
+                    if bad {
+                        log::debug!(
+                            "validator: via offender net '{}' at ({:.2},{:.2})",
+                            board.nets[i].name, v.x, v.y
+                        );
+                        // Remember the site: extension recovery must
+                        // not re-place the exact via the validator
+                        // just amputated, or the loop ping-pongs until
+                        // the round cap and ships the sinks unrouted.
+                        banned_vias.push((i, (v.x, v.y)));
+                        offender = Some((i, via_span_seg(&final_routes[i], vi)));
+                        break 'scan;
+                    }
+                }
                 // Track vs foreign track.
                 for j in (i + 1)..final_routes.len() {
                     if final_routes[j].is_empty() {
                         continue;
                     }
-                    for sa in &final_routes[i].segments {
-                        for sb in &final_routes[j].segments {
+                    for (sai, sa) in final_routes[i].segments.iter().enumerate() {
+                        for (sbi, sb) in final_routes[j].segments.iter().enumerate() {
                             if sa.layer != sb.layer {
                                 continue;
                             }
@@ -764,7 +996,18 @@ fn validate_and_rip(board: &Board, final_routes: &mut [Route]) -> Vec<usize> {
                             ) {
                                 let wi = board.nets.get(i).map(|n| n.weight).unwrap_or(1.0);
                                 let wj = board.nets.get(j).map(|n| n.weight).unwrap_or(1.0);
-                                offender = Some(if wj <= wi { (j, None) } else { (i, None) });
+                                // Amputate the offending BRANCH of the
+                                // lighter net, not its whole tree — the
+                                // recovery loop then extends it back with
+                                // vias. Whole-net rips threw away good
+                                // copper and the from-scratch reroute
+                                // often failed where an extension
+                                // succeeds.
+                                offender = Some(if wj <= wi {
+                                    (j, Some(sbi))
+                                } else {
+                                    (i, Some(sai))
+                                });
                                 break 'scan;
                             }
                         }
@@ -773,6 +1016,7 @@ fn validate_and_rip(board: &Board, final_routes: &mut [Route]) -> Vec<usize> {
             }
             match offender {
                 Some((k, seg_idx)) => {
+                    let seg_idx = if whole_rip_mode { None } else { seg_idx };
                     let name = board.nets.get(k).map(|n| n.name.clone()).unwrap_or_default();
                     // AMPUTATE the offending Steiner branch when the
                     // route carries path structure: one bad segment must
@@ -841,6 +1085,26 @@ fn validate_and_rip(board: &Board, final_routes: &mut [Route]) -> Vec<usize> {
                                     }
                                 }
                             }
+                            // Vias travel with their branch (orphaned
+                            // vias read as via_dangling to the oracle).
+                            let mut vorder: Vec<usize> = (0..n)
+                                .filter(|&i| doomed[i] && i < r.via_spans.len())
+                                .collect();
+                            vorder.sort_by_key(|&i| std::cmp::Reverse(r.via_spans[i].0));
+                            for &i in &vorder {
+                                let (vs, vl) = r.via_spans[i];
+                                if vl > 0 && vs + vl <= r.vias.len() {
+                                    r.vias.drain(vs..vs + vl);
+                                    for j in 0..n {
+                                        if !doomed[j]
+                                            && j < r.via_spans.len()
+                                            && r.via_spans[j].0 > vs
+                                        {
+                                            r.via_spans[j].0 -= vl;
+                                        }
+                                    }
+                                }
+                            }
                             // Compact spans/parents, remapping parent
                             // indices to the surviving order.
                             let mut remap = vec![usize::MAX; n];
@@ -869,8 +1133,73 @@ fn validate_and_rip(board: &Board, final_routes: &mut [Route]) -> Vec<usize> {
                                     )
                                 })
                                 .collect();
+                            let vspans: Vec<(usize, usize)> = (0..n)
+                                .filter(|&i| !doomed[i])
+                                .map(|i| r.via_spans.get(i).copied().unwrap_or((0, 0)))
+                                .collect();
                             r.path_spans = spans;
                             r.path_parents = parents;
+                            r.via_spans = vspans;
+                            // Prune stubs orphaned by the cut: a
+                            // 1-segment parentless span (pad-escape
+                            // stub) whose start no longer coincides
+                            // with any surviving copper endpoint is
+                            // dangling — grid segments always start/end
+                            // on cell centers, so an endpoint match is
+                            // exact.
+                            loop {
+                                let mut drop_span: Option<usize> = None;
+                                'stubs: for (si, &(ps, pl)) in
+                                    r.path_spans.iter().enumerate()
+                                {
+                                    if pl != 1 || r.path_parents.get(si).copied().flatten().is_some() {
+                                        continue;
+                                    }
+                                    let st = r.segments[ps].start;
+                                    for (qi, &(qs, ql)) in r.path_spans.iter().enumerate() {
+                                        if qi == si {
+                                            continue;
+                                        }
+                                        for seg in &r.segments[qs..qs + ql] {
+                                            if (seg.start.0 - st.0).abs() < 1e-6
+                                                && (seg.start.1 - st.1).abs() < 1e-6
+                                                || (seg.end.0 - st.0).abs() < 1e-6
+                                                    && (seg.end.1 - st.1).abs() < 1e-6
+                                            {
+                                                continue 'stubs;
+                                            }
+                                        }
+                                    }
+                                    drop_span = Some(si);
+                                    break;
+                                }
+                                let Some(si) = drop_span else { break };
+                                let (ps, pl) = r.path_spans[si];
+                                r.segments.drain(ps..ps + pl);
+                                r.path_spans.remove(si);
+                                r.path_parents.remove(si);
+                                if si < r.via_spans.len() {
+                                    r.via_spans.remove(si);
+                                }
+                                for sp in r.path_spans.iter_mut() {
+                                    if sp.0 > ps {
+                                        sp.0 -= pl;
+                                    }
+                                }
+                                for pparent in r.path_parents.iter_mut() {
+                                    if let Some(pp) = pparent {
+                                        if *pp > si {
+                                            *pp -= 1;
+                                        }
+                                    }
+                                }
+                            }
+                            // Queue for recovery: the cut sinks get an
+                            // EXTENSION attempt (vias allowed) from the
+                            // surviving tree.
+                            if !ripped_nets.contains(&k) {
+                                ripped_nets.push(k);
+                            }
                         }
                         None => {
                             log::warn!(
@@ -884,7 +1213,17 @@ fn validate_and_rip(board: &Board, final_routes: &mut [Route]) -> Vec<usize> {
                     }
                     ripped += 1;
                     if ripped > board.nets.len() * 8 {
-                        break;
+                        // Cap tripped: amputation isn't converging.
+                        // Switch to whole-rip mode — every further
+                        // offender loses its whole net. Unrouted beats
+                        // illegal is a hard guarantee, not a budget;
+                        // stopping here used to SHIP the remaining
+                        // violations.
+                        log::warn!(
+                            "geometric validation: rip cap exhausted — \
+                             whole-ripping remaining offender nets"
+                        );
+                        whole_rip_mode = true;
                     }
                 }
                 None => break,

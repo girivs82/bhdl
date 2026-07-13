@@ -8,6 +8,7 @@ mod helpers;
 pub mod symbol_table;
 pub mod scope_registry;
 pub mod hierarchical_symbol_table;
+pub use hierarchical_symbol_table::definition_scopes_sorted;
 pub mod net_attributes;
 pub mod part_family;
 pub mod catalog_scan;

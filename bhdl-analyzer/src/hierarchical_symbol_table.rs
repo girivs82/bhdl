@@ -202,3 +202,18 @@ mod tests {
         assert_eq!(tail.head(), Some("pwm"));
     }
 }
+
+/// Iterate `definition_scopes` in SOURCE order (by text range).
+///
+/// The map is HashMap-keyed by syntax-node pointer; its iteration order
+/// is per-process random, and everything downstream of a scope walk —
+/// module creation order, instance IDs, PnR component order, placement —
+/// inherits that randomness. Every iteration over definition_scopes must
+/// go through this.
+pub fn definition_scopes_sorted(
+    map: &HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>,
+) -> Vec<(&SyntaxNodePtr<BhdlLanguage>, &SymbolTable)> {
+    let mut v: Vec<_> = map.iter().collect();
+    v.sort_by_key(|(p, _)| (p.text_range().start(), p.text_range().end()));
+    v
+}

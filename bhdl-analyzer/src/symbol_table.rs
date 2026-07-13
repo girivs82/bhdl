@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use rowan::{TextRange, ast::SyntaxNodePtr};
 use bhdl_parser::BhdlLanguage;
 use crate::net_attributes::NetAttribute;
@@ -160,8 +160,12 @@ impl Symbol {
 #[derive(Debug, Default, Clone, PartialEq)] // Added PartialEq for comparison in lib.rs
 pub struct SymbolTable {
     pub scope_name: Option<String>,
-    symbols: HashMap<String, Symbol>,
-    nets: HashMap<String, Symbol>, // Separate namespace for nets
+    // BTreeMap, not HashMap: iteration order feeds module-creation order
+    // and (through instance IDs) PnR component order — HashMap's
+    // per-process randomness made whole layouts nondeterministic at a
+    // fixed seed.
+    symbols: BTreeMap<String, Symbol>,
+    nets: BTreeMap<String, Symbol>, // Separate namespace for nets
 }
 
 impl SymbolTable {
@@ -193,11 +197,11 @@ impl SymbolTable {
 
     // Removed: add_child_scope (dead code — children were never used for lookup)
     
-    pub fn get_nets(&self) -> &HashMap<String, Symbol> {
+    pub fn get_nets(&self) -> &BTreeMap<String, Symbol> {
         &self.nets
     }
     
-    pub fn get_symbols(&self) -> &HashMap<String, Symbol> {
+    pub fn get_symbols(&self) -> &BTreeMap<String, Symbol> {
         &self.symbols
     }
 } 

@@ -587,6 +587,10 @@ pub struct Route {
     /// oracle's track_dangling). None = attached at the source pin (or
     /// a trunk stub).
     pub path_parents: Vec<Option<usize>>,
+    /// Via ranges per span (start index into `vias`, length): amputation
+    /// must take a branch's vias with its segments or they orphan as
+    /// via_dangling.
+    pub via_spans: Vec<(usize, usize)>,
 }
 
 impl Route {
@@ -597,6 +601,7 @@ impl Route {
             vias: Vec::new(),
             path_spans: Vec::new(),
             path_parents: Vec::new(),
+            via_spans: Vec::new(),
         }
     }
 

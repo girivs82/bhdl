@@ -39,7 +39,7 @@ impl NetlistGenerator {
         let mut all_symbols = analysis.global_scope.get_symbols().clone();
         
         // Add symbols from all definition scopes (power domains are stored in board definition scope)
-        for (_node_ptr, scope) in &analysis.definition_scopes {
+        for (_node_ptr, scope) in bhdl_analyzer::definition_scopes_sorted(&analysis.definition_scopes) {
             for (name, symbol) in scope.get_symbols() {
                 all_symbols.insert(name.clone(), symbol.clone());
             }

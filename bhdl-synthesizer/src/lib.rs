@@ -889,7 +889,7 @@ impl NetlistGenerator {
         let mut all_symbols = analysis.global_scope.get_symbols().clone();
         
         // Add symbols from all definition scopes
-        for (_node_ptr, scope) in &analysis.definition_scopes {
+        for (_node_ptr, scope) in bhdl_analyzer::definition_scopes_sorted(&analysis.definition_scopes) {
             for (name, symbol) in scope.get_symbols() {
                 all_symbols.insert(name.clone(), symbol.clone());
             }
@@ -2017,7 +2017,7 @@ impl NetlistGenerator {
         }
         
         // Extract symbols from definition scopes (modules, components, etc.)
-        for (node_ptr, scope) in &analysis.definition_scopes {
+        for (node_ptr, scope) in bhdl_analyzer::definition_scopes_sorted(&analysis.definition_scopes) {
             debug!("Processing definition scope for node: {:?}", node_ptr);
             
             // Get the scope name to identify the module
@@ -2071,7 +2071,7 @@ impl NetlistGenerator {
     /// Extract module pin information for a module from analysis results
     fn extract_module_pins(&self, module_name: &str, analysis: &AnalysisResult) -> Result<ModulePinMetadata> {
         // Look for the module in definition scopes
-        for (_, scope) in &analysis.definition_scopes {
+        for (_, scope) in bhdl_analyzer::definition_scopes_sorted(&analysis.definition_scopes) {
             if scope.scope_name.as_deref() == Some(module_name) {
                 return self.extract_pins_from_scope(scope);
             }

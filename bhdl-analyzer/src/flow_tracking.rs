@@ -139,7 +139,7 @@ impl FlowTracker {
         let diagnostics = Vec::new();
         
         // Iterate through all module scopes to find virtual pins
-        for (module_node_ptr, module_scope) in definition_scopes {
+        for (module_node_ptr, module_scope) in crate::definition_scopes_sorted(definition_scopes) {
             // Check each symbol in the module scope
             for (pin_name, symbol) in module_scope.get_symbols() {
                 if symbol.kind == SymbolKind::VirtualPin {
@@ -420,7 +420,7 @@ impl FlowTracker {
         };
 
         collect(symbol_table, &mut self.rail_stage_params);
-        for (_, scope) in definition_scopes {
+        for (_, scope) in crate::definition_scopes_sorted(definition_scopes) {
             collect(scope, &mut self.rail_stage_params);
         }
 
@@ -730,7 +730,7 @@ impl FlowTracker {
                     }
                     
                     // Also check in definition scopes
-                    for (_, scope) in definition_scopes {
+                    for (_, scope) in crate::definition_scopes_sorted(definition_scopes) {
                         if let Some(symbol) = scope.lookup(component) {
                             if symbol.kind == SymbolKind::Instance {
                                 module_intents.push((component.clone(), intent.clone()));

@@ -214,6 +214,7 @@ fn shortest_path_3d(
     let mut path_recs: Vec<PathRec> = Vec::new();
     let mut cell_home: std::collections::HashMap<CellCoord, (usize, usize)> =
         std::collections::HashMap::new();
+    let mut via_keepout: Vec<(f64, f64)> = Vec::new();
 
     while !remaining_sinks.is_empty() {
         let result = dijkstra_to_any(
@@ -225,6 +226,7 @@ fn shortest_path_3d(
             history_factor,
             present_factor,
             allow_vias,
+            &via_keepout,
         );
 
         match result {
@@ -237,6 +239,11 @@ fn shortest_path_3d(
                 for (ci, &cell) in path.iter().enumerate() {
                     source_set.insert(cell);
                     cell_home.entry(cell).or_insert((pidx, ci));
+                }
+                for w in path.windows(2) {
+                    if w[0].layer != w[1].layer {
+                        via_keepout.push(grid.cell_center(w[0]));
+                    }
                 }
                 path_recs.push(PathRec { cells: path.clone(), parent });
             }
@@ -344,18 +351,20 @@ fn shortest_path_3d(
     };
     let mut path_spans: Vec<(usize, usize)> = Vec::new();
     let mut path_parents: Vec<Option<usize>> = Vec::new();
+    let mut via_spans: Vec<(usize, usize)> = Vec::new();
     // Stubs emitted inside their branch's span: each path's last cell is
     // its sink — the sink's pad-escape stub belongs to THAT branch, so
     // amputating the branch removes its stub with it (previously stubs
     // were separate spans and amputation left them dangling — the
     // oracle's track_dangling family).
-    let mut stub_of: std::collections::HashMap<CellCoord, Vec<(f64, f64)>> =
-        std::collections::HashMap::new();
+    let mut stub_of: std::collections::BTreeMap<CellCoord, Vec<(f64, f64)>> =
+        std::collections::BTreeMap::new();
     for (c, p) in &pin_targets {
         stub_of.entry(*c).or_default().push(*p);
     }
     for (p, rec) in path_recs.iter().enumerate() {
         let span_start = all_segments.len();
+        let via_start = all_vias.len();
         for w in 0..rec.cells.len().saturating_sub(1) {
             let a = rec.cells[w];
             let b = rec.cells[w + 1];
@@ -387,6 +396,7 @@ fn shortest_path_3d(
         }
         path_spans.push((span_start, all_segments.len() - span_start));
         path_parents.push(rec.parent.map(|(pp, _)| pp));
+        via_spans.push((via_start, all_vias.len() - via_start));
     }
 
     // Remaining pad-escape stubs (the source pin, and any pin whose
@@ -400,7 +410,13 @@ fn shortest_path_3d(
             let (cx, cy) = grid.cell_center(*cell);
             if (cx - px).hypot(cy - py) > 1e-6 {
                 path_spans.push((all_segments.len(), 1));
+                // Parent stays None: these stubs serve the shared trunk
+                // (often span 0, the parent of most branches) — wiring
+                // them into the cascade lets one early-span amputation
+                // nuke the whole tree. Orphaned stubs are pruned
+                // geometrically after amputation instead.
                 path_parents.push(None);
+                via_spans.push((all_vias.len(), 0));
                 all_segments.push(RouteSegment {
                     layer: cell.layer,
                     start: (cx, cy),
@@ -421,6 +437,7 @@ fn shortest_path_3d(
         vias: all_vias,
         path_spans,
         path_parents,
+        via_spans,
     }
 }
 
@@ -434,6 +451,7 @@ fn dijkstra_to_any(
     history_factor: f64,
     present_factor: f64,
     allow_vias: bool,
+    via_keepout: &[(f64, f64)],
 ) -> Option<(Vec<CellCoord>, CellCoord)> {
     let mut dist: HashMap<CellCoord, f64> = HashMap::new();
     let mut prev: HashMap<CellCoord, CellCoord> = HashMap::new();
@@ -512,6 +530,34 @@ fn dijkstra_to_any(
                 if gc.blocked
                     && !sinks.contains(&nbr)
                     && (gc.hard || gc.nc_blocked || !gc.owners.contains(&net.id))
+                {
+                    continue;
+                }
+                // Via siting: the barrel (via pad + hole clearance) is
+                // wider than a trace, so the halo carved for traces
+                // under-protects it — require a clear ring around the
+                // via column on BOTH layers or the oracle reports
+                // clearance/hole_clearance against adjacent foreign
+                // pads.
+                let ring_clear = [cell, nbr].iter().all(|&c| {
+                    grid.planar_neighbors(c).into_iter().all(|(pn, _)| {
+                        let g = grid.get(pn);
+                        !(g.hard
+                            || g.nc_blocked
+                            || (g.blocked && !g.owners.contains(&net.id)))
+                    })
+                });
+                if !ring_clear && !sinks.contains(&nbr) {
+                    continue;
+                }
+                // Drilled-hole spacing: no new via within hole-to-hole
+                // distance of one this route already committed (same-net
+                // vias violate hole_to_hole just like foreign ones).
+                let hole_gap = stack.via.drill_mm + 0.25;
+                let (vx, vy) = grid.cell_center(cell);
+                if via_keepout
+                    .iter()
+                    .any(|&(kx, ky)| (vx - kx).hypot(vy - ky) < hole_gap)
                 {
                     continue;
                 }
@@ -709,4 +755,139 @@ impl Ord for DijkState {
             .unwrap_or(Ordering::Equal)
             .then_with(|| other.cell.cmp(&self.cell))
     }
+}
+
+
+/// Extend a PARTIAL route to its unreached pins: the surviving tree's
+/// cells seed the Dijkstra source set and only pins not already
+/// touched are targeted (vias allowed). New branches append as spans
+/// with no parent (attachment to existing spans isn't tracked — a
+/// later amputation of an old span won't cascade into these, which is
+/// conservative). Used by the geometric-recovery loop after subtree
+/// amputation: rebuilding a 90%-good power tree from scratch loses to
+/// extending it.
+pub(crate) fn extend_route(
+    grid: &mut RoutingGrid,
+    net: &PnrNet,
+    board: &Board,
+    route: &mut Route,
+    history_factor: f64,
+    present_factor: f64,
+    banned_via_sites: &[(f64, f64)],
+) -> usize {
+    let comp_idx: HashMap<ComponentId, usize> = board
+        .components
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.id, i))
+        .collect();
+
+    // Pin cells + exact pad coordinates.
+    let pin_targets: Vec<(CellCoord, (f64, f64))> = net
+        .pins
+        .iter()
+        .filter_map(|&(comp_id, pin_id)| {
+            let &ci = comp_idx.get(&comp_id)?;
+            let comp = &board.components[ci];
+            let pin = comp.pins.iter().find(|p| p.pin_id == pin_id)?;
+            let cos_t = comp.theta.cos();
+            let sin_t = comp.theta.sin();
+            let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
+            let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+            let layer = match comp.side {
+                BoardSide::Top => 0,
+                BoardSide::Bottom => grid.num_layers - 1,
+            };
+            Some((grid.point_to_cell(gx, gy, layer), (gx, gy)))
+        })
+        .collect();
+
+    // Existing copper = source set; unreached pins = sinks.
+    let mut source_set: BTreeSet<CellCoord> = route_cells(grid, route);
+    if source_set.is_empty() {
+        return 0; // nothing to extend from — the whole-net path applies
+    }
+    let mut remaining: BTreeSet<CellCoord> = pin_targets
+        .iter()
+        .filter(|(c, _)| !source_set.contains(c))
+        .map(|(c, _)| *c)
+        .collect();
+    let share_width = crate::stackup::trace_width_for_current(
+        crate::stackup::current_for_trace_width(net.required_trace_width_mm)
+            / net.pins.len().max(1) as f64,
+        1.0,
+        10.0,
+    )
+    .max(0.15)
+    .min(net.required_trace_width_mm);
+
+    let mut reclaimed = 0usize;
+    let mut via_keepout: Vec<(f64, f64)> =
+        route.vias.iter().map(|v| (v.x, v.y)).collect();
+    via_keepout.extend_from_slice(banned_via_sites);
+    while !remaining.is_empty() {
+        let result = dijkstra_to_any(
+            grid,
+            &source_set,
+            &remaining,
+            net,
+            &board.layer_stack,
+            history_factor,
+            present_factor,
+            true, // vias allowed — recovery is exactly when they earn it
+            &via_keepout,
+        );
+        match result {
+            Some((path, reached)) => {
+                remaining.remove(&reached);
+                for &cell in &path {
+                    source_set.insert(cell);
+                }
+                let span_start = route.segments.len();
+                let via_start = route.vias.len();
+                // Real parent: the surviving span whose copper touches
+                // the attachment cell — without it, later amputation of
+                // that span cannot cascade into this extension and
+                // strands it (extension-era track_dangling).
+                let parent = path.first().and_then(|c0| {
+                    let (ax, ay) = grid.cell_center(*c0);
+                    route.path_spans.iter().position(|&(ps, pl)| {
+                        route.segments[ps..ps + pl].iter().any(|seg| {
+                            (seg.start.0 - ax).abs() < 1e-6 && (seg.start.1 - ay).abs() < 1e-6
+                                || (seg.end.0 - ax).abs() < 1e-6
+                                    && (seg.end.1 - ay).abs() < 1e-6
+                        })
+                    })
+                });
+                let (segs, vias) = path_to_segments(grid, &path, share_width);
+                via_keepout.extend(vias.iter().map(|v| (v.x, v.y)));
+                route.segments.extend(segs);
+                route.vias.extend(vias);
+                // Pad-escape stub for the newly reached pin(s) at this cell.
+                for (c, (px, py)) in &pin_targets {
+                    if *c == reached {
+                        let (cx, cy) = grid.cell_center(reached);
+                        if (cx - px).hypot(cy - py) > 1e-6 {
+                            route.segments.push(RouteSegment {
+                                layer: reached.layer,
+                                start: (cx, cy),
+                                end: (*px, *py),
+                                width_mm: share_width,
+                            });
+                        }
+                    }
+                }
+                route
+                    .path_spans
+                    .push((span_start, route.segments.len() - span_start));
+                route.path_parents.push(parent);
+                route
+                    .via_spans
+                    .push((via_start, route.vias.len() - via_start));
+                reclaimed += 1;
+            }
+            None => break,
+        }
+    }
+    reclaimed
 }
