@@ -256,6 +256,12 @@ enum Commands {
         #[arg(long, default_value = "600")]
         max_iterations: usize,
 
+        /// Base RNG seed — trial k runs at seed+k. Same seed + same
+        /// input = byte-identical board, so changes can be A/B'd
+        /// instead of argued with the dice
+        #[arg(long, default_value = "42")]
+        seed: u64,
+
         /// Also generate interactive HTML board visualization
         #[arg(long)]
         html: bool,
@@ -488,8 +494,8 @@ async fn main() -> Result<()> {
             run_simulation(&source_file, testbench, output, &format).await?;
         }
 
-        Some(Commands::Layout { output, trials, max_iterations, html }) => {
-            run_layout(&source_file, output, trials, max_iterations, html, &cli.input).await?;
+        Some(Commands::Layout { output, trials, max_iterations, html, seed }) => {
+            run_layout(&source_file, output, trials, max_iterations, html, &cli.input, seed).await?;
         }
 
         Some(Commands::Doc { output, bom_only, budget_only, no_tree, no_patterns }) => {
@@ -1632,6 +1638,7 @@ async fn run_layout(
     max_iterations: usize,
     html: bool,
     source_path: &Path,
+    seed: u64,
 ) -> Result<()> {
     use bhdl_pnr::semantic::{self, SemanticConfig};
     use bhdl_pnr::types::PnrConfig;
@@ -1744,7 +1751,7 @@ async fn run_layout(
         max_iterations,
         ..PnrConfig::default()
     };
-    let result = bhdl_pnr::place_and_route_best_of(board, config, trials)?;
+    let result = bhdl_pnr::place_and_route_best_of(board, config, trials, seed)?;
 
     // 9. Results
     println!("\n{}", "PnR Results".bold().cyan());

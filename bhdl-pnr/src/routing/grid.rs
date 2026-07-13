@@ -62,7 +62,7 @@ impl Default for GridCell {
 }
 
 /// 3D cell coordinate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CellCoord {
     pub layer: usize,
     pub row: usize,

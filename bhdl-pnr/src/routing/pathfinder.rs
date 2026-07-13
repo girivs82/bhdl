@@ -8,7 +8,7 @@
 use crate::routing::grid::{CellCoord, RoutingGrid};
 use crate::types::*;
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::collections::{BTreeSet, BinaryHeap, HashMap};
 
 /// Route all nets using PathFinder negotiated congestion.
 ///
@@ -185,14 +185,14 @@ fn shortest_path_3d(
 
     // Multi-sink Dijkstra (Steiner tree approximation)
     let source = pin_cells[0];
-    let mut remaining_sinks: HashSet<CellCoord> =
+    let mut remaining_sinks: BTreeSet<CellCoord> =
         pin_cells[1..].iter().cloned().collect();
 
     let mut all_segments = Vec::new();
     let mut all_vias = Vec::new();
 
     // Keep routing until all sinks reached (or we give up)
-    let mut source_set: HashSet<CellCoord> = HashSet::new();
+    let mut source_set: BTreeSet<CellCoord> = BTreeSet::new();
     source_set.insert(source);
 
     let total_sinks = remaining_sinks.len();
@@ -393,8 +393,8 @@ fn shortest_path_3d(
 /// Dijkstra from any source cell to any sink cell.
 fn dijkstra_to_any(
     grid: &RoutingGrid,
-    sources: &HashSet<CellCoord>,
-    sinks: &HashSet<CellCoord>,
+    sources: &BTreeSet<CellCoord>,
+    sinks: &BTreeSet<CellCoord>,
     net: &PnrNet,
     stack: &LayerStack,
     history_factor: f64,
@@ -566,8 +566,8 @@ fn add_route_demand(grid: &mut RoutingGrid, route: &Route) {
 /// oracle's tracks_crossing family). Deduped per route because a net's
 /// own zigzag grazes the same companion twice — a net cannot conflict
 /// with itself, and double-charging made the ripper rip its own route.
-pub(crate) fn route_cells(grid: &RoutingGrid, route: &Route) -> std::collections::HashSet<CellCoord> {
-    let mut cells = std::collections::HashSet::new();
+pub(crate) fn route_cells(grid: &RoutingGrid, route: &Route) -> BTreeSet<CellCoord> {
+    let mut cells = BTreeSet::new();
     let pitch = if grid.x_coords.len() > 1 {
         grid.x_coords[1] - grid.x_coords[0]
     } else {
@@ -649,7 +649,7 @@ struct DijkState {
 
 impl PartialEq for DijkState {
     fn eq(&self, other: &Self) -> bool {
-        self.cost == other.cost
+        self.cost == other.cost && self.cell == other.cell
     }
 }
 
@@ -663,10 +663,16 @@ impl PartialOrd for DijkState {
 
 impl Ord for DijkState {
     fn cmp(&self, other: &Self) -> Ordering {
-        // Reverse ordering for min-heap
+        // Reverse ordering for min-heap; equal costs tie-break on the
+        // CELL so the heap pop order is fully deterministic — with
+        // Ordering::Equal ties, BinaryHeap's pop among equal-cost
+        // states depended on insertion history, which depended on
+        // HashSet iteration order, which is randomized per process:
+        // the root of the run-to-run layout nondeterminism.
         other
             .cost
             .partial_cmp(&self.cost)
             .unwrap_or(Ordering::Equal)
+            .then_with(|| other.cell.cmp(&self.cell))
     }
 }

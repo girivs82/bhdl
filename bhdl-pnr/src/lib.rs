@@ -57,13 +57,14 @@ pub fn place_and_route_best_of(
     board: Board,
     config: PnrConfig,
     trials: usize,
+    base_seed: u64,
 ) -> Result<PnrResult> {
     let mut best: Option<PnrResult> = None;
 
     for trial in 0..trials {
         info!("=== Trial {}/{} ===", trial + 1, trials);
         let trial_board = board.clone();
-        let result = place_and_route(trial_board, config.clone(), trial as u64)?;
+        let result = place_and_route(trial_board, config.clone(), base_seed.wrapping_add(trial as u64))?;
 
         let dominated = best.as_ref().map_or(false, |b| {
             // Better = more routed nets, or same routed but lower HPWL
