@@ -31,15 +31,19 @@ pub struct GridCell {
     pub history: f64,
     pub present: f64,
     pub blocked: bool,
-    /// Nets that own this blocked cell (a pad + its clearance halo).
-    /// TWO slots: adjacent pads' halos overlap on fine-pitch parts, and
-    /// blocking contested cells for everyone walled pins into their own
-    /// halos (the dense-board unroutability). An owning net may enter
-    /// (terminal access / escape); others see a hard block. Three-way
-    /// contests block all — the geometric validator is the backstop.
-    pub owners: [Option<NetId>; 2],
-    /// ≥3 different nets' halos meet here: blocked for everyone.
-    pub contested_full: bool,
+    /// Every net owning this blocked cell — one entry per pad whose
+    /// expanded rect (pad + clearance halo) covers it. Any owner may
+    /// enter (terminal access/escape toward its own pad); non-owners
+    /// are blocked. A SET, not fixed slots: the two-slot version walled
+    /// a third net's pin inside its own halo whenever two neighbors
+    /// registered first (the dense-board pin-escape blockage). The
+    /// geometric validator backstops near-misses.
+    pub owners: Vec<NetId>,
+    /// NC-pad copper here: nobody may route through, owners or not.
+    pub nc_blocked: bool,
+    /// Absolutely unroutable (edge band, keepouts, mounting holes,
+    /// committed route footprints in later passes) — owners irrelevant.
+    pub hard: bool,
 }
 
 impl Default for GridCell {
@@ -50,8 +54,9 @@ impl Default for GridCell {
             history: 0.0,
             present: 0.0,
             blocked: false,
-            owners: [None, None],
-            contested_full: false,
+            owners: Vec::new(),
+            nc_blocked: false,
+            hard: false,
         }
     }
 }
@@ -180,6 +185,7 @@ impl RoutingGrid {
                         || cy > outline_h - edge_band
                     {
                         grid.cells[l][r][c].blocked = true;
+                        grid.cells[l][r][c].hard = true;
                     }
                 }
             }
@@ -393,14 +399,10 @@ fn mark_rect_blocked_owned(
             let cell = &mut layer_cells[r][c];
             cell.blocked = true;
             match owner {
-                None => cell.contested_full = true, // NC pad: nobody enters
+                None => cell.nc_blocked = true, // NC pad: nobody enters
                 Some(o) => {
-                    if cell.owners[0].is_none() || cell.owners[0] == Some(o) {
-                        cell.owners[0] = Some(o);
-                    } else if cell.owners[1].is_none() || cell.owners[1] == Some(o) {
-                        cell.owners[1] = Some(o);
-                    } else {
-                        cell.contested_full = true;
+                    if !cell.owners.contains(&o) {
+                        cell.owners.push(o);
                     }
                 }
             }
@@ -448,6 +450,7 @@ fn mark_circle_blocked(
             let dy = cell_y - cy;
             if dx * dx + dy * dy <= r2 {
                 layer_cells[r][c].blocked = true;
+                layer_cells[r][c].hard = true;
                 layer_cells[r][c].capacity = 0;
             }
         }
@@ -475,6 +478,7 @@ fn mark_shape_blocked(
                     let cell_x = (x_coords[c] + x_coords[c + 1]) / 2.0;
                     if shape.contains(cell_x, cell_y) {
                         layer_cells[r][c].blocked = true;
+                layer_cells[r][c].hard = true;
                         layer_cells[r][c].capacity = 0;
                     }
                 }

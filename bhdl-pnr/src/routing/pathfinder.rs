@@ -382,7 +382,7 @@ fn dijkstra_to_any(
             // components' pads.
             if gc.blocked
                     && !sinks.contains(&nbr)
-                    && (gc.contested_full || !gc.owners.contains(&Some(net.id)))
+                    && (gc.hard || gc.nc_blocked || !gc.owners.contains(&net.id))
                 {
                 continue;
             }
@@ -412,7 +412,7 @@ fn dijkstra_to_any(
                 // on a blocked cell only if it is this net's own pin terminal.
                 if gc.blocked
                     && !sinks.contains(&nbr)
-                    && (gc.contested_full || !gc.owners.contains(&Some(net.id)))
+                    && (gc.hard || gc.nc_blocked || !gc.owners.contains(&net.id))
                 {
                     continue;
                 }

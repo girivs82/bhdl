@@ -438,7 +438,9 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                 // blocked cell is truly unroutable (own terminals still
                 // enter via the sink exception).
                 for cell in pathfinder::route_cells(&via_grid, route) {
-                    via_grid.get_mut(cell).blocked = true;
+                    let c = via_grid.get_mut(cell);
+                    c.blocked = true;
+                    c.hard = true;
                 }
             }
         }
@@ -509,7 +511,9 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
             for (i, route) in final_routes.iter().enumerate() {
                 if !route.is_empty() && !ripped.contains(&i) {
                     for cell in pathfinder::route_cells(&rec_grid, route) {
-                        rec_grid.get_mut(cell).blocked = true;
+                        let c = rec_grid.get_mut(cell);
+                        c.blocked = true;
+                        c.hard = true;
                     }
                 }
             }
