@@ -302,9 +302,22 @@ pub fn build_board(
                 // (see memory: pds pins on NC pads = real evidence the
                 // index contract breaks on SOME footprint; find WHICH
                 // deterministically).
-                let _ = &numeric;
+                // Numeric order: def i pairs with the pad NUMBERED
+                // i+1 (entities declare pins in package-numbering
+                // order). SHIPPED ON A/B EVIDENCE at frozen seed 42:
+                // byte-identical output on every board whose pads were
+                // already index-aligned; strictly better on
+                // intent_system_demo (copper clearance+mask violations
+                // → CLEAN, silk 12→8) — the board whose footprint
+                // emission order genuinely diverges from numbering.
                 let chosen = by_name
                     .filter(|&i| !used[i])
+                    .or_else(|| {
+                        numeric
+                            .as_ref()
+                            .and_then(|ord| ord.get(di).copied())
+                            .filter(|&i| !used[i])
+                    })
                     .or_else(|| Some(di).filter(|&i| i < used.len() && !used[i]))
                     .or_else(|| used.iter().position(|u| !u));
                 match chosen {
