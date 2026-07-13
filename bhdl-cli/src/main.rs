@@ -1726,7 +1726,11 @@ async fn run_layout(
         Err(e) => return Err(anyhow::anyhow!("Board construction failed: {}", e)),
     };
     // Attach placement recipes from analyzer (vendor datasheet layouts)
-    board.placement_recipes = analysis.placement_recipes.clone();
+    board.placement_recipes = analysis
+        .placement_recipes
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
     if !board.placement_recipes.is_empty() {
         println!("  {} Placement recipes: {} entities", "✓".green(), board.placement_recipes.len());
     }

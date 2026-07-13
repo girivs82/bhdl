@@ -1035,7 +1035,11 @@ pub struct CircuitContext {
     pub is_status_indicator: bool,
     pub is_error_indicator: bool,
     /// Explicit parameters from component instantiation (e.g., Res(330Ω) -> {"": "330Ω"})
-    pub explicit_params: Option<HashMap<String, String>>,
+    // BTreeMap, not HashMap: inference iterates these to build the
+    // InferredParameter list, whose ORDER decides which duplicate wins at
+    // attribute stamping — HashMap order made netlists (and layouts)
+    // nondeterministic.
+    pub explicit_params: Option<std::collections::BTreeMap<String, String>>,
 }
 
 /// Generate E-series values (E12, E24, etc.)

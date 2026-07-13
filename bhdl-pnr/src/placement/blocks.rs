@@ -45,7 +45,7 @@ pub struct PlacementBlock {
 /// the exact datasheet coordinates are used instead of the netlist-driven heuristic.
 pub fn form_blocks(
     board: &Board,
-    placement_recipes: &HashMap<String, PlacementRecipe>,
+    placement_recipes: &std::collections::BTreeMap<String, PlacementRecipe>,
 ) -> Vec<PlacementBlock> {
     let mut blocks = Vec::new();
     let mut assigned: HashSet<usize> = HashSet::new();
@@ -387,7 +387,7 @@ fn find_recipe_for_block<'a>(
     anchor_name: &str,
     board: &Board,
     members: &[usize],
-    recipes: &'a HashMap<String, PlacementRecipe>,
+    recipes: &'a std::collections::BTreeMap<String, PlacementRecipe>,
 ) -> Option<&'a PlacementRecipe> {
     // Try matching by the anchor component's name or package/entity type
     // The recipe key is the entity name (e.g., "AP63205")

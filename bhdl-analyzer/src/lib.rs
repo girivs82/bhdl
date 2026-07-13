@@ -704,7 +704,7 @@ fn visit_node_for_component_inference(
                 
                 // Extract explicit parameters from the component instantiation
                 // Look for PARAM_ASSIGN_BLOCK which contains the parameters
-                let mut explicit_params = std::collections::HashMap::new();
+                let mut explicit_params = std::collections::BTreeMap::new();
                 if let Some(param_block) = node.children().find(|n| n.kind() == bhdl_ast::SyntaxKind::PARAM_ASSIGN_BLOCK) {
                     // Extract parameters from the block
                     for param_node in param_block.children() {
@@ -947,7 +947,7 @@ fn process_component_instantiation_v2(
     // Add explicit parameters to the circuit context
     if !extracted_params.is_empty() {
         log::debug!("Component {} has {} extracted parameters", component_type, extracted_params.len());
-        let mut explicit_params_map = std::collections::HashMap::new();
+        let mut explicit_params_map = std::collections::BTreeMap::new();
         for param in &extracted_params {
             let value_str = match &param.value {
                 ParameterValue::Real(v) => v.to_string(),
@@ -1220,7 +1220,7 @@ fn process_component_inst_common(
     // Add explicit parameters to the circuit context
     if !extracted_params.is_empty() {
         log::debug!("Component {} has {} extracted parameters", component_type, extracted_params.len());
-        let mut explicit_params_map = std::collections::HashMap::new();
+        let mut explicit_params_map = std::collections::BTreeMap::new();
         for param in &extracted_params {
             let value_str = match &param.value {
                 ParameterValue::Real(v) => v.to_string(),

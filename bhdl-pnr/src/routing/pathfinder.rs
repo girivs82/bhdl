@@ -227,6 +227,7 @@ fn shortest_path_3d(
             present_factor,
             allow_vias,
             &via_keepout,
+            &[],
         );
 
         match result {
@@ -452,6 +453,7 @@ fn dijkstra_to_any(
     present_factor: f64,
     allow_vias: bool,
     via_keepout: &[(f64, f64)],
+    banned_sites: &[(f64, f64)],
 ) -> Option<(Vec<CellCoord>, CellCoord)> {
     let mut dist: HashMap<CellCoord, f64> = HashMap::new();
     let mut prev: HashMap<CellCoord, CellCoord> = HashMap::new();
@@ -503,6 +505,19 @@ fn dijkstra_to_any(
                 {
                 continue;
             }
+            // Banned sites: cells where a previous recovery round's
+            // copper was amputated by the validator (dangling ends) —
+            // re-routing through them deterministically re-creates the
+            // same offender and ping-pongs to the round cap.
+            if !banned_sites.is_empty() && !sinks.contains(&nbr) {
+                let (bx, by) = grid.cell_center(nbr);
+                if banned_sites
+                    .iter()
+                    .any(|&(kx, ky)| (bx - kx).hypot(by - ky) < 0.01)
+                {
+                    continue;
+                }
+            }
 
             let edge_cost = cell_cost(gc, history_factor, present_factor);
             let width_factor = (net.required_trace_width_mm / 0.2).max(1.0);
@@ -540,7 +555,7 @@ fn dijkstra_to_any(
                 // clearance/hole_clearance against adjacent foreign
                 // pads.
                 let ring_clear = [cell, nbr].iter().all(|&c| {
-                    grid.planar_neighbors(c).into_iter().all(|(pn, _)| {
+                    grid.ring8(c).into_iter().all(|pn| {
                         let g = grid.get(pn);
                         !(g.hard
                             || g.nc_blocked
@@ -549,6 +564,15 @@ fn dijkstra_to_any(
                 });
                 if !ring_clear && !sinks.contains(&nbr) {
                     continue;
+                }
+                if !banned_sites.is_empty() && !sinks.contains(&nbr) {
+                    let (bx, by) = grid.cell_center(nbr);
+                    if banned_sites
+                        .iter()
+                        .any(|&(kx, ky)| (bx - kx).hypot(by - ky) < 0.01)
+                    {
+                        continue;
+                    }
                 }
                 // Drilled-hole spacing: no new via within hole-to-hole
                 // distance of one this route already committed (same-net
@@ -774,6 +798,8 @@ pub(crate) fn extend_route(
     history_factor: f64,
     present_factor: f64,
     banned_via_sites: &[(f64, f64)],
+    banned_sites: &[(f64, f64)],
+    full_width: bool,
 ) -> usize {
     let comp_idx: HashMap<ComponentId, usize> = board
         .components
@@ -782,8 +808,8 @@ pub(crate) fn extend_route(
         .map(|(i, c)| (c.id, i))
         .collect();
 
-    // Pin cells + exact pad coordinates.
-    let pin_targets: Vec<(CellCoord, (f64, f64))> = net
+    // Pin cells + exact pad coordinates + pad half-extent.
+    let pin_targets: Vec<(CellCoord, (f64, f64), f64)> = net
         .pins
         .iter()
         .filter_map(|&(comp_id, pin_id)| {
@@ -798,30 +824,71 @@ pub(crate) fn extend_route(
                 BoardSide::Top => 0,
                 BoardSide::Bottom => grid.num_layers - 1,
             };
-            Some((grid.point_to_cell(gx, gy, layer), (gx, gy)))
+            let half = pin
+                .pad
+                .as_ref()
+                .map(|p| p.width_mm.min(p.height_mm) / 2.0)
+                .unwrap_or(0.4);
+            Some((grid.point_to_cell(gx, gy, layer), (gx, gy), half))
         })
         .collect();
 
-    // Existing copper = source set; unreached pins = sinks.
+    // Existing copper = source set; unreached pins = sinks. "Reached"
+    // is GEOMETRY, not cell membership: route_cells includes a fat
+    // trunk's width ring, and a pin cell covered by the ring can still
+    // have no copper touching its pad (that unc was invisible here —
+    // extension thought there was nothing to do).
     let mut source_set: BTreeSet<CellCoord> = route_cells(grid, route);
     if source_set.is_empty() {
-        return 0; // nothing to extend from — the whole-net path applies
+        // From-scratch greedy mode: seed from the first pin and grow the
+        // tree sink by sink — no negotiation, so a lone fat net on a
+        // crowded grid can't overflow-rip itself the way the negotiated
+        // reroute does.
+        match pin_targets.first() {
+            Some((c, _, _)) => {
+                source_set.insert(*c);
+            }
+            None => return 0,
+        }
     }
+    let pad_connected = |px: f64, py: f64, half: f64| {
+        route.segments.iter().any(|sg| {
+            let (dx, dy) = (sg.end.0 - sg.start.0, sg.end.1 - sg.start.1);
+            let len2 = dx * dx + dy * dy;
+            let t = if len2 <= 1e-12 {
+                0.0
+            } else {
+                (((px - sg.start.0) * dx + (py - sg.start.1) * dy) / len2).clamp(0.0, 1.0)
+            };
+            let (cx, cy) = (sg.start.0 + t * dx, sg.start.1 + t * dy);
+            (px - cx).hypot(py - cy) < sg.width_mm / 2.0 + half - 0.001
+        }) || route
+            .vias
+            .iter()
+            .any(|v| (v.x - px).hypot(v.y - py) < half + 0.15)
+    };
     let mut remaining: BTreeSet<CellCoord> = pin_targets
         .iter()
-        .filter(|(c, _)| !source_set.contains(c))
-        .map(|(c, _)| *c)
+        .filter(|(_, (px, py), half)| !pad_connected(*px, *py, *half))
+        .map(|(c, _, _)| *c)
         .collect();
-    let share_width = crate::stackup::trace_width_for_current(
-        crate::stackup::current_for_trace_width(net.required_trace_width_mm)
-            / net.pins.len().max(1) as f64,
-        1.0,
-        10.0,
-    )
-    .max(0.15)
-    .min(net.required_trace_width_mm);
+    let share_width = if full_width {
+        // From-scratch trunks may end up carrying the whole rail; use
+        // the IPC width for the full current rather than a leaf share.
+        net.required_trace_width_mm
+    } else {
+        crate::stackup::trace_width_for_current(
+            crate::stackup::current_for_trace_width(net.required_trace_width_mm)
+                / net.pins.len().max(1) as f64,
+            1.0,
+            10.0,
+        )
+        .max(0.15)
+        .min(net.required_trace_width_mm)
+    };
 
     let mut reclaimed = 0usize;
+    let n_missing = remaining.len();
     let mut via_keepout: Vec<(f64, f64)> =
         route.vias.iter().map(|v| (v.x, v.y)).collect();
     via_keepout.extend_from_slice(banned_via_sites);
@@ -836,6 +903,7 @@ pub(crate) fn extend_route(
             present_factor,
             true, // vias allowed — recovery is exactly when they earn it
             &via_keepout,
+            banned_sites,
         );
         match result {
             Some((path, reached)) => {
@@ -864,7 +932,7 @@ pub(crate) fn extend_route(
                 route.segments.extend(segs);
                 route.vias.extend(vias);
                 // Pad-escape stub for the newly reached pin(s) at this cell.
-                for (c, (px, py)) in &pin_targets {
+                for (c, (px, py), _half) in &pin_targets {
                     if *c == reached {
                         let (cx, cy) = grid.cell_center(reached);
                         if (cx - px).hypot(cy - py) > 1e-6 {
@@ -889,5 +957,68 @@ pub(crate) fn extend_route(
             None => break,
         }
     }
+    if reclaimed < n_missing {
+        log::debug!(
+            "extend_route '{}': {}/{} sinks reclaimed ({} unreachable on the \
+             surviving-copper grid)",
+            net.name, reclaimed, n_missing, remaining.len()
+        );
+    }
     reclaimed
+}
+
+
+/// Count pins whose pad is geometrically touched by their net's copper
+/// (width-aware, same test extension recovery uses). This is the trial-
+/// selection currency: "non-empty route" counts a net with one surviving
+/// branch and 19 stranded pads as routed.
+pub(crate) fn count_connected_sinks(board: &Board, routes: &[Route]) -> usize {
+    let comp_idx: HashMap<ComponentId, usize> = board
+        .components
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.id, i))
+        .collect();
+    let mut connected = 0usize;
+    for (ni, net) in board.nets.iter().enumerate() {
+        let Some(route) = routes.get(ni) else { continue };
+        if route.is_empty() {
+            continue;
+        }
+        for &(comp_id, pin_id) in &net.pins {
+            let Some(&ci) = comp_idx.get(&comp_id) else { continue };
+            let comp = &board.components[ci];
+            let Some(pin) = comp.pins.iter().find(|p| p.pin_id == pin_id) else {
+                continue;
+            };
+            let cos_t = comp.theta.cos();
+            let sin_t = comp.theta.sin();
+            let px = comp.x + pin.dx * cos_t - pin.dy * sin_t;
+            let py = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+            let half = pin
+                .pad
+                .as_ref()
+                .map(|p| p.width_mm.min(p.height_mm) / 2.0)
+                .unwrap_or(0.4);
+            let hit = route.segments.iter().any(|sg| {
+                let (dx, dy) = (sg.end.0 - sg.start.0, sg.end.1 - sg.start.1);
+                let len2 = dx * dx + dy * dy;
+                let t = if len2 <= 1e-12 {
+                    0.0
+                } else {
+                    (((px - sg.start.0) * dx + (py - sg.start.1) * dy) / len2)
+                        .clamp(0.0, 1.0)
+                };
+                let (cx, cy) = (sg.start.0 + t * dx, sg.start.1 + t * dy);
+                (px - cx).hypot(py - cy) < sg.width_mm / 2.0 + half - 0.001
+            }) || route
+                .vias
+                .iter()
+                .any(|v| (v.x - px).hypot(v.y - py) < half + 0.15);
+            if hit {
+                connected += 1;
+            }
+        }
+    }
+    connected
 }

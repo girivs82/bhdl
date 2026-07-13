@@ -27,7 +27,10 @@ pub struct Board {
     /// Placement recipes from stdlib (vendor datasheet layout recommendations).
     /// The *rigid* placement form: absolute (dx, dy, rotation) offsets copied
     /// from datasheet reference layouts. When present, honored verbatim.
-    pub placement_recipes: std::collections::HashMap<String, bhdl_common::PlacementRecipe>,
+    // BTreeMap: find_recipe_for_block returns the FIRST matching recipe
+    // while iterating — HashMap order let hash randomness pick which
+    // recipe wins and made placement nondeterministic.
+    pub placement_recipes: std::collections::BTreeMap<String, bhdl_common::PlacementRecipe>,
     /// Layout constraints lowered from intent + interface constraints.
     /// The *flexible* placement/routing form: proximity, loop area, length
     /// match, etc. that the optimizer balances against other costs.
@@ -791,6 +794,9 @@ pub struct PnrResult {
 
 #[derive(Clone)]
 pub struct PnrMetrics {
+    /// Pins whose pad is geometrically touched by their net's copper —
+    /// the honest connectivity currency for trial selection.
+    pub connected_sinks: usize,
     pub hpwl_mm: f64,
     pub total_routed_length_mm: f64,
     pub via_count: usize,

@@ -2998,8 +2998,23 @@ pub fn populate_instance_attributes(
             if instance_name == handle_name {
                 log::debug!("Found inference data for handle '{}', component type: {}", handle_name, component.component_type);
                 
-                // Extract parameters from the component suggestion
-                for param in &component.parameters {
+                // Extract parameters from the component suggestion.
+                // Sort first: the Vec inherits HashMap iteration order
+                // from several inference sources, and stamping order
+                // decides which duplicate wins (override vs or_insert) —
+                // unsorted, netlists and layouts were nondeterministic.
+                let mut params_sorted: Vec<_> = component.parameters.iter().collect();
+                params_sorted.sort_by(|a, b| {
+                    a.name
+                        .cmp(&b.name)
+                        .then(
+                            b.confidence
+                                .partial_cmp(&a.confidence)
+                                .unwrap_or(std::cmp::Ordering::Equal),
+                        )
+                        .then_with(|| format!("{:?}", a.value).cmp(&format!("{:?}", b.value)))
+                });
+                for param in params_sorted {
                     let param_value = match &param.value {
                         ParameterValue::Resistance(r) => r.to_string(),
                         ParameterValue::Capacitance(c) => c.to_string(),

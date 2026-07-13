@@ -61,7 +61,7 @@ impl Forces {
 /// 4. Stamp block positions to components
 ///
 /// `seed` varies the block order for multi-trial exploration.
-pub fn initialize(board: &mut Board, seed: u64, placement_recipes: &std::collections::HashMap<String, bhdl_common::PlacementRecipe>) {
+pub fn initialize(board: &mut Board, seed: u64, placement_recipes: &std::collections::BTreeMap<String, bhdl_common::PlacementRecipe>) {
     let width = board.config.outline.width();
     let height = board.config.outline.height();
     let ec = board.config.edge_clearance_mm;
@@ -108,7 +108,13 @@ pub fn find_anchor(board: &Board) -> Option<usize> {
         }
     }
 
-    degree.into_iter().max_by_key(|(_, d)| *d).map(|(idx, _)| idx)
+    // Tie-break on lowest index: max_by_key over a HashMap resolves
+    // equal degrees by hash-iteration order, which varies per process
+    // and made the anchor (and the whole placement) nondeterministic.
+    degree
+        .into_iter()
+        .max_by_key(|&(idx, d)| (d, std::cmp::Reverse(idx)))
+        .map(|(idx, _)| idx)
 }
 
 /// Initialize only constrained components (Fixed, Edge, PreferRegion).

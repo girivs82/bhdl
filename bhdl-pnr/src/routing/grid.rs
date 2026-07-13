@@ -317,6 +317,30 @@ impl RoutingGrid {
         nbrs
     }
 
+    /// All 8 surrounding cells on the same layer, regardless of the
+    /// `allow_diagonal` routing setting. Via SITING must check diagonals
+    /// too: a foreign track on a diagonal neighbor (0.42mm at 0.3mm
+    /// pitch) is inside a via barrel's required clearance but invisible
+    /// to the 4-cardinal routing neighborhood.
+    pub fn ring8(&self, c: CellCoord) -> Vec<CellCoord> {
+        let mut out = Vec::with_capacity(8);
+        let max_r = self.rows();
+        let max_c = self.cols();
+        for dr in -1i64..=1 {
+            for dc in -1i64..=1 {
+                if dr == 0 && dc == 0 {
+                    continue;
+                }
+                let r = c.row as i64 + dr;
+                let co = c.col as i64 + dc;
+                if r >= 0 && co >= 0 && (r as usize) < max_r && (co as usize) < max_c {
+                    out.push(CellCoord { row: r as usize, col: co as usize, ..c });
+                }
+            }
+        }
+        out
+    }
+
     /// Vertical neighbors (through-via model: can reach any other layer).
     ///
     /// In a real PCB, a plated through-hole via connects all layers.

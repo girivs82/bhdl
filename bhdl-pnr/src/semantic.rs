@@ -631,7 +631,7 @@ pub fn build_board(
         components,
         nets,
         groups,
-        placement_recipes: std::collections::HashMap::new(), // populated by caller
+        placement_recipes: std::collections::BTreeMap::new(), // populated by caller
         // Net/signal constraints from interface `intf_const__*` attributes
         // (above); expansion-intent constraints appended by
         // `intent::lower_board_intents`.
