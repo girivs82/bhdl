@@ -225,42 +225,128 @@ pub fn build_board(
             .collect();
 
         let pins: Vec<PinPosition> = if let Some(ref fp) = footprint {
-            // Use ALL footprint pads as pin positions (authoritative source).
-            // Match pad index to module pin def by position for naming.
-            fp.pads.iter().enumerate()
-                .map(|(i, pad)| {
-                    // Try to get pin name from module definition
-                    let pin_name = pin_defs
-                        .get(i)
-                        .and_then(|&pid| netlist.pins.get(pid))
-                        .map(|p| p.name.clone())
-                        .unwrap_or_else(|| pad.pad_number.clone());
-                    PinPosition {
+            // PAIRING CONTRACT: comp.pins[i] must correspond to module
+            // pin_def[i] — net wiring later indexes comp.pins by the
+            // module pin-def index (resolve_connection). The old code
+            // paired pads to defs by RAW EMISSION ORDER; any footprint
+            // whose pad order differs from the entity's declaration
+            // order scrambled names AND nets (frontier dumps showed
+            // pins whose coordinates landed on someone else's NC pad).
+            //
+            // Pairing, strongest first:
+            //   1. name match (pad_number == pin name, case-insens.) —
+            //      passives ("1"/"2") and lettered pads (A/K).
+            //   2. numeric pad order: when every pad_number parses as a
+            //      number, def i pairs with pad number i+1 (entities
+            //      declare pins in package-numbering order — the
+            //      established convention).
+            //   3. emission order among still-unused pads.
+            // Unmatched pads (thermal/EP) append AFTER the defs with no
+            // net — they block copper but never steal a pin slot.
+            let to_geom = |pad: &bhdl_components::types::component::FootprintPad| {
+                crate::types::PadGeom {
+                    width_mm: pad.width,
+                    height_mm: pad.height,
+                    shape: match pad.shape {
+                        bhdl_components::types::component::PadShape::Circle => {
+                            crate::types::PadShapeKind::Circle
+                        }
+                        bhdl_components::types::component::PadShape::Oval => {
+                            crate::types::PadShapeKind::Oval
+                        }
+                        bhdl_components::types::component::PadShape::RoundedRectangle => {
+                            crate::types::PadShapeKind::RoundRect
+                        }
+                        _ => crate::types::PadShapeKind::Rect,
+                    },
+                    drill_mm: pad.drill_diameter,
+                }
+            };
+            let mut used = vec![false; fp.pads.len()];
+            let numeric: Option<Vec<usize>> = {
+                let mut idx: Vec<(usize, usize)> = Vec::new();
+                let mut ok = true;
+                for (i, pad) in fp.pads.iter().enumerate() {
+                    match pad.pad_number.parse::<usize>() {
+                        Ok(n) => idx.push((n, i)),
+                        Err(_) => {
+                            ok = false;
+                            break;
+                        }
+                    }
+                }
+                if ok {
+                    idx.sort();
+                    Some(idx.into_iter().map(|(_, i)| i).collect())
+                } else {
+                    None
+                }
+            };
+            let mut out: Vec<PinPosition> = Vec::new();
+            for (di, &pid) in pin_defs.iter().enumerate() {
+                let pname = netlist
+                    .pins
+                    .get(pid)
+                    .map(|p| p.name.clone())
+                    .unwrap_or_default();
+                let by_name = fp
+                    .pads
+                    .iter()
+                    .position(|p| p.pad_number.eq_ignore_ascii_case(&pname));
+                // ONLY the provably-safe layers ship: exact name match
+                // (pad_number == pin name — passives "1"/"2", lettered
+                // A/K), else the original emission-index pairing.
+                // Numeric reordering strategies measured worse-or-noise
+                // under nondeterministic trials — parked until seed
+                // determinism lands and pairing changes can be A/B'd
+                // (see memory: pds pins on NC pads = real evidence the
+                // index contract breaks on SOME footprint; find WHICH
+                // deterministically).
+                let _ = &numeric;
+                let chosen = by_name
+                    .filter(|&i| !used[i])
+                    .or_else(|| Some(di).filter(|&i| i < used.len() && !used[i]))
+                    .or_else(|| used.iter().position(|u| !u));
+                match chosen {
+                    Some(i) => {
+                        used[i] = true;
+                        let pad = &fp.pads[i];
+                        out.push(PinPosition {
+                            pin_id: PinId::default(),
+                            name: pname,
+                            dx: pad.x_position,
+                            dy: pad.y_position,
+                            net: None,
+                            pad: Some(to_geom(pad)),
+                        });
+                    }
+                    None => {
+                        // More defs than pads — keep index alignment
+                        // with a geometry-less placeholder.
+                        out.push(PinPosition {
+                            pin_id: PinId::default(),
+                            name: pname,
+                            dx: 0.0,
+                            dy: 0.0,
+                            net: None,
+                            pad: None,
+                        });
+                    }
+                }
+            }
+            for (i, pad) in fp.pads.iter().enumerate() {
+                if !used[i] {
+                    out.push(PinPosition {
                         pin_id: PinId::default(),
-                        name: pin_name,
+                        name: pad.pad_number.clone(),
                         dx: pad.x_position,
                         dy: pad.y_position,
                         net: None,
-                        pad: Some(crate::types::PadGeom {
-                            width_mm: pad.width,
-                            height_mm: pad.height,
-                            shape: match pad.shape {
-                                bhdl_components::types::component::PadShape::Circle => {
-                                    crate::types::PadShapeKind::Circle
-                                }
-                                bhdl_components::types::component::PadShape::Oval => {
-                                    crate::types::PadShapeKind::Oval
-                                }
-                                bhdl_components::types::component::PadShape::RoundedRectangle => {
-                                    crate::types::PadShapeKind::RoundRect
-                                }
-                                _ => crate::types::PadShapeKind::Rect,
-                            },
-                            drill_mm: pad.drill_diameter,
-                        }),
-                    }
-                })
-                .collect()
+                        pad: Some(to_geom(pad)),
+                    });
+                }
+            }
+            out
         } else {
             // Fallback: estimate pin positions
             estimate_pin_positions(&pin_defs, netlist, width, height)
