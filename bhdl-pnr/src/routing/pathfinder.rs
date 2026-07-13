@@ -195,6 +195,26 @@ fn shortest_path_3d(
     let mut source_set: HashSet<CellCoord> = HashSet::new();
     source_set.insert(source);
 
+    let total_sinks = remaining_sinks.len();
+    let mut unreached = 0usize;
+    // Per-path records for power-tree FLOW ANALYSIS: each Dijkstra path
+    // attaches one sink to the tree; a segment's current is the sum of
+    // the shares of every sink downstream of it. Sizing every segment
+    // at the RAIL total (the old behavior) demanded absurd widths
+    // (7.2mm for a 5A rail) that can never fit — real power trees
+    // taper: trunk wide, leaves thin. Per-pin draws are approximated as
+    // equal shares of the net current until per-pin solved currents are
+    // plumbed through (documented approximation).
+    struct PathRec {
+        cells: Vec<CellCoord>,
+        /// (parent path index, cell index within parent) where this
+        /// path attached; None = attached at the source pin itself.
+        parent: Option<(usize, usize)>,
+    }
+    let mut path_recs: Vec<PathRec> = Vec::new();
+    let mut cell_home: std::collections::HashMap<CellCoord, (usize, usize)> =
+        std::collections::HashMap::new();
+
     while !remaining_sinks.is_empty() {
         let result = dijkstra_to_any(
             grid,
@@ -210,16 +230,74 @@ fn shortest_path_3d(
         match result {
             Some((path, reached_sink)) => {
                 remaining_sinks.remove(&reached_sink);
-                // Add all cells in path to source set (Steiner approximation)
-                for &cell in &path {
+                // Attachment point: the first path cell already in the
+                // tree (paths start from the tree and end at the sink).
+                let parent = path.first().and_then(|c| cell_home.get(c)).copied();
+                let pidx = path_recs.len();
+                for (ci, &cell) in path.iter().enumerate() {
                     source_set.insert(cell);
+                    cell_home.entry(cell).or_insert((pidx, ci));
                 }
-                // Convert path to segments + vias
-                let (segs, vias) = path_to_segments(grid, &path, net.required_trace_width_mm);
-                all_segments.extend(segs);
-                all_vias.extend(vias);
+                path_recs.push(PathRec { cells: path.clone(), parent });
             }
-            None => break, // Unroutable — stop
+            // Multi-sink Dijkstra reaches ANY remaining sink — if it
+            // returns None, NO remaining sink is reachable from the
+            // tree, so there is nothing more to try this iteration.
+            None => {
+                unreached = remaining_sinks.len();
+                break;
+            }
+        }
+    }
+    if unreached > 0 && std::env::var("BHDL_PNR_DEBUG_NETS").is_ok() {
+        log::warn!(
+            "ROUTE '{}' width={:.2}mm: {}/{} sinks unreached (vias={})",
+            net.name, net.required_trace_width_mm,
+            unreached, total_sinks, allow_vias
+        );
+    }
+
+    // Flow analysis → tapered widths. downstream[p][i] = sinks served
+    // through path p at-or-after cell i = 1 (p's own sink) + every
+    // descendant path attached to p at index ≥ i, transitively.
+    let n_paths = path_recs.len();
+    let mut downstream: Vec<Vec<usize>> = path_recs
+        .iter()
+        .map(|r| vec![1usize; r.cells.len().max(1)])
+        .collect();
+    // Children contribute to the parent prefix [0..=attach_idx].
+    // Process children before parents is unnecessary if we iterate to a
+    // fixpoint over the (acyclic, forward-attached) structure: children
+    // always have HIGHER indices than their parents, so one reverse
+    // pass suffices.
+    for p in (0..n_paths).rev() {
+        let served: usize = *downstream[p].first().unwrap_or(&1);
+        if let Some((pp, pi)) = path_recs[p].parent {
+            for i in 0..=pi.min(downstream[pp].len().saturating_sub(1)) {
+                downstream[pp][i] += served;
+            }
+        }
+    }
+    let share = if total_sinks > 0 {
+        // Net current back-derived from the rail width the classifier
+        // computed; equal-share approximation per sink.
+        crate::stackup::current_for_trace_width(net.required_trace_width_mm)
+            / total_sinks as f64
+    } else {
+        0.0
+    };
+    for (p, rec) in path_recs.iter().enumerate() {
+        for w in 0..rec.cells.len().saturating_sub(1) {
+            let a = rec.cells[w];
+            let b = rec.cells[w + 1];
+            let seg_current = share * downstream[p][w + 1] as f64;
+            let width = crate::stackup::trace_width_for_current(seg_current, 1.0, 10.0)
+                .max(0.15)
+                .min(net.required_trace_width_mm);
+            let (segs, vias) =
+                path_to_segments(grid, &[a, b], width);
+            all_segments.extend(segs);
+            all_vias.extend(vias);
         }
     }
 

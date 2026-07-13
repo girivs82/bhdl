@@ -379,6 +379,20 @@ pub fn resolve_stackup(
 /// Trace width from current (IPC-2221 formula).
 ///
 /// Returns trace width in mm for given current, copper weight, and temperature rise.
+/// Inverse of [`trace_width_for_current`] at 1oz/10°C: the current a
+/// given width carries under the same IPC-2221 model. Used by the
+/// power-tree flow analysis to recover the net's rail current from the
+/// classifier's computed width.
+pub fn current_for_trace_width(width_mm: f64) -> f64 {
+    if width_mm <= 0.15 {
+        return 0.0;
+    }
+    let width_mils = width_mm / 0.0254;
+    let thickness_mils = 1.378; // 1oz
+    let area_mils2 = width_mils * thickness_mils;
+    0.024 * 10f64.powf(0.44) * area_mils2.powf(0.725)
+}
+
 pub fn trace_width_for_current(current_a: f64, copper_oz: f64, temp_rise_c: f64) -> f64 {
     if current_a <= 0.0 {
         return 0.15; // default minimum
