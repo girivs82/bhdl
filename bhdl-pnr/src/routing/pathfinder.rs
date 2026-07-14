@@ -174,7 +174,15 @@ fn shortest_path_3d(
                 BoardSide::Bottom => grid.num_layers - 1,
             };
 
-            Some((grid.point_to_cell(gx, gy, layer), (gx, gy)))
+            let natural = grid.point_to_cell(gx, gy, layer);
+            let cell = escape_cell(
+                grid,
+                net.id,
+                natural,
+                (gx, gy),
+                (gx - comp.x, gy - comp.y),
+            );
+            Some((cell, (gx, gy)))
         })
         .collect();
     let pin_cells: Vec<CellCoord> = pin_targets.iter().map(|(c, _)| *c).collect();
@@ -441,6 +449,64 @@ fn shortest_path_3d(
         path_parents,
         via_spans,
     }
+}
+
+/// ESCAPE STUB target selection: a fine-pitch pin's natural cell can
+/// be walled in — every planar neighbor inside some OTHER pad's halo —
+/// even though a clearance-true escape lane exists straight out along
+/// the pad axis (cell-granularity halo painting covers the lane's cell
+/// centers). When the natural cell has no passable approach, walk
+/// OUTWARD (component center → pad direction) to the first cell that
+/// is passable AND has a passable neighbor, and target THAT cell; the
+/// existing stub emission draws the pad→waypoint copper and the
+/// geometric validator polices it like any other segment (an illegal
+/// escape is amputated to honest unconnected).
+fn escape_cell(
+    grid: &RoutingGrid,
+    net_id: NetId,
+    natural: CellCoord,
+    pad_xy: (f64, f64),
+    outward: (f64, f64),
+) -> CellCoord {
+    let passable = |c: CellCoord| -> bool {
+        let g = grid.get(c);
+        !(g.hard || g.nc_blocked || (g.blocked && !g.owners.contains(&net_id)))
+    };
+    let has_open_neighbor = |c: CellCoord| -> bool {
+        grid.planar_neighbors(c).into_iter().any(|(n, _)| passable(n))
+    };
+    // Natural cell approachable? Keep it.
+    if has_open_neighbor(natural) {
+        return natural;
+    }
+    let len = (outward.0 * outward.0 + outward.1 * outward.1).sqrt();
+    if len < 1e-9 {
+        return natural;
+    }
+    let (ux, uy) = (outward.0 / len, outward.1 / len);
+    let mut t = 0.3f64;
+    while t <= 3.0 {
+        let c = grid.point_to_cell(pad_xy.0 + ux * t, pad_xy.1 + uy * t, natural.layer);
+        // The stub is drawn pad -> CELL CENTER: a center laterally off
+        // the escape axis makes a diagonal stub that clips the very
+        // neighbor pads we are escaping (validator amputates it, net
+        // loses). Only accept cells whose center sits ON the axis.
+        let (ccx, ccy) = grid.cell_center(c);
+        let lateral = ((ccx - pad_xy.0) * uy - (ccy - pad_xy.1) * ux).abs();
+        if lateral > 0.08 {
+            t += 0.3;
+            continue;
+        }
+        if c != natural && passable(c) && has_open_neighbor(c) {
+            log::debug!(
+                "escape stub: pin at ({:.2},{:.2}) walled in — waypoint {:.1}mm outward",
+                pad_xy.0, pad_xy.1, t
+            );
+            return c;
+        }
+        t += 0.3;
+    }
+    natural
 }
 
 /// Dijkstra from any source cell to any sink cell.
@@ -872,7 +938,15 @@ pub(crate) fn extend_route(
                 .as_ref()
                 .map(|p| p.width_mm.min(p.height_mm) / 2.0)
                 .unwrap_or(0.4);
-            Some((grid.point_to_cell(gx, gy, layer), (gx, gy), half))
+            let natural = grid.point_to_cell(gx, gy, layer);
+            let cell = escape_cell(
+                grid,
+                net.id,
+                natural,
+                (gx, gy),
+                (gx - comp.x, gy - comp.y),
+            );
+            Some((cell, (gx, gy), half))
         })
         .collect();
 
