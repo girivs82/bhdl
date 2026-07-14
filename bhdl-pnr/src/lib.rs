@@ -550,11 +550,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                 let mut ext_grid = RoutingGrid::build(&board);
                 for (j, route) in final_routes.iter().enumerate() {
                     if j != i && !route.is_empty() {
-                        for cell in pathfinder::route_cells(&ext_grid, route) {
-                            let c = ext_grid.get_mut(cell);
-                            c.blocked = true;
-                            c.hard = true;
-                        }
+                        pathfinder::block_route_geometry(&mut ext_grid, route, &board);
                     }
                 }
                 let mut route = final_routes[i].clone();
@@ -596,11 +592,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                 let mut rec_grid = RoutingGrid::build(&board);
                 for (j, route) in final_routes.iter().enumerate() {
                     if j != i && !route.is_empty() {
-                        for cell in pathfinder::route_cells(&rec_grid, route) {
-                            let c = rec_grid.get_mut(cell);
-                            c.blocked = true;
-                            c.hard = true;
-                        }
+                        pathfinder::block_route_geometry(&mut rec_grid, route, &board);
                     }
                 }
                 let rec_nets: Vec<PnrNet> = board
@@ -633,17 +625,31 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                     let mut greedy_grid = RoutingGrid::build(&board);
                     for (j, route) in final_routes.iter().enumerate() {
                         if j != i && !route.is_empty() {
-                            for cell in pathfinder::route_cells(&greedy_grid, route) {
-                                let c = greedy_grid.get_mut(cell);
-                                c.blocked = true;
-                                c.hard = true;
-                            }
+                            pathfinder::block_route_geometry(&mut greedy_grid, route, &board);
                         }
                     }
                     let mut fresh = Route::empty(final_routes[i].net_id);
+                    let banned_v: Vec<(f64, f64)> = banned_vias
+                        .iter()
+                        .filter(|(k, _)| *k == i)
+                        .map(|&(_, xy)| xy)
+                        .collect();
+                    let banned_d: Vec<(f64, f64)> = banned_dangles
+                        .iter()
+                        .filter(|(k, _)| *k == i)
+                        .map(|&(_, xy)| xy)
+                        .collect();
+                    // Share width, NOT the whole-rail IPC width: a
+                    // high-current rail's full width (7.19mm on this
+                    // corpus) is unroutable on a small board and
+                    // under-clears everything — the normal router
+                    // tapers per-segment by downstream share; the
+                    // greedy tree approximates with leaf shares.
+                    // (Trunk current concentration is the per-pin
+                    // flow-analysis follow-up.)
                     let got = pathfinder::extend_route(
                         &mut greedy_grid, &board.nets[i], &board, &mut fresh, 1.0, 1.0,
-                        &[], &[], true,
+                        &banned_v, &banned_d, false,
                     );
                     if got > 0 {
                         info!(
@@ -893,6 +899,12 @@ fn validate_and_rip(
                             continue;
                         }
                         if seg_hits_rect(sa.start, sa.end, p, gap) {
+                            log::debug!(
+                                "validator: track-vs-pad offender net '{}' seg {si} \
+                                 ({:.2},{:.2})-({:.2},{:.2}) w={:.2} vs pad at ({:.2},{:.2}) hx={:.2} hy={:.2}",
+                                board.nets[i].name, sa.start.0, sa.start.1, sa.end.0, sa.end.1,
+                                sa.width_mm, p.cx, p.cy, p.hx, p.hy
+                            );
                             offender = Some((i, Some(si)));
                             break 'scan;
                         }
@@ -1236,6 +1248,11 @@ fn validate_and_rip(
                                 // copper and the from-scratch reroute
                                 // often failed where an extension
                                 // succeeds.
+                                log::debug!(
+                                    "validator: track-vs-track offender '{}' seg ({:.2},{:.2})-({:.2},{:.2}) w={:.2} vs '{}' seg ({:.2},{:.2})-({:.2},{:.2}) w={:.2}",
+                                    board.nets[i].name, sa.start.0, sa.start.1, sa.end.0, sa.end.1, sa.width_mm,
+                                    board.nets[j].name, sb.start.0, sb.start.1, sb.end.0, sb.end.1, sb.width_mm
+                                );
                                 offender = Some(if wj <= wi {
                                     (j, Some(sbi))
                                 } else {

@@ -228,6 +228,7 @@ fn shortest_path_3d(
             allow_vias,
             &via_keepout,
             &[],
+            0,
         );
 
         match result {
@@ -454,6 +455,7 @@ fn dijkstra_to_any(
     allow_vias: bool,
     via_keepout: &[(f64, f64)],
     banned_sites: &[(f64, f64)],
+    clear_ring: usize,
 ) -> Option<(Vec<CellCoord>, CellCoord)> {
     let mut dist: HashMap<CellCoord, f64> = HashMap::new();
     let mut prev: HashMap<CellCoord, CellCoord> = HashMap::new();
@@ -504,6 +506,47 @@ fn dijkstra_to_any(
                     && (gc.hard || gc.nc_blocked || !gc.owners.contains(&net.id))
                 {
                 continue;
+            }
+            // Wide-trace clearance: grid halos are sized for the
+            // MINIMUM trace width; a trunk routed wider under-clears
+            // foreign pads by construction (the validator then rips the
+            // root span and the loop ping-pongs). Require a clear
+            // Chebyshev ring proportional to the extra half-width.
+            if clear_ring > 0 && !sinks.contains(&nbr) {
+                let mut ok = true;
+                'ring: for dr in -(clear_ring as i64)..=(clear_ring as i64) {
+                    for dc in -(clear_ring as i64)..=(clear_ring as i64) {
+                        if dr == 0 && dc == 0 {
+                            continue;
+                        }
+                        let rr = nbr.row as i64 + dr;
+                        let cc = nbr.col as i64 + dc;
+                        if rr < 0
+                            || cc < 0
+                            || rr as usize >= grid.rows()
+                            || cc as usize >= grid.cols()
+                        {
+                            ok = false; // wide copper would leave the board
+                            break 'ring;
+                        }
+                        let rc = CellCoord {
+                            row: rr as usize,
+                            col: cc as usize,
+                            ..nbr
+                        };
+                        let g = grid.get(rc);
+                        if g.hard
+                            || g.nc_blocked
+                            || (g.blocked && !g.owners.contains(&net.id))
+                        {
+                            ok = false;
+                            break 'ring;
+                        }
+                    }
+                }
+                if !ok {
+                    continue;
+                }
             }
             // Banned sites: cells where a previous recovery round's
             // copper was amputated by the validator (dangling ends) —
@@ -887,6 +930,15 @@ pub(crate) fn extend_route(
         .min(net.required_trace_width_mm)
     };
 
+    // Extra clearance cells for traces wider than the pitch's assumed
+    // minimum: pitch = min_trace + min_spacing, halos cover min_trace/2.
+    let pitch = if grid.x_coords.len() > 1 {
+        grid.x_coords[1] - grid.x_coords[0]
+    } else {
+        0.25
+    };
+    let extra_half = (share_width - board.config.min_trace_width_mm).max(0.0) / 2.0;
+    let clear_ring = (extra_half / pitch).ceil() as usize;
     let mut reclaimed = 0usize;
     let n_missing = remaining.len();
     let mut via_keepout: Vec<(f64, f64)> =
@@ -904,6 +956,7 @@ pub(crate) fn extend_route(
             true, // vias allowed — recovery is exactly when they earn it
             &via_keepout,
             banned_sites,
+            clear_ring,
         );
         match result {
             Some((path, reached)) => {
@@ -1021,4 +1074,74 @@ pub(crate) fn count_connected_sinks(board: &Board, routes: &[Route]) -> usize {
         }
     }
     connected
+}
+
+
+/// Hard-block a surviving route's copper GEOMETRY on a recovery grid:
+/// every cell whose center is within (seg_width/2 + spacing +
+/// min_trace/2) of a segment, plus via barrels. Cell-set blocking
+/// (route_cells) under-covers a wide trunk by up to half a pitch — a
+/// recovery route through the adjacent cell under-cleared it and the
+/// validator ripped the rebuild every round.
+pub(crate) fn block_route_geometry(
+    grid: &mut RoutingGrid,
+    route: &Route,
+    board: &Board,
+) {
+    let pitch = if grid.x_coords.len() > 1 {
+        grid.x_coords[1] - grid.x_coords[0]
+    } else {
+        0.25
+    };
+    let spacing = board.config.min_spacing_mm;
+    let min_half = board.config.min_trace_width_mm / 2.0;
+    for seg in &route.segments {
+        let margin = seg.width_mm / 2.0 + spacing + min_half;
+        let x_lo = seg.start.0.min(seg.end.0) - margin;
+        let x_hi = seg.start.0.max(seg.end.0) + margin;
+        let y_lo = seg.start.1.min(seg.end.1) - margin;
+        let y_hi = seg.start.1.max(seg.end.1) + margin;
+        let c_lo = grid.point_to_cell(x_lo, y_lo, seg.layer);
+        let c_hi = grid.point_to_cell(x_hi, y_hi, seg.layer);
+        for row in c_lo.row..=c_hi.row {
+            for col in c_lo.col..=c_hi.col {
+                let cc = CellCoord { layer: seg.layer, row, col };
+                let (cx, cy) = grid.cell_center(cc);
+                // point-to-segment distance
+                let (dx, dy) = (seg.end.0 - seg.start.0, seg.end.1 - seg.start.1);
+                let len2 = dx * dx + dy * dy;
+                let t = if len2 <= 1e-12 {
+                    0.0
+                } else {
+                    (((cx - seg.start.0) * dx + (cy - seg.start.1) * dy) / len2)
+                        .clamp(0.0, 1.0)
+                };
+                let (px, py) = (seg.start.0 + t * dx, seg.start.1 + t * dy);
+                if (cx - px).hypot(cy - py) < margin + pitch * 0.5 {
+                    let c = grid.get_mut(cc);
+                    c.blocked = true;
+                    c.hard = true;
+                }
+            }
+        }
+    }
+    let via_r = board.layer_stack.via.pad_mm / 2.0;
+    for v in &route.vias {
+        let margin = via_r + spacing + min_half;
+        for layer in 0..grid.num_layers {
+            let c_lo = grid.point_to_cell(v.x - margin, v.y - margin, layer);
+            let c_hi = grid.point_to_cell(v.x + margin, v.y + margin, layer);
+            for row in c_lo.row..=c_hi.row {
+                for col in c_lo.col..=c_hi.col {
+                    let cc = CellCoord { layer, row, col };
+                    let (cx, cy) = grid.cell_center(cc);
+                    if (cx - v.x).hypot(cy - v.y) < margin + pitch * 0.5 {
+                        let c = grid.get_mut(cc);
+                        c.blocked = true;
+                        c.hard = true;
+                    }
+                }
+            }
+        }
+    }
 }
