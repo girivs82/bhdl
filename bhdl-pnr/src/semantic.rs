@@ -513,6 +513,7 @@ pub fn build_board(
             // Board-level @net intents (rare); populated by synth step 4.1.
             layout_intents: Vec::new(),
             plane_layer: None,
+            plane_region: None,
         });
     }
 
@@ -655,12 +656,21 @@ pub fn build_board(
                     }
                 }
                 LayerKind::Power => {
-                    if let Some(pi) = next_power.next() {
+                    // SPLIT PLANE: up to 4 rails share one Power layer
+                    // in band regions (regions computed post-placement
+                    // from pin centroids — assign_plane_regions).
+                    let mut took = 0;
+                    while took < 4 {
+                        let Some(pi) = next_power.next() else { break };
                         nets[pi].plane_layer = Some(li);
                         log::info!(
-                            "plane assignment: {} -> '{}' (fattest unassigned rail, {:.2}mm IPC width)",
-                            layer.name, nets[pi].name, nets[pi].required_trace_width_mm
+                            "plane assignment: {} -> '{}' ({:.2}mm IPC width{})",
+                            layer.name,
+                            nets[pi].name,
+                            nets[pi].required_trace_width_mm,
+                            if took == 0 { "" } else { ", split region" }
                         );
+                        took += 1;
                     }
                 }
                 _ => {}

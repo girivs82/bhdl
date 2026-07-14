@@ -443,6 +443,13 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
             wl0, wl1, (wl0 - wl1) / wl0 * 100.0);
     }
 
+    // 4.7 Split-plane regions: several rails can share one Power layer;
+    // each gets a BAND along the axis of larger pin spread, boundaries
+    // at midpoints between rail centroids (computable only now — pin
+    // positions needed placement). Bands shrink 0.25mm per inner side
+    // so adjacent fills keep the 0.3mm zone clearance plus margin.
+    assign_plane_regions(&mut board);
+
     // 5. Final routing — two-pass strategy (route like a human)
     //    Pass 1: single-layer routing (no vias) — maximize what can be routed flat
     //    Pass 2: remaining unrouted nets get vias to escape to other layers
@@ -584,8 +591,14 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
             let mut vi = 0;
             while vi < r.vias.len() {
                 let v = &r.vias[vi];
-                let swallowed =
-                    output::kicad::plane_swallows(&board, &holes, v.x, v.y, via_r);
+                let swallowed = output::kicad::plane_swallows(
+                    &board,
+                    &holes,
+                    v.x,
+                    v.y,
+                    via_r,
+                    board.nets[i].plane_region,
+                );
                 if swallowed {
                     log::warn!(
                         "plane via drop at ({:.2},{:.2}) on '{}' swallowed by a merged \
@@ -892,6 +905,152 @@ fn segments_too_close(
 /// may intersect or under-clear. The cell model has deliberate blind
 /// spots (blocked pad-halo cells exempt from overflow), so the last
 /// word is geometry. Returns the indices of nets ripped this call.
+/// Compute split-plane band regions for Power layers shared by
+/// multiple rails. Single-net planes (and Ground planes) keep
+/// plane_region = None (whole layer).
+fn assign_plane_regions(board: &mut Board) {
+    use std::collections::BTreeMap;
+    let bw = board.config.outline.width();
+    let bh = board.config.outline.height();
+    let comp_idx: std::collections::HashMap<ComponentId, usize> = board
+        .components
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.id, i))
+        .collect();
+    // Group plane nets by layer.
+    let mut by_layer: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for (i, n) in board.nets.iter().enumerate() {
+        if let Some(l) = n.plane_layer {
+            by_layer.entry(l).or_default().push(i);
+        }
+    }
+    for (layer, nets_on) in by_layer {
+        if nets_on.len() < 2 {
+            continue; // whole-layer plane
+        }
+        // Rail centroids from pin positions.
+        let mut cents: Vec<(usize, f64, f64)> = Vec::new();
+        for &ni in &nets_on {
+            let (mut sx, mut sy, mut n) = (0.0, 0.0, 0usize);
+            for &(cid, pid) in &board.nets[ni].pins {
+                let Some(&ci) = comp_idx.get(&cid) else { continue };
+                let comp = &board.components[ci];
+                let Some(pin) = comp.pins.iter().find(|p| p.pin_id == pid) else {
+                    continue;
+                };
+                let cos_t = comp.theta.cos();
+                let sin_t = comp.theta.sin();
+                sx += comp.x + pin.dx * cos_t - pin.dy * sin_t;
+                sy += comp.y + pin.dx * sin_t + pin.dy * cos_t;
+                n += 1;
+            }
+            if n > 0 {
+                cents.push((ni, sx / n as f64, sy / n as f64));
+            } else {
+                cents.push((ni, bw / 2.0, bh / 2.0));
+            }
+        }
+        // Axis of larger centroid spread.
+        let spread = |vals: Vec<f64>| -> f64 {
+            let mn = vals.iter().cloned().fold(f64::INFINITY, f64::min);
+            let mx = vals.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            mx - mn
+        };
+        let x_spread = spread(cents.iter().map(|c| c.1).collect());
+        let y_spread = spread(cents.iter().map(|c| c.2).collect());
+        let use_x = x_spread >= y_spread;
+        cents.sort_by(|a, b| {
+            let (ka, kb) = if use_x { (a.1, b.1) } else { (a.2, b.2) };
+            ka.partial_cmp(&kb)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| board.nets[a.0].name.cmp(&board.nets[b.0].name))
+        });
+        // Band boundaries at centroid midpoints.
+        let full = if use_x { bw } else { bh };
+        let mut bounds = vec![0.0];
+        for w in cents.windows(2) {
+            let (a, b) = if use_x { (w[0].1, w[1].1) } else { (w[0].2, w[1].2) };
+            bounds.push((a + b) / 2.0);
+        }
+        bounds.push(full);
+        // SEPARABILITY GATE: bands only help when each rail's pins
+        // actually live in its band. A scattered rail (VCC everywhere)
+        // forced into a band strands its far pins — worse than letting
+        // it route as copper. Require ≥60% of every rail's pins within
+        // its band (±2mm slack); otherwise keep only the fattest rail
+        // on the whole layer and release the rest to the router.
+        let mut regions: Vec<(usize, (f64, f64, f64, f64))> = Vec::new();
+        for (k, &(ni, _, _)) in cents.iter().enumerate() {
+            let lo = bounds[k] + if k == 0 { 0.0 } else { 0.25 };
+            let hi = bounds[k + 1] - if k + 1 == cents.len() { 0.0 } else { 0.25 };
+            let region = if use_x {
+                (lo, 0.0, hi, bh)
+            } else {
+                (0.0, lo, bw, hi)
+            };
+            regions.push((ni, region));
+        }
+        let mut separable = true;
+        'gate: for &(ni, (rx0, ry0, rx1, ry1)) in &regions {
+            let (mut inside, mut total) = (0usize, 0usize);
+            for &(cid, pid) in &board.nets[ni].pins {
+                let Some(&ci) = comp_idx.get(&cid) else { continue };
+                let comp = &board.components[ci];
+                let Some(pin) = comp.pins.iter().find(|p| p.pin_id == pid) else {
+                    continue;
+                };
+                let cos_t = comp.theta.cos();
+                let sin_t = comp.theta.sin();
+                let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
+                let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+                total += 1;
+                if gx > rx0 - 2.0 && gx < rx1 + 2.0 && gy > ry0 - 2.0 && gy < ry1 + 2.0
+                {
+                    inside += 1;
+                }
+            }
+            if total > 0 && (inside as f64) < 0.6 * total as f64 {
+                info!(
+                    "split plane {layer}: NOT separable ('{}': {inside}/{total} pins \
+                     in band) — fattest rail keeps the whole layer",
+                    board.nets[ni].name
+                );
+                separable = false;
+                break 'gate;
+            }
+        }
+        if separable {
+            for &(ni, region) in &regions {
+                board.nets[ni].plane_region = Some(region);
+                info!(
+                    "split plane {}: '{}' region ({:.1},{:.1})-({:.1},{:.1})",
+                    layer, board.nets[ni].name, region.0, region.1, region.2, region.3
+                );
+            }
+        } else {
+            // Fattest (first assigned = widest) keeps the layer; others
+            // go back to the router.
+            let keep = nets_on
+                .iter()
+                .copied()
+                .max_by(|&a, &b| {
+                    board.nets[a]
+                        .required_trace_width_mm
+                        .partial_cmp(&board.nets[b].required_trace_width_mm)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| board.nets[b].name.cmp(&board.nets[a].name))
+                })
+                .unwrap();
+            for &ni in &nets_on {
+                if ni != keep {
+                    board.nets[ni].plane_layer = None;
+                }
+            }
+        }
+    }
+}
+
 /// Connect plane-assigned nets' SURFACE pads to their plane with a
 /// stub + via. Sites are searched deterministically on rings around the
 /// pad and checked geometrically against ALL existing copper (foreign
@@ -983,9 +1142,21 @@ fn plane_via_drops(board: &Board, final_routes: &mut [Route]) -> usize {
                 BoardSide::Top => 0,
                 BoardSide::Bottom => n_layers - 1,
             };
+            let region = net.plane_region;
             let site_ok = |x: f64, y: f64| -> bool {
                 if x < edge || y < edge || x > bw - edge || y > bh - edge {
                     return false;
+                }
+                // Split-plane: the via must land INSIDE the rail's
+                // region (plus via radius margin) or it has no plane.
+                if let Some((rx0, ry0, rx1, ry1)) = region {
+                    if x - via_r < rx0 + 0.05
+                        || y - via_r < ry0 + 0.05
+                        || x + via_r > rx1 - 0.05
+                        || y + via_r > ry1 - 0.05
+                    {
+                        return false;
+                    }
                 }
                 for p in &pads {
                     let same = p.net == Some(net.id);
@@ -1037,15 +1208,28 @@ fn plane_via_drops(board: &Board, final_routes: &mut [Route]) -> usize {
                 }
                 true
             };
+            // Ring search around the pad; for split planes ALSO around
+            // the pad's projection into the region (a pad outside its
+            // rail's band needs a longer stub to a legal site).
+            let mut anchors: Vec<(f64, f64)> = vec![(px, py)];
+            if let Some((rx0, ry0, rx1, ry1)) = region {
+                let qx = px.clamp(rx0 + via_r + 0.1, rx1 - via_r - 0.1);
+                let qy = py.clamp(ry0 + via_r + 0.1, ry1 - via_r - 0.1);
+                if (qx - px).abs() > 1e-9 || (qy - py).abs() > 1e-9 {
+                    anchors.push((qx, qy));
+                }
+            }
             let mut placed_at: Option<(f64, f64)> = None;
-            'rings: for ring in 0..6 {
+            'rings: for ring in 0..10 {
                 let r = 0.6 + ring as f64 * 0.35;
-                for k in 0..8 {
-                    let ang = k as f64 * std::f64::consts::FRAC_PI_4;
-                    let (x, y) = (px + r * ang.cos(), py + r * ang.sin());
-                    if site_ok(x, y) {
-                        placed_at = Some((x, y));
-                        break 'rings;
+                for &(ax, ay) in &anchors {
+                    for k in 0..8 {
+                        let ang = k as f64 * std::f64::consts::FRAC_PI_4;
+                        let (x, y) = (ax + r * ang.cos(), ay + r * ang.sin());
+                        if site_ok(x, y) {
+                            placed_at = Some((x, y));
+                            break 'rings;
+                        }
                     }
                 }
             }

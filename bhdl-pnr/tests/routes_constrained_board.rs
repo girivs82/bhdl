@@ -66,6 +66,7 @@ fn netted_board() -> Board {
         intent: None,
         layout_intents: vec![],
             plane_layer: None,
+            plane_region: None,
         };
 
     Board {

@@ -518,6 +518,11 @@ pub struct PnrNet {
     /// the router skips assigned nets (their copper is the emitted zone
     /// FILL) and surface pads get via drops.
     pub plane_layer: Option<usize>,
+    /// SPLIT-PLANE region (x0, y0, x1, y1): several rails share one
+    /// Power layer, each owning a band. None = whole layer (single-net
+    /// planes, all Ground planes). Computed AFTER placement from rail
+    /// pin centroids; fills clip to it, drops must land inside it.
+    pub plane_region: Option<(f64, f64, f64, f64)>,
     /// Legacy string-form intent (from the older `intent_routing_constraints`
     /// path). Retained during transition; superseded by typed constraints
     /// in `Board.constraints`.

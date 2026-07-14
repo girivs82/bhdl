@@ -98,6 +98,7 @@ mod tests {
             intent: None,
             layout_intents: vec![],
             plane_layer: None,
+            plane_region: None,
         }
     }
 

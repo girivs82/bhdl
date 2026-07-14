@@ -77,6 +77,7 @@ fn board_with_blocker() -> (Board, NetId, NetId) {
         intent: None,
         layout_intents: vec![],
             plane_layer: None,
+            plane_region: None,
         };
 
     let board = Board {
@@ -231,6 +232,7 @@ fn route_avoids_nc_pad_on_own_component() {
             intent: None,
             layout_intents: vec![],
             plane_layer: None,
+            plane_region: None,
         }],
         groups: vec![],
         placement_recipes: Default::default(),

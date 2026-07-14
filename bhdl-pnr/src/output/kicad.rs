@@ -273,9 +273,44 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
             .map(|l| l.name.as_str())
             .unwrap_or("In1.Cu");
         let n = net_no(net.id);
-        let _ = ni;
 
         let holes = plane_foreign_holes(board, routes, net.id);
+        // A region with NO same-net barrel inside would be an isolated
+        // dead island — skip its zone entirely (the rail's unc stays
+        // honest).
+        {
+            let (rx0, ry0, rx1, ry1) = net
+                .plane_region
+                .unwrap_or((0.0, 0.0, w, h));
+            let has_barrel = routes
+                .get(ni)
+                .map(|r| {
+                    r.vias
+                        .iter()
+                        .any(|v| v.x > rx0 && v.x < rx1 && v.y > ry0 && v.y < ry1)
+                })
+                .unwrap_or(false)
+                || board.components.iter().any(|comp| {
+                    let cos_t = comp.theta.cos();
+                    let sin_t = comp.theta.sin();
+                    comp.pins.iter().any(|pin| {
+                        pin.net == Some(net.id)
+                            && pin.pad.as_ref().and_then(|p| p.drill_mm).is_some()
+                            && {
+                                let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
+                                let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+                                gx > rx0 && gx < rx1 && gy > ry0 && gy < ry1
+                            }
+                    })
+                });
+            if !has_barrel {
+                log::warn!(
+                    "plane fill for '{}' has no same-net barrel in its region — zone skipped",
+                    net.name
+                );
+                continue;
+            }
+        }
 
         out.push_str(&format!(
             "  (zone (net {}) (net_name \"{}\") (layer \"{}\") (hatch edge 0.5)\n",
@@ -284,9 +319,15 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
         out.push_str("    (connect_pads (clearance 0.3))\n");
         out.push_str("    (min_thickness 0.25) (filled_areas_thickness no)\n");
         out.push_str("    (fill yes (thermal_gap 0.3) (thermal_bridge_width 0.4))\n");
-        out.push_str("    (polygon (pts\n");
         let m = 0.5;
-        for (x, y) in [(m, m), (w - m, m), (w - m, h - m), (m, h - m)] {
+        let (zx0, zy0, zx1, zy1) = match net.plane_region {
+            Some((rx0, ry0, rx1, ry1)) => {
+                (rx0.max(m), ry0.max(m), rx1.min(w - m), ry1.min(h - m))
+            }
+            None => (m, m, w - m, h - m),
+        };
+        out.push_str("    (polygon (pts\n");
+        for (x, y) in [(zx0, zy0), (zx1, zy0), (zx1, zy1), (zx0, zy1)] {
             out.push_str(&format!("      (xy {x} {y})\n"));
         }
         out.push_str("    ))\n");
@@ -297,7 +338,14 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
         // fill must be a single simple polygon — holes joined to the
         // outline through zero-width slits, exactly how KiCad's own
         // filler stores them.
-        let pts = fracture_fill(m, m, w - m, h - m, &holes);
+        // Split-plane: clip the fill to the rail's region.
+        let (fx0, fy0, fx1, fy1) = match net.plane_region {
+            Some((rx0, ry0, rx1, ry1)) => {
+                (rx0.max(m), ry0.max(m), rx1.min(w - m), ry1.min(h - m))
+            }
+            None => (m, m, w - m, h - m),
+        };
+        let pts = fracture_fill(fx0, fy0, fx1, fy1, &holes);
         out.push_str(&format!("    (filled_polygon (layer \"{}\") (pts\n", layer_name));
         for (x, y) in &pts {
             out.push_str(&format!("      (xy {x} {y})\n"));
@@ -671,11 +719,17 @@ pub(crate) fn plane_swallows(
     x: f64,
     y: f64,
     via_r: f64,
+    region: Option<(f64, f64, f64, f64)>,
 ) -> bool {
     let m = 0.5;
     let w = board.config.outline.width();
     let h = board.config.outline.height();
-    let (x0, y0, x1, y1) = (m, m, w - m, h - m);
+    let (x0, y0, x1, y1) = match region {
+        Some((rx0, ry0, rx1, ry1)) => {
+            (rx0.max(m), ry0.max(m), rx1.min(w - m), ry1.min(h - m))
+        }
+        None => (m, m, w - m, h - m),
+    };
     let slack = 0.05;
     // Outside the fill rect entirely = no plane contact.
     if x - via_r < x0 || x + via_r > x1 || y - via_r < y0 || y + via_r > y1 {
