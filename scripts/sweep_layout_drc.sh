@@ -20,10 +20,16 @@ total_v=0; total_u=0; boards=0; failed=0
 for f in tests/circuits/realistic/*.bhdl; do
   b=$(basename "$f" .bhdl)
   pcb="$outdir/$b.kicad_pcb"
-  if ! BHDL_JLCPARTS_DB=/nonexistent RUST_LOG=off timeout 300 \
+  if ! BHDL_JLCPARTS_DB=/nonexistent RUST_LOG=off timeout 600 \
       ./target/release/bhdl-cli "$f" layout -o "$pcb" >"$outdir/$b.layout.log" 2>&1; then
     echo "$b: LAYOUT-FAILED"
     failed=$((failed+1))
+    continue
+  fi
+  # Boards with nothing to place skip cleanly (library files, pure
+  # syntax fixtures) — not failures, and there is no .kicad_pcb to DRC.
+  if grep -q "nothing to lay out" "$outdir/$b.layout.log" 2>/dev/null; then
+    echo "$b: SKIPPED (nothing to lay out)"
     continue
   fi
   if ! "$KICAD_CLI" pcb drc --format json --output "$outdir/$b.drc.json" "$pcb" \

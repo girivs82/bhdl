@@ -418,11 +418,20 @@ fn generate_quad(
 
     let (z, g, x) = compute_zgx(l_min, s_max, w_min, cl, cs, cw, &j);
 
+    let pps = pins / 4; // pins per side
+
+    // Corner interaction: the IPC Z/G/X solution treats each side in
+    // isolation, but a quad's inner pad edge (G/2) can collide with the
+    // PERPENDICULAR side's outermost pad. Trim the pads from the inner
+    // side (raise G, keep Z) until corner clearance is >= 0.2mm —
+    // TQFP-32 shipped with 0.05mm corner gaps (KiCad clearance
+    // violations inside a single footprint).
+    let outermost = (pps as f64 - 1.0) / 2.0 * pitch + x / 2.0;
+    let g = g.max(2.0 * (outermost + 0.2));
+
     let pad_len = (z - g) / 2.0;
     let pad_wid = x;
     let center = (z + g) / 4.0;
-
-    let pps = pins / 4; // pins per side
     let mut pads = Vec::with_capacity(pins);
 
     // Left side (top to bottom)

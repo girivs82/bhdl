@@ -1715,6 +1715,7 @@ async fn run_layout(
     let mut board = match board_result {
         Ok(b) => b,
         Err(e) if e.to_string().contains("no instances")
+            || e.to_string().contains("no top-level module")
             || e.to_string().contains("EmptyNetlist")
             || format!("{e:?}").contains("EmptyNetlist") =>
         {

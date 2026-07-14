@@ -81,7 +81,23 @@ pub fn place_and_route_best_of(
                 "Trial {} is new best: {} connected sink(s), HPWL={:.1}mm",
                 trial + 1, result.metrics.connected_sinks, result.metrics.hpwl_mm
             );
+            let total_sinks: usize = result
+                .board
+                .nets
+                .iter()
+                .filter(|n| n.pins.len() >= 2)
+                .map(|n| n.pins.len())
+                .sum();
+            let perfect = result.metrics.connected_sinks >= total_sinks
+                && result.drc_violations.is_empty();
             best = Some(result);
+            if perfect {
+                info!(
+                    "Trial {} fully connected with no DRC — skipping remaining trials",
+                    trial + 1
+                );
+                break;
+            }
         }
     }
 
@@ -597,76 +613,54 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                 let wb = board.nets[b].required_trace_width_mm;
                 wb.partial_cmp(&wa).unwrap_or(std::cmp::Ordering::Equal).then(a.cmp(&b))
             });
-            for &i in &whole_sorted {
-                let mut rec_grid = RoutingGrid::build(&board);
-                for (j, route) in final_routes.iter().enumerate() {
-                    if j != i && !route.is_empty() {
-                        pathfinder::block_route_geometry(&mut rec_grid, route, &board);
+            // One grid for the whole round: every net in `whole` is
+            // EMPTY (nothing of its own to exclude), so the blocked set
+            // is identical — rebuilding the grid per net was the uno
+            // board's 10-minute recovery. Copper committed by earlier
+            // nets in the round is blocked incrementally.
+            let mut rec_grid = if whole_sorted.is_empty() {
+                None
+            } else {
+                let mut g = RoutingGrid::build(&board);
+                for route in final_routes.iter() {
+                    if !route.is_empty() {
+                        pathfinder::block_route_geometry(&mut g, route, &board);
                     }
                 }
-                let rec_nets: Vec<PnrNet> = board
-                    .nets
+                Some(g)
+            };
+            for &i in &whole_sorted {
+                // Sequential greedy per net on ONE shared round grid:
+                // negotiation is pointless when everything else is
+                // hard-blocked and nets commit one at a time — and the
+                // per-net grid rebuild + 100-iteration negotiated
+                // reroute was the uno board's 10-minute recovery.
+                // Widths are leaf shares (whole-rail IPC width is
+                // unroutable and under-clears; per-pin flow analysis
+                // is the width-honesty follow-up).
+                let rec_grid = rec_grid.as_mut().unwrap();
+                let mut fresh = Route::empty(final_routes[i].net_id);
+                let banned_v: Vec<(f64, f64)> = banned_vias
                     .iter()
-                    .enumerate()
-                    .map(|(k, net)| {
-                        if k == i {
-                            net.clone()
-                        } else {
-                            PnrNet { pins: Vec::new(), ..net.clone() }
-                        }
-                    })
+                    .filter(|(k, _)| *k == i)
+                    .map(|&(_, xy)| xy)
                     .collect();
-                let rec_routes = pathfinder::pathfinder_route(
-                    &mut rec_grid, &rec_nets, &board, 100, 1.0, 1.0, true,
+                let banned_d: Vec<(f64, f64)> = banned_dangles
+                    .iter()
+                    .filter(|(k, _)| *k == i)
+                    .map(|&(_, xy)| xy)
+                    .collect();
+                let got = pathfinder::extend_route(
+                    rec_grid, &board.nets[i], &board, &mut fresh, 1.0, 1.0,
+                    &banned_v, &banned_d, false,
                 );
-                if !rec_routes[i].is_empty() {
+                if got > 0 {
                     info!(
-                        "recovery: rerouted whole net '{}' ({} segments)",
-                        board.nets[i].name,
-                        rec_routes[i].segments.len()
+                        "recovery: greedy reroute of '{}' reached {got} sink(s)",
+                        board.nets[i].name
                     );
-                    final_routes[i] = rec_routes[i].clone();
-                } else {
-                    // Negotiated reroute overflow-ripped itself: greedy
-                    // from-scratch extension, full trunk width, vias
-                    // allowed. Partial connectivity beats an empty net;
-                    // the validator still polices whatever it builds.
-                    let mut greedy_grid = RoutingGrid::build(&board);
-                    for (j, route) in final_routes.iter().enumerate() {
-                        if j != i && !route.is_empty() {
-                            pathfinder::block_route_geometry(&mut greedy_grid, route, &board);
-                        }
-                    }
-                    let mut fresh = Route::empty(final_routes[i].net_id);
-                    let banned_v: Vec<(f64, f64)> = banned_vias
-                        .iter()
-                        .filter(|(k, _)| *k == i)
-                        .map(|&(_, xy)| xy)
-                        .collect();
-                    let banned_d: Vec<(f64, f64)> = banned_dangles
-                        .iter()
-                        .filter(|(k, _)| *k == i)
-                        .map(|&(_, xy)| xy)
-                        .collect();
-                    // Share width, NOT the whole-rail IPC width: a
-                    // high-current rail's full width (7.19mm on this
-                    // corpus) is unroutable on a small board and
-                    // under-clears everything — the normal router
-                    // tapers per-segment by downstream share; the
-                    // greedy tree approximates with leaf shares.
-                    // (Trunk current concentration is the per-pin
-                    // flow-analysis follow-up.)
-                    let got = pathfinder::extend_route(
-                        &mut greedy_grid, &board.nets[i], &board, &mut fresh, 1.0, 1.0,
-                        &banned_v, &banned_d, false,
-                    );
-                    if got > 0 {
-                        info!(
-                            "recovery: greedy from-scratch reroute of '{}' reached {got} sink(s)",
-                            board.nets[i].name
-                        );
-                        final_routes[i] = fresh;
-                    }
+                    final_routes[i] = fresh;
+                    pathfinder::block_route_geometry(rec_grid, &final_routes[i], &board);
                 }
             }
         }
