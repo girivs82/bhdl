@@ -377,6 +377,10 @@ pub struct Component {
     pub refdes: String,
     pub width_mm: f64,
     pub height_mm: f64,
+    /// Copper-envelope center offset from the component origin, in
+    /// LOCAL (unrotated) coordinates. Zero for symmetric packages.
+    pub bbox_dx: f64,
+    pub bbox_dy: f64,
     pub pins: Vec<PinPosition>,
     pub side: BoardSide,
     pub group: Option<GroupId>,
@@ -411,6 +415,20 @@ impl Component {
             self.width_mm * cos_t + self.height_mm * sin_t,
             self.width_mm * sin_t + self.height_mm * cos_t,
         )
+    }
+
+    /// Copper envelope in GLOBAL coordinates: (center_x, center_y,
+    /// half_w, half_h). Asymmetric packages (offset tabs, one-sided
+    /// pads) have an envelope center displaced from the component
+    /// origin — clamping/overlap tests that assume a centered bbox
+    /// under-protect the far side (the pad-at-board-edge family).
+    pub fn envelope(&self) -> (f64, f64, f64, f64) {
+        let cos_t = self.theta.cos();
+        let sin_t = self.theta.sin();
+        let cx = self.x + self.bbox_dx * cos_t - self.bbox_dy * sin_t;
+        let cy = self.y + self.bbox_dx * sin_t + self.bbox_dy * cos_t;
+        let (rw, rh) = self.rotated_bbox();
+        (cx, cy, rw / 2.0, rh / 2.0)
     }
 }
 
@@ -457,6 +475,12 @@ pub struct PinPosition {
     /// or imported KiCad footprint). None only on the estimated-pin
     /// fallback path — the exporter then emits a visibly-default pad.
     pub pad: Option<PadGeom>,
+    /// True when the footprint had no pad slot for this pin (entity
+    /// declares more pins than the package has pads). Unplaced pins emit
+    /// NO copper — stacked default pads at the footprint origin read as
+    /// shorting_items to the oracle; an honest unconnected beats an
+    /// invisible short.
+    pub unplaced: bool,
 }
 
 /// Pad geometry carried through to fabrication output.

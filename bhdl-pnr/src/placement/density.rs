@@ -411,10 +411,12 @@ fn add_pairwise_repulsion(forces: &mut Forces, board: &Board) -> usize {
             let a = &board.components[i];
             let b = &board.components[j];
 
-            let dx = b.x - a.x;
-            let dy = b.y - a.y;
-            let min_dx = (a.width_mm + b.width_mm) / 2.0 + clearance;
-            let min_dy = (a.height_mm + b.height_mm) / 2.0 + clearance;
+            let (acx, acy, ahw, ahh) = a.envelope();
+            let (bcx, bcy, bhw, bhh) = b.envelope();
+            let dx = bcx - acx;
+            let dy = bcy - acy;
+            let min_dx = ahw + bhw + clearance;
+            let min_dy = ahh + bhh + clearance;
 
             let overlap_x = (min_dx - dx.abs()).max(0.0);
             let overlap_y = (min_dy - dy.abs()).max(0.0);
@@ -484,7 +486,9 @@ mod tests {
                 theta: 0.0,
                 density_inflation: 1.0,
                 layout_intents: vec![],
-            }
+            bbox_dx: 0.0,
+            bbox_dy: 0.0,
+        }
         }).collect();
 
         Board {

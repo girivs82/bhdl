@@ -157,11 +157,14 @@ pub fn adam_step(
                 comp.y -= config.position_lr * step_y;
                 comp.theta -= config.rotation_lr * step_t;
 
-                // Clamp to board (account for component half-width so edges stay inside)
-                let hw = comp.width_mm / 2.0;
-                let hh = comp.height_mm / 2.0;
-                comp.x = comp.x.clamp(ec + hw, board_w - ec - hw);
-                comp.y = comp.y.clamp(ec + hh, board_h - ec - hh);
+                // Clamp the copper ENVELOPE to the board (rotation- and
+                // offset-aware; asymmetric packages have copper the
+                // origin-centered clamp never saw).
+                let (ecx, ecy, hw, hh) = comp.envelope();
+                let nx = ecx.clamp(ec + hw, board_w - ec - hw);
+                let ny = ecy.clamp(ec + hh, board_h - ec - hh);
+                comp.x += nx - ecx;
+                comp.y += ny - ecy;
             }
         }
     }

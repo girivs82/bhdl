@@ -84,8 +84,8 @@ mod tests {
             width_mm: 10.0,
             height_mm: 10.0,
             pins: vec![
-                PinPosition { pin_id: vcc, name: "VCC".into(), dx: 0.0, dy: 0.0, net: None, pad: None },
-                PinPosition { pin_id: gnd1, name: "GND1".into(), dx: 2.0, dy: 0.0, net: None, pad: None },
+                PinPosition { pin_id: vcc, name: "VCC".into(), dx: 0.0, dy: 0.0, net: None, pad: None, unplaced: false },
+                PinPosition { pin_id: gnd1, name: "GND1".into(), dx: 2.0, dy: 0.0, net: None, pad: None, unplaced: false },
             ],
             side: BoardSide::Top,
             group: None,
@@ -97,6 +97,8 @@ mod tests {
             theta: 0.0,
             density_inflation: 1.0,
             layout_intents: vec![],
+            bbox_dx: 0.0,
+            bbox_dy: 0.0,
         };
 
         let cap_id = comp_keys.insert(());
@@ -109,8 +111,8 @@ mod tests {
             width_mm: 1.0,
             height_mm: 0.5,
             pins: vec![
-                PinPosition { pin_id: c1, name: "1".into(), dx: -0.5, dy: 0.0, net: None, pad: None },
-                PinPosition { pin_id: c2, name: "2".into(), dx: 0.5, dy: 0.0, net: None, pad: None },
+                PinPosition { pin_id: c1, name: "1".into(), dx: -0.5, dy: 0.0, net: None, pad: None, unplaced: false },
+                PinPosition { pin_id: c2, name: "2".into(), dx: 0.5, dy: 0.0, net: None, pad: None, unplaced: false },
             ],
             side: BoardSide::Top,
             group: None,
@@ -129,6 +131,8 @@ mod tests {
                 loop_area_max_mm2: 1.5,
                 proximity_max_mm: 2.0,
             }],
+            bbox_dx: 0.0,
+            bbox_dy: 0.0,
         };
 
         let g = group_keys.insert(());

@@ -157,6 +157,12 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
         ));
 
         for pin in &comp.pins {
+            // Unplaced pins (no pad slot in the package) emit NO copper:
+            // stacked placeholder pads at the origin shipped as
+            // shorting_items. Their nets show honestly unconnected.
+            if pin.unplaced {
+                continue;
+            }
             // Real geometry when the footprint source provided it; a
             // visibly-default 0.5mm square only on the estimated-pin
             // fallback path.

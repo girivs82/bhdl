@@ -224,6 +224,8 @@ mod tests {
             theta: 0.0,
             density_inflation: 1.0,
             layout_intents: vec![],
+            bbox_dx: 0.0,
+            bbox_dy: 0.0,
         };
         let _ = &mut pk;
         let board = Board {

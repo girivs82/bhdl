@@ -54,18 +54,17 @@ fn board_with_blocker() -> (Board, NetId, NetId) {
         theta: 0.0,
         density_inflation: 1.0,
         layout_intents: vec![],
-    };
+            bbox_dx: 0.0,
+            bbox_dy: 0.0,
+        };
 
     let comp_a = mk(a, "A", 5.0, 10.0, vec![PinPosition {
-        pin_id: a1, name: "1".into(), dx: 0.0, dy: 0.0, net: Some(sig), pad: pad(1.0, 1.0),
-    }]);
+        pin_id: a1, name: "1".into(), dx: 0.0, dy: 0.0, net: Some(sig), pad: pad(1.0, 1.0), unplaced: false }]);
     let comp_b = mk(b, "B", 25.0, 10.0, vec![PinPosition {
-        pin_id: b1, name: "1".into(), dx: 0.0, dy: 0.0, net: Some(sig), pad: pad(1.0, 1.0),
-    }]);
+        pin_id: b1, name: "1".into(), dx: 0.0, dy: 0.0, net: Some(sig), pad: pad(1.0, 1.0), unplaced: false }]);
     // The blocker: a 3×3 mm foreign pad dead-center on the A→B line.
     let comp_m = mk(m, "M", 15.0, 10.0, vec![PinPosition {
-        pin_id: m1, name: "1".into(), dx: 0.0, dy: 0.0, net: Some(other), pad: pad(3.0, 3.0),
-    }]);
+        pin_id: m1, name: "1".into(), dx: 0.0, dy: 0.0, net: Some(other), pad: pad(3.0, 3.0), unplaced: false }]);
 
     let mk_net = |id, name: &str, pins: Vec<(ComponentId, PinId)>| PnrNet {
         id,
@@ -195,23 +194,22 @@ fn route_avoids_nc_pad_on_own_component() {
         theta,
         density_inflation: 1.0,
         layout_intents: vec![],
-    };
+            bbox_dx: 0.0,
+            bbox_dy: 0.0,
+        };
 
     // Source far below; sink K and NC pad 3 mimic the SOT-23 layout:
     // K at dx −0.925, pad 3 at dx +0.925 — 1.85 mm apart with 1.35×0.5
     // pads, so their clearance halos overlap between them. Rotated 90°.
     let comp_a = mk(a, "A", 15.0, 3.0, 0.0, vec![PinPosition {
-        pin_id: a1, name: "1".into(), dx: 0.0, dy: 0.0, net: Some(sig), pad: pad(1.0, 1.0),
-    }]);
+        pin_id: a1, name: "1".into(), dx: 0.0, dy: 0.0, net: Some(sig), pad: pad(1.0, 1.0), unplaced: false }]);
     let comp_m = mk(m, "M", 15.0, 12.0, std::f64::consts::FRAC_PI_2, vec![
         PinPosition {
             pin_id: mk_pin, name: "K".into(), dx: -0.925, dy: 0.0,
-            net: Some(sig), pad: pad(1.35, 0.5),
-        },
+            net: Some(sig), pad: pad(1.35, 0.5), unplaced: false },
         PinPosition {
             pin_id: m3, name: "3".into(), dx: 0.925, dy: 0.0,
-            net: None, pad: pad(1.35, 0.5),
-        },
+            net: None, pad: pad(1.35, 0.5), unplaced: false },
     ]);
 
     let board = Board {

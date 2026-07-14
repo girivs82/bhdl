@@ -189,6 +189,20 @@ pub fn build_board(
             continue;
         }
 
+        // Pin count drives the default-package fit (computed before the
+        // full pin_defs vec because package resolution needs it first).
+        let pin_defs_count = module_def
+            .pins
+            .iter()
+            .filter(|&&pid| {
+                netlist
+                    .pins
+                    .get(pid)
+                    .map(|p| !p.is_virtual)
+                    .unwrap_or(false)
+            })
+            .count();
+
         // Resolve package string
         let package = config
             .package_overrides
@@ -197,7 +211,7 @@ pub fn build_board(
             .or_else(|| instance.attributes.get("package").cloned())
             .unwrap_or_else(|| {
                 let cat = categorize_component(&module_def.name, &instance.attributes);
-                default_package_for_category(&cat)
+                default_package_for_category(&cat, pin_defs_count)
             });
 
         // Generate footprint via IPC-7351B
@@ -205,10 +219,10 @@ pub fn build_board(
             .map(|family| ipc7351::generate_footprint(&family, config.density_level));
 
         // Use full footprint extent (body + pad protrusion), not just body
-        let (width, height) = footprint
+        let (width, height, bbox_dx, bbox_dy) = footprint
             .as_ref()
             .map(|fp| footprint_extent(fp))
-            .unwrap_or((5.0, 5.0));
+            .unwrap_or((5.0, 5.0, 0.0, 0.0));
 
         // Build pin positions from footprint pads
         let pin_defs: Vec<NlPinId> = module_def
@@ -331,11 +345,21 @@ pub fn build_board(
                             dy: pad.y_position,
                             net: None,
                             pad: Some(to_geom(pad)),
+                            unplaced: false,
                         });
                     }
                     None => {
-                        // More defs than pads — keep index alignment
-                        // with a geometry-less placeholder.
+                        // More defs than pads: the package cannot carry
+                        // this entity. Loud error + unplaced marker —
+                        // stacked placeholder pads at the origin used to
+                        // ship as shorting_items; an honest unconnected
+                        // pin is the truthful failure mode.
+                        log::error!(
+                            "entity '{}' pin '{}' has no pad slot in package '{}' \
+                             ({} pins > {} pads) — pin left unplaced (no copper)",
+                            module_def.name, pname, package,
+                            pin_defs.len(), fp.pads.len()
+                        );
                         out.push(PinPosition {
                             pin_id: PinId::default(),
                             name: pname,
@@ -343,6 +367,7 @@ pub fn build_board(
                             dy: 0.0,
                             net: None,
                             pad: None,
+                            unplaced: true,
                         });
                     }
                 }
@@ -356,7 +381,8 @@ pub fn build_board(
                         dy: pad.y_position,
                         net: None,
                         pad: Some(to_geom(pad)),
-                    });
+                            unplaced: false,
+                        });
                 }
             }
             out
@@ -401,6 +427,8 @@ pub fn build_board(
             package,
             width_mm: width,
             height_mm: height,
+            bbox_dx,
+            bbox_dy,
             pins,
             side: BoardSide::Top,
             group: None,
@@ -957,9 +985,9 @@ fn extract_groups(
 ///
 /// For gull-wing packages (SOIC, SOT), pads extend beyond the IC body.
 /// The component outline should encompass everything.
-fn footprint_extent(fp: &bhdl_components::ComponentFootprint) -> (f64, f64) {
+fn footprint_extent(fp: &bhdl_components::ComponentFootprint) -> (f64, f64, f64, f64) {
     if fp.pads.is_empty() {
-        return (fp.body_width, fp.body_height);
+        return (fp.body_width, fp.body_height, 0.0, 0.0);
     }
 
     let mut x_min = -fp.body_width / 2.0;
@@ -974,7 +1002,15 @@ fn footprint_extent(fp: &bhdl_components::ComponentFootprint) -> (f64, f64) {
         y_max = y_max.max(pad.y_position + pad.height / 2.0);
     }
 
-    (x_max - x_min, y_max - y_min)
+    // (w, h, center offset) — dropping the offset let asymmetric
+    // packages (offset tabs) keep copper outside the assumed centered
+    // envelope.
+    (
+        x_max - x_min,
+        y_max - y_min,
+        (x_min + x_max) / 2.0,
+        (y_min + y_max) / 2.0,
+    )
 }
 
 /// Check if an instance is a power/ground symbol (not a physical component).
@@ -1049,16 +1085,30 @@ fn category_prefix(category: &str) -> String {
     .to_string()
 }
 
-fn default_package_for_category(category: &str) -> String {
+fn default_package_for_category(category: &str, pin_count: usize) -> String {
+    // Grow the default to FIT the pin count: a class default smaller
+    // than the entity's pin list leaves surplus pins unplaced (no
+    // copper) — the honest failure, but a fitting default avoids it.
+    let ic_by_pins = |n: usize| -> &'static str {
+        match n {
+            0..=8 => "SOIC-8",
+            9..=14 => "SOIC-14",
+            15..=16 => "SOIC-16",
+            17..=32 => "TQFP-32",
+            _ => "TQFP-64",
+        }
+    };
     match category {
         "resistor" | "capacitor" | "ferrite_bead" => "0603",
         "inductor" => "1210",
-        "diode" | "led" | "tvs_diode" => "SOT-23",
-        "voltage_regulator" => "SOT-223",
-        "opamp" | "buffer" => "SOIC-8",
+        "diode" | "led" | "tvs_diode" if pin_count <= 3 => "SOT-23",
+        "diode" | "led" | "tvs_diode" => "SOT-23-6",
+        "voltage_regulator" if pin_count <= 4 => "SOT-223",
+        "voltage_regulator" if pin_count <= 5 => "SOT-23-5",
+        "voltage_regulator" if pin_count <= 6 => "SOT-23-6",
+        "voltage_regulator" => ic_by_pins(pin_count),
         "microcontroller" => "TQFP-64",
-        "connector" => "SOIC-8", // placeholder
-        _ => "SOIC-8",
+        _ => ic_by_pins(pin_count),
     }
     .to_string()
 }
@@ -1093,7 +1143,8 @@ fn estimate_pin_positions(
                 dy: 0.0,
                 net: None,
                 pad: None,
-            });
+                            unplaced: false,
+                        });
         }
     } else {
         // Distribute around perimeter
@@ -1114,7 +1165,8 @@ fn estimate_pin_positions(
                 dy,
                 net: None,
                 pad: None,
-            });
+                            unplaced: false,
+                        });
         }
     }
     positions

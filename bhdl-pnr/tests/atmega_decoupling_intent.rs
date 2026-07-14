@@ -47,8 +47,7 @@ fn mcu(ids: &mut Ids, x: f64, y: f64) -> (Component, ComponentId, Vec<PinId>) {
             dx: *dx,
             dy: *dy,
             net: None,
-            pad: None,
-        })
+            pad: None, unplaced: false })
         .collect();
     let pin_ids = pins.iter().map(|p| p.pin_id).collect();
     let c = Component {
@@ -69,15 +68,17 @@ fn mcu(ids: &mut Ids, x: f64, y: f64) -> (Component, ComponentId, Vec<PinId>) {
         theta: 0.0,
         density_inflation: 1.0,
         layout_intents: vec![],
-    };
+            bbox_dx: 0.0,
+            bbox_dy: 0.0,
+        };
     (c, id, pin_ids)
 }
 
 fn cap(ids: &mut Ids, name: &str, x: f64, y: f64, intent: LayoutIntent) -> (Component, ComponentId) {
     let id = ids.comp.insert(());
     let pins = vec![
-        PinPosition { pin_id: ids.pin.insert(()), name: "1".into(), dx: -0.5, dy: 0.0, net: None, pad: None },
-        PinPosition { pin_id: ids.pin.insert(()), name: "2".into(), dx: 0.5, dy: 0.0, net: None, pad: None },
+        PinPosition { pin_id: ids.pin.insert(()), name: "1".into(), dx: -0.5, dy: 0.0, net: None, pad: None, unplaced: false },
+        PinPosition { pin_id: ids.pin.insert(()), name: "2".into(), dx: 0.5, dy: 0.0, net: None, pad: None, unplaced: false },
     ];
     let c = Component {
         id,
@@ -96,7 +97,9 @@ fn cap(ids: &mut Ids, name: &str, x: f64, y: f64, intent: LayoutIntent) -> (Comp
         theta: 0.0,
         density_inflation: 1.0,
         layout_intents: vec![intent],
-    };
+            bbox_dx: 0.0,
+            bbox_dy: 0.0,
+        };
     (c, id)
 }
 

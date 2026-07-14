@@ -84,11 +84,14 @@ pub fn legalize(board: &mut Board, snap_grid_mm: f64) {
             // 90°-rotated elongated part sit with its true (rotated)
             // envelope outside the edge — the exact sibling of the
             // verify-side phantom-overlap bug.
-            let (rw, rh) = comp.rotated_bbox();
-            let hw = rw / 2.0;
-            let hh = rh / 2.0;
-            comp.x = comp.x.clamp(ec + hw, bw - ec - hw);
-            comp.y = comp.y.clamp(ec + hh, bh - ec - hh);
+            let (ecx, ecy, hw, hh) = comp.envelope();
+            // Clamp the ENVELOPE inside the board, then move the origin
+            // by the same delta — asymmetric packages have copper the
+            // origin-centered clamp never saw.
+            let nx = ecx.clamp(ec + hw, bw - ec - hw);
+            let ny = ecy.clamp(ec + hh, bh - ec - hh);
+            comp.x += nx - ecx;
+            comp.y += ny - ecy;
         }
     }
 }
@@ -107,13 +110,13 @@ fn resolve_overlaps(board: &mut Board) {
 
         for i in 0..n {
             for j in (i + 1)..n {
-                let (bwi, bhi) = board.components[i].rotated_bbox();
-                let (bwj, bhj) = board.components[j].rotated_bbox();
+                let (cxi, cyi, hwi, hhi) = board.components[i].envelope();
+                let (cxj, cyj, hwj, hhj) = board.components[j].envelope();
 
-                let dx = board.components[j].x - board.components[i].x;
-                let dy = board.components[j].y - board.components[i].y;
-                let min_dx = (bwi + bwj) / 2.0 + 0.5; // 0.5mm clearance
-                let min_dy = (bhi + bhj) / 2.0 + 0.5;
+                let dx = cxj - cxi;
+                let dy = cyj - cyi;
+                let min_dx = hwi + hwj + 0.5; // 0.5mm clearance
+                let min_dy = hhi + hhj + 0.5;
 
                 if dx.abs() < min_dx && dy.abs() < min_dy {
                     any_overlap = true;
@@ -162,13 +165,14 @@ fn resolve_overlaps(board: &mut Board) {
             }
         }
 
-        // Re-clamp to board after each pass (account for component size)
+        // Re-clamp to board after each pass (envelope-aware)
         for comp in board.components.iter_mut() {
             if !comp.placement.is_fixed() {
-                let hw = comp.width_mm / 2.0;
-                let hh = comp.height_mm / 2.0;
-                comp.x = comp.x.clamp(ec + hw, bw - ec - hw);
-                comp.y = comp.y.clamp(ec + hh, bh - ec - hh);
+                let (ecx, ecy, hw, hh) = comp.envelope();
+                let nx = ecx.clamp(ec + hw, bw - ec - hw);
+                let ny = ecy.clamp(ec + hh, bh - ec - hh);
+                comp.x += nx - ecx;
+                comp.y += ny - ecy;
             }
         }
 

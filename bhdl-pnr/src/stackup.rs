@@ -203,9 +203,12 @@ pub fn stackup_preset(preset: StackupPreset) -> LayerStack {
             ],
             total_thickness_mm: 1.6,
             via: ViaSpec {
-                drill_mm: 0.25,
-                pad_mm: 0.5,
-                annular_ring_mm: 0.125,
+                // 0.25 drill sat below KiCad's default 0.3mm min-hole
+                // constraint — every via on a 4-layer board flagged
+                // drill_out_of_range. Standard 0.6/0.3 via.
+                drill_mm: 0.3,
+                pad_mm: 0.6,
+                annular_ring_mm: 0.15,
             },
         },
 

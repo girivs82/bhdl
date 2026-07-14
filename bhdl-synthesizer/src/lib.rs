@@ -659,6 +659,39 @@ impl NetlistGenerator {
             crate::intent_attribute_stamper::stamp_intent_attributes(&mut self.netlist, ft);
         }
 
+        // Phase 12.6: stamp entity-declared packages. `layout Entity {
+        // package X; }` blocks were extracted into
+        // analysis.layout_definitions but nothing consumed them — every
+        // such entity silently fell to the class-default package, and a
+        // too-small default stacks the surplus pins at the footprint
+        // origin (the oracle's "pad-overlap" family). Existing package
+        // attributes (user args, GLACIER physical selection) win.
+        {
+            let mut names: Vec<_> = self.netlist.instances.keys().collect();
+            names.sort_by_key(|id| self.netlist.instances.get(*id).map(|i| i.name.clone()));
+            for id in names {
+                let Some(inst) = self.netlist.instances.get(id) else { continue };
+                let Some(module) = self.netlist.modules.get(inst.definition) else {
+                    continue;
+                };
+                let Some(lay) = analysis.layout_definitions.get(&module.name) else {
+                    continue;
+                };
+                let Some(pkg) = lay.package.clone() else { continue };
+                if let Some(inst) = self.netlist.instances.get_mut(id) {
+                    inst.attributes
+                        .entry("package".to_string())
+                        .or_insert_with(|| {
+                            log::debug!(
+                                "package from layout block: '{}' -> {}",
+                                module.name, pkg
+                            );
+                            pkg.clone()
+                        });
+                }
+            }
+        }
+
         // Phase 12.7: allocate reference designators. After every phase
         // that mints instances (expansion 4.5, entity attrs 4.6), before
         // DRC so ERC plugin summaries carry real designators. Instances

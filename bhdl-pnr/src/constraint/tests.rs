@@ -33,6 +33,7 @@ fn make_component(
             dx: *dx,
             dy: *dy,
             net: None,
+            unplaced: false,
         })
         .collect();
     let pin_ids = pin_positions.iter().map(|p| p.pin_id).collect();
@@ -53,7 +54,9 @@ fn make_component(
         theta: 0.0,
         density_inflation: 1.0,
         layout_intents: Vec::new(),
-    };
+            bbox_dx: 0.0,
+            bbox_dy: 0.0,
+        };
     (id, pin_ids, comp)
 }
 

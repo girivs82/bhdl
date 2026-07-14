@@ -302,14 +302,16 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                 let immovable_i = freezer.is_frozen(i) || board.components[i].placement.is_fixed();
                 let immovable_j = freezer.is_frozen(j) || board.components[j].placement.is_fixed();
                 if immovable_i && immovable_j { continue; }
-                let dx = board.components[j].x - board.components[i].x;
-                let dy = board.components[j].y - board.components[i].y;
-                // Min center-to-center separation = sum of half-extents plus
+                let (cxi, cyi, hwi, hhi) = board.components[i].envelope();
+                let (cxj, cyj, hwj, hhj) = board.components[j].envelope();
+                let dx = cxj - cxi;
+                let dy = cyj - cyi;
+                // Min envelope separation = sum of half-extents plus
                 // both components' courtyard excess (IPC keepout). At nominal
                 // density (0.25/side) this is the prior hardcoded +0.5.
                 let cy = 2.0 * board.config.courtyard_excess_mm;
-                let min_dx = (board.components[i].width_mm + board.components[j].width_mm) / 2.0 + cy;
-                let min_dy = (board.components[i].height_mm + board.components[j].height_mm) / 2.0 + cy;
+                let min_dx = hwi + hwj + cy;
+                let min_dy = hhi + hhj + cy;
                 if dx.abs() < min_dx && dy.abs() < min_dy {
                     // Push proportional to overlap — larger overlaps get stronger push
                     let overlap = ((min_dx - dx.abs()) + (min_dy - dy.abs())) / 2.0;
@@ -715,7 +717,7 @@ fn debug_check_foreign_pads(board: &Board, routes: &[Route], tag: &str) {
                 let cos_t = comp.theta.cos();
                 let sin_t = comp.theta.sin();
                 for pin in &comp.pins {
-                    if pin.net == Some(route.net_id) {
+                    if pin.unplaced || pin.net == Some(route.net_id) {
                         continue;
                     }
                     let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
@@ -821,6 +823,9 @@ fn validate_and_rip(
             let quarter =
                 ((comp.theta / std::f64::consts::FRAC_PI_2).round() as i64).rem_euclid(2);
             for pin in &comp.pins {
+                if pin.unplaced {
+                    continue; // no copper emitted for this pin
+                }
                 let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
                 let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
                 let (pw, ph, thru, drill_r) = match &pin.pad {
