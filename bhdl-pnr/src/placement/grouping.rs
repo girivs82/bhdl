@@ -149,3 +149,78 @@ pub fn compute_region_preference(board: &Board) -> Forces {
 
     forces
 }
+
+
+/// Power-domain cohesion: pull each POWER rail's consumers toward the
+/// rail's centroid — the floorplanning discipline a layout engineer
+/// applies by hand ("the 5V section", "the 3.3V corner"). Regional
+/// rails are what make split power planes separable; without this
+/// force the wirelength objective happily interleaves rails and the
+/// plane splitter's separability gate never passes.
+///
+/// A component's rail = the Power-class net touching most of its pins
+/// (GND excluded — it is universal and carries no floorplan signal).
+/// Rail membership is computed once per call from net pin lists; the
+/// force mirrors group cohesion at a fraction of its weight so signal
+/// wirelength still dominates.
+pub fn compute_power_domain_cohesion(board: &Board) -> Forces {
+    let n = board.components.len();
+    let mut forces = Forces::zeros(n);
+
+    let comp_idx: HashMap<ComponentId, usize> = board
+        .components
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.id, i))
+        .collect();
+
+    // Component -> dominant power rail (net index), by touched-pin count.
+    let mut rail_pins: Vec<HashMap<usize, usize>> = vec![HashMap::new(); n];
+    for (ni, net) in board.nets.iter().enumerate() {
+        if !matches!(net.net_class, crate::types::PnrNetClass::Power { .. }) {
+            continue;
+        }
+        for &(cid, _) in &net.pins {
+            if let Some(&ci) = comp_idx.get(&cid) {
+                *rail_pins[ci].entry(ni).or_insert(0) += 1;
+            }
+        }
+    }
+    let rail_of: Vec<Option<usize>> = rail_pins
+        .iter()
+        .map(|m| {
+            m.iter()
+                .max_by_key(|&(ni, cnt)| (*cnt, std::cmp::Reverse(*ni)))
+                .map(|(&ni, _)| ni)
+        })
+        .collect();
+
+    // Centroid per rail, then a pull toward it for every member.
+    let mut cents: HashMap<usize, (f64, f64, f64)> = HashMap::new();
+    for (ci, r) in rail_of.iter().enumerate() {
+        if let Some(ni) = r {
+            let e = cents.entry(*ni).or_insert((0.0, 0.0, 0.0));
+            e.0 += board.components[ci].x;
+            e.1 += board.components[ci].y;
+            e.2 += 1.0;
+        }
+    }
+    for (ci, r) in rail_of.iter().enumerate() {
+        let Some(ni) = r else { continue };
+        let Some(&(sx, sy, cnt)) = cents.get(ni) else { continue };
+        if cnt < 2.0 {
+            continue;
+        }
+        let (cx, cy) = (sx / cnt, sy / cnt);
+        let comp = &board.components[ci];
+        if comp.placement.is_fixed() {
+            continue;
+        }
+        // Gradient of ½·d² toward the centroid (same form as group
+        // cohesion): gentle spring, distance-proportional.
+        forces.dx[ci] += comp.x - cx;
+        forces.dy[ci] += comp.y - cy;
+    }
+
+    forces
+}

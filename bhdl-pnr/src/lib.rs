@@ -194,6 +194,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         let (density_forces, density_overflow) =
             placement::density::compute_density_forces(&board);
         let group_forces = grouping::compute_group_cohesion(&board);
+        let power_forces = grouping::compute_power_domain_cohesion(&board);
         let thermal_forces = grouping::compute_thermal_spreading(&board, 0.1);
         let region_forces = grouping::compute_region_preference(&board);
 
@@ -235,6 +236,10 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         let mut forces = wl_forces;
         forces.accumulate(&density_forces, lambda_density);
         forces.accumulate(&group_forces, group_weight);
+        // Power-domain cohesion at a fraction of group weight: enough
+        // to regionalize rails (split-plane separability), never enough
+        // to beat signal wirelength.
+        forces.accumulate(&power_forces, group_weight * 0.3);
         forces.accumulate(&thermal_forces, config.placement.lambda_thermal);
         forces.accumulate(&region_forces, config.placement.lambda_region);
 
