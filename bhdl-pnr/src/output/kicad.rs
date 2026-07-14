@@ -364,21 +364,24 @@ fn place_reference_labels(board: &Board, routes: &[Route]) -> Vec<(f64, f64, f64
         // crowded neighborhood earns a smaller label a few mm away
         // before it ever earns an overlap.
         let mut best: Option<(f64, (f64, f64), f64)> = None;
-        'fonts: for (font, rings) in [(1.0f64, 4usize), (0.8, 7)] {
+        'fonts: for (font, rings, dirs) in [(1.0f64, 4usize, 8usize), (0.8, 16, 16)] {
             let tw = (0.95 * c.refdes.len() as f64 + 0.4) * font;
             let th = 1.3 * font;
             for ring in 0..rings {
                 let off = 0.3 + ring as f64 * 0.9;
-                let candidates = [
-                    (ecx, ecy - hh - th / 2.0 - off),
-                    (ecx, ecy + hh + th / 2.0 + off),
-                    (ecx - hw - tw / 2.0 - off, ecy),
-                    (ecx + hw + tw / 2.0 + off, ecy),
-                    (ecx - hw - tw / 2.0 - off, ecy - hh - th / 2.0 - off),
-                    (ecx + hw + tw / 2.0 + off, ecy - hh - th / 2.0 - off),
-                    (ecx - hw - tw / 2.0 - off, ecy + hh + th / 2.0 + off),
-                    (ecx + hw + tw / 2.0 + off, ecy + hh + th / 2.0 + off),
-                ];
+                // Candidates on the envelope "ellipse": denser
+                // direction sampling on the small-font pass — saturated
+                // corners often have exactly one legal pocket the 8
+                // cardinal/diagonal offsets straddle.
+                let candidates: Vec<(f64, f64)> = (0..dirs)
+                    .map(|k| {
+                        let ang = k as f64 * std::f64::consts::TAU / dirs as f64;
+                        (
+                            ecx + (hw + tw / 2.0 + off) * ang.cos(),
+                            ecy + (hh + th / 2.0 + off) * ang.sin(),
+                        )
+                    })
+                    .collect();
                 for cand in candidates {
                     let rect = (
                         cand.0 - tw / 2.0,
