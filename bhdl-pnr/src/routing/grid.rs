@@ -226,6 +226,23 @@ impl RoutingGrid {
             }
         }
 
+        // Plane layers (capacity_factor 0) carry NO tracks — ever.
+        // Capacity-0 cells are exempt from cost/overflow accounting
+        // (the pin-terminal rule), so routing crossed power planes at
+        // zero cost, invisibly: 0.3mm VCC tracks ON In2.Cu shorting
+        // every GND drop via through them. Hard-block the whole layer;
+        // through-vias still transit (they never LAND on plane cells).
+        for (l, layer) in board.layer_stack.layers.iter().enumerate() {
+            if layer.capacity_factor <= 0.0 {
+                for row in grid.cells[l].iter_mut() {
+                    for cell in row.iter_mut() {
+                        cell.blocked = true;
+                        cell.hard = true;
+                    }
+                }
+            }
+        }
+
         grid
     }
 

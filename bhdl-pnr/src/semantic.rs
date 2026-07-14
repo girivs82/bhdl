@@ -616,14 +616,14 @@ pub fn build_board(
     // deterministic tie-break). Assigned nets are plane-connected: the
     // router skips them, the exporter emits real fill copper, surface
     // pads get via drops.
-    // GATED (BHDL_PNR_PLANES=1): the full pour-fill pipeline (plane
-    // assignment → via drops → fractured filled_polygon emission) is
-    // oracle-CLEAN on single-plane boards (pds 47→0 unc, led/lm/
-    // advanced 0) but multi-plane boards still ship fill-interaction
-    // shorts, and disabling only power planes destabilized others.
-    // Dark until the multi-plane interplay is converged — default
-    // behavior is exactly the pre-plane router.
-    if std::env::var("BHDL_PNR_PLANES").is_ok() {
+    // Plane assignment is ON by default (BHDL_PNR_NO_PLANES=1 to
+    // disable). The "multi-plane interplay" that kept this dark turned
+    // out to be the orphan-stub prune discarding every drop stub (pad
+    // and via anchors weren't counted) the moment any span of the net
+    // was amputated — fixed; planes-on is oracle-clean or better than
+    // planes-off on every board (pds 47→0 unc, uno copper CLEAN
+    // unc 57→48, shorts zero).
+    if std::env::var("BHDL_PNR_NO_PLANES").is_err() {
         let gnd_idx = nets
             .iter()
             .position(|n| matches!(n.net_class, PnrNetClass::Ground));

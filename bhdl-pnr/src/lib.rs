@@ -635,6 +635,19 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         let mut banned_vias: Vec<(usize, (f64, f64))> = Vec::new();
         let mut banned_dangles: Vec<(usize, (f64, f64))> = Vec::new();
         loop {
+            if std::env::var("BHDL_PNR_DEBUG_PLANES").is_ok() {
+                for (i, n) in board.nets.iter().enumerate() {
+                    if n.plane_layer.is_some() {
+                        log::info!(
+                            "[planes] pre-validate '{}': {} segs, {} vias, {} spans",
+                            n.name,
+                            final_routes[i].segments.len(),
+                            final_routes[i].vias.len(),
+                            final_routes[i].path_spans.len()
+                        );
+                    }
+                }
+            }
             let ripped = validate_and_rip(
                 &board,
                 &mut final_routes,
@@ -1717,25 +1730,58 @@ fn validate_and_rip(
                             // exact.
                             loop {
                                 let mut drop_span: Option<usize> = None;
+                                let via_r = board.layer_stack.via.pad_mm / 2.0;
                                 'stubs: for (si, &(ps, pl)) in
                                     r.path_spans.iter().enumerate()
                                 {
                                     if pl != 1 || r.path_parents.get(si).copied().flatten().is_some() {
                                         continue;
                                     }
-                                    let st = r.segments[ps].start;
-                                    for (qi, &(qs, ql)) in r.path_spans.iter().enumerate() {
-                                        if qi == si {
-                                            continue;
-                                        }
-                                        for seg in &r.segments[qs..qs + ql] {
-                                            if (seg.start.0 - st.0).abs() < 1e-6
-                                                && (seg.start.1 - st.1).abs() < 1e-6
-                                                || (seg.end.0 - st.0).abs() < 1e-6
-                                                    && (seg.end.1 - st.1).abs() < 1e-6
-                                            {
-                                                continue 'stubs;
+                                    // A stub is anchored if EITHER endpoint
+                                    // touches other copper: another span's
+                                    // segment (width-aware), a via, or an
+                                    // own-net pad. Endpoint-vs-segment-
+                                    // endpoint matching alone pruned every
+                                    // plane drop stub (pad on one end, via
+                                    // on the other) the moment any span of
+                                    // the net was amputated.
+                                    let sg0 = &r.segments[ps];
+                                    let own_half = sg0.width_mm / 2.0;
+                                    for pt in [sg0.start, sg0.end] {
+                                        for (qi, &(qs, ql)) in
+                                            r.path_spans.iter().enumerate()
+                                        {
+                                            if qi == si {
+                                                continue;
                                             }
+                                            for seg in &r.segments[qs..qs + ql] {
+                                                if seg.layer == sg0.layer
+                                                    && segment_point_too_close(
+                                                        seg.start,
+                                                        seg.end,
+                                                        pt,
+                                                        seg.width_mm / 2.0 + own_half
+                                                            - 0.001,
+                                                    )
+                                                {
+                                                    continue 'stubs;
+                                                }
+                                            }
+                                        }
+                                        if r.vias.iter().any(|v| {
+                                            (v.x - pt.0).hypot(v.y - pt.1)
+                                                < via_r + own_half - 0.001
+                                        }) {
+                                            continue 'stubs;
+                                        }
+                                        if pad_rects.iter().any(|p| {
+                                            p.net == Some(r.net_id)
+                                                && (pt.0 - p.cx).abs()
+                                                    < p.hx + own_half - 0.001
+                                                && (pt.1 - p.cy).abs()
+                                                    < p.hy + own_half - 0.001
+                                        }) {
+                                            continue 'stubs;
                                         }
                                     }
                                     drop_span = Some(si);
