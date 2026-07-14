@@ -119,7 +119,7 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
     // (vs bodies, pads, tracks, board edge, and other labels) instead of
     // the fixed above-the-part offset that landed text on neighbors'
     // copper (the oracle's silk_over_copper / silk_overlap families).
-    let label_slots = place_reference_labels(board, routes);
+    let label_slots = place_reference_labels(board, routes); // (x, y, font_mm)
     for (ci, comp) in board.components.iter().enumerate() {
         let (cu, mask, paste, silk) = match comp.side {
             BoardSide::Top => ("F.Cu", "F.Mask", "F.Paste", "F.SilkS"),
@@ -140,15 +140,16 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
         ));
         // Convert the label's GLOBAL slot into footprint-local coords
         // (KiCad transforms property positions like pads: R_kicad(rot)).
-        let (gx, gy) = label_slots[ci];
+        let (gx, gy, font_mm) = label_slots[ci];
         let (odx, ody) = (gx - comp.x, gy - comp.y);
         let a = rot_deg.to_radians();
         let ldx = odx * a.cos() - ody * a.sin();
         let ldy = odx * a.sin() + ody * a.cos();
         out.push_str(&format!(
-            "    (property \"Reference\" \"{}\" (at {ldx:.3} {ldy:.3} 0) (layer \"{}\") (effects (font (size 1 1) (thickness 0.15))))\n",
+            "    (property \"Reference\" \"{}\" (at {ldx:.3} {ldy:.3} 0) (layer \"{}\") (effects (font (size {font_mm} {font_mm}) (thickness {:.3}))))\n",
             comp.refdes,
-            silk
+            silk,
+            (font_mm * 0.15f64).max(0.1)
         ));
         out.push_str(&format!(
             "    (property \"Value\" \"{}\" (at 0 {} 0) (layer \"F.Fab\") (effects (font (size 1 1) (thickness 0.15))))\n",
@@ -315,7 +316,7 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
 /// board edge, and previously placed labels. Candidates ring the part;
 /// the fallback (fully crowded neighborhoods) keeps the classic
 /// above-the-part slot.
-fn place_reference_labels(board: &Board, routes: &[Route]) -> Vec<(f64, f64)> {
+fn place_reference_labels(board: &Board, routes: &[Route]) -> Vec<(f64, f64, f64)> {
     let bw = board.config.outline.width();
     let bh = board.config.outline.height();
     let edge = 0.5; // silk-to-edge rule
@@ -357,61 +358,66 @@ fn place_reference_labels(board: &Board, routes: &[Route]) -> Vec<(f64, f64)> {
     let mut placed: Vec<(f64, f64, f64, f64)> = Vec::new();
     let mut slots = Vec::with_capacity(board.components.len());
     for c in &board.components {
-        let tw = 0.95 * c.refdes.len() as f64 + 0.4; // ~1mm font
-        let th = 1.3;
         let (ecx, ecy, hw, hh) = c.envelope();
-        // Spiral of candidate rings: ring 0 hugs the part, further
-        // rings step outward — a crowded neighborhood gets a label a
-        // few mm away instead of one stamped over copper.
-        let mut best: Option<(f64, (f64, f64))> = None;
-        'search: for ring in 0..4 {
-            let off = 0.3 + ring as f64 * 0.9;
-            let candidates = [
-                (ecx, ecy - hh - th / 2.0 - off),
-                (ecx, ecy + hh + th / 2.0 + off),
-                (ecx - hw - tw / 2.0 - off, ecy),
-                (ecx + hw + tw / 2.0 + off, ecy),
-                (ecx - hw - tw / 2.0 - off, ecy - hh - th / 2.0 - off),
-                (ecx + hw + tw / 2.0 + off, ecy - hh - th / 2.0 - off),
-                (ecx - hw - tw / 2.0 - off, ecy + hh + th / 2.0 + off),
-                (ecx + hw + tw / 2.0 + off, ecy + hh + th / 2.0 + off),
-            ];
-            for cand in candidates {
-                let rect = (
-                    cand.0 - tw / 2.0,
-                    cand.1 - th / 2.0,
-                    cand.0 + tw / 2.0,
-                    cand.1 + th / 2.0,
-                );
-                let inside = rect.0 > edge
-                    && rect.1 > edge
-                    && rect.2 < bw - edge
-                    && rect.3 < bh - edge;
-                if !inside {
-                    continue;
-                }
-                let area = overlap_area(rect, &obstacles) + overlap_area(rect, &placed);
-                if area <= 0.0 {
-                    best = Some((0.0, cand));
-                    break 'search;
-                }
-                // Track the least-bad candidate: shipping the smallest
-                // overlap beats shipping candidate[0] blind.
-                if best.map_or(true, |(a, _)| area < a) {
-                    best = Some((area, cand));
+        // Two font passes: full-size first, then the smallest silk
+        // KiCad's checker accepts (0.8mm) with a wider spiral — a
+        // crowded neighborhood earns a smaller label a few mm away
+        // before it ever earns an overlap.
+        let mut best: Option<(f64, (f64, f64), f64)> = None;
+        'fonts: for (font, rings) in [(1.0f64, 4usize), (0.8, 7)] {
+            let tw = (0.95 * c.refdes.len() as f64 + 0.4) * font;
+            let th = 1.3 * font;
+            for ring in 0..rings {
+                let off = 0.3 + ring as f64 * 0.9;
+                let candidates = [
+                    (ecx, ecy - hh - th / 2.0 - off),
+                    (ecx, ecy + hh + th / 2.0 + off),
+                    (ecx - hw - tw / 2.0 - off, ecy),
+                    (ecx + hw + tw / 2.0 + off, ecy),
+                    (ecx - hw - tw / 2.0 - off, ecy - hh - th / 2.0 - off),
+                    (ecx + hw + tw / 2.0 + off, ecy - hh - th / 2.0 - off),
+                    (ecx - hw - tw / 2.0 - off, ecy + hh + th / 2.0 + off),
+                    (ecx + hw + tw / 2.0 + off, ecy + hh + th / 2.0 + off),
+                ];
+                for cand in candidates {
+                    let rect = (
+                        cand.0 - tw / 2.0,
+                        cand.1 - th / 2.0,
+                        cand.0 + tw / 2.0,
+                        cand.1 + th / 2.0,
+                    );
+                    let inside = rect.0 > edge
+                        && rect.1 > edge
+                        && rect.2 < bw - edge
+                        && rect.3 < bh - edge;
+                    if !inside {
+                        continue;
+                    }
+                    let area =
+                        overlap_area(rect, &obstacles) + overlap_area(rect, &placed);
+                    if area <= 0.0 {
+                        best = Some((0.0, cand, font));
+                        break 'fonts;
+                    }
+                    // Least-bad fallback: smallest overlap wins.
+                    if best.map_or(true, |(a, _, _)| area < a) {
+                        best = Some((area, cand, font));
+                    }
                 }
             }
         }
-        let chosen = best
-            .map(|(_, c)| c)
-            .unwrap_or((ecx, ecy - hh - th / 2.0 - 0.3));
+        let (chosen, font) = best
+            .map(|(_, c, f)| (c, f))
+            .unwrap_or(((ecx, ecy - hh - 0.65 - 0.3), 1.0));
+        let tw = (0.95 * c.refdes.len() as f64 + 0.4) * font;
+        let th = 1.3 * font;
         placed.push((
             chosen.0 - tw / 2.0,
             chosen.1 - th / 2.0,
             chosen.0 + tw / 2.0,
             chosen.1 + th / 2.0,
         ));
-        slots.push(chosen);
+        slots.push((chosen.0, chosen.1, font));
     }
     slots
 }
