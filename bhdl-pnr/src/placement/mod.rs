@@ -8,6 +8,7 @@
 //! neighbors placed radially. Progressive freezing locks stable components.
 
 pub mod analytical;
+pub mod detailed;
 pub mod blocks;
 pub mod density;
 pub mod intent_forces;

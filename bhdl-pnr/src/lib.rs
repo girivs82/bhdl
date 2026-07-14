@@ -418,6 +418,15 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
     info!("Legalizing placement...");
     legalization::legalize(&mut board, 0.1);
 
+    // 4.5 Detailed placement: greedy swap/rotate HPWL refinement on the
+    // legal placement. Every accepted move is legality-checked, so no
+    // re-legalization is needed.
+    let (wl0, wl1) = placement::detailed::refine(&mut board, 4);
+    if wl1 < wl0 - 1e-9 {
+        info!("Detailed placement: HPWL {:.1} -> {:.1}mm ({:.1}%)",
+            wl0, wl1, (wl0 - wl1) / wl0 * 100.0);
+    }
+
     // 5. Final routing — two-pass strategy (route like a human)
     //    Pass 1: single-layer routing (no vias) — maximize what can be routed flat
     //    Pass 2: remaining unrouted nets get vias to escape to other layers
