@@ -76,7 +76,22 @@ pub fn net_criticality(board: &Board) -> HashMap<NetId, f64> {
 /// Effective routing weight: base net weight plus constraint criticality.
 /// The router sorts descending by this to pick net order.
 pub fn effective_weight(net: &crate::types::PnrNet, crit: &HashMap<NetId, f64>) -> f64 {
-    net.weight + crit.get(&net.id).copied().unwrap_or(0.0)
+    // FAT TRUNKS FIRST: a power/ground rail that did NOT get a plane
+    // (the stackup is the user's budget — PnR never adds layers) must
+    // route as wide copper, and wide copper wants an empty board: a
+    // human routes the power trunks before any signal. The bonus puts
+    // every plane-less power-class net ahead of all signals while
+    // preserving relative order among rails (fatter = earlier via the
+    // width term) and among signals (constraint criticality).
+    let power_first = match net.net_class {
+        crate::types::PnrNetClass::Power { .. } | crate::types::PnrNetClass::Ground
+            if net.plane_layer.is_none() =>
+        {
+            5.0 + net.required_trace_width_mm
+        }
+        _ => 0.0,
+    };
+    net.weight + power_first + crit.get(&net.id).copied().unwrap_or(0.0)
 }
 
 #[cfg(test)]

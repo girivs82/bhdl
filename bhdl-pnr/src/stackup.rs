@@ -254,11 +254,11 @@ pub fn stackup_preset(preset: StackupPreset) -> LayerStack {
                 Layer {
                     id: 4,
                     name: "In4.Cu".into(),
-                    kind: LayerKind::Signal,
+                    kind: LayerKind::Power,
                     thickness_mm: 0.035,
                     copper_weight_oz: 1.0,
                     dielectric_constant: 4.3,
-                    capacity_factor: 0.8,
+                    capacity_factor: 0.0,
                 },
                 Layer {
                     id: 5,
@@ -334,9 +334,13 @@ pub fn stackup_preset(preset: StackupPreset) -> LayerStack {
             ],
             total_thickness_mm: 1.6,
             via: ViaSpec {
-                drill_mm: 0.2,
-                pad_mm: 0.45,
-                annular_ring_mm: 0.125,
+                // 0.45/0.2 microvia geometry violated KiCad's default
+                // constraints (min hole 0.3, min via dia 0.5) on every
+                // via — 8-layer boards use the standard 0.6/0.3 through
+                // via until we emit matching board constraints for HDI.
+                drill_mm: 0.3,
+                pad_mm: 0.6,
+                annular_ring_mm: 0.15,
             },
         },
     }

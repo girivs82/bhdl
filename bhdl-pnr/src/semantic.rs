@@ -634,11 +634,16 @@ pub fn build_board(
             .filter(|(_, n)| matches!(n.net_class, PnrNetClass::Power { .. }))
             .map(|(i, _)| i)
             .collect();
+        // Fattest first, PIN COUNT as tie-break: "give 5V the plane"
+        // means the rail with the most consumers, not the input jack
+        // that happens to share its IPC width (DC_IN, 3 pins, was
+        // beating VCC_5V, 29 pins, on the name tie).
         power_by_fat.sort_by(|&a, &b| {
             nets[b]
                 .required_trace_width_mm
                 .partial_cmp(&nets[a].required_trace_width_mm)
                 .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| nets[b].pins.len().cmp(&nets[a].pins.len()))
                 .then_with(|| nets[a].name.cmp(&nets[b].name))
         });
         let mut next_power = power_by_fat.into_iter();
@@ -656,11 +661,20 @@ pub fn build_board(
                     }
                 }
                 LayerKind::Power => {
-                    // SPLIT PLANE: up to 4 rails share one Power layer
-                    // in band regions (regions computed post-placement
-                    // from pin centroids — assign_plane_regions).
+                    // Distribute rails ACROSS Power layers before
+                    // splitting within one: with two Power layers the
+                    // top rails each get a whole plane; splits only
+                    // absorb the overflow. (Greedy 4-per-first-layer
+                    // starved the second plane entirely.)
+                    let layers_left = layer_stack.layers[li..]
+                        .iter()
+                        .filter(|l| l.kind == LayerKind::Power)
+                        .count()
+                        .max(1);
+                    let rails_left = next_power.len();
+                    let take = ((rails_left + layers_left - 1) / layers_left).min(4);
                     let mut took = 0;
-                    while took < 4 {
+                    while took < take {
                         let Some(pi) = next_power.next() else { break };
                         nets[pi].plane_layer = Some(li);
                         log::info!(
