@@ -65,7 +65,8 @@ fn netted_board() -> Board {
         layer_constraint: LayerConstraint::Any,
         intent: None,
         layout_intents: vec![],
-    };
+            plane_layer: None,
+        };
 
     Board {
         config: BoardConfig {

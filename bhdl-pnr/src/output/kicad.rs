@@ -254,32 +254,55 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
     }
     out.push('\n');
 
-    // ── Plane zones ──
-    // One copper zone per Ground-kind layer, on the (first) Ground-class
-    // net — the plane the router assumed when it skipped those nets.
-    let gnd = board
-        .nets
-        .iter()
-        .find(|net| matches!(net.net_class, PnrNetClass::Ground));
-    if let Some(gnd) = gnd {
-        let n = net_no(gnd.id);
-        for layer in &board.layer_stack.layers {
-            if layer.kind != LayerKind::Ground {
-                continue;
-            }
-            out.push_str(&format!(
-                "  (zone (net {}) (net_name \"{}\") (layer \"{}\") (hatch edge 0.5)\n",
-                n, gnd.name, layer.name
-            ));
-            out.push_str("    (connect_pads thru_hole_only (clearance 0.3))\n");
-            out.push_str("    (min_thickness 0.25) (filled_areas_thickness no)\n");
-            out.push_str("    (fill yes (thermal_gap 0.3) (thermal_bridge_width 0.4))\n");
-            out.push_str("    (polygon (pts\n");
-            for (x, y) in [(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)] {
-                out.push_str(&format!("      (xy {x} {y})\n"));
-            }
-            out.push_str("    ))\n  )\n");
+    // ── Plane zones with REAL fill geometry ──
+    // One zone per plane-assigned net, WITH saved filled_polygon
+    // copper: headless KiCad DRC uses saved fills (no CLI refill in
+    // 9.0), so plane connectivity must be actual polygons. The fill is
+    // the board rect (minus edge clearance) with clearance holes
+    // punched around every FOREIGN through-barrel (vias + plated
+    // holes of other nets) — same-net barrels sit in solid copper,
+    // which is exactly the connectivity we're claiming. Emitted as
+    // horizontal strips (simple polygons; holes need no fracturing).
+    for (ni, net) in board.nets.iter().enumerate() {
+        let Some(plane_layer) = net.plane_layer else { continue };
+        let layer_name = board
+            .layer_stack
+            .layers
+            .get(plane_layer)
+            .map(|l| l.name.as_str())
+            .unwrap_or("In1.Cu");
+        let n = net_no(net.id);
+        let _ = ni;
+
+        let holes = plane_foreign_holes(board, routes, net.id);
+
+        out.push_str(&format!(
+            "  (zone (net {}) (net_name \"{}\") (layer \"{}\") (hatch edge 0.5)\n",
+            n, net.name, layer_name
+        ));
+        out.push_str("    (connect_pads (clearance 0.3))\n");
+        out.push_str("    (min_thickness 0.25) (filled_areas_thickness no)\n");
+        out.push_str("    (fill yes (thermal_gap 0.3) (thermal_bridge_width 0.4))\n");
+        out.push_str("    (polygon (pts\n");
+        let m = 0.5;
+        for (x, y) in [(m, m), (w - m, m), (w - m, h - m), (m, h - m)] {
+            out.push_str(&format!("      (xy {x} {y})\n"));
         }
+        out.push_str("    ))\n");
+
+        // ONE fractured polygon: KiCad's connectivity treats every
+        // saved filled_polygon as its own island (overlapping strips
+        // stayed 90+ isolated_copper items and split the net), so the
+        // fill must be a single simple polygon — holes joined to the
+        // outline through zero-width slits, exactly how KiCad's own
+        // filler stores them.
+        let pts = fracture_fill(m, m, w - m, h - m, &holes);
+        out.push_str(&format!("    (filled_polygon (layer \"{}\") (pts\n", layer_name));
+        for (x, y) in &pts {
+            out.push_str(&format!("      (xy {x} {y})\n"));
+        }
+        out.push_str("    ))\n");
+        out.push_str("  )\n");
     }
 
     out.push_str(")\n");
@@ -391,4 +414,296 @@ fn place_reference_labels(board: &Board, routes: &[Route]) -> Vec<(f64, f64)> {
         slots.push(chosen);
     }
     slots
+}
+
+
+/// Fracture a rectangular fill with circular holes into ONE simple
+/// polygon: each hole becomes a CW octagon joined to the boundary by a
+/// zero-width slit cast rightward from the hole (processing holes
+/// right-to-left so a ray always hits already-fractured boundary).
+fn fracture_fill(
+    x0: f64,
+    y0: f64,
+    x1: f64,
+    y1: f64,
+    holes_in: &[(f64, f64, f64)],
+) -> Vec<(f64, f64)> {
+    // Merge overlapping holes into enclosing circles (a slit through a
+    // neighboring hole would self-intersect).
+    let holes: Vec<(f64, f64, f64)> = merge_holes(
+        holes_in
+            .iter()
+            .filter(|&&(cx, cy, r)| {
+                cx + r > x0 && cx - r < x1 && cy + r > y0 && cy - r < y1
+            })
+            .copied()
+            .collect(),
+    );
+    // Split holes: interior ones become slit-fractured octagons; ones
+    // whose punch crosses the fill boundary become EDGE NOTCHES —
+    // rectangular detours cut into the outline (clamping an interior
+    // hole inward uncovered the barrel it was punched for).
+    let slack = 0.05;
+    let mut notches_bottom: Vec<(f64, f64, f64)> = Vec::new(); // (xa, xb, depth_to_y)
+    let mut notches_top: Vec<(f64, f64, f64)> = Vec::new();
+    let mut notches_right: Vec<(f64, f64, f64)> = Vec::new(); // (ya, yb, depth_to_x)
+    let mut notches_left: Vec<(f64, f64, f64)> = Vec::new();
+    let mut interior: Vec<(f64, f64, f64)> = Vec::new();
+    for &(cx, cy, r) in &holes {
+        let crosses_left = cx - r < x0 + slack;
+        let crosses_right = cx + r > x1 - slack;
+        let crosses_top = cy - r < y0 + slack;
+        let crosses_bottom = cy + r > y1 - slack;
+        if crosses_bottom {
+            notches_bottom.push((
+                (cx - r).max(x0),
+                (cx + r).min(x1),
+                (cy - r).max(y0),
+            ));
+        } else if crosses_top {
+            notches_top.push(((cx - r).max(x0), (cx + r).min(x1), (cy + r).min(y1)));
+        } else if crosses_right {
+            notches_right.push((((cy - r).max(y0)), (cy + r).min(y1), (cx - r).max(x0)));
+        } else if crosses_left {
+            notches_left.push((((cy - r).max(y0)), (cy + r).min(y1), (cx + r).min(x1)));
+        } else {
+            interior.push((cx, cy, r));
+        }
+    }
+    let merge_iv = |mut v: Vec<(f64, f64, f64)>| -> Vec<(f64, f64, f64)> {
+        v.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        let mut out: Vec<(f64, f64, f64)> = Vec::new();
+        for n in v {
+            match out.last_mut() {
+                Some(last) if n.0 <= last.1 => {
+                    last.1 = last.1.max(n.1);
+                    last.2 = if last.2 < n.2 { last.2 } else { n.2 };
+                }
+                _ => out.push(n),
+            }
+        }
+        out
+    };
+    let notches_bottom = merge_iv(notches_bottom);
+    let notches_top = merge_iv(notches_top);
+    let notches_right = merge_iv(notches_right);
+    let notches_left = merge_iv(notches_left);
+    let holes = interior;
+    // Rightmost first; jitter duplicate slit rows so a ray never runs
+    // along an existing horizontal slit.
+    let mut holes = holes;
+    holes.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    // Outline with edge notches: bottom edge traversed x1→x0 (in the
+    // ring (x0,y0)→(x1,y0)→(x1,y1)→(x0,y1)), top edge x0→x1.
+    let mut poly: Vec<(f64, f64)> = vec![(x0, y0)];
+    for &(xa, xb, yd) in notches_top.iter() {
+        poly.push((xa, y0));
+        poly.push((xa, yd));
+        poly.push((xb, yd));
+        poly.push((xb, y0));
+    }
+    poly.push((x1, y0));
+    for &(ya, yb, xd) in notches_right.iter() {
+        poly.push((x1, ya));
+        poly.push((xd, ya));
+        poly.push((xd, yb));
+        poly.push((x1, yb));
+    }
+    poly.push((x1, y1));
+    for &(xa, xb, yd) in notches_bottom.iter().rev() {
+        poly.push((xb, y1));
+        poly.push((xb, yd));
+        poly.push((xa, yd));
+        poly.push((xa, y1));
+    }
+    poly.push((x0, y1));
+    for &(ya, yb, xd) in notches_left.iter().rev() {
+        poly.push((x0, yb));
+        poly.push((xd, yb));
+        poly.push((xd, ya));
+        poly.push((x0, ya));
+    }
+    let mut used_y: Vec<f64> = Vec::new();
+    for &(cx, cy, r) in &holes {
+        let mut ry = cy;
+        while used_y.iter().any(|&u| (u - ry).abs() < 1e-4) {
+            ry += 2e-4;
+        }
+        used_y.push(ry);
+        // Octagon CW starting at rightmost vertex, at slit height ry.
+        let k = r / (1.0 + std::f64::consts::SQRT_2);
+        // Hole ring must wind OPPOSITE the outline or the polygon
+        // self-overlaps and KiCad's normalization erases the holes.
+        // CIRCUMSCRIBED octagon (vertices at r/cos(22.5°)): a polygon
+        // with vertices ON the circle has edges cutting inside the
+        // punch radius — the fill edge sat 0.25mm from vias that need
+        // 0.30.
+        let rr = r / (std::f64::consts::PI / 8.0).cos();
+        let mut oct = [(0.0f64, 0.0f64); 8];
+        for (q, slot) in oct.iter_mut().enumerate() {
+            let ang = -(q as f64) * std::f64::consts::FRAC_PI_4;
+            *slot = (cx + rr * ang.cos(), cy + rr * ang.sin());
+        }
+        oct[0].1 = ry; // slit entry rides the (jittered) ray row
+        let _ = k;
+        // Ray from (cx + r, ry) rightward: nearest boundary crossing.
+        let n = poly.len();
+        let mut best: Option<(f64, usize)> = None;
+        for e in 0..n {
+            let a = poly[e];
+            let b = poly[(e + 1) % n];
+            if (a.1 - b.1).abs() < 1e-12 {
+                continue; // horizontal edge — parallel to ray
+            }
+            let t = (ry - a.1) / (b.1 - a.1);
+            if !(0.0..=1.0).contains(&t) {
+                continue;
+            }
+            let ix = a.0 + t * (b.0 - a.0);
+            if ix > cx + r + 1e-9 && best.map_or(true, |(bx, _)| ix < bx) {
+                best = Some((ix, e));
+            }
+        }
+        let Some((ix, e)) = best else {
+            log::warn!(
+                "plane fill: slit ray from hole at ({cx:.2},{cy:.2}) r={r:.2} \
+                 found no boundary — hole NOT punched (foreign barrel may \
+                 under-clear the fill)"
+            );
+            continue;
+        };
+        let mut insert: Vec<(f64, f64)> = vec![(ix, ry)];
+        insert.extend_from_slice(&oct);
+        insert.push(oct[0]);
+        insert.push((ix, ry));
+        let at = e + 1;
+        for (ofs, p) in insert.into_iter().enumerate() {
+            poly.insert(at + ofs, p);
+        }
+    }
+    poly
+}
+
+
+/// Foreign through-barrels for a plane net's fill: punch radius =
+/// barrel + zone clearance. Shared by the exporter (fracture) and the
+/// via-drop verifier in lib.rs — the two MUST agree or drops verified
+/// as connected can still be swallowed by the emitted fill.
+pub(crate) fn plane_foreign_holes(
+    board: &Board,
+    routes: &[Route],
+    net_id: NetId,
+) -> Vec<(f64, f64, f64)> {
+    let via_r = board.layer_stack.via.pad_mm / 2.0;
+    let zc = 0.3;
+    let mut holes: Vec<(f64, f64, f64)> = Vec::new();
+    for (rj, r) in routes.iter().enumerate() {
+        if board.nets.get(rj).map(|x| x.id) == Some(net_id) {
+            continue;
+        }
+        for v in &r.vias {
+            holes.push((v.x, v.y, via_r + zc + 0.05));
+        }
+    }
+    for comp in &board.components {
+        let cos_t = comp.theta.cos();
+        let sin_t = comp.theta.sin();
+        for pin in &comp.pins {
+            if pin.unplaced || pin.net == Some(net_id) {
+                continue;
+            }
+            let Some(pad) = &pin.pad else { continue };
+            if pad.drill_mm.is_none() {
+                continue; // SMD never reaches inner layers
+            }
+            let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
+            let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+            let barrel = pad.width_mm.max(pad.height_mm) / 2.0;
+            holes.push((gx, gy, barrel + zc + 0.05));
+        }
+    }
+    holes
+}
+
+/// Merge overlapping holes into enclosing circles — the SAME merge the
+/// fracture applies, exposed so lib.rs can verify drop-via plane
+/// contact against the geometry that will actually be emitted.
+pub(crate) fn merge_holes(mut holes: Vec<(f64, f64, f64)>) -> Vec<(f64, f64, f64)> {
+    loop {
+        let mut merged = false;
+        'outer: for i in 0..holes.len() {
+            for j in (i + 1)..holes.len() {
+                let (ax, ay, ar) = holes[i];
+                let (bx, by, br) = holes[j];
+                let d = (ax - bx).hypot(ay - by);
+                if d < ar + br {
+                    let r = (d + ar + br) / 2.0;
+                    let t = if d > 1e-9 { (r - ar) / d } else { 0.0 };
+                    holes[i] = (ax + (bx - ax) * t, ay + (by - ay) * t, r);
+                    holes.remove(j);
+                    merged = true;
+                    break 'outer;
+                }
+            }
+        }
+        if !merged {
+            return holes;
+        }
+    }
+}
+
+
+/// Does the plane fill's cutout geometry (merged interior holes OR
+/// edge notch boxes) fully swallow a via at (x, y)? Mirrors the
+/// fracture's classification exactly — used by the drop verifier.
+pub(crate) fn plane_swallows(
+    board: &Board,
+    merged_holes: &[(f64, f64, f64)],
+    x: f64,
+    y: f64,
+    via_r: f64,
+) -> bool {
+    let m = 0.5;
+    let w = board.config.outline.width();
+    let h = board.config.outline.height();
+    let (x0, y0, x1, y1) = (m, m, w - m, h - m);
+    let slack = 0.05;
+    // Outside the fill rect entirely = no plane contact.
+    if x - via_r < x0 || x + via_r > x1 || y - via_r < y0 || y + via_r > y1 {
+        return true;
+    }
+    for &(cx, cy, r) in merged_holes {
+        let crosses_bottom = cy + r > y1 - slack;
+        let crosses_top = cy - r < y0 + slack;
+        let crosses_right = cx + r > x1 - slack;
+        let crosses_left = cx - r < x0 + slack;
+        let overlaps_box = |bx0: f64, by0: f64, bx1: f64, by1: f64| -> bool {
+            x + via_r > bx0 && x - via_r < bx1 && y + via_r > by0 && y - via_r < by1
+        };
+        if crosses_bottom {
+            if overlaps_box((cx - r).max(x0), (cy - r).max(y0), (cx + r).min(x1), y1) {
+                return true;
+            }
+        } else if crosses_top {
+            if overlaps_box((cx - r).max(x0), y0, (cx + r).min(x1), (cy + r).min(y1)) {
+                return true;
+            }
+        } else if crosses_right {
+            if overlaps_box((cx - r).max(x0), (cy - r).max(y0), x1, (cy + r).min(y1)) {
+                return true;
+            }
+        } else if crosses_left {
+            if overlaps_box(x0, (cy - r).max(y0), (cx + r).min(x1), (cy + r).min(y1)) {
+                return true;
+            }
+        } else if (x - cx).hypot(y - cy) < r + via_r + 0.05 {
+            // OVERLAP counts as swallowed, not just full containment:
+            // fracture normalization near crowded cutouts can lose more
+            // copper than the ideal model says (two oracle-confirmed
+            // danglers sat half-overlapped). Conservative = a few more
+            // honest unconnecteds, never dangling copper.
+            return true;
+        }
+    }
+    false
 }

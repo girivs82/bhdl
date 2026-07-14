@@ -97,6 +97,7 @@ mod tests {
             layer_constraint: LayerConstraint::Any,
             intent: None,
             layout_intents: vec![],
+            plane_layer: None,
         }
     }
 

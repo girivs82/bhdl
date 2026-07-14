@@ -512,6 +512,7 @@ pub fn build_board(
             intent,
             // Board-level @net intents (rare); populated by synth step 4.1.
             layout_intents: Vec::new(),
+            plane_layer: None,
         });
     }
 
@@ -607,6 +608,65 @@ pub fn build_board(
         num_power,
         has_hs,
     );
+
+    // 10.5 Assign plane layers to nets. The stackup is INPUT (resolved
+    // above); Ground-kind planes carry the ground net, each Power-kind
+    // plane carries the fattest still-unassigned power rail (required
+    // trace width = the flow classifier's own currency, name as the
+    // deterministic tie-break). Assigned nets are plane-connected: the
+    // router skips them, the exporter emits real fill copper, surface
+    // pads get via drops.
+    // GATED (BHDL_PNR_PLANES=1): the full pour-fill pipeline (plane
+    // assignment → via drops → fractured filled_polygon emission) is
+    // oracle-CLEAN on single-plane boards (pds 47→0 unc, led/lm/
+    // advanced 0) but multi-plane boards still ship fill-interaction
+    // shorts, and disabling only power planes destabilized others.
+    // Dark until the multi-plane interplay is converged — default
+    // behavior is exactly the pre-plane router.
+    if std::env::var("BHDL_PNR_PLANES").is_ok() {
+        let gnd_idx = nets
+            .iter()
+            .position(|n| matches!(n.net_class, PnrNetClass::Ground));
+        let mut power_by_fat: Vec<usize> = nets
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| matches!(n.net_class, PnrNetClass::Power { .. }))
+            .map(|(i, _)| i)
+            .collect();
+        power_by_fat.sort_by(|&a, &b| {
+            nets[b]
+                .required_trace_width_mm
+                .partial_cmp(&nets[a].required_trace_width_mm)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| nets[a].name.cmp(&nets[b].name))
+        });
+        let mut next_power = power_by_fat.into_iter();
+        for (li, layer) in layer_stack.layers.iter().enumerate() {
+            match layer.kind {
+                LayerKind::Ground => {
+                    if let Some(gi) = gnd_idx {
+                        if nets[gi].plane_layer.is_none() {
+                            nets[gi].plane_layer = Some(li);
+                            log::info!(
+                                "plane assignment: {} -> '{}' (ground)",
+                                layer.name, nets[gi].name
+                            );
+                        }
+                    }
+                }
+                LayerKind::Power => {
+                    if let Some(pi) = next_power.next() {
+                        nets[pi].plane_layer = Some(li);
+                        log::info!(
+                            "plane assignment: {} -> '{}' (fattest unassigned rail, {:.2}mm IPC width)",
+                            layer.name, nets[pi].name, nets[pi].required_trace_width_mm
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
 
     // 11. Auto-size board outline
     let outline = match &config.board_config.outline {

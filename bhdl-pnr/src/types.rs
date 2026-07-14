@@ -513,6 +513,11 @@ pub struct PnrNet {
     pub weight: f64,
     pub required_trace_width_mm: f64,
     pub layer_constraint: LayerConstraint,
+    /// Plane layer index this net is assigned to (GND plane, power
+    /// plane). Assigned at board construction after stackup resolution;
+    /// the router skips assigned nets (their copper is the emitted zone
+    /// FILL) and surface pads get via drops.
+    pub plane_layer: Option<usize>,
     /// Legacy string-form intent (from the older `intent_routing_constraints`
     /// path). Retained during transition; superseded by typed constraints
     /// in `Board.constraints`.
@@ -532,14 +537,13 @@ impl PnrNet {
     /// plane but typically multiple power rails (VIN, 5V, 3.3V, 1.8V, etc.).
     /// On 1-layer or 2-layer boards (no dedicated ground layer), even GND is routed.
     pub fn is_plane_connected(&self, _stack: &LayerStack) -> bool {
-        // ALWAYS route. "The plane will connect it" was an assumption
-        // the exporter couldn't back: headless KiCad DRC uses SAVED
-        // zone fills and we emit none, so every SMD pad of a
-        // plane-skipped net counted as unconnected (38 GND pins on the
-        // dense fixture). Until pour FILLS are computed and emitted,
-        // plane nets get real, verifiable tracks; zones remain bonus
-        // copper. (P1 continuation: compute fills → re-enable skips.)
-        false
+        // True only for nets ASSIGNED a plane layer at board
+        // construction: the exporter now emits real filled_polygon
+        // geometry for those planes (headless KiCad DRC uses saved
+        // fills), so "the plane connects it" is backed by copper the
+        // oracle can see. Surface pads get via drops; through-hole
+        // barrels pierce the plane directly.
+        self.plane_layer.is_some()
     }
 }
 

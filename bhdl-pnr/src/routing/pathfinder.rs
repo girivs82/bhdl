@@ -1035,7 +1035,7 @@ pub(crate) fn count_connected_sinks(board: &Board, routes: &[Route]) -> usize {
     let mut connected = 0usize;
     for (ni, net) in board.nets.iter().enumerate() {
         let Some(route) = routes.get(ni) else { continue };
-        if route.is_empty() {
+        if route.is_empty() && net.plane_layer.is_none() {
             continue;
         }
         for &(comp_id, pin_id) in &net.pins {
@@ -1053,6 +1053,13 @@ pub(crate) fn count_connected_sinks(board: &Board, routes: &[Route]) -> usize {
                 .as_ref()
                 .map(|p| p.width_mm.min(p.height_mm) / 2.0)
                 .unwrap_or(0.4);
+            // Plane-net through-hole barrels pierce their plane fill.
+            if net.plane_layer.is_some()
+                && pin.pad.as_ref().and_then(|p| p.drill_mm).is_some()
+            {
+                connected += 1;
+                continue;
+            }
             let hit = route.segments.iter().any(|sg| {
                 let (dx, dy) = (sg.end.0 - sg.start.0, sg.end.1 - sg.start.1);
                 let len2 = dx * dx + dy * dy;

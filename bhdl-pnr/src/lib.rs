@@ -447,10 +447,23 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
     //    Pass 1: single-layer routing (no vias) — maximize what can be routed flat
     //    Pass 2: remaining unrouted nets get vias to escape to other layers
     info!("Final routing pass 1 (single-layer, no vias)...");
+    // Plane-assigned nets don't route as trees: their copper is the
+    // emitted zone FILL; surface pads get via drops after routing.
+    let routing_nets: Vec<PnrNet> = board
+        .nets
+        .iter()
+        .map(|n| {
+            if n.plane_layer.is_some() {
+                PnrNet { pins: Vec::new(), ..n.clone() }
+            } else {
+                n.clone()
+            }
+        })
+        .collect();
     let mut final_grid = RoutingGrid::build(&board);
     let mut final_routes = pathfinder::pathfinder_route(
         &mut final_grid,
-        &board.nets,
+        &routing_nets,
         &board,
         100,
         1.0,
@@ -543,6 +556,75 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
     info!("Routing complete: {} pass1, {} pass2",
         routed_pass1, final_routes.iter().filter(|r| !r.is_empty()).count() - routed_pass1);
 
+    // 5.5. Via drops for plane-assigned nets: through-hole barrels
+    // pierce their plane directly; each SURFACE pad gets a short stub
+    // to a legally-sited via. A pad with no legal site within reach
+    // stays honestly unconnected.
+    {
+        let dropped = plane_via_drops(&board, &mut final_routes);
+        if dropped > 0 {
+            info!("plane via drops: {} surface pad(s) connected", dropped);
+        }
+        // Verify every drop still TOUCHES its plane after hole merging:
+        // punches around clustered foreign barrels chain-merge into
+        // circles bigger than any siting gap anticipates, and a drop
+        // fully inside one has no plane contact (ships as
+        // via_dangling). Remove swallowed drops — honest unconnected.
+        let via_r = board.layer_stack.via.pad_mm / 2.0;
+        for i in 0..board.nets.len() {
+            if board.nets[i].plane_layer.is_none() {
+                continue;
+            }
+            let holes = output::kicad::merge_holes(output::kicad::plane_foreign_holes(
+                &board,
+                &final_routes,
+                board.nets[i].id,
+            ));
+            let r = &mut final_routes[i];
+            let mut vi = 0;
+            while vi < r.vias.len() {
+                let v = &r.vias[vi];
+                let swallowed =
+                    output::kicad::plane_swallows(&board, &holes, v.x, v.y, via_r);
+                if swallowed {
+                    log::warn!(
+                        "plane via drop at ({:.2},{:.2}) on '{}' swallowed by a merged \
+                         fill punch — removed (pad stays unconnected)",
+                        v.x, v.y, board.nets[i].name
+                    );
+                    // Drop spans are (1 segment, 1 via) each, appended in
+                    // order: find the span whose via range contains vi.
+                    if let Some(sp) = r
+                        .via_spans
+                        .iter()
+                        .position(|&(vs, vl)| vl > 0 && vi >= vs && vi < vs + vl)
+                    {
+                        let (ps, pl) = r.path_spans[sp];
+                        r.segments.drain(ps..ps + pl);
+                        r.vias.remove(vi);
+                        r.path_spans.remove(sp);
+                        r.path_parents.remove(sp);
+                        r.via_spans.remove(sp);
+                        for q in r.path_spans.iter_mut() {
+                            if q.0 > ps {
+                                q.0 -= pl;
+                            }
+                        }
+                        for q in r.via_spans.iter_mut() {
+                            if q.0 > vi {
+                                q.0 -= 1;
+                            }
+                        }
+                    } else {
+                        r.vias.remove(vi);
+                    }
+                } else {
+                    vi += 1;
+                }
+            }
+        }
+    }
+
     // 5.9. Geometric validation with RECOVERY: a ripped net is not
     // abandoned — it gets rerouted (vias allowed) on a grid where all
     // surviving copper's footprint is blocked, then re-validated. Up to
@@ -569,6 +651,16 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
             );
             // Partial (amputated) routes EXTEND from their surviving
             // tree; only fully-ripped nets reroute from scratch.
+            // Plane-assigned nets are NOT tree-recovered: their
+            // connectivity is pad → drop via → plane fill, which the
+            // extension's tree model can't see — it "reclaimed" plane
+            // pins with 69 segments of tree copper and orphaned drop
+            // vias. Validator amputation of their offending copper
+            // stands; the plane carries the rest.
+            let ripped: Vec<usize> = ripped
+                .into_iter()
+                .filter(|&i| board.nets[i].plane_layer.is_none())
+                .collect();
             let (partial, whole): (Vec<usize>, Vec<usize>) =
                 ripped.iter().partition(|&&i| !final_routes[i].is_empty());
             for &i in &partial {
@@ -787,6 +879,195 @@ fn segments_too_close(
 /// may intersect or under-clear. The cell model has deliberate blind
 /// spots (blocked pad-halo cells exempt from overflow), so the last
 /// word is geometry. Returns the indices of nets ripped this call.
+/// Connect plane-assigned nets' SURFACE pads to their plane with a
+/// stub + via. Sites are searched deterministically on rings around the
+/// pad and checked geometrically against ALL existing copper (foreign
+/// pads, tracks, vias, board edge). Returns the number of pads dropped.
+fn plane_via_drops(board: &Board, final_routes: &mut [Route]) -> usize {
+    let via_r = board.layer_stack.via.pad_mm / 2.0;
+    let drill = board.layer_stack.via.drill_mm;
+    let clearance = board.config.min_spacing_mm;
+    let bw = board.config.outline.width();
+    let bh = board.config.outline.height();
+    let edge = board.config.edge_clearance_mm + via_r;
+    let n_layers = board.layer_stack.layers.len();
+
+    // Snapshot foreign-copper geometry once.
+    struct PadObs {
+        net: Option<NetId>,
+        cx: f64,
+        cy: f64,
+        hx: f64,
+        hy: f64,
+        drill_r: f64,
+    }
+    let mut pads: Vec<PadObs> = Vec::new();
+    for comp in &board.components {
+        let cos_t = comp.theta.cos();
+        let sin_t = comp.theta.sin();
+        let quarter =
+            ((comp.theta / std::f64::consts::FRAC_PI_2).round() as i64).rem_euclid(2);
+        for pin in &comp.pins {
+            if pin.unplaced {
+                continue;
+            }
+            let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
+            let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+            let (pw, ph, dr) = match &pin.pad {
+                Some(p) => (p.width_mm, p.height_mm, p.drill_mm.unwrap_or(0.0) / 2.0),
+                None => (0.8, 0.8, 0.0),
+            };
+            let (pw, ph) = if quarter == 1 { (ph, pw) } else { (pw, ph) };
+            pads.push(PadObs {
+                net: pin.net,
+                cx: gx,
+                cy: gy,
+                hx: pw / 2.0,
+                hy: ph / 2.0,
+                drill_r: dr,
+            });
+        }
+    }
+
+    let mut new_vias: Vec<(f64, f64)> = Vec::new();
+    let mut dropped = 0usize;
+    for i in 0..board.nets.len() {
+        let net = &board.nets[i];
+        if net.plane_layer.is_none() {
+            continue;
+        }
+        let comp_idx: std::collections::HashMap<ComponentId, usize> = board
+            .components
+            .iter()
+            .enumerate()
+            .map(|(k, c)| (c.id, k))
+            .collect();
+        let share = stackup::trace_width_for_current(
+            stackup::current_for_trace_width(net.required_trace_width_mm)
+                / net.pins.len().max(1) as f64,
+            1.0,
+            10.0,
+        )
+        .max(0.3)
+        .min(net.required_trace_width_mm);
+        for &(comp_id, pin_id) in &net.pins {
+            let Some(&ci) = comp_idx.get(&comp_id) else { continue };
+            let comp = &board.components[ci];
+            let Some(pin) = comp.pins.iter().find(|p| p.pin_id == pin_id) else {
+                continue;
+            };
+            if pin.unplaced {
+                continue;
+            }
+            if pin.pad.as_ref().and_then(|p| p.drill_mm).is_some() {
+                continue; // through-hole barrel pierces the plane
+            }
+            let cos_t = comp.theta.cos();
+            let sin_t = comp.theta.sin();
+            let px = comp.x + pin.dx * cos_t - pin.dy * sin_t;
+            let py = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+            let stub_layer = match comp.side {
+                BoardSide::Top => 0,
+                BoardSide::Bottom => n_layers - 1,
+            };
+            let site_ok = |x: f64, y: f64| -> bool {
+                if x < edge || y < edge || x > bw - edge || y > bh - edge {
+                    return false;
+                }
+                for p in &pads {
+                    let same = p.net == Some(net.id);
+                    if !same {
+                        let m = (via_r + clearance).max(drill / 2.0 + 0.25);
+                        if (x - p.cx).abs() < p.hx + m && (y - p.cy).abs() < p.hy + m {
+                            return false;
+                        }
+                    }
+                    if p.drill_r > 0.0
+                        && (x - p.cx).hypot(y - p.cy)
+                            < (p.drill_r + drill / 2.0 + 0.25)
+                                .max(if p.net == Some(net.id) {
+                                    0.0
+                                } else {
+                                    // foreign barrel punch + own punch
+                                    (p.hx.max(p.hy) + 0.35) + (via_r + 0.35) + 0.1
+                                })
+                    {
+                        return false;
+                    }
+                }
+                // Keep plane drops a full PUNCH DIAMETER away from
+                // foreign barrels: the fill punches holes around
+                // foreign barrels (radius ~via_r + zone clearance), and
+                // overlapping punches MERGE into bigger circles — a
+                // drop sited inside a merged punch loses its plane
+                // contact (shipped as via_dangling).
+                let punch_gap = 2.0 * (via_r + 0.35) + 0.15;
+                for r in final_routes.iter() {
+                    for sg in &r.segments {
+                        let m = via_r + sg.width_mm / 2.0 + clearance;
+                        if segment_point_too_close(sg.start, sg.end, (x, y), m) {
+                            return false;
+                        }
+                    }
+                    for v in &r.vias {
+                        if (x - v.x).hypot(y - v.y) < punch_gap {
+                            return false;
+                        }
+                    }
+                }
+                for &(vx, vy) in &new_vias {
+                    // Same-net drops don't punch each other, but drops
+                    // of DIFFERENT plane nets do — keep the full gap.
+                    if (x - vx).hypot(y - vy) < punch_gap {
+                        return false;
+                    }
+                }
+                true
+            };
+            let mut placed_at: Option<(f64, f64)> = None;
+            'rings: for ring in 0..6 {
+                let r = 0.6 + ring as f64 * 0.35;
+                for k in 0..8 {
+                    let ang = k as f64 * std::f64::consts::FRAC_PI_4;
+                    let (x, y) = (px + r * ang.cos(), py + r * ang.sin());
+                    if site_ok(x, y) {
+                        placed_at = Some((x, y));
+                        break 'rings;
+                    }
+                }
+            }
+            let Some((vx, vy)) = placed_at else {
+                log::warn!(
+                    "plane via drop: no legal site near pad '{}' of '{}' (net '{}') — pad stays unconnected",
+                    pin.name, comp.refdes, net.name
+                );
+                continue;
+            };
+            let route = &mut final_routes[i];
+            let seg_start = route.segments.len();
+            let via_start = route.vias.len();
+            route.segments.push(RouteSegment {
+                layer: stub_layer,
+                start: (px, py),
+                end: (vx, vy),
+                width_mm: share,
+            });
+            route.vias.push(RouteVia {
+                x: vx,
+                y: vy,
+                from_layer: 0,
+                to_layer: n_layers - 1,
+            });
+            route.path_spans.push((seg_start, 1));
+            route.path_parents.push(None);
+            route.via_spans.push((via_start, 1));
+            new_vias.push((vx, vy));
+            dropped += 1;
+        }
+    }
+    dropped
+}
+
 fn segment_point_too_close(a: (f64, f64), b: (f64, f64), p: (f64, f64), gap: f64) -> bool {
     let (dx, dy) = (b.0 - a.0, b.1 - a.1);
     let len2 = dx * dx + dy * dy;
@@ -1175,7 +1456,10 @@ fn validate_and_rip(
                     // via_dangling: the via must land on copper on BOTH
                     // layers it spans — a segment endpoint at its center
                     // on that layer, or a THT pad of its own net.
-                    if !bad {
+                    // Plane-assigned nets are exempt: their via pierces
+                    // the emitted zone fill (copper the oracle sees but
+                    // this validator doesn't model).
+                    if !bad && board.nets[i].plane_layer.is_none() {
                         for check_layer in [v.from_layer, v.to_layer] {
                             // Width-aware copper overlap (a via inside
                             // a wide trunk's width is connected even off
