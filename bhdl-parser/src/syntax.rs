@@ -416,6 +416,7 @@ pub enum SyntaxKind {
     SYMBOL_PART,           // part "label" { side ... } (Phase 2 stub)
     LAYOUT_DEF,            // layout EntityName { ... }
     LAYOUT_PACKAGE,        // package HTSSOP-16;
+    LAYOUT_STACKUP,        // layer_stackup 4;
 
     // Placement block nodes (entity-level PCB placement recipes)
     PLACEMENT_BLOCK,       // placement { ... }

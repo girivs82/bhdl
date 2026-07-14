@@ -3422,8 +3422,12 @@ impl<'t> Parser<'t> {
             match self.peek() {
                 Some(SyntaxKind::R_BRACE) | None => break,
                 Some(SyntaxKind::PACKAGE_KW) => self.parse_layout_package(),
+                Some(SyntaxKind::LAYER_STACKUP_KW) => self.parse_layout_stackup(),
                 _ => {
-                    self.error("Expected 'package' in layout definition".to_string());
+                    self.error(
+                        "Expected 'package' or 'layer_stackup' in layout definition"
+                            .to_string(),
+                    );
                     self.bump_any();
                 }
             }
@@ -3447,6 +3451,23 @@ impl<'t> Parser<'t> {
             self.bump_any();
         }
 
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+
+    /// Parse layout stackup: `layer_stackup 4;` — the BOARD-level layer
+    /// count. A stackup is a design decision (cost, EMI, current
+    /// capacity) the PnR consumes as INPUT; without a declaration the
+    /// synthesizer infers one and reports it.
+    fn parse_layout_stackup(&mut self) {
+        self.builder.start_node(SyntaxKind::LAYOUT_STACKUP.into());
+        self.expect(SyntaxKind::LAYER_STACKUP_KW);
+        while self.peek() != Some(SyntaxKind::SEMI)
+            && self.peek() != Some(SyntaxKind::R_BRACE)
+            && self.peek().is_some()
+        {
+            self.bump_any();
+        }
         self.expect(SyntaxKind::SEMI);
         self.builder.finish_node();
     }

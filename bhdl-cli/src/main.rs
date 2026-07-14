@@ -1706,11 +1706,43 @@ async fn run_layout(
         println!("  {} Physical selection: {} components", "✓".green(), phys.len());
     }
 
-    // 7. Build PnR board
+    // 7. Build PnR board. The stackup is an INPUT to PnR: a board's
+    // `layout Board { layer_stackup N; }` declaration wins; otherwise
+    // the synthesizer infers one and REPORTS it (a silent layer-count
+    // decision is a hidden design decision).
+    let mut sem_config = SemanticConfig::default();
+    let board_module_name = netlist
+        .top_level_module
+        .and_then(|id| netlist.modules.get(id))
+        .map(|m| m.name.clone());
+    if let Some(name) = &board_module_name {
+        if let Some(lay) = analysis.layout_definitions.get(name) {
+            if let Some(n) = lay.layer_stackup {
+                use bhdl_pnr::types::{StackupPreset, StackupSource};
+                let preset = match n {
+                    2 => StackupPreset::TwoLayer,
+                    4 => StackupPreset::FourLayer,
+                    6 => StackupPreset::SixLayer,
+                    8 => StackupPreset::EightLayer,
+                    other => anyhow::bail!(
+                        "layout {name} declares layer_stackup {other}; \
+                         supported stackups are 2, 4, 6, 8 layers"
+                    ),
+                };
+                sem_config.board_config.stackup = StackupSource::Preset(preset);
+                println!(
+                    "  {} Stackup: {n}-layer (declared in layout {name})",
+                    "✓".green()
+                );
+            }
+        }
+    }
+    let declared_stackup =
+        !matches!(sem_config.board_config.stackup, bhdl_pnr::types::StackupSource::Auto);
     let board_result = semantic::build_board(
         &netlist,
         sim_annotations.as_ref(),
-        SemanticConfig::default(),
+        sem_config,
     );
     let mut board = match board_result {
         Ok(b) => b,
@@ -1745,6 +1777,16 @@ async fn run_layout(
             "✓".green(),
             lowering.constraints_emitted,
             lowering.components_with_intent
+        );
+    }
+    if !declared_stackup {
+        println!(
+            "  {} Stackup: {}-layer (inferred from {} components / {} nets — declare \
+             `layout <Board> {{ layer_stackup N; }}` to pin it)",
+            "✓".green(),
+            board.layer_stack.layers.len(),
+            board.components.len(),
+            board.nets.len()
         );
     }
     println!("  {} Board: {} components, {} nets, {} groups",

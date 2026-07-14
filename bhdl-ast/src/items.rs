@@ -1525,6 +1525,18 @@ impl LayoutDef {
                 name_parts.join("")
             })
     }
+
+    /// Board-level layer count from `layer_stackup N;`.
+    pub fn layer_stackup(&self) -> Option<usize> {
+        self.0
+            .children()
+            .find(|n| n.kind() == SyntaxKind::LAYOUT_STACKUP)
+            .and_then(|n| {
+                n.children_with_tokens()
+                    .filter_map(|e| e.into_token())
+                    .find_map(|t| t.text().parse::<usize>().ok())
+            })
+    }
 }
 // ─── part_family declarations (v0.2 catalog) ───────────────────────
 //

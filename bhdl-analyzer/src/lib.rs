@@ -3091,10 +3091,12 @@ pub fn extract_layout_definitions(
         }
 
         let package = layout_def.package();
+        let layer_stackup = layout_def.layer_stackup();
 
         definitions.insert(entity_name.clone(), LayoutDefinition {
             entity_name,
             package,
+            layer_stackup,
         });
     }
 

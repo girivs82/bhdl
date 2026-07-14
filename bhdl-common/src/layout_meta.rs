@@ -10,4 +10,7 @@ use serde::{Serialize, Deserialize};
 pub struct LayoutDefinition {
     pub entity_name: String,
     pub package: Option<String>,
+    /// Board-level layer count from `layer_stackup N;` — a declared
+    /// stackup is an INPUT to PnR, not something routing discovers.
+    pub layer_stackup: Option<usize>,
 }
