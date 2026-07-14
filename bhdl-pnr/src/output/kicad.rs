@@ -295,30 +295,40 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
 fn place_reference_labels(board: &Board, routes: &[Route]) -> Vec<(f64, f64)> {
     let bw = board.config.outline.width();
     let bh = board.config.outline.height();
+    let edge = 0.5; // silk-to-edge rule
 
-    // Obstacles: rotated component bboxes (+margin) and track segments.
+    // Obstacles: copper envelopes (offset-aware — asymmetric packages
+    // have pads the origin-centered bbox misses), track segments, vias.
     let mut obstacles: Vec<(f64, f64, f64, f64)> = Vec::new();
     for c in &board.components {
-        let (rw, rh) = c.rotated_bbox();
-        obstacles.push((
-            c.x - rw / 2.0 - 0.15,
-            c.y - rh / 2.0 - 0.15,
-            c.x + rw / 2.0 + 0.15,
-            c.y + rh / 2.0 + 0.15,
-        ));
+        let (cx, cy, hw, hh) = c.envelope();
+        obstacles.push((cx - hw - 0.15, cy - hh - 0.15, cx + hw + 0.15, cy + hh + 0.15));
     }
+    let via_r = board.layer_stack.via.pad_mm / 2.0;
     for r in routes {
         for s in &r.segments {
+            if s.layer != 0 {
+                continue; // silk is front-side; only F.Cu copper collides
+            }
             let (x0, x1) = (s.start.0.min(s.end.0), s.start.0.max(s.end.0));
             let (y0, y1) = (s.start.1.min(s.end.1), s.start.1.max(s.end.1));
             let m = s.width_mm / 2.0 + 0.15;
             obstacles.push((x0 - m, y0 - m, x1 + m, y1 + m));
         }
+        for v in &r.vias {
+            let m = via_r + 0.15;
+            obstacles.push((v.x - m, v.y - m, v.x + m, v.y + m));
+        }
     }
 
-    let overlaps = |r: (f64, f64, f64, f64), obs: &[(f64, f64, f64, f64)]| -> bool {
+    let overlap_area = |r: (f64, f64, f64, f64), obs: &[(f64, f64, f64, f64)]| -> f64 {
         obs.iter()
-            .any(|o| r.0 < o.2 && r.2 > o.0 && r.1 < o.3 && r.3 > o.1)
+            .map(|o| {
+                let w = (r.2.min(o.2) - r.0.max(o.0)).max(0.0);
+                let h = (r.3.min(o.3) - r.1.max(o.1)).max(0.0);
+                w * h
+            })
+            .sum()
     };
 
     let mut placed: Vec<(f64, f64, f64, f64)> = Vec::new();
@@ -326,31 +336,52 @@ fn place_reference_labels(board: &Board, routes: &[Route]) -> Vec<(f64, f64)> {
     for c in &board.components {
         let tw = 0.95 * c.refdes.len() as f64 + 0.4; // ~1mm font
         let th = 1.3;
-        let (rw, rh) = c.rotated_bbox();
-        let candidates = [
-            (c.x, c.y - rh / 2.0 - th / 2.0 - 0.3),           // above
-            (c.x, c.y + rh / 2.0 + th / 2.0 + 0.3),           // below
-            (c.x - rw / 2.0 - tw / 2.0 - 0.3, c.y),           // left
-            (c.x + rw / 2.0 + tw / 2.0 + 0.3, c.y),           // right
-            (c.x - rw / 2.0 - tw / 2.0 - 0.3, c.y - rh / 2.0 - th / 2.0 - 0.3),
-            (c.x + rw / 2.0 + tw / 2.0 + 0.3, c.y - rh / 2.0 - th / 2.0 - 0.3),
-            (c.x - rw / 2.0 - tw / 2.0 - 0.3, c.y + rh / 2.0 + th / 2.0 + 0.3),
-            (c.x + rw / 2.0 + tw / 2.0 + 0.3, c.y + rh / 2.0 + th / 2.0 + 0.3),
-        ];
-        let mut chosen = candidates[0];
-        for cand in candidates {
-            let rect = (
-                cand.0 - tw / 2.0,
-                cand.1 - th / 2.0,
-                cand.0 + tw / 2.0,
-                cand.1 + th / 2.0,
-            );
-            let inside = rect.0 > 0.3 && rect.1 > 0.3 && rect.2 < bw - 0.3 && rect.3 < bh - 0.3;
-            if inside && !overlaps(rect, &obstacles) && !overlaps(rect, &placed) {
-                chosen = cand;
-                break;
+        let (ecx, ecy, hw, hh) = c.envelope();
+        // Spiral of candidate rings: ring 0 hugs the part, further
+        // rings step outward — a crowded neighborhood gets a label a
+        // few mm away instead of one stamped over copper.
+        let mut best: Option<(f64, (f64, f64))> = None;
+        'search: for ring in 0..4 {
+            let off = 0.3 + ring as f64 * 0.9;
+            let candidates = [
+                (ecx, ecy - hh - th / 2.0 - off),
+                (ecx, ecy + hh + th / 2.0 + off),
+                (ecx - hw - tw / 2.0 - off, ecy),
+                (ecx + hw + tw / 2.0 + off, ecy),
+                (ecx - hw - tw / 2.0 - off, ecy - hh - th / 2.0 - off),
+                (ecx + hw + tw / 2.0 + off, ecy - hh - th / 2.0 - off),
+                (ecx - hw - tw / 2.0 - off, ecy + hh + th / 2.0 + off),
+                (ecx + hw + tw / 2.0 + off, ecy + hh + th / 2.0 + off),
+            ];
+            for cand in candidates {
+                let rect = (
+                    cand.0 - tw / 2.0,
+                    cand.1 - th / 2.0,
+                    cand.0 + tw / 2.0,
+                    cand.1 + th / 2.0,
+                );
+                let inside = rect.0 > edge
+                    && rect.1 > edge
+                    && rect.2 < bw - edge
+                    && rect.3 < bh - edge;
+                if !inside {
+                    continue;
+                }
+                let area = overlap_area(rect, &obstacles) + overlap_area(rect, &placed);
+                if area <= 0.0 {
+                    best = Some((0.0, cand));
+                    break 'search;
+                }
+                // Track the least-bad candidate: shipping the smallest
+                // overlap beats shipping candidate[0] blind.
+                if best.map_or(true, |(a, _)| area < a) {
+                    best = Some((area, cand));
+                }
             }
         }
+        let chosen = best
+            .map(|(_, c)| c)
+            .unwrap_or((ecx, ecy - hh - th / 2.0 - 0.3));
         placed.push((
             chosen.0 - tw / 2.0,
             chosen.1 - th / 2.0,
