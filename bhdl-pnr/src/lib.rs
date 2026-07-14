@@ -836,7 +836,7 @@ fn debug_check_foreign_pads(board: &Board, routes: &[Route], tag: &str) {
                     }
                     let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
                     let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
-                    let (pw, ph) = pin.pad.as_ref().map(|p| (p.width_mm, p.height_mm)).unwrap_or((0.8, 0.8));
+                    let (pw, ph) = pin.pad.as_ref().map(|p| (p.width_mm, p.height_mm)).unwrap_or((0.5, 0.5)); // matches exporter fallback
                     let (hx, hy) = (pw / 2.0 + 0.15, ph / 2.0 + 0.15);
                     for i in 0..=10 {
                         let t = i as f64 / 10.0;
@@ -928,7 +928,7 @@ fn plane_via_drops(board: &Board, final_routes: &mut [Route]) -> usize {
             let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
             let (pw, ph, dr) = match &pin.pad {
                 Some(p) => (p.width_mm, p.height_mm, p.drill_mm.unwrap_or(0.0) / 2.0),
-                None => (0.8, 0.8, 0.0),
+                None => (0.5, 0.5, 0.0), // matches exporter fallback
             };
             let (pw, ph) = if quarter == 1 { (ph, pw) } else { (pw, ph) };
             pads.push(PadObs {
@@ -1138,7 +1138,10 @@ fn validate_and_rip(
                         p.drill_mm.is_some(),
                         p.drill_mm.unwrap_or(0.0) / 2.0,
                     ),
-                    None => (0.8, 0.8, false, 0.0),
+                    // 0.5 matches the EXPORTER's fallback pad — the validator
+                    // modeling 0.8 while the file ships 0.5 let stubs pass
+                    // as pad-anchored that KiCad sees dangling.
+                    None => (0.5, 0.5, false, 0.0),
                 };
                 let (pw, ph) = if quarter == 1 { (ph, pw) } else { (pw, ph) };
                 let on_top = thru || matches!(comp.side, BoardSide::Top);
@@ -1264,35 +1267,32 @@ fn validate_and_rip(
                     let mut dangle: Option<(usize, (f64, f64))> = None;
                     'ends: for (si, sa) in rt.segments.iter().enumerate() {
                         for pt in [sa.start, sa.end] {
-                            // Width-aware: copper CONNECTS when the
-                            // shapes overlap — a thin stub ending inside
-                            // a fat trunk's width is joined even 0.4mm
-                            // off the trunk centerline. Centerline-point
-                            // tests flagged exactly those as dangling.
+                            // KiCad's track_dangling is ENDPOINT-GRAPH
+                            // semantics: lateral width-overlap does NOT
+                            // rescue a stray end (self-copper of the
+                            // merged run never counts). An endpoint is
+                            // anchored only if it lies ON another
+                            // segment (co-endpoint or T-interior),
+                            // INSIDE a same-net pad, or ON a via.
                             let own_half = sa.width_mm / 2.0;
+                            let _ = own_half;
                             let via_r = board.layer_stack.via.pad_mm / 2.0;
                             let mut touched = rt.segments.iter().enumerate().any(|(sj, sb)| {
                                 sj != si
                                     && sb.layer == sa.layer
-                                    && segment_point_too_close(
-                                        sb.start,
-                                        sb.end,
-                                        pt,
-                                        sb.width_mm / 2.0 + own_half - 0.001,
-                                    )
+                                    && segment_point_too_close(sb.start, sb.end, pt, 0.01)
                             });
                             if !touched {
                                 touched = rt.vias.iter().any(|v| {
-                                    (v.x - pt.0).hypot(v.y - pt.1)
-                                        < via_r + own_half - 0.001
+                                    (v.x - pt.0).hypot(v.y - pt.1) < via_r + 0.01
                                 });
                             }
                             if !touched {
                                 touched = pad_rects.iter().any(|p| {
                                     p.net == Some(net_id)
                                         && pad_on_layer(p, sa.layer)
-                                        && (pt.0 - p.cx).abs() < p.hx + own_half - 0.001
-                                        && (pt.1 - p.cy).abs() < p.hy + own_half - 0.001
+                                        && (pt.0 - p.cx).abs() < p.hx + 0.01
+                                        && (pt.1 - p.cy).abs() < p.hy + 0.01
                                 });
                             }
                             if !touched {
@@ -1844,5 +1844,34 @@ fn validate_and_rip(
             }
         }
     
+    // Self-check (debug builds of truth): re-run the dangle scan on the
+    // final state — a survivor here means an arm above exited without
+    // consuming its offender.
+    if std::env::var("BHDL_PNR_DEBUG_PLANES").is_ok() {
+        for (i, rt) in final_routes.iter().enumerate() {
+            for (si, sa) in rt.segments.iter().enumerate() {
+                let own_half = sa.width_mm / 2.0;
+                for pt in [sa.start, sa.end] {
+                    let touched = rt.segments.iter().enumerate().any(|(sj, sb)| {
+                        sj != si
+                            && sb.layer == sa.layer
+                            && segment_point_too_close(
+                                sb.start, sb.end, pt,
+                                sb.width_mm / 2.0 + own_half - 0.001,
+                            )
+                    }) || rt.vias.iter().any(|v| {
+                        (v.x - pt.0).hypot(v.y - pt.1) < 0.3 + own_half
+                    });
+                    if !touched {
+                        log::warn!(
+                            "[self-check] net '{}' endpoint ({:.2},{:.2}) untouched at validator exit",
+                            board.nets.get(i).map(|n| n.name.as_str()).unwrap_or(""),
+                            pt.0, pt.1
+                        );
+                    }
+                }
+            }
+        }
+    }
     ripped_nets
 }
