@@ -42,6 +42,7 @@ pub fn pathfinder_route(
     // pulling the pair together (constraint synthesis v1: attraction,
     // not geometric lockstep — the sign-off report grades the result).
     let partner: HashMap<usize, usize> = {
+        // (populated below; pair adjacency applied to net_order after)
         let idx_of: HashMap<NetId, usize> =
             nets.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
         let mut m = HashMap::new();
@@ -55,6 +56,27 @@ pub fn pathfinder_route(
         }
         m
     };
+    // Pair ADJACENCY: another net routed between P and N leaves its
+    // copper across the corridor N wants — reorder so each pair's
+    // second member routes immediately after the first.
+    if !partner.is_empty() {
+        let mut reordered: Vec<usize> = Vec::with_capacity(net_order.len());
+        let mut placed = vec![false; nets.len()];
+        for &i in &net_order {
+            if placed[i] {
+                continue;
+            }
+            reordered.push(i);
+            placed[i] = true;
+            if let Some(&j) = partner.get(&i) {
+                if !placed[j] {
+                    reordered.push(j);
+                    placed[j] = true;
+                }
+            }
+        }
+        net_order = reordered;
+    }
 
     let comp_idx: HashMap<ComponentId, usize> = board
         .components
@@ -87,15 +109,7 @@ pub fn pathfinder_route(
             let attract: Option<BTreeSet<CellCoord>> = partner
                 .get(&net_idx)
                 .filter(|&&pi| !routes[pi].is_empty())
-                .map(|&pi| {
-                    let mut cells = route_cells(grid, &routes[pi]);
-                    let ring: Vec<CellCoord> = cells
-                        .iter()
-                        .flat_map(|c| grid.planar_neighbors(*c).into_iter().map(|(n, _)| n))
-                        .collect();
-                    cells.extend(ring);
-                    cells
-                });
+                .map(|&pi| build_attract_set(grid, &routes[pi]));
 
             // Find shortest path with congestion-aware cost
             let route = shortest_path_3d(
@@ -547,6 +561,37 @@ fn escape_cell(
 
 /// Dijkstra from any source cell to any sink cell.
 #[allow(clippy::too_many_arguments)]
+/// The attraction corridor of a routed diff-pair partner: its cells,
+/// a one-cell ring (the target gap at grid pitch), projected to every
+/// layer so a shadow net forced through a via still follows the XY run.
+pub(crate) fn build_attract_set(grid: &RoutingGrid, route: &Route) -> BTreeSet<CellCoord> {
+    let mut cells = route_cells(grid, route);
+    // TWO rings: ring 1 is the target gap at grid pitch, but in
+    // recovery grids the partner's copper is hard-blocked INCLUDING
+    // its spacing halo — ring 1 is unreachable there and ring 2 is the
+    // first legal offset. The band covers both.
+    for _ in 0..2 {
+        let ring: Vec<CellCoord> = cells
+            .iter()
+            .flat_map(|c| grid.planar_neighbors(*c).into_iter().map(|(n, _)| n))
+            .collect();
+        cells.extend(ring);
+    }
+    let projected: Vec<CellCoord> = cells
+        .iter()
+        .flat_map(|c| {
+            (0..grid.num_layers).map(|l| CellCoord {
+                col: c.col,
+                row: c.row,
+                layer: l,
+            })
+        })
+        .collect();
+    cells.extend(projected);
+    cells
+}
+
+#[allow(clippy::too_many_arguments)]
 fn dijkstra_to_any(
     grid: &RoutingGrid,
     sources: &BTreeSet<CellCoord>,
@@ -672,7 +717,7 @@ fn dijkstra_to_any(
             // is cheap — the pair converges to a coupled run without
             // geometric lockstep.
             let attract_factor = match attract {
-                Some(set) if set.contains(&nbr) => 0.25,
+                Some(set) if set.contains(&nbr) => 0.15,
                 _ => 1.0,
             };
             let new_cost = cost + edge_cost * width_factor * move_cost * attract_factor;
@@ -740,7 +785,11 @@ fn dijkstra_to_any(
                     continue;
                 }
 
-                let new_cost = cost + grid.via_cost;
+                // A diff-pair shadow net leaving its partner's layer
+                // abandons the coupled run entirely — vias cost 4× for
+                // it (an EMPTY far layer otherwise wins on congestion).
+                let via_factor = if attract.is_some() { 4.0 } else { 1.0 };
+                let new_cost = cost + grid.via_cost * via_factor;
                 if new_cost < *dist.get(&nbr).unwrap_or(&f64::INFINITY) {
                     dist.insert(nbr, new_cost);
                     prev.insert(nbr, cell);
@@ -1085,6 +1134,7 @@ pub(crate) fn unreached_sink_count(net: &PnrNet, board: &Board, route: &Route) -
     unreached
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn extend_route(
     grid: &mut RoutingGrid,
     net: &PnrNet,
@@ -1095,6 +1145,7 @@ pub(crate) fn extend_route(
     banned_via_sites: &[(f64, f64)],
     banned_sites: &[(f64, f64)],
     full_width: bool,
+    attract: Option<&BTreeSet<CellCoord>>,
 ) -> usize {
     let comp_idx: HashMap<ComponentId, usize> = board
         .components
@@ -1285,7 +1336,7 @@ pub(crate) fn extend_route(
             &via_keepout,
             banned_sites,
             clear_ring,
-            None,
+            attract,
         );
         match result {
             Some((path, reached)) => {

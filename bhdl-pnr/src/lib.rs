@@ -655,9 +655,10 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                     .filter(|(k, _)| *k == i)
                     .map(|&(_, xy)| xy)
                     .collect();
+                let attract = pair_attract(&board, &final_routes, &ext_grid, i);
                 let got = pathfinder::extend_route(
                     &mut ext_grid, &board.nets[i], &board, &mut route, 1.0, 1.0, &banned,
-                    &dangles, false,
+                    &dangles, false, attract.as_ref(),
                 );
                 if got > 0 {
                     info!(
@@ -716,9 +717,10 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                     .filter(|(k, _)| *k == i)
                     .map(|&(_, xy)| xy)
                     .collect();
+                let attract = pair_attract(&board, &final_routes, rec_grid, i);
                 let got = pathfinder::extend_route(
                     rec_grid, &board.nets[i], &board, &mut fresh, 1.0, 1.0,
-                    &banned_v, &banned_d, false,
+                    &banned_v, &banned_d, false, attract.as_ref(),
                 );
                 if got > 0 {
                     info!(
@@ -765,6 +767,28 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
             let mut bv: Vec<(usize, (f64, f64))> = Vec::new();
             let mut bd: Vec<(usize, (f64, f64))> = Vec::new();
             validate_and_rip(&board, &mut final_routes, &mut bv, &mut bd);
+        }
+    }
+
+    // 5.94. MEANDERS: length-match skew above the limit gets serpentine
+    // length added to the SHORT member — one meander at a time, each
+    // wrapped in a full-snapshot transaction: the validator judges the
+    // new copper, and any objection restores the whole board (the skew
+    // FAIL then stands honestly in the sign-off).
+    {
+        // Fixpoint: short collinear runs bound how much one application
+        // can add — repeat until the skew is inside the limit or a
+        // round makes no progress.
+        let mut total = 0;
+        for _ in 0..8 {
+            let meandered = meander_pass(&board, &mut final_routes);
+            if meandered == 0 {
+                break;
+            }
+            total += meandered;
+        }
+        if total > 0 {
+            info!("meander pass: {total} application(s) for skew");
         }
     }
 
@@ -1419,6 +1443,30 @@ fn assign_plane_regions(board: &mut Board) {
 /// allowed) on a grid where all other committed copper is blocked.
 /// Cheap when nothing is missing (grid-free pre-filter). Returns the
 /// number of sinks reclaimed.
+/// Diff-pair partner attraction for post-negotiation extensions
+/// (recovery, completion): the partner's routed corridor, when it
+/// exists. Without this, a pair member re-routed after validation
+/// abandons the coupled run (and cheap empty-layer vias).
+fn pair_attract(
+    board: &Board,
+    final_routes: &[Route],
+    grid: &routing::grid::RoutingGrid,
+    i: usize,
+) -> Option<std::collections::BTreeSet<routing::grid::CellCoord>> {
+    use crate::constraint::Constraint;
+    let my_id = board.nets[i].id;
+    let partner_id = board.constraints.iter().find_map(|c| match c {
+        Constraint::DiffPair { p_net, n_net, .. } if *p_net == my_id => Some(*n_net),
+        Constraint::DiffPair { p_net, n_net, .. } if *n_net == my_id => Some(*p_net),
+        _ => None,
+    })?;
+    let pi = board.nets.iter().position(|n| n.id == partner_id)?;
+    if final_routes[pi].is_empty() {
+        return None;
+    }
+    Some(pathfinder::build_attract_set(grid, &final_routes[pi]))
+}
+
 fn completion_pass(board: &Board, final_routes: &mut Vec<Route>) -> usize {
     let mut total = 0usize;
     for i in 0..board.nets.len() {
@@ -1438,8 +1486,10 @@ fn completion_pass(board: &Board, final_routes: &mut Vec<Route>) -> usize {
             }
         }
         let mut route = final_routes[i].clone();
+        let attract = pair_attract(board, final_routes, &ext_grid, i);
         let got = pathfinder::extend_route(
             &mut ext_grid, &board.nets[i], board, &mut route, 1.0, 1.0, &[], &[], false,
+            attract.as_ref(),
         );
         if got > 0 {
             info!(
@@ -1451,6 +1501,387 @@ fn completion_pass(board: &Board, final_routes: &mut Vec<Route>) -> usize {
         }
     }
     total
+}
+
+/// Add serpentine length to the short member of each skew-violating
+/// pair / length-match group. Returns the number of nets meandered.
+fn meander_pass(board: &Board, final_routes: &mut Vec<Route>) -> usize {
+    use crate::constraint::Constraint;
+    let idx_of = |nid: NetId| board.nets.iter().position(|n| n.id == nid);
+    // Collect (short_idx, long_idx, needed_mm) work items.
+    let mut jobs: Vec<(usize, f64)> = Vec::new();
+    let mut seen: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+    for c in &board.constraints {
+        let (nets, tol): (Vec<usize>, f64) = match c {
+            Constraint::DiffPair { p_net, n_net, length_match_mm, .. } => {
+                let limit = board
+                    .constraints
+                    .iter()
+                    .find_map(|c2| match c2 {
+                        Constraint::LengthMatchGroup { nets, tolerance_mm, .. }
+                            if nets.contains(p_net) && nets.contains(n_net) =>
+                        {
+                            Some(*tolerance_mm)
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or(*length_match_mm);
+                (
+                    [*p_net, *n_net].iter().filter_map(|n| idx_of(*n)).collect(),
+                    limit as f64,
+                )
+            }
+            Constraint::LengthMatchGroup { nets, tolerance_mm, .. } => (
+                nets.iter().filter_map(|n| idx_of(*n)).collect(),
+                *tolerance_mm as f64,
+            ),
+            _ => continue,
+        };
+        if nets.len() < 2 {
+            continue;
+        }
+        let lens: Vec<f64> = nets
+            .iter()
+            .map(|&i| routing::measure::net_routed_length(&final_routes[i]))
+            .collect();
+        let max = lens.iter().cloned().fold(0.0_f64, f64::max);
+        if lens.iter().any(|&l| l <= 0.0) {
+            continue; // unrouted member — skew is not the problem
+        }
+        for (k, &i) in nets.iter().enumerate() {
+            let short = lens[k];
+            if max - short > tol && seen.insert(i) {
+                // Aim for mid-band, not the edge.
+                jobs.push((i, (max - short) - tol * 0.5));
+            }
+        }
+    }
+    let mut done = 0usize;
+    for (i, needed) in jobs {
+        if board.nets[i].plane_layer.is_some() {
+            continue;
+        }
+        let mut ok = false;
+        // A bump field toward the coupled partner collides with its
+        // copper, and tight corridors reject deep bumps — walk
+        // (run × depth × side) until the LOCAL clearance check accepts.
+        // (A full validate_and_rip here is wrong: the validator is
+        // stricter than KiCad in spots and would rip PRE-EXISTING
+        // shipped-legal copper, poisoning the transaction.)
+        'attempts: for run_rank in 0..4 {
+        for depth in [0.6, 0.45, 0.3] {
+        for side in [1.0, -1.0] {
+            let snapshot = final_routes[i].clone();
+            let Some((s0, sn)) =
+                apply_meander(board, &mut final_routes[i], needed, side, depth, run_rank)
+            else {
+                continue 'attempts; // this run has no room; try the next
+            };
+            if std::env::var("BHDL_PNR_DEBUG_NETS").is_ok() {
+                log::warn!(
+                    "meander attempt '{}' run_rank={run_rank} side={side} depth={depth}: spliced {sn} segs at {s0}",
+                    board.nets[i].name
+                );
+                for sg in &final_routes[i].segments[s0..s0 + sn] {
+                    log::warn!(
+                        "   new ({:.2},{:.2})-({:.2},{:.2}) L{}",
+                        sg.start.0, sg.start.1, sg.end.0, sg.end.1, sg.layer
+                    );
+                }
+            }
+            if meander_clear(board, final_routes, i, s0, sn) {
+                ok = true;
+                break 'attempts;
+            }
+            final_routes[i] = snapshot;
+        }
+        }
+        }
+        if ok {
+            done += 1;
+        } else {
+            log::info!(
+                "meander on '{}' rejected on every run/side/depth — skew FAIL stands",
+                board.nets[i].name
+            );
+        }
+    }
+    done
+}
+
+/// Local legality of net `i`'s copper against every OTHER net's
+/// copper, pads, and the board edge — the meander transaction's
+/// acceptance test. Deliberately scoped: pre-existing geometry of
+/// other nets is not re-judged.
+fn meander_clear(
+    board: &Board,
+    final_routes: &[Route],
+    i: usize,
+    s0: usize,
+    sn: usize,
+) -> bool {
+    let spacing = board.config.min_spacing_mm;
+    let via_r = board.layer_stack.via.pad_mm / 2.0;
+    let bw = board.config.outline.width();
+    let bh = board.config.outline.height();
+    let ec = board.config.edge_clearance_mm;
+    let my_net = board.nets[i].id;
+    // Only the NEW serpentine copper is judged: the net's pre-existing
+    // geometry already shipped (KiCad-legal) and re-judging it with the
+    // stricter local model would veto every meander.
+    for sg in &final_routes[i].segments[s0..s0 + sn] {
+        let half = sg.width_mm / 2.0;
+        // Board edge (bbox; polygon boards re-checked by the oracle).
+        for &(x, y) in &[sg.start, sg.end] {
+            if x < ec + half || y < ec + half || x > bw - ec - half || y > bh - ec - half {
+                return false;
+            }
+        }
+        for &(cx0, cy0, cx1, cy1) in &board.config.cutouts {
+            let edges = [
+                ((cx0, cy0), (cx1, cy0)),
+                ((cx1, cy0), (cx1, cy1)),
+                ((cx1, cy1), (cx0, cy1)),
+                ((cx0, cy1), (cx0, cy0)),
+            ];
+            if edges.iter().any(|&(a, b)| {
+                segments_too_close(sg.start, sg.end, a, b, half + ec)
+            }) {
+                return false;
+            }
+        }
+        for (j, r) in final_routes.iter().enumerate() {
+            if j == i {
+                continue;
+            }
+            for so in &r.segments {
+                if so.layer != sg.layer {
+                    continue;
+                }
+                if segments_too_close(
+                    sg.start,
+                    sg.end,
+                    so.start,
+                    so.end,
+                    half + so.width_mm / 2.0 + spacing,
+                ) {
+                    if std::env::var("BHDL_PNR_DEBUG_NETS").is_ok() {
+                        log::warn!(
+                            "meander_clear: new seg ({:.2},{:.2})-({:.2},{:.2}) vs '{}' seg ({:.2},{:.2})-({:.2},{:.2})",
+                            sg.start.0, sg.start.1, sg.end.0, sg.end.1,
+                            board.nets[j].name, so.start.0, so.start.1, so.end.0, so.end.1
+                        );
+                    }
+                    return false;
+                }
+            }
+            for v in &r.vias {
+                if segment_point_too_close(sg.start, sg.end, (v.x, v.y), half + via_r + spacing)
+                {
+                    return false;
+                }
+            }
+        }
+        // Foreign pads (rect approx via center extents).
+        for comp in &board.components {
+            let cos_t = comp.theta.cos();
+            let sin_t = comp.theta.sin();
+            let quarter =
+                ((comp.theta / std::f64::consts::FRAC_PI_2).round() as i64).rem_euclid(2);
+            for pin in &comp.pins {
+                if pin.unplaced || pin.net == Some(my_net) {
+                    continue;
+                }
+                let Some(pad) = &pin.pad else { continue };
+                let thru = pad.drill_mm.is_some();
+                let on_layer = thru
+                    || match comp.side {
+                        BoardSide::Top => sg.layer == 0,
+                        BoardSide::Bottom => {
+                            sg.layer == board.layer_stack.layers.len() - 1
+                        }
+                    };
+                if !on_layer {
+                    continue;
+                }
+                let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
+                let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+                let (pw, ph) = if quarter == 1 {
+                    (pad.height_mm, pad.width_mm)
+                } else {
+                    (pad.width_mm, pad.height_mm)
+                };
+                let (hx, hy) = (pw / 2.0, ph / 2.0);
+                let edges = [
+                    ((gx - hx, gy - hy), (gx + hx, gy - hy)),
+                    ((gx + hx, gy - hy), (gx + hx, gy + hy)),
+                    ((gx + hx, gy + hy), (gx - hx, gy + hy)),
+                    ((gx - hx, gy + hy), (gx - hx, gy - hy)),
+                ];
+                if edges.iter().any(|&(a, b)| {
+                    segments_too_close(sg.start, sg.end, a, b, half + spacing)
+                }) {
+                    if std::env::var("BHDL_PNR_DEBUG_NETS").is_ok() {
+                        log::warn!(
+                            "meander_clear: new seg ({:.2},{:.2})-({:.2},{:.2}) vs pad of {} at ({gx:.2},{gy:.2})",
+                            sg.start.0, sg.start.1, sg.end.0, sg.end.1, comp.refdes
+                        );
+                    }
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+/// Replace part of the longest straight tree segment with a square-wave
+/// serpentine adding ~`needed` mm. Returns false when no segment offers
+/// enough room (honest FAIL).
+fn apply_meander(
+    board: &Board,
+    route: &mut Route,
+    needed: f64,
+    side: f64,
+    depth: f64,
+    run_rank: usize,
+) -> Option<(usize, usize)> {
+    let comps = pathfinder::route_components(route);
+    let tree = {
+        let mut pop: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        for &c in &comps {
+            *pop.entry(c).or_insert(0) += 1;
+        }
+        pop.into_iter()
+            .max_by_key(|&(c, n)| (n, std::cmp::Reverse(c)))
+            .map(|(c, _)| c)
+    };
+    // Longest COLLINEAR RUN of consecutive tree segments (grid routing
+    // emits 1-cell pieces — a single segment is never long enough),
+    // kept within one path span so the splice bookkeeping stays sane.
+    let span_of = |si: usize| -> Option<usize> {
+        route
+            .path_spans
+            .iter()
+            .position(|&(ps, pl)| si >= ps && si < ps + pl)
+    };
+    let mut runs: Vec<(usize, usize, f64)> = Vec::new(); // (start, end incl, len)
+    let mut si = 0;
+    while si < route.segments.len() {
+        let sg = &route.segments[si];
+        let axis_x = (sg.end.1 - sg.start.1).abs() < 1e-9;
+        let axis_y = (sg.end.0 - sg.start.0).abs() < 1e-9;
+        if Some(comps[si]) != tree || (!axis_x && !axis_y) {
+            si += 1;
+            continue;
+        }
+        // signum(0.0) is +1.0 in Rust — naive signum pairs gave a
+        // horizontal segment direction (1,1), merging it with a
+        // following DIAGONAL into one "run" (the serpentine then bent
+        // diagonally and hit everything).
+        let dnorm = |dx: f64, dy: f64| -> (i8, i8) {
+            let f = |v: f64| {
+                if v > 1e-9 {
+                    1
+                } else if v < -1e-9 {
+                    -1
+                } else {
+                    0
+                }
+            };
+            (f(dx), f(dy))
+        };
+        let dir = dnorm(sg.end.0 - sg.start.0, sg.end.1 - sg.start.1);
+        let sp = span_of(si);
+        let mut sj = si;
+        while sj + 1 < route.segments.len() {
+            let nx = &route.segments[sj + 1];
+            let chained = (route.segments[sj].end.0 - nx.start.0).abs() < 1e-9
+                && (route.segments[sj].end.1 - nx.start.1).abs() < 1e-9;
+            let same_dir = dnorm(nx.end.0 - nx.start.0, nx.end.1 - nx.start.1) == dir;
+            if !chained
+                || !same_dir
+                || nx.layer != sg.layer
+                || Some(comps[sj + 1]) != tree
+                || span_of(sj + 1) != sp
+            {
+                break;
+            }
+            sj += 1;
+        }
+        let run_len = (route.segments[sj].end.0 - route.segments[si].start.0)
+            .hypot(route.segments[sj].end.1 - route.segments[si].start.1);
+        runs.push((si, sj, run_len));
+        si = sj + 1;
+    }
+    runs.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+    let Some(&(si, sj, seg_len)) = runs.get(run_rank) else { return None };
+    let sg = RouteSegment {
+        layer: route.segments[si].layer,
+        start: route.segments[si].start,
+        end: route.segments[sj].end,
+        width_mm: route.segments[si].width_mm,
+    };
+    let pitch = 0.3;
+    let spacing = board.config.min_spacing_mm;
+    let w = sg.width_mm;
+    // Bump geometry: depth d adds 2d per bump; bump pitch along the
+    // segment = 2 cells (rise/run) + one cell gap.
+    let d: f64 = depth.min(needed / 2.0).max(pitch);
+    // Each bump consumes exactly 2·(w+spacing) of run (rise-advance-
+    // fall-advance) — the old +pitch overestimate halved capacity.
+    let bump_pitch = 2.0 * (w + spacing);
+    let margin = pitch;
+    let n_fit = ((seg_len - 2.0 * margin) / bump_pitch).floor() as usize;
+    let n_need = (needed / (2.0 * d)).ceil() as usize;
+    let n = n_fit.min(n_need);
+    if n == 0 {
+        return None;
+    }
+    let (ux, uy) = (
+        (sg.end.0 - sg.start.0).signum() * if (sg.end.0 - sg.start.0).abs() > 1e-9 { 1.0 } else { 0.0 },
+        (sg.end.1 - sg.start.1).signum() * if (sg.end.1 - sg.start.1).abs() > 1e-9 { 1.0 } else { 0.0 },
+    );
+    let (nx, ny) = (-uy * side, ux * side);
+    // Build the serpentine polyline from sg.start to sg.end.
+    let mut pts: Vec<(f64, f64)> = vec![sg.start];
+    let mut pos = sg.start;
+    let mut adv = |pts: &mut Vec<(f64, f64)>, pos: &mut (f64, f64), dx: f64, dy: f64| {
+        *pos = (pos.0 + dx, pos.1 + dy);
+        pts.push(*pos);
+    };
+    adv(&mut pts, &mut pos, ux * margin, uy * margin);
+    for _ in 0..n {
+        adv(&mut pts, &mut pos, nx * d, ny * d);
+        adv(&mut pts, &mut pos, ux * (w + spacing), uy * (w + spacing));
+        adv(&mut pts, &mut pos, -nx * d, -ny * d);
+        adv(&mut pts, &mut pos, ux * (w + spacing), uy * (w + spacing));
+    }
+    pts.push(sg.end);
+    // Splice: replace segments[si] with the polyline, fixing span
+    // bookkeeping (that span grows; later spans shift).
+    let new_segs: Vec<RouteSegment> = pts
+        .windows(2)
+        .filter(|w2| (w2[0].0 - w2[1].0).hypot(w2[0].1 - w2[1].1) > 1e-9)
+        .map(|w2| RouteSegment {
+            layer: sg.layer,
+            start: w2[0],
+            end: w2[1],
+            width_mm: w,
+        })
+        .collect();
+    let replaced = sj - si + 1;
+    let n_new = new_segs.len();
+    let added = n_new as i64 - replaced as i64;
+    route.segments.splice(si..sj + 1, new_segs);
+    for span in route.path_spans.iter_mut() {
+        if si >= span.0 && si < span.0 + span.1 {
+            span.1 = (span.1 as i64 + added) as usize;
+        } else if span.0 > si {
+            span.0 = (span.0 as i64 + added) as usize;
+        }
+    }
+    Some((si, n_new))
 }
 
 fn plane_drop_pass(board: &Board, final_routes: &mut [Route]) -> usize {
