@@ -335,9 +335,29 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
             }
             None => (m, m, w - m, h - m),
         };
+        // Polygon outlines: the zone boundary (and the fill) is the
+        // outline inset by the edge margin, clipped to the region rect
+        // — never the bbox (copper in a cutout notch is off-board).
+        let poly_boundary: Option<Vec<(f64, f64)>> =
+            if let PnrBoardOutlinePoly(opts) = &board.config.outline {
+                inset_rectilinear(opts, m)
+                    .map(|ins| clip_poly_to_rect(&ins, zx0, zy0, zx1, zy1))
+                    .filter(|b| b.len() >= 4)
+            } else {
+                None
+            };
         out.push_str("    (polygon (pts\n");
-        for (x, y) in [(zx0, zy0), (zx1, zy0), (zx1, zy1), (zx0, zy1)] {
-            out.push_str(&format!("      (xy {x} {y})\n"));
+        match &poly_boundary {
+            Some(b) => {
+                for (x, y) in b {
+                    out.push_str(&format!("      (xy {x} {y})\n"));
+                }
+            }
+            None => {
+                for (x, y) in [(zx0, zy0), (zx1, zy0), (zx1, zy1), (zx0, zy1)] {
+                    out.push_str(&format!("      (xy {x} {y})\n"));
+                }
+            }
         }
         out.push_str("    ))\n");
 
@@ -354,7 +374,10 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
             }
             None => (m, m, w - m, h - m),
         };
-        let pts = fracture_fill(fx0, fy0, fx1, fy1, &holes);
+        let pts = match &poly_boundary {
+            Some(b) => fracture_fill_poly(b, &holes),
+            None => fracture_fill(fx0, fy0, fx1, fy1, &holes),
+        };
         out.push_str(&format!("    (filled_polygon (layer \"{}\") (pts\n", layer_name));
         for (x, y) in &pts {
             out.push_str(&format!("      (xy {x} {y})\n"));
@@ -500,6 +523,280 @@ fn place_reference_labels(board: &Board, routes: &[Route]) -> Vec<(f64, f64, f64
 /// polygon: each hole becomes a CW octagon joined to the boundary by a
 /// zero-width slit cast rightward from the hole (processing holes
 /// right-to-left so a ray always hits already-fractured boundary).
+/// Shoelace signed area (positive = same winding as the rect fill ring
+/// (x0,y0)->(x1,y0)->(x1,y1)->(x0,y1)).
+fn poly_signed_area(pts: &[(f64, f64)]) -> f64 {
+    let n = pts.len();
+    let mut a = 0.0;
+    for i in 0..n {
+        let (x0, y0) = pts[i];
+        let (x1, y1) = pts[(i + 1) % n];
+        a += x0 * y1 - x1 * y0;
+    }
+    a / 2.0
+}
+
+pub(crate) fn point_in_poly(pts: &[(f64, f64)], x: f64, y: f64) -> bool {
+    let n = pts.len();
+    let mut inside = false;
+    let mut j = n - 1;
+    for i in 0..n {
+        let (xi, yi) = pts[i];
+        let (xj, yj) = pts[j];
+        if (yi > y) != (yj > y)
+            && x < (xj - xi) * (y - yi) / (yj - yi) + xi
+        {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
+}
+
+fn dist_point_segment(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let len2 = dx * dx + dy * dy;
+    let t = if len2 <= 1e-12 {
+        0.0
+    } else {
+        (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / len2).clamp(0.0, 1.0)
+    };
+    (p.0 - (a.0 + t * dx)).hypot(p.1 - (a.1 + t * dy))
+}
+
+/// Minimum distance from a point to the polygon boundary.
+pub(crate) fn poly_edge_distance(pts: &[(f64, f64)], x: f64, y: f64) -> f64 {
+    let n = pts.len();
+    (0..n)
+        .map(|i| dist_point_segment((x, y), pts[i], pts[(i + 1) % n]))
+        .fold(f64::INFINITY, f64::min)
+}
+
+/// True when every edge is axis-aligned — the only polygon class the
+/// plane fracture supports (chassis cutouts are rectilinear in
+/// practice; anything else keeps plane fills gated off).
+pub(crate) fn poly_is_rectilinear(pts: &[(f64, f64)]) -> bool {
+    let n = pts.len();
+    n >= 4
+        && (0..n).all(|i| {
+            let (ax, ay) = pts[i];
+            let (bx, by) = pts[(i + 1) % n];
+            (ax - bx).abs() < 1e-9 || (ay - by).abs() < 1e-9
+        })
+}
+
+/// Inset a rectilinear polygon by `m` (edge clearance): every edge
+/// moves toward the interior; vertices re-intersect trivially because
+/// consecutive edges alternate horizontal/vertical. Winding is
+/// normalized to positive area first.
+pub(crate) fn inset_rectilinear(pts: &[(f64, f64)], m: f64) -> Option<Vec<(f64, f64)>> {
+    if !poly_is_rectilinear(pts) {
+        return None;
+    }
+    let mut pts: Vec<(f64, f64)> = pts.to_vec();
+    if poly_signed_area(&pts) < 0.0 {
+        pts.reverse();
+    }
+    let n = pts.len();
+    // Offset each edge line inward: interior is LEFT of travel for
+    // positive-area winding; left of direction d is (-dy, dx).
+    let mut lines: Vec<(bool, f64)> = Vec::new(); // (is_vertical, coordinate)
+    for i in 0..n {
+        let (ax, ay) = pts[i];
+        let (bx, by) = pts[(i + 1) % n];
+        if (ax - bx).abs() < 1e-9 {
+            // vertical edge, direction (0, ±1); inward x-shift = -dy*m... left normal
+            let dy = (by - ay).signum();
+            lines.push((true, ax - dy * m));
+        } else {
+            let dx = (bx - ax).signum();
+            lines.push((false, ay + dx * m));
+        }
+    }
+    let mut out: Vec<(f64, f64)> = Vec::new();
+    for i in 0..n {
+        let prev = lines[(i + n - 1) % n];
+        let cur = lines[i];
+        // Vertex = intersection of the two offset lines; rectilinear
+        // guarantees one vertical + one horizontal.
+        let (vx, vy) = match (prev, cur) {
+            ((true, x), (false, y)) | ((false, y), (true, x)) => (x, y),
+            _ => return None, // collinear consecutive edges — unsupported
+        };
+        out.push((vx, vy));
+    }
+    if poly_signed_area(&out) <= 0.0 {
+        return None; // inset collapsed the polygon
+    }
+    Some(out)
+}
+
+/// Sutherland–Hodgman clip of a (possibly concave) polygon against an
+/// axis-aligned rect. Valid because the CLIP region is convex.
+pub(crate) fn clip_poly_to_rect(
+    pts: &[(f64, f64)],
+    x0: f64,
+    y0: f64,
+    x1: f64,
+    y1: f64,
+) -> Vec<(f64, f64)> {
+    // inside tests per half-plane, with the matching intersection.
+    let clip = |input: &[(f64, f64)],
+                inside: &dyn Fn((f64, f64)) -> bool,
+                cross: &dyn Fn((f64, f64), (f64, f64)) -> (f64, f64)|
+     -> Vec<(f64, f64)> {
+        let mut out = Vec::new();
+        let n = input.len();
+        for i in 0..n {
+            let a = input[i];
+            let b = input[(i + 1) % n];
+            match (inside(a), inside(b)) {
+                (true, true) => out.push(b),
+                (true, false) => out.push(cross(a, b)),
+                (false, true) => {
+                    out.push(cross(a, b));
+                    out.push(b);
+                }
+                (false, false) => {}
+            }
+        }
+        out
+    };
+    let ix = |a: (f64, f64), b: (f64, f64), x: f64| -> (f64, f64) {
+        let t = (x - a.0) / (b.0 - a.0);
+        (x, a.1 + t * (b.1 - a.1))
+    };
+    let iy = |a: (f64, f64), b: (f64, f64), y: f64| -> (f64, f64) {
+        let t = (y - a.1) / (b.1 - a.1);
+        (a.0 + t * (b.0 - a.0), y)
+    };
+    let mut p = pts.to_vec();
+    p = clip(&p, &|q| q.0 >= x0 - 1e-12, &|a, b| ix(a, b, x0));
+    if p.is_empty() { return p; }
+    p = clip(&p, &|q| q.0 <= x1 + 1e-12, &|a, b| ix(a, b, x1));
+    if p.is_empty() { return p; }
+    p = clip(&p, &|q| q.1 >= y0 - 1e-12, &|a, b| iy(a, b, y0));
+    if p.is_empty() { return p; }
+    p = clip(&p, &|q| q.1 <= y1 + 1e-12, &|a, b| iy(a, b, y1));
+    // Drop duplicate consecutive vertices SH can produce on corners.
+    let mut dedup: Vec<(f64, f64)> = Vec::new();
+    for q in p {
+        if dedup
+            .last()
+            .map_or(true, |&l| (l.0 - q.0).hypot(l.1 - q.1) > 1e-9)
+        {
+            dedup.push(q);
+        }
+    }
+    if dedup.len() > 1 {
+        let first = dedup[0];
+        let last = *dedup.last().unwrap();
+        if (first.0 - last.0).hypot(first.1 - last.1) <= 1e-9 {
+            dedup.pop();
+        }
+    }
+    dedup
+}
+
+/// fracture_fill generalized to a rectilinear boundary polygon: holes
+/// near an edge become rectangular notches cut into THAT edge; interior
+/// holes get the same octagon + rightward-slit treatment (the slit ray
+/// already casts against the full vertex chain).
+fn fracture_fill_poly(
+    boundary: &[(f64, f64)],
+    holes_in: &[(f64, f64, f64)],
+) -> Vec<(f64, f64)> {
+    let holes = merge_holes(
+        holes_in
+            .iter()
+            .copied()
+            .filter(|&(cx, cy, r)| {
+                point_in_poly(boundary, cx, cy)
+                    || poly_edge_distance(boundary, cx, cy) < r + 0.05
+            })
+            .collect(),
+    );
+    let slack = 0.05;
+    let nb = boundary.len();
+    // Per-edge notches: (t_enter, t_exit, depth) in edge-travel order.
+    let mut edge_notches: Vec<Vec<(f64, f64, f64)>> = vec![Vec::new(); nb];
+    let mut interior: Vec<(f64, f64, f64)> = Vec::new();
+    'holes: for &(cx, cy, r) in &holes {
+        for e in 0..nb {
+            let a = boundary[e];
+            let b = boundary[(e + 1) % nb];
+            if dist_point_segment((cx, cy), a, b) < r + slack {
+                // Clamp hole span to the edge segment, depth = far side
+                // of the hole measured along the inward normal.
+                let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+                let len = (dx * dx + dy * dy).sqrt();
+                if len < 1e-9 {
+                    continue;
+                }
+                let (ux, uy) = (dx / len, dy / len);
+                let (nx, ny) = (-uy, ux); // interior side (positive area)
+                let tc = (cx - a.0) * ux + (cy - a.1) * uy;
+                let ta = (tc - r).max(0.0);
+                let tb = (tc + r).min(len);
+                if tb <= ta {
+                    continue;
+                }
+                let d = ((cx - a.0) * nx + (cy - a.1) * ny) + r;
+                if d <= 0.0 {
+                    continue 'holes; // entirely outside this edge
+                }
+                edge_notches[e].push((ta, tb, d));
+                continue 'holes;
+            }
+        }
+        if point_in_poly(boundary, cx, cy) {
+            interior.push((cx, cy, r));
+        }
+        // else: fully outside (e.g. inside a cutout bite) — no copper
+        // to punch.
+    }
+    // Merge overlapping notches per edge (same rule as merge_iv: union
+    // the span, keep the deeper cut).
+    for list in edge_notches.iter_mut() {
+        list.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        let mut out: Vec<(f64, f64, f64)> = Vec::new();
+        for n in list.drain(..) {
+            match out.last_mut() {
+                Some(last) if n.0 <= last.1 => {
+                    last.1 = last.1.max(n.1);
+                    last.2 = last.2.max(n.2);
+                }
+                _ => out.push(n),
+            }
+        }
+        *list = out;
+    }
+    // Walk the boundary inserting notch detours.
+    let mut poly: Vec<(f64, f64)> = Vec::new();
+    for e in 0..nb {
+        let a = boundary[e];
+        let b = boundary[(e + 1) % nb];
+        poly.push(a);
+        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+        let len = (dx * dx + dy * dy).sqrt();
+        if len < 1e-9 {
+            continue;
+        }
+        let (ux, uy) = (dx / len, dy / len);
+        let (nx, ny) = (-uy, ux);
+        for &(ta, tb, d) in &edge_notches[e] {
+            let pa = (a.0 + ux * ta, a.1 + uy * ta);
+            let pb = (a.0 + ux * tb, a.1 + uy * tb);
+            poly.push(pa);
+            poly.push((pa.0 + nx * d, pa.1 + ny * d));
+            poly.push((pb.0 + nx * d, pb.1 + ny * d));
+            poly.push(pb);
+        }
+    }
+    punch_interior_holes(&mut poly, interior);
+    poly
+}
+
 fn fracture_fill(
     x0: f64,
     y0: f64,
@@ -602,6 +899,17 @@ fn fracture_fill(
         poly.push((xd, ya));
         poly.push((x0, ya));
     }
+    punch_interior_holes(&mut poly, holes);
+    poly
+}
+
+/// Interior-hole fracture shared by the rect and polygon fills: each
+/// hole becomes a circumscribed octagon wound opposite the outline,
+/// joined to the boundary by a zero-width rightward slit (jittered
+/// rows so a ray never runs along an existing slit). The ray casts
+/// against the CURRENT vertex chain, so notch detours and previously
+/// inserted slits are all valid targets.
+fn punch_interior_holes(poly: &mut Vec<(f64, f64)>, holes: Vec<(f64, f64, f64)>) {
     let mut used_y: Vec<f64> = Vec::new();
     for &(cx, cy, r) in &holes {
         let mut ry = cy;
@@ -660,7 +968,6 @@ fn fracture_fill(
             poly.insert(at + ofs, p);
         }
     }
-    poly
 }
 
 
@@ -700,6 +1007,14 @@ pub(crate) fn plane_foreign_holes(
             let barrel = pad.width_mm.max(pad.height_mm) / 2.0;
             holes.push((gx, gy, barrel + zc + 0.05));
         }
+    }
+    // Mounting holes: NPTH barrels pierce every layer and carry no
+    // net — always foreign, always punched.
+    for mh in &board.config.mounting_holes {
+        // Punch from the NPTH PAD edge (drill + 0.5 annular in the
+        // emitted footprint), not the drill — the pad shape carries
+        // the clearance rule.
+        holes.push((mh.x_mm, mh.y_mm, (mh.drill_mm + 0.5) / 2.0 + zc + 0.05));
     }
     holes
 }
@@ -756,6 +1071,21 @@ pub(crate) fn plane_swallows(
     // Outside the fill rect entirely = no plane contact.
     if x - via_r < x0 || x + via_r > x1 || y - via_r < y0 || y + via_r > y1 {
         return true;
+    }
+    // Polygon outlines: the fill is clipped to the inset outline — a
+    // via whose disc pokes outside it (e.g. into a cutout notch) has
+    // no plane contact there. Rect boards skip this (bbox == outline).
+    if let crate::types::BoardOutline::Polygon(opts) = &board.config.outline {
+        match inset_rectilinear(opts, m) {
+            Some(ins) => {
+                if !point_in_poly(&ins, x, y)
+                    || poly_edge_distance(&ins, x, y) < via_r - 1e-9
+                {
+                    return true;
+                }
+            }
+            None => return true, // non-rectilinear: no fill exists
+        }
     }
     for &(cx, cy, r) in merged_holes {
         let crosses_bottom = cy + r > y1 - slack;

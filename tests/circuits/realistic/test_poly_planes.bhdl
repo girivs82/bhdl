@@ -1,0 +1,43 @@
+// Polygon-outline + planes fixture (P2 polygon fill clipping): the
+// same L-shaped board as test_mech_poly but on a 4-layer stackup, so
+// GND and VCC get real plane fills that must clip to the outline —
+// no copper in the cutout notch, drop vias only inside the polygon.
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
+
+entity PwrJack() {
+    pin VIN: power out;
+    pin GND: ground;
+
+    attribute component_class = "connector";
+}
+
+layout PwrJack {
+    package SOT-223;
+}
+
+board PolyPlanes {
+    power VCC = 5V @ 100mA;
+    ground GND;
+
+    j_pwr: PwrJack();
+    j_pwr.VIN -> @VCC;
+    j_pwr.GND -> @GND;
+
+    @VCC -> led1: LED(color="green").A;
+    led1.K -> r_led: Res(220).1;
+    r_led.2 -> @GND;
+
+    @VCC -> led2: LED(color="red").A;
+    led2.K -> r_led2: Res(330).1;
+    r_led2.2 -> @GND;
+}
+
+layout PolyPlanes {
+    layer_stackup 4;
+    // Same L-shape: 40x30 with the (28..40, 18..30) corner cut away.
+    outline polygon (0,0) (40,0) (40,18) (28,18) (28,30) (0,30);
+    place j_pwr at (4, 15) rot 90;
+    mounting_hole (36, 4) drill 3.2 keepout 2.0;
+}

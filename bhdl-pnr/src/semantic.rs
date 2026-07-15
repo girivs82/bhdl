@@ -636,12 +636,25 @@ pub fn build_board(
     // was amputated — fixed; planes-on is oracle-clean or better than
     // planes-off on every board (pds 47→0 unc, uno copper CLEAN
     // unc 57→48, shorts zero).
-    if std::env::var("BHDL_PNR_NO_PLANES").is_err()
-        && !matches!(config.board_config.outline, BoardOutline::Polygon(_))
-    // Plane fills fracture against a RECT; on polygon outlines the
-    // fill would ship copper inside the cutout notches. Planes return
-    // for polygon boards when the fracture clips to the outline (v3).
-    {
+    // Polygon boards: the fill fractures against the inset outline —
+    // rectilinear only (chassis cutouts in practice); anything else
+    // keeps plane fills gated off. Rails are NOT band-split on polygon
+    // boards — one rail per Power layer (banding a concave board is a
+    // later refinement).
+    let (polygon_board, non_rectilinear) = match &config.board_config.outline {
+        BoardOutline::Polygon(pts) => {
+            let rect = crate::output::kicad::poly_is_rectilinear(pts);
+            if !rect {
+                log::warn!(
+                    "plane fills disabled: polygon outline is not rectilinear \
+                     (the fracture only clips axis-aligned cutouts)"
+                );
+            }
+            (true, !rect)
+        }
+        _ => (false, false),
+    };
+    if std::env::var("BHDL_PNR_NO_PLANES").is_err() && !non_rectilinear {
         let gnd_idx = nets
             .iter()
             .position(|n| matches!(n.net_class, PnrNetClass::Ground));
@@ -689,7 +702,11 @@ pub fn build_board(
                         .count()
                         .max(1);
                     let rails_left = next_power.len();
-                    let take = ((rails_left + layers_left - 1) / layers_left).min(4);
+                    let take = if polygon_board {
+                        1 // no band regions on polygon boards
+                    } else {
+                        ((rails_left + layers_left - 1) / layers_left).min(4)
+                    };
                     let mut took = 0;
                     while took < take {
                         let Some(pi) = next_power.next() else { break };

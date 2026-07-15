@@ -1123,6 +1123,12 @@ fn miter_pass(board: &Board, final_routes: &mut [Route]) -> usize {
 /// plane_region = None (whole layer).
 fn assign_plane_regions(board: &mut Board) {
     use std::collections::BTreeMap;
+    // Polygon boards never band-split: plane assignment already limits
+    // them to one rail per Power layer, and a rectangular band on a
+    // concave outline can be disconnected.
+    if matches!(board.config.outline, BoardOutline::Polygon(_)) {
+        return;
+    }
     let bw = board.config.outline.width();
     let bh = board.config.outline.height();
     let comp_idx: std::collections::HashMap<ComponentId, usize> = board
