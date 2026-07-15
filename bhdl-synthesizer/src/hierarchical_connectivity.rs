@@ -623,6 +623,17 @@ fn process_entity_instance(
     let instance_id = if let Some(instance_id) = existing_instance {
         debug!("Entity instance '{}' already exists, reusing (pins were \
                 materialized by the earlier pass)", instance_name);
+        if let Some(module_id) =
+            netlist.instances.get(instance_id).map(|i| i.definition)
+        {
+            topup_interface_field_pins(
+                &entity_type,
+                module_id,
+                netlist,
+                context,
+                import_preprocessor,
+            );
+        }
         instance_id
     } else {
         // Get or create entity variant based on parameters
@@ -1125,13 +1136,26 @@ fn create_component_instance(
     // `ATMEGA328P_PU.S1` existed, and bare-name lookup hit one
     // or the other depending on SlotMap iteration. After this
     // fix, only `S1` exists; lookup is deterministic.
-    for (_inst_id, instance) in &netlist.instances {
-        if instance.name == instance_name || instance.name == local_name {
-            debug!("Component instance '{}' already exists (matched on {}), skipping creation",
-                instance_name,
-                if instance.name == instance_name { "full path" } else { "bare name" });
-            return Ok(());
-        }
+    let existing_module = netlist
+        .instances
+        .iter()
+        .find(|(_, instance)| {
+            instance.name == instance_name || instance.name == local_name
+        })
+        .map(|(_, instance)| instance.definition);
+    if let Some(module_id) = existing_module {
+        debug!(
+            "Component instance '{}' already exists, skipping creation",
+            instance_name
+        );
+        topup_interface_field_pins(
+            &component_type,
+            module_id,
+            netlist,
+            context,
+            import_preprocessor,
+        );
+        return Ok(());
     }
     
     // Create or get the component module
@@ -1868,6 +1892,66 @@ pub(crate) const INTERFACE_FIELD_XWIRE_ATTR_PREFIX: &str = "intf_xwire__";
 /// the interface-field bindings above but without the dotted
 /// `field.signal` namespacing.
 pub(crate) const ENTITY_ALIAS_ATTR_PREFIX: &str = "alias__";
+
+/// Late interface-field materialisation: the inference-driven pass
+/// (synthesizer lib.rs) creates instances reading only `entity.pins()`,
+/// and this hierarchical pass dedups against them — so an entity's
+/// `interface Lvds tx;` fields (pins `tx.P`, `tx.N`, plus their
+/// intf_const__* / intf_bind__* attributes) never materialise for
+/// same-file entities. Called from both dedup branches: adds the
+/// dotted pins to the MODULE (skipped when any dotted pin already
+/// exists) and creates the missing pin INSTANCES on every instance of
+/// that module so connection resolution can bind nets to them.
+fn topup_interface_field_pins(
+    component_type: &str,
+    module_id: ModuleId,
+    netlist: &mut Netlist,
+    context: &HierarchicalContext,
+    import_preprocessor: Option<&crate::import_preprocessor::ImportPreprocessor>,
+) {
+    let already_dotted = netlist
+        .modules
+        .get(module_id)
+        .map(|m| {
+            m.pins.iter().any(|pid| {
+                netlist.pins.get(*pid).map_or(false, |p| p.name.contains('.'))
+            })
+        })
+        .unwrap_or(true);
+    if already_dotted {
+        return;
+    }
+    let entity_ast = context
+        .variant_manager
+        .find_entity_definition(component_type)
+        .map(|e| e.clone())
+        .or_else(|| {
+            import_preprocessor
+                .and_then(|p| p.get_imported_entity(component_type))
+                .cloned()
+        });
+    let Some(entity_ast) = entity_ast else {
+        return;
+    };
+    add_interface_field_pins(
+        &entity_ast,
+        module_id,
+        netlist,
+        context,
+        import_preprocessor,
+    );
+    // New module pins need pin instances on every existing instance of
+    // this module (idempotent: only missing ones are created).
+    let ids: Vec<_> = netlist
+        .instances
+        .iter()
+        .filter(|(_, i)| i.definition == module_id)
+        .map(|(id, _)| id)
+        .collect();
+    for id in ids {
+        let _ = netlist.create_missing_pin_instances(id);
+    }
+}
 
 fn add_interface_field_pins(
     entity: &bhdl_ast::Entity,

@@ -255,6 +255,49 @@ impl Netlist {
         Ok(pin_instance_ids)
     }
 
+    /// Create pin instances ONLY for module pins that have no pin
+    /// instance on this instance yet. Idempotent counterpart to
+    /// `create_pin_instances` for late pin materialisation (interface
+    /// fields added after the instance was built) — re-running the
+    /// full version duplicates every existing pin instance.
+    pub fn create_missing_pin_instances(
+        &mut self,
+        instance_id: InstanceId,
+    ) -> Result<Vec<PinInstanceId>, String> {
+        let instance = self
+            .instances
+            .get(instance_id)
+            .ok_or_else(|| format!("Instance {:?} does not exist", instance_id))?;
+        let module_def = self
+            .modules
+            .get(instance.definition)
+            .ok_or_else(|| format!("Module {:?} does not exist", instance.definition))?;
+        let existing: std::collections::HashSet<PinId> = self
+            .pin_instances
+            .values()
+            .filter(|pi| pi.instance == instance_id)
+            .map(|pi| pi.pin_def)
+            .collect();
+        let missing: Vec<PinId> = module_def
+            .pins
+            .iter()
+            .copied()
+            .filter(|pid| !existing.contains(pid))
+            .collect();
+        let mut out = Vec::new();
+        for pin_id in missing {
+            let pin_inst_id = self.pin_instances.insert_with_key(|id| PinInstance {
+                id,
+                pin_def: pin_id,
+                instance: instance_id,
+                net: None,
+                connection_name: None,
+            });
+            out.push(pin_inst_id);
+        }
+        Ok(out)
+    }
+
     // --- Getter methods ---
 
     pub fn get_module(&self, module_id: ModuleId) -> Option<&ModuleDefinition> {

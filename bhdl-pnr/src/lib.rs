@@ -920,6 +920,11 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                 _ => {}
             }
         }
+        // Both ends of a link can carry the same constraint (each
+        // instance's module holds its side's attrs, resolving to the
+        // same nets) — one row per distinct fact.
+        let mut seen = std::collections::BTreeSet::new();
+        rows.retain(|r| seen.insert(r.clone()));
         if !rows.is_empty() {
             info!("── Constraint sign-off ──");
             for r in &rows {

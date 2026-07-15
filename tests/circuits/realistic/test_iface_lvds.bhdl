@@ -1,0 +1,61 @@
+// Interface-FIELD materialization fixture: the same LVDS link as
+// test_diff_pair, but the constraints come from the interface's own
+// `constraints {}` block and the entities carry `interface Lvds tx;`
+// FIELDS — the full v0.8 surface, end to end: field pins materialize
+// as tx.P/tx.N, board connections bind nets to them, the constraint
+// attributes flow into the typed catalog, and the sign-off report
+// grades the routed pair.
+
+interface Lvds {
+    signal P: inout;
+    signal N: inout;
+    constraints {
+        *:      differential 100ohm;
+        P -> N: length_match 65ps;
+    }
+}
+
+entity LvdsDriver() {
+    interface Lvds tx;
+    pin VCC: power in;
+    pin GND: ground;
+
+    attribute component_class = "ic";
+}
+
+layout LvdsDriver {
+    package SOIC-8;
+}
+
+entity LvdsSink() {
+    interface Lvds rx;
+    pin VCC: power in;
+    pin GND: ground;
+
+    attribute component_class = "ic";
+}
+
+layout LvdsSink {
+    package SOIC-8;
+}
+
+board IfaceLvds {
+    power VCC = 3.3V @ 100mA;
+    ground GND;
+
+    drv: LvdsDriver();
+    snk: LvdsSink();
+
+    drv.VCC -> @VCC;
+    drv.GND -> @GND;
+    snk.VCC -> @VCC;
+    snk.GND -> @GND;
+
+    drv.tx.P -> snk.rx.P;
+    drv.tx.N -> snk.rx.N;
+}
+
+layout IfaceLvds {
+    layer_stackup 4;
+    outline rect 40 25;
+}
