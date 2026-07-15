@@ -3432,6 +3432,7 @@ impl<'t> Parser<'t> {
                         Some("outline") => SyntaxKind::LAYOUT_OUTLINE,
                         Some("mounting_hole") => SyntaxKind::LAYOUT_MOUNTING_HOLE,
                         Some("keepout") => SyntaxKind::LAYOUT_KEEPOUT,
+                        Some("cutout") => SyntaxKind::LAYOUT_CUTOUT,
                         Some("mech_check") => SyntaxKind::LAYOUT_KEEPOUT, // token capture; AST reads first token
                         _ => {
                             self.error(

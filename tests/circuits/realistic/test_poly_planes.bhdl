@@ -40,4 +40,7 @@ layout PolyPlanes {
     outline polygon (0,0) (40,0) (40,18) (28,18) (28,30) (0,30);
     place j_pwr at (4, 15) rot 90;
     mounting_hole (36, 4) drill 3.2 keepout 2.0;
+    // Display window: interior aperture — no copper, no parts, planes
+    // punched around it.
+    cutout rect (16, 10) (22, 14);
 }

@@ -421,6 +421,7 @@ pub enum SyntaxKind {
     LAYOUT_OUTLINE,        // outline rect 80 50; | outline polygon (..) ..;
     LAYOUT_MOUNTING_HOLE,  // mounting_hole (5,5) drill 3.2 keepout 6;
     LAYOUT_KEEPOUT,        // keepout rect (60,40) (80,50);
+    LAYOUT_CUTOUT,         // cutout rect (16,8) (22,12);
 
     // Placement block nodes (entity-level PCB placement recipes)
     PLACEMENT_BLOCK,       // placement { ... }

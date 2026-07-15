@@ -52,6 +52,11 @@ pub struct BoardConfig {
     pub fixed_placements: Vec<FixedPlacement>,
     pub mounting_holes: Vec<MountingHole>,
     pub keepout_zones: Vec<KeepoutZone>,
+    /// Interior board apertures (display windows, shaft slots):
+    /// (x0, y0, x1, y1) rects cut out of the board. Emitted as interior
+    /// Edge.Cuts, blocked for routing (edge band) and placement, and
+    /// punched from plane fills.
+    pub cutouts: Vec<(f64, f64, f64, f64)>,
     pub placement_regions: Vec<PlacementRegion>,
     /// IPC-7351B courtyard excess (per side, mm) added to each
     /// component's pad/body extent to form its keepout boundary. Set from
@@ -72,6 +77,7 @@ impl Default for BoardConfig {
             fixed_placements: Vec::new(),
             mounting_holes: Vec::new(),
             keepout_zones: Vec::new(),
+            cutouts: Vec::new(),
             placement_regions: Vec::new(),
             courtyard_excess_mm: 0.25, // IPC nominal
         }

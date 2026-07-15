@@ -97,6 +97,13 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
         }
         BoardOutline::AutoSize => {}
     }
+    // Interior cutouts: closed rects on Edge.Cuts = apertures in the
+    // board (KiCad treats interior Edge.Cuts contours as holes).
+    for &(x0, y0, x1, y1) in &board.config.cutouts {
+        out.push_str(&format!(
+            "  (gr_rect (start {x0} {y0}) (end {x1} {y1}) (layer \"Edge.Cuts\") (stroke (width 0.05) (type solid)) (fill none))\n"
+        ));
+    }
     out.push('\n');
 
     // ── Mounting holes ──
@@ -404,6 +411,9 @@ fn place_reference_labels(board: &Board, routes: &[Route]) -> Vec<(f64, f64, f64
     // Obstacles: copper envelopes (offset-aware — asymmetric packages
     // have pads the origin-centered bbox misses), track segments, vias.
     let mut obstacles: Vec<(f64, f64, f64, f64)> = Vec::new();
+    for &(x0, y0, x1, y1) in &board.config.cutouts {
+        obstacles.push((x0 - 0.5, y0 - 0.5, x1 + 0.5, y1 + 0.5));
+    }
     for c in &board.components {
         let (cx, cy, hw, hh) = c.envelope();
         obstacles.push((cx - hw - 0.15, cy - hh - 0.15, cx + hw + 0.15, cy + hh + 0.15));
@@ -1007,6 +1017,14 @@ pub(crate) fn plane_foreign_holes(
             let barrel = pad.width_mm.max(pad.height_mm) / 2.0;
             holes.push((gx, gy, barrel + zc + 0.05));
         }
+    }
+    // Interior cutouts: no copper in the aperture — punch the
+    // enclosing circle (conservative for elongated slots; a rect
+    // fracture primitive is a later refinement).
+    for &(x0, y0, x1, y1) in &board.config.cutouts {
+        let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+        let half_diag = ((x1 - x0) / 2.0).hypot((y1 - y0) / 2.0);
+        holes.push((cx, cy, half_diag + zc + 0.05));
     }
     // Mounting holes: NPTH barrels pierce every layer and carry no
     // net — always foreign, always punched.

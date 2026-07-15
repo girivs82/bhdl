@@ -225,6 +225,29 @@ impl RoutingGrid {
             }
         }
 
+        // Interior cutouts: no copper inside the aperture or within
+        // the edge band around it (KiCad copper-to-edge clearance
+        // applies to interior Edge.Cuts too).
+        {
+            let band = 0.5 + board.config.min_trace_width_mm / 2.0;
+            for &(x0, y0, x1, y1) in &board.config.cutouts {
+                for l in 0..num_layers {
+                    for (row, &cy) in grid.y_coords.iter().enumerate() {
+                        if cy < y0 - band || cy > y1 + band {
+                            continue;
+                        }
+                        for (col, &cx) in grid.x_coords.iter().enumerate() {
+                            if cx < x0 - band || cx > x1 + band {
+                                continue;
+                            }
+                            grid.cells[l][row][col].blocked = true;
+                            grid.cells[l][row][col].hard = true;
+                        }
+                    }
+                }
+            }
+        }
+
         // Block cells for keepout zones
         for zone in &board.config.keepout_zones {
             if matches!(zone.applies_to, KeepoutTarget::All | KeepoutTarget::RoutingOnly) {

@@ -1666,6 +1666,26 @@ impl LayoutDef {
         out
     }
 
+    /// `cutout rect (x0,y0) (x1,y1);` — interior board apertures.
+    pub fn cutouts(&self) -> Vec<(f64, f64, f64, f64)> {
+        let mut out = Vec::new();
+        for n in self
+            .0
+            .children()
+            .filter(|n| n.kind() == SyntaxKind::LAYOUT_CUTOUT)
+        {
+            let toks = Self::mech_tokens(&n);
+            let nums: Vec<f64> = toks
+                .iter()
+                .filter_map(|t| t.parse::<f64>().ok())
+                .collect();
+            if nums.len() >= 4 {
+                out.push((nums[0], nums[1], nums[2], nums[3]));
+            }
+        }
+        out
+    }
+
     /// `mech_check "file.dxf";` — MCAD parity gate file reference.
     pub fn mech_check(&self) -> Option<String> {
         // Reuses LAYOUT_PLACE-style token capture: any mech statement

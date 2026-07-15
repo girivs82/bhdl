@@ -43,12 +43,13 @@ pub fn legalize(board: &mut Board, snap_grid_mm: f64) {
     for _outer in 0..10 {
         resolve_overlaps(board);
 
-        // Enforce keepout zones
+        // Enforce keepout zones (ENVELOPE-aware: the center-only test
+        // let a part's body hang into the zone).
         for comp in board.components.iter_mut() {
             if comp.placement.is_fixed() { continue; }
             for zone in &board.config.keepout_zones {
                 if matches!(zone.applies_to, KeepoutTarget::All | KeepoutTarget::ComponentsOnly) {
-                    if zone.shape.contains(comp.x, comp.y) {
+                    if envelope_overlaps_shape(comp, &zone.shape) {
                         push_out_of_shape(comp, &zone.shape);
                     }
                 }
@@ -159,6 +160,175 @@ pub fn legalize(board: &mut Board, snap_grid_mm: f64) {
             comp.y += ny - ecy;
         }
     }
+
+    // 4. GUARANTEE: the push loop can wedge a free part between a
+    // fixed neighbor and a clamp (edge / keepout / polygon nudge) and
+    // give up with the overlap standing — which ships shorting pads.
+    // Any component still illegal relocates to the NEAREST legal slot
+    // found by an expanding ring search (deterministic order).
+    for i in 0..board.components.len() {
+        if board.components[i].placement.is_fixed() {
+            continue;
+        }
+        if position_legal(board, i, board.components[i].x, board.components[i].y) {
+            continue;
+        }
+        let (ox, oy) = (board.components[i].x, board.components[i].y);
+        let bw = board.config.outline.width();
+        let bh = board.config.outline.height();
+        let max_r = bw.max(bh);
+        let mut found: Option<(f64, f64)> = None;
+        let mut r = 0.5;
+        'search: while r <= max_r {
+            let steps = ((2.0 * std::f64::consts::PI * r / 0.5).ceil() as usize).max(8);
+            for k in 0..steps {
+                let ang = k as f64 / steps as f64 * 2.0 * std::f64::consts::PI;
+                let (x, y) = (ox + r * ang.cos(), oy + r * ang.sin());
+                if position_legal(board, i, x, y) {
+                    found = Some((x, y));
+                    break 'search;
+                }
+            }
+            r += 0.5;
+        }
+        match found {
+            Some((x, y)) => {
+                log::warn!(
+                    "legalization guarantee: relocated '{}' ({:.1},{:.1}) -> ({:.1},{:.1}) — \
+                     push loop left it illegal",
+                    board.components[i].refdes, ox, oy, x, y
+                );
+                board.components[i].x = x;
+                board.components[i].y = y;
+            }
+            None => {
+                log::warn!(
+                    "legalization guarantee: no legal slot for '{}' anywhere on the \
+                     board — placement ships illegal (board too small?)",
+                    board.components[i].refdes
+                );
+            }
+        }
+    }
+}
+
+/// Full placement legality of component `i` at hypothetical (x, y):
+/// inside the board (polygon-aware), clear of every other component's
+/// envelope (+0.5mm), keepouts, and mounting holes.
+fn position_legal(board: &Board, i: usize, x: f64, y: f64) -> bool {
+    let comp = &board.components[i];
+    let (ecx0, ecy0, hw, hh) = comp.envelope();
+    let (ecx, ecy) = (ecx0 + (x - comp.x), ecy0 + (y - comp.y));
+    let ec = board.config.edge_clearance_mm;
+    let bw = board.config.outline.width();
+    let bh = board.config.outline.height();
+    if ecx - hw < ec || ecy - hh < ec || ecx + hw > bw - ec || ecy + hh > bh - ec {
+        return false;
+    }
+    if let crate::types::BoardOutline::Polygon(pts) = &board.config.outline {
+        let corners = [
+            (ecx - hw, ecy - hh),
+            (ecx + hw, ecy - hh),
+            (ecx + hw, ecy + hh),
+            (ecx - hw, ecy + hh),
+        ];
+        if !corners.iter().all(|&(px, py)| {
+            board.config.outline.contains(px, py)
+                && crate::routing::grid::polygon_edge_distance(pts, px, py) >= ec * 0.5
+        }) {
+            return false;
+        }
+    }
+    for (j, other) in board.components.iter().enumerate() {
+        if j == i {
+            continue;
+        }
+        let (ocx, ocy, ohw, ohh) = other.envelope();
+        if (ocx - ecx).abs() < hw + ohw + 0.5 && (ocy - ecy).abs() < hh + ohh + 0.5 {
+            return false;
+        }
+    }
+    for zone in &board.config.keepout_zones {
+        if matches!(zone.applies_to, KeepoutTarget::All | KeepoutTarget::ComponentsOnly) {
+            match &zone.shape {
+                ZoneShape::Rectangle { x: zx, y: zy, w, h } => {
+                    if ecx + hw > *zx && ecx - hw < zx + w && ecy + hh > *zy && ecy - hh < zy + h {
+                        return false;
+                    }
+                }
+                ZoneShape::Circle { x: zx, y: zy, r } => {
+                    let nx = zx.clamp(ecx - hw, ecx + hw);
+                    let ny = zy.clamp(ecy - hh, ecy + hh);
+                    if (zx - nx).hypot(zy - ny) < *r {
+                        return false;
+                    }
+                }
+                ZoneShape::Polygon(pts) => {
+                    // Conservative: envelope center or any corner inside.
+                    let test = [
+                        (ecx, ecy),
+                        (ecx - hw, ecy - hh),
+                        (ecx + hw, ecy - hh),
+                        (ecx + hw, ecy + hh),
+                        (ecx - hw, ecy + hh),
+                    ];
+                    if test.iter().any(|&(px, py)| point_in_zone_poly(pts, px, py)) {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    for hole in &board.config.mounting_holes {
+        let clearance = hole.drill_mm / 2.0 + hole.keepout_mm;
+        let nx = hole.x_mm.clamp(ecx - hw, ecx + hw);
+        let ny = hole.y_mm.clamp(ecy - hh, ecy + hh);
+        if (hole.x_mm - nx).hypot(hole.y_mm - ny) < clearance {
+            return false;
+        }
+    }
+    true
+}
+
+/// Envelope-vs-zone overlap (the center-only `contains` test misses a
+/// part whose body hangs into the zone).
+fn envelope_overlaps_shape(comp: &Component, shape: &ZoneShape) -> bool {
+    let (ecx, ecy, hw, hh) = comp.envelope();
+    match shape {
+        ZoneShape::Rectangle { x, y, w, h } => {
+            ecx + hw > *x && ecx - hw < x + w && ecy + hh > *y && ecy - hh < y + h
+        }
+        ZoneShape::Circle { x, y, r } => {
+            let nx = x.clamp(ecx - hw, ecx + hw);
+            let ny = y.clamp(ecy - hh, ecy + hh);
+            (x - nx).hypot(y - ny) < *r
+        }
+        ZoneShape::Polygon(pts) => {
+            let test = [
+                (ecx, ecy),
+                (ecx - hw, ecy - hh),
+                (ecx + hw, ecy - hh),
+                (ecx + hw, ecy + hh),
+                (ecx - hw, ecy + hh),
+            ];
+            test.iter().any(|&(px, py)| point_in_zone_poly(pts, px, py))
+        }
+    }
+}
+
+fn point_in_zone_poly(pts: &[(f64, f64)], x: f64, y: f64) -> bool {
+    let n = pts.len();
+    let mut inside = false;
+    let mut j = n.saturating_sub(1);
+    for i in 0..n {
+        let (xi, yi) = pts[i];
+        let (xj, yj) = pts[j];
+        if (yi > y) != (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
 }
 
 /// Greedy overlap resolution.

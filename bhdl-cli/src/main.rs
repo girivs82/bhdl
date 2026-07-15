@@ -1852,6 +1852,31 @@ async fn run_layout(
                     lay.keepouts.len()
                 );
             }
+            for &(x0, y0, x1, y1) in &lay.cutouts {
+                sem_config.board_config.cutouts.push((
+                    x0.min(x1),
+                    y0.min(y1),
+                    x0.max(x1),
+                    y0.max(y1),
+                ));
+                // Components must stay out of the aperture too.
+                sem_config.board_config.keepout_zones.push(KeepoutZone {
+                    shape: ZoneShape::Rectangle {
+                        x: x0.min(x1),
+                        y: y0.min(y1),
+                        w: (x1 - x0).abs(),
+                        h: (y1 - y0).abs(),
+                    },
+                    applies_to: KeepoutTarget::All,
+                });
+            }
+            if !lay.cutouts.is_empty() {
+                println!(
+                    "  {} Cutouts: {} (declared)",
+                    "✓".green(),
+                    lay.cutouts.len()
+                );
+            }
             if let Some(dxf) = &lay.mech_check {
                 let outline_pts: Vec<(f64, f64)> =
                     if let Some(pts) = &lay.outline_polygon {
