@@ -1025,7 +1025,10 @@ fn extract_groups(
     id_map: &IdMap,
     _components: &[Component],
 ) -> Vec<FunctionalGroup> {
-    let mut parent_children: HashMap<String, Vec<usize>> = HashMap::new();
+    // BTreeMap: group order feeds straight into block order and thus the
+    // whole placement — HashMap iteration here made layout flap per process.
+    let mut parent_children: std::collections::BTreeMap<String, Vec<usize>> =
+        std::collections::BTreeMap::new();
     let mut name_to_idx: HashMap<String, usize> = HashMap::new();
 
     for (inst_id, inst) in &netlist.instances {
