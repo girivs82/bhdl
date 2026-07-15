@@ -67,6 +67,7 @@ fn board_with_blocker() -> (Board, NetId, NetId) {
         pin_id: m1, name: "1".into(), dx: 0.0, dy: 0.0, net: Some(other), pad: pad(3.0, 3.0), unplaced: false }]);
 
     let mk_net = |id, name: &str, pins: Vec<(ComponentId, PinId)>| PnrNet {
+        allowed_layers: None,
         id,
         name: name.into(),
         pins,
@@ -222,6 +223,7 @@ fn route_avoids_nc_pad_on_own_component() {
         layer_stack: bhdl_pnr::stackup::stackup_preset(StackupPreset::TwoLayer),
         components: vec![comp_a, comp_m],
         nets: vec![PnrNet {
+        allowed_layers: None,
             id: sig,
             name: "SIG".into(),
             pins: vec![(a, a1), (m, mk_pin)],

@@ -158,7 +158,8 @@ impl Constraint {
             | Constraint::Impedance { .. }
             | Constraint::Topology { .. }
             | Constraint::SwizzleGroup { .. }
-            | Constraint::SignalClass { .. } => {
+            | Constraint::SignalClass { .. }
+            | Constraint::LayerRule { .. } => {
                 let _ = snap.has_routes();
                 Eval::Unknown
             }

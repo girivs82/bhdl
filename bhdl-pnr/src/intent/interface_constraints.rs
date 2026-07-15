@@ -58,6 +58,9 @@ pub enum IfaceTarget {
 #[derive(Debug, Clone, PartialEq)]
 pub enum IfaceProp {
     SingleEnded { ohms: f32 },
+    /// `layer top|bottom|outer|inner` — bind the net's copper to
+    /// specific layers.
+    Layer { bind: crate::constraint::LayerBind },
     Differential { ohms: f32 },
     SignalClass { class: String },
     MaxFreqHz { hz: f64 },
@@ -153,6 +156,13 @@ fn parse_prop(name: &str, value: &str) -> IfaceProp {
             None => unknown(name, value),
         },
         "signal_class" => IfaceProp::SignalClass { class: value.to_string() },
+        "layer" => match value.trim() {
+            "top" => IfaceProp::Layer { bind: crate::constraint::LayerBind::Top },
+            "bottom" => IfaceProp::Layer { bind: crate::constraint::LayerBind::Bottom },
+            "outer" => IfaceProp::Layer { bind: crate::constraint::LayerBind::Outer },
+            "inner" => IfaceProp::Layer { bind: crate::constraint::LayerBind::Inner },
+            _ => unknown(name, value),
+        },
         "max_freq" => match parse_freq_hz(value) {
             Some(hz) => IfaceProp::MaxFreqHz { hz },
             None => unknown(name, value),
@@ -320,6 +330,15 @@ pub fn lower_interface_constraints(
                         target_ohms: *ohms,
                         tolerance_pct: 5.0,
                         source: src(&c.key, "differential"),
+                    });
+                }
+            }
+            (IfaceTarget::PerSignal(path), IfaceProp::Layer { bind }) => {
+                if let Some(net) = resolve_or_warn(path, "layer", &mut diags) {
+                    out.push(Constraint::LayerRule {
+                        net,
+                        bind: *bind,
+                        source: src(&c.key, "layer"),
                     });
                 }
             }

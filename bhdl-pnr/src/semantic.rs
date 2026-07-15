@@ -529,6 +529,7 @@ pub fn build_board(
             layout_intents: Vec::new(),
             plane_layer: None,
             plane_region: None,
+            allowed_layers: None,
         });
     }
 
@@ -834,6 +835,66 @@ pub fn build_board(
                     }
                 }
             }
+        }
+    }
+
+    // Layer rules → allowed-layer masks. Pad layers are physics: a
+    // rule that excludes a pad's layer is relaxed to include it, with
+    // a warning (the alternative ships an unroutable pin).
+    {
+        use crate::constraint::{Constraint, LayerBind};
+        let n_layers = layer_stack.layers.len();
+        let signal_layers: Vec<usize> = layer_stack.signal_layer_indices();
+        for c in &iface_constraints {
+            let Constraint::LayerRule { net, bind, .. } = c else { continue };
+            let mut allowed: Vec<usize> = match bind {
+                LayerBind::Top => vec![0],
+                LayerBind::Bottom => vec![n_layers - 1],
+                LayerBind::Outer => vec![0, n_layers - 1],
+                LayerBind::Inner => signal_layers
+                    .iter()
+                    .copied()
+                    .filter(|&l| l != 0 && l != n_layers - 1)
+                    .collect(),
+            };
+            if allowed.is_empty() {
+                log::warn!(
+                    "layer rule: no such signal layers on this stackup — rule ignored"
+                );
+                continue;
+            }
+            let Some(n) = nets.iter_mut().find(|n| n.id == *net) else { continue };
+            // Pads live where they live.
+            for &(comp_id, pin_id) in &n.pins {
+                let Some(comp) = components.iter().find(|c| c.id == comp_id) else {
+                    continue;
+                };
+                if comp.pins.iter().any(|p| {
+                    p.pin_id == pin_id
+                        && p.pad.as_ref().and_then(|pd| pd.drill_mm).is_some()
+                }) {
+                    continue; // THT reaches every layer
+                }
+                let pad_layer = match comp.side {
+                    BoardSide::Top => 0,
+                    BoardSide::Bottom => n_layers - 1,
+                };
+                if !allowed.contains(&pad_layer) {
+                    log::warn!(
+                        "layer rule on '{}': pad on layer {pad_layer} conflicts \
+                         with the rule — pad layer added (rule relaxed)",
+                        n.name
+                    );
+                    allowed.push(pad_layer);
+                }
+            }
+            allowed.sort_unstable();
+            allowed.dedup();
+            log::info!(
+                "layer rule: '{}' restricted to layers {:?}",
+                n.name, allowed
+            );
+            n.allowed_layers = Some(allowed);
         }
     }
 

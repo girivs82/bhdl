@@ -941,6 +941,40 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                         ));
                     }
                 }
+                Constraint::Topology { net, kind, .. } => {
+                    let Some(i) = idx_of(*net) else { continue };
+                    if final_routes[i].is_empty() {
+                        continue;
+                    }
+                    rows.push(format!(
+                        "topology {:?} on '{}': constructed ({} span(s))",
+                        kind,
+                        board.nets[i].name,
+                        final_routes[i].path_spans.len()
+                    ));
+                }
+                Constraint::LayerRule { net, bind, .. } => {
+                    let Some(i) = idx_of(*net) else { continue };
+                    let mut used: Vec<usize> = final_routes[i]
+                        .segments
+                        .iter()
+                        .map(|sg| sg.layer)
+                        .collect();
+                    used.sort_unstable();
+                    used.dedup();
+                    let ok = board.nets[i]
+                        .allowed_layers
+                        .as_ref()
+                        .map(|a| used.iter().all(|l| a.contains(l)))
+                        .unwrap_or(true);
+                    rows.push(format!(
+                        "layer rule {:?} on '{}': layers used {:?} — {}",
+                        bind,
+                        board.nets[i].name,
+                        used,
+                        if ok { "PASS" } else { "FAIL" }
+                    ));
+                }
                 _ => {}
             }
         }

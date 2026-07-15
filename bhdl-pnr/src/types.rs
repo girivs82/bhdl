@@ -549,6 +549,10 @@ pub struct PnrNet {
     /// planes, all Ground planes). Computed AFTER placement from rail
     /// pin centroids; fills clip to it, drops must land inside it.
     pub plane_region: Option<(f64, f64, f64, f64)>,
+    /// Layer rule: copper restricted to these layer indices (None =
+    /// any signal layer). Pad layers are auto-included with a warning
+    /// when a rule conflicts with where the pads physically are.
+    pub allowed_layers: Option<Vec<usize>>,
     /// Legacy string-form intent (from the older `intent_routing_constraints`
     /// path). Retained during transition; superseded by typed constraints
     /// in `Board.constraints`.

@@ -56,6 +56,7 @@ fn netted_board() -> Board {
     ]);
 
     let mk_net = |id, name: &str, pins: Vec<(ComponentId, PinId)>| PnrNet {
+        allowed_layers: None,
         id,
         name: name.into(),
         pins,

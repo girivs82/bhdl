@@ -240,10 +240,76 @@ fn shortest_path_3d(
         return Route::empty(net.id);
     }
 
+    // Topology constraint: star sources every branch from the ROOT
+    // pin; daisy_chain / fly_by route hop-by-hop through a nearest-
+    // neighbor pin order. Default (None / T for now) = Steiner tree.
+    let topo: Option<(crate::constraint::TopoKind, usize)> = board
+        .constraints
+        .iter()
+        .find_map(|c| match c {
+            crate::constraint::Constraint::Topology { net: n, kind, root, .. }
+                if *n == net.id =>
+            {
+                // Root = the declared PinSel when it maps to one of this
+                // net's pins, else pin 0 (deterministic).
+                let root_idx = root
+                    .and_then(|ps| {
+                        net.pins
+                            .iter()
+                            .position(|&(c, p)| c == ps.component && p == ps.pin)
+                    })
+                    .unwrap_or(0);
+                Some((kind.clone(), root_idx))
+            }
+            _ => None,
+        });
+
     // Multi-sink Dijkstra (Steiner tree approximation)
-    let source = pin_cells[0];
-    let mut remaining_sinks: BTreeSet<CellCoord> =
-        pin_cells[1..].iter().cloned().collect();
+    let root_idx = topo.as_ref().map(|(_, r)| *r).unwrap_or(0);
+    let source = pin_cells[root_idx];
+    let mut remaining_sinks: BTreeSet<CellCoord> = pin_cells
+        .iter()
+        .enumerate()
+        .filter(|&(i, _)| i != root_idx)
+        .map(|(_, c)| *c)
+        .collect();
+    // Daisy-chain hop order: nearest-neighbor walk over pad positions
+    // starting at the root. Each hop's SOURCE is the previous pin only.
+    let chain_order: Option<Vec<usize>> = match topo.as_ref().map(|(k, _)| k) {
+        Some(crate::constraint::TopoKind::DaisyChain)
+        | Some(crate::constraint::TopoKind::FlyBy) => {
+            let mut order = vec![root_idx];
+            let mut left: Vec<usize> =
+                (0..pin_cells.len()).filter(|&i| i != root_idx).collect();
+            while !left.is_empty() {
+                let &last = order.last().unwrap();
+                let (lx, ly) = pin_targets[last].1;
+                let (bi, _) = left
+                    .iter()
+                    .enumerate()
+                    .min_by(|&(_, &a), &(_, &b)| {
+                        let da = {
+                            let (ax, ay) = pin_targets[a].1;
+                            (ax - lx).hypot(ay - ly)
+                        };
+                        let db = {
+                            let (bx, by) = pin_targets[b].1;
+                            (bx - lx).hypot(by - ly)
+                        };
+                        da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .unwrap();
+                order.push(left.remove(bi));
+            }
+            Some(order)
+        }
+        _ => None,
+    };
+    let star = matches!(
+        topo.as_ref().map(|(k, _)| k),
+        Some(crate::constraint::TopoKind::Star)
+    );
+    let mut chain_hop = 1usize; // next index into chain_order
 
     let mut all_segments = Vec::new();
     let mut all_vias = Vec::new();
@@ -273,11 +339,32 @@ fn shortest_path_3d(
         std::collections::HashMap::new();
     let mut via_keepout: Vec<(f64, f64)> = Vec::new();
 
+    let root_only: BTreeSet<CellCoord> = std::iter::once(source).collect();
     while !remaining_sinks.is_empty() {
+        // Per-topology source/sink selection:
+        //  - star: every branch starts at the ROOT cell
+        //  - daisy chain: hop k routes FROM pin k-1 TO pin k only
+        //  - default: grow the Steiner tree
+        let (iter_sources, iter_sinks): (BTreeSet<CellCoord>, BTreeSet<CellCoord>) =
+            if let Some(order) = &chain_order {
+                if chain_hop >= order.len() {
+                    break;
+                }
+                let from = pin_cells[order[chain_hop - 1]];
+                let to = pin_cells[order[chain_hop]];
+                (
+                    std::iter::once(from).collect(),
+                    std::iter::once(to).collect(),
+                )
+            } else if star {
+                (root_only.clone(), remaining_sinks.clone())
+            } else {
+                (source_set.clone(), remaining_sinks.clone())
+            };
         let result = dijkstra_to_any(
             grid,
-            &source_set,
-            &remaining_sinks,
+            &iter_sources,
+            &iter_sinks,
             net,
             &board.layer_stack,
             history_factor,
@@ -292,6 +379,9 @@ fn shortest_path_3d(
         match result {
             Some((path, reached_sink)) => {
                 remaining_sinks.remove(&reached_sink);
+                if chain_order.is_some() {
+                    chain_hop += 1;
+                }
                 // Attachment point: the first path cell already in the
                 // tree (paths start from the tree and end at the sink).
                 let parent = path.first().and_then(|c| cell_home.get(c)).copied();
@@ -697,6 +787,13 @@ fn dijkstra_to_any(
                     continue;
                 }
             }
+            // Layer rule: the net's copper may only exist on its
+            // allowed layers.
+            if let Some(allowed) = &net.allowed_layers {
+                if !allowed.contains(&nbr.layer) && !sinks.contains(&nbr) {
+                    continue;
+                }
+            }
             // Banned sites: cells where a previous recovery round's
             // copper was amputated by the validator (dangling ends) —
             // re-routing through them deterministically re-creates the
@@ -785,6 +882,11 @@ fn dijkstra_to_any(
                     continue;
                 }
 
+                if let Some(allowed) = &net.allowed_layers {
+                    if !allowed.contains(&nbr.layer) {
+                        continue;
+                    }
+                }
                 // A diff-pair shadow net leaving its partner's layer
                 // abandons the coupled run entirely — vias cost 4× for
                 // it (an EMPTY far layer otherwise wins on congestion).

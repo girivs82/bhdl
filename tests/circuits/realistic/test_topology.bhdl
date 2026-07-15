@@ -1,0 +1,49 @@
+// Topology + layer-rule fixture: CLK fans out star-style from the
+// driver (every branch sourced at the root pin); EN daisy-chains
+// through the loads nearest-neighbor; CLK is also locked to the top
+// layer. All three constraints ride the shipped v0.8 intf_const
+// attribute contract and are graded in the sign-off report.
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+entity ClkDriver() {
+    pin CLK: signal out;
+    pin EN: signal out;
+    pin VCC: power in;
+    pin GND: ground;
+
+    attribute component_class = "ic";
+    attribute intf_const__CLK__topology = "star";
+    attribute intf_const__CLK__layer = "top";
+    attribute intf_const__EN__topology = "daisy_chain";
+}
+
+layout ClkDriver {
+    package SOIC-8;
+}
+
+board TopoDemo {
+    power VCC = 3.3V @ 100mA;
+    ground GND;
+
+    u1: ClkDriver();
+    u1.VCC -> @VCC;
+    u1.GND -> @GND;
+
+    u1.CLK -> ra: Res(10000).1;
+    u1.CLK -> rb: Res(10000).1;
+    u1.CLK -> rc: Res(10000).1;
+    ra.2 -> @GND;
+    rb.2 -> @GND;
+    rc.2 -> @GND;
+
+    u1.EN -> rd: Res(10000).1;
+    u1.EN -> re: Res(10000).1;
+    rd.2 -> @GND;
+    re.2 -> @GND;
+}
+
+layout TopoDemo {
+    layer_stackup 2;
+    outline rect 30 22;
+}

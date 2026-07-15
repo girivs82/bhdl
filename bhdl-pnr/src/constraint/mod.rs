@@ -244,6 +244,22 @@ pub enum Constraint {
         max_freq_hz: Option<f64>,
         source: ConstraintSource,
     },
+    /// Net restricted to specific copper layers (`layer top;` etc.).
+    /// (Router-side — enforced in the grid walk.)
+    LayerRule {
+        net: NetId,
+        bind: LayerBind,
+        source: ConstraintSource,
+    },
+}
+
+/// Which copper layers a `LayerRule` binds a net to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LayerBind {
+    Top,
+    Bottom,
+    Outer,
+    Inner,
 }
 
 /// Routing-topology kind for `Constraint::Topology`.
@@ -277,7 +293,8 @@ impl Constraint {
             | Constraint::Impedance { source, .. }
             | Constraint::Topology { source, .. }
             | Constraint::SwizzleGroup { source, .. }
-            | Constraint::SignalClass { source, .. } => source,
+            | Constraint::SignalClass { source, .. }
+            | Constraint::LayerRule { source, .. } => source,
         }
     }
 
@@ -292,7 +309,8 @@ impl Constraint {
             // Router-side variants without a placement hardness default to Hard.
             Constraint::DiffPair { .. }
             | Constraint::Impedance { .. }
-            | Constraint::Topology { .. } => Hardness::Hard,
+            | Constraint::Topology { .. }
+            | Constraint::LayerRule { .. } => Hardness::Hard,
             // Freedom grant + classification tag carry no hardness.
             Constraint::SwizzleGroup { .. } | Constraint::SignalClass { .. } => {
                 Hardness::Soft { shape: CostShape::Linear, weight: 0.0 }
@@ -314,6 +332,7 @@ impl Constraint {
             Constraint::Topology { .. } => "Topology",
             Constraint::SwizzleGroup { .. } => "SwizzleGroup",
             Constraint::SignalClass { .. } => "SignalClass",
+            Constraint::LayerRule { .. } => "LayerRule",
         }
     }
 }
