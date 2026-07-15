@@ -11,6 +11,7 @@
 use clap::{Parser, Subcommand};
 
 mod value_deriver;
+mod mech_check;
 use anyhow::{Result, Context};
 use colored::*;
 use std::fs;
@@ -1740,6 +1741,7 @@ async fn run_layout(
     // Mechanical contract from the layout block: chassis-locked parts,
     // declared outline, mounting holes, keepouts — INPUT that PnR works
     // within (like the stackup), reported with provenance.
+    let mut mech_gate: Option<(String, Vec<(f64, f64)>, Vec<(f64, f64, f64)>)> = None;
     if let Some(name) = &board_module_name {
         if let Some(lay) = analysis.layout_definitions.get(name) {
             use bhdl_pnr::types::{
@@ -1822,6 +1824,27 @@ async fn run_layout(
                     "✓".green(),
                     lay.keepouts.len()
                 );
+            }
+            if let Some(dxf) = &lay.mech_check {
+                let outline_pts: Vec<(f64, f64)> =
+                    if let Some(pts) = &lay.outline_polygon {
+                        pts.clone()
+                    } else if let Some((w, h)) = lay.outline_rect {
+                        vec![(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)]
+                    } else {
+                        anyhow::bail!(
+                            "mech_check requires a declared outline (rect or \
+                             polygon) — an auto-sized board has no mechanical \
+                             contract to verify"
+                        );
+                    };
+                let holes: Vec<(f64, f64, f64)> = lay
+                    .mounting_holes
+                    .iter()
+                    .map(|&(x, y, d, _)| (x, y, d))
+                    .collect();
+                println!("  {} Mech check: {dxf} (declared)", "✓".green());
+                mech_gate = Some((dxf.clone(), outline_pts, holes));
             }
         }
     }
@@ -1951,6 +1974,21 @@ async fn run_layout(
     std::fs::write(&output_path, &pcb)?;
     std::fs::write(output_path.with_extension("kicad_pro"), &project_json)?;
     println!("\n  {} KiCad PCB: {} ({} bytes)", "✓".green(), output_path.display(), pcb.len());
+
+    // MCAD parity gate: the exported board's mechanical contract must
+    // match the referenced DXF, or the build fails.
+    if let Some((dxf_rel, outline_pts, holes)) = &mech_gate {
+        let dxf_path = source_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join(dxf_rel);
+        let dxf = mech_check::parse_dxf(&dxf_path)?;
+        let board_h = outline_pts
+            .iter()
+            .map(|&(_, y)| y)
+            .fold(0.0_f64, f64::max);
+        mech_check::check_parity(outline_pts, holes, &dxf, board_h)?;
+    }
 
     // HTML visualization (always generate, or only with --html flag)
     if html {

@@ -35,4 +35,5 @@ layout MechPoly {
     outline polygon (0,0) (40,0) (40,18) (28,18) (28,30) (0,30);
     place j_pwr at (4, 15) rot 90;
     mounting_hole (36, 4) drill 3.2 keepout 2.0;
+    mech_check "test_mech_poly.dxf";
 }

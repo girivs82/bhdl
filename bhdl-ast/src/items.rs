@@ -1666,6 +1666,28 @@ impl LayoutDef {
         out
     }
 
+    /// `mech_check "file.dxf";` — MCAD parity gate file reference.
+    pub fn mech_check(&self) -> Option<String> {
+        // Reuses LAYOUT_PLACE-style token capture: any mech statement
+        // whose first token is `mech_check` carries a string literal.
+        for kind in [
+            SyntaxKind::LAYOUT_PLACE,
+            SyntaxKind::LAYOUT_OUTLINE,
+            SyntaxKind::LAYOUT_MOUNTING_HOLE,
+            SyntaxKind::LAYOUT_KEEPOUT,
+        ] {
+            for n in self.0.children().filter(|n| n.kind() == kind) {
+                let toks = Self::mech_tokens(&n);
+                if toks.first().map(|t| t.as_str()) == Some("mech_check") {
+                    return toks
+                        .get(1)
+                        .map(|t| t.trim_matches('"').to_string());
+                }
+            }
+        }
+        None
+    }
+
     /// Board-level layer count from `layer_stackup N;`.
     pub fn layer_stackup(&self) -> Option<usize> {
         self.0

@@ -3101,6 +3101,7 @@ pub fn extract_layout_definitions(
         };
         let mounting_holes = layout_def.mounting_holes();
         let keepouts = layout_def.keepouts();
+        let mech_check = layout_def.mech_check();
 
         definitions.insert(entity_name.clone(), LayoutDefinition {
             entity_name,
@@ -3112,6 +3113,7 @@ pub fn extract_layout_definitions(
             outline_polygon,
             mounting_holes,
             keepouts,
+            mech_check,
         });
     }
 

@@ -26,4 +26,7 @@ pub struct LayoutDefinition {
     pub mounting_holes: Vec<(f64, f64, f64, f64)>,
     /// (x0, y0, x1, y1) rectangular keepouts (chassis bosses etc.).
     pub keepouts: Vec<(f64, f64, f64, f64)>,
+    /// DXF parity-gate file (`mech_check "file.dxf";`), relative to
+    /// the .bhdl.
+    pub mech_check: Option<String>,
 }
