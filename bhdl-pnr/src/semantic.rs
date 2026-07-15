@@ -407,13 +407,25 @@ pub fn build_board(
             .cloned()
             .unwrap_or_else(|| format!("{}{}", prefix, counter));
 
-        // Placement constraint
+        // Placement constraint: hard lock (chassis coordinates) wins,
+        // then region binding (thermal boss / heatsink pad: WITHIN the
+        // zone, position otherwise free), then free.
         let placement = fixed_placements
             .get(&instance.name)
             .map(|fp| PlacementConstraint::Fixed {
                 x: fp.x_mm,
                 y: fp.y_mm,
                 theta: fp.rotation_deg.to_radians(),
+            })
+            .or_else(|| {
+                config
+                    .board_config
+                    .placement_regions
+                    .iter()
+                    .find(|r| r.preferred_instances.iter().any(|n| n == &instance.name))
+                    .map(|r| PlacementConstraint::PreferRegion {
+                        region_name: r.name.clone(),
+                    })
             })
             .unwrap_or(PlacementConstraint::Free);
 

@@ -3093,6 +3093,7 @@ pub fn extract_layout_definitions(
         let package = layout_def.package();
         let layer_stackup = layout_def.layer_stackup();
         let places = layout_def.places();
+        let region_places = layout_def.region_places();
         let (outline_rect, outline_polygon) = match layout_def.outline() {
             Some(bhdl_ast::LayoutOutline::Rect { w, h }) => (Some((w, h)), None),
             Some(bhdl_ast::LayoutOutline::Polygon(pts)) => (None, Some(pts)),
@@ -3106,6 +3107,7 @@ pub fn extract_layout_definitions(
             package,
             layer_stackup,
             places,
+            region_places,
             outline_rect,
             outline_polygon,
             mounting_holes,

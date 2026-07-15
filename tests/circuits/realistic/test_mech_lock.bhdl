@@ -29,13 +29,19 @@ board MechLock {
     @VCC -> led1: LED(color="green").A;
     led1.K -> r_led: Res(220).1;
     r_led.2 -> @GND;
+
+    // "Hot" part bound to the heatsink boss region (thermal contract):
+    // must land WITHIN the zone, exact position free.
+    @VCC -> r_load: Res(100).1;
+    r_load.2 -> @GND;
 }
 
 layout MechLock {
     layer_stackup 2;
-    outline rect 40 30;
+    outline rect 46 32;
     place j_pwr at (4, 15) rot 90;
-    mounting_hole (36, 4) drill 3.2 keepout 2.0;
-    mounting_hole (36, 26) drill 3.2 keepout 2.0;
-    keepout rect (30, 12) (40, 18);
+    mounting_hole (42, 4) drill 3.2 keepout 2.0;
+    mounting_hole (42, 28) drill 3.2 keepout 2.0;
+    keepout rect (36, 13) (46, 19);
+    place r_load in rect (14, 20) (26, 28);
 }

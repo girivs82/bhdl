@@ -1760,6 +1760,24 @@ async fn run_layout(
                     "✓".green()
                 );
             }
+            for &(ref handle, x0, y0, x1, y1) in &lay.region_places {
+                use bhdl_pnr::types::{PlacementRegion, ZoneShape};
+                sem_config.board_config.placement_regions.push(PlacementRegion {
+                    name: format!("region_{handle}"),
+                    shape: ZoneShape::Rectangle {
+                        x: x0.min(x1),
+                        y: y0.min(y1),
+                        w: (x1 - x0).abs(),
+                        h: (y1 - y0).abs(),
+                    },
+                    preferred_instances: vec![handle.clone()],
+                    weight: 5.0,
+                });
+                println!(
+                    "  {} Region-locked: {handle} within ({x0},{y0})-({x1},{y1}) (layout {name})",
+                    "✓".green()
+                );
+            }
             if let Some((w, h)) = lay.outline_rect {
                 sem_config.board_config.outline =
                     BoardOutline::Rectangle { width_mm: w, height_mm: h };

@@ -27,6 +27,29 @@ fn is_legal(board: &Board, k: usize) -> bool {
     {
         return false;
     }
+    // Region-bound parts (thermal bosses): any move must keep the
+    // envelope INSIDE the declared zone — the mechanical contract
+    // survives refinement.
+    if let crate::types::PlacementConstraint::PreferRegion { region_name } =
+        &board.components[k].placement
+    {
+        if let Some(r) = board
+            .config
+            .placement_regions
+            .iter()
+            .find(|r| &r.name == region_name)
+        {
+            if let crate::types::ZoneShape::Rectangle { x, y, w, h } = &r.shape {
+                if cxk - hwk < x - 1e-9
+                    || cyk - hhk < y - 1e-9
+                    || cxk + hwk > x + w + 1e-9
+                    || cyk + hhk > y + h + 1e-9
+                {
+                    return false;
+                }
+            }
+        }
+    }
     if let crate::types::BoardOutline::Polygon(pts) = &board.config.outline {
         let corners = [
             (cxk - hwk, cyk - hhk),

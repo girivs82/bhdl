@@ -74,6 +74,35 @@ pub fn legalize(board: &mut Board, snap_grid_mm: f64) {
             }
         }
 
+        // Region-bound parts (thermal bosses) CLAMP into their zone:
+        // the region-preference force is soft; the mechanical contract
+        // is not.
+        {
+            let regions: Vec<(String, crate::types::ZoneShape)> = board
+                .config
+                .placement_regions
+                .iter()
+                .map(|r| (r.name.clone(), r.shape.clone()))
+                .collect();
+            for comp in board.components.iter_mut() {
+                let PlacementConstraint::PreferRegion { region_name } = &comp.placement
+                else {
+                    continue;
+                };
+                let Some((_, shape)) = regions.iter().find(|(n, _)| n == region_name)
+                else {
+                    continue;
+                };
+                if let crate::types::ZoneShape::Rectangle { x, y, w, h } = shape {
+                    let (ecx, ecy, hw, hh) = comp.envelope();
+                    let nx = ecx.clamp(x + hw, (x + w - hw).max(x + hw));
+                    let ny = ecy.clamp(y + hh, (y + h - hh).max(y + hh));
+                    comp.x += nx - ecx;
+                    comp.y += ny - ecy;
+                }
+            }
+        }
+
         // Clamp to board boundary (account for component size)
         let ec = board.config.edge_clearance_mm;
         let bw = board.config.outline.width();

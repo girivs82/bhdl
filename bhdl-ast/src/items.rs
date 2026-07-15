@@ -1540,6 +1540,32 @@ impl LayoutDef {
             .collect()
     }
 
+    /// `place <handle> in rect (x0,y0) (x1,y1);` — region-constrained
+    /// parts (thermal bosses, heatsink pads: the part must sit WITHIN
+    /// the zone, exact position free).
+    pub fn region_places(&self) -> Vec<(String, f64, f64, f64, f64)> {
+        let mut out = Vec::new();
+        for n in self
+            .0
+            .children()
+            .filter(|n| n.kind() == SyntaxKind::LAYOUT_PLACE)
+        {
+            let toks = Self::mech_tokens(&n);
+            if !toks.iter().any(|t| t == "in") {
+                continue;
+            }
+            let nums: Vec<f64> = toks
+                .iter()
+                .filter_map(|t| t.parse::<f64>().ok())
+                .collect();
+            let handle = toks.get(1).cloned().unwrap_or_default();
+            if !handle.is_empty() && nums.len() >= 4 {
+                out.push((handle, nums[0], nums[1], nums[2], nums[3]));
+            }
+        }
+        out
+    }
+
     /// `place <handle> at (x, y) [rot D];` — locked part positions.
     pub fn places(&self) -> Vec<(String, f64, f64, f64)> {
         let mut out = Vec::new();
@@ -1549,6 +1575,9 @@ impl LayoutDef {
             .filter(|n| n.kind() == SyntaxKind::LAYOUT_PLACE)
         {
             let toks = Self::mech_tokens(&n);
+            if toks.iter().any(|t| t == "in") {
+                continue; // region form — see region_places()
+            }
             // place <handle> at ( x , y ) [rot d]
             let nums: Vec<f64> = toks
                 .iter()

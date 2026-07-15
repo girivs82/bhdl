@@ -16,6 +16,9 @@ pub struct LayoutDefinition {
     /// MECHANICAL CONTRACT — chassis-locked truth PnR works within:
     /// (handle, x, y, rot_deg) locked part positions.
     pub places: Vec<(String, f64, f64, f64)>,
+    /// (handle, x0, y0, x1, y1) region-constrained parts (thermal
+    /// bosses: part must sit WITHIN the zone, position otherwise free).
+    pub region_places: Vec<(String, f64, f64, f64, f64)>,
     /// Declared outline: Rect(w,h) as (w, h, empty) or Polygon points.
     pub outline_rect: Option<(f64, f64)>,
     pub outline_polygon: Option<Vec<(f64, f64)>>,
