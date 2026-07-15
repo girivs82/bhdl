@@ -126,6 +126,9 @@ pub fn verify(board: &Board, routes: &[Route]) -> VerifyReport {
         for j in (i + 1)..board.components.len() {
             let a = &board.components[i];
             let b = &board.components[j];
+            if !a.shares_surface(b) {
+                continue; // opposite-side SMD parts may share XY
+            }
             let (aw, ah) = a.rotated_bbox();
             let (bw2, bh2) = b.rotated_bbox();
             let dx = (a.x - b.x).abs();

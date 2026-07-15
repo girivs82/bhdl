@@ -1878,6 +1878,13 @@ async fn run_layout(
                     lay.cutouts.len()
                 );
             }
+            if lay.double_sided {
+                sem_config.board_config.double_sided = true;
+                println!(
+                    "  {} Assembly: double-sided (free SMD parts may flip to the back)",
+                    "✓".green()
+                );
+            }
             if let Some(dxf) = &lay.mech_check {
                 let outline_pts: Vec<(f64, f64)> =
                     if let Some(pts) = &lay.outline_polygon {

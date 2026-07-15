@@ -3434,6 +3434,7 @@ impl<'t> Parser<'t> {
                         Some("keepout") => SyntaxKind::LAYOUT_KEEPOUT,
                         Some("cutout") => SyntaxKind::LAYOUT_CUTOUT,
                         Some("mech_check") => SyntaxKind::LAYOUT_KEEPOUT, // token capture; AST reads first token
+                        Some("assembly") => SyntaxKind::LAYOUT_KEEPOUT, // token capture; AST reads first token
                         _ => {
                             self.error(
                                 "Expected 'package', 'layer_stackup', 'place', \

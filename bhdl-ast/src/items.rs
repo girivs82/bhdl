@@ -1689,6 +1689,25 @@ impl LayoutDef {
         out
     }
 
+    /// `assembly double_sided;` — the optimizer may flip free SMD
+    /// parts to the back (double-sided assembly is a deliberate cost
+    /// decision, so it is opt-in).
+    pub fn double_sided(&self) -> bool {
+        for n in self
+            .0
+            .children()
+            .filter(|n| n.kind() == SyntaxKind::LAYOUT_KEEPOUT)
+        {
+            let toks = Self::mech_tokens(&n);
+            if toks.first().map(|t| t.as_str()) == Some("assembly")
+                && toks.get(1).map(|t| t.as_str()) == Some("double_sided")
+            {
+                return true;
+            }
+        }
+        false
+    }
+
     /// `mech_check "file.dxf";` — MCAD parity gate file reference.
     pub fn mech_check(&self) -> Option<String> {
         // Reuses LAYOUT_PLACE-style token capture: any mech statement

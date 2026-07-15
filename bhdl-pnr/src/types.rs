@@ -57,6 +57,9 @@ pub struct BoardConfig {
     /// Edge.Cuts, blocked for routing (edge band) and placement, and
     /// punched from plane fills.
     pub cutouts: Vec<(f64, f64, f64, f64)>,
+    /// Double-sided assembly declared (`assembly double_sided;`) —
+    /// detailed placement may flip free SMD parts to the back.
+    pub double_sided: bool,
     pub placement_regions: Vec<PlacementRegion>,
     /// IPC-7351B courtyard excess (per side, mm) added to each
     /// component's pad/body extent to form its keepout boundary. Set from
@@ -78,6 +81,7 @@ impl Default for BoardConfig {
             mounting_holes: Vec::new(),
             keepout_zones: Vec::new(),
             cutouts: Vec::new(),
+            double_sided: false,
             placement_regions: Vec::new(),
             courtyard_excess_mm: 0.25, // IPC nominal
         }
@@ -428,6 +432,22 @@ impl Component {
     /// pads) have an envelope center displaced from the component
     /// origin — clamping/overlap tests that assume a centered bbox
     /// under-protect the far side (the pad-at-board-edge family).
+    /// Can these two components' bodies conflict in XY? Opposite-side
+    /// SMD parts occupy different surfaces and may share coordinates;
+    /// a through-hole pin pierces both sides, so a THT part conflicts
+    /// with everything.
+    pub fn shares_surface(&self, other: &Component) -> bool {
+        if self.side == other.side {
+            return true;
+        }
+        let tht = |c: &Component| {
+            c.pins
+                .iter()
+                .any(|p| p.pad.as_ref().and_then(|pd| pd.drill_mm).is_some())
+        };
+        tht(self) || tht(other)
+    }
+
     pub fn envelope(&self) -> (f64, f64, f64, f64) {
         let cos_t = self.theta.cos();
         let sin_t = self.theta.sin();

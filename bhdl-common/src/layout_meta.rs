@@ -31,4 +31,6 @@ pub struct LayoutDefinition {
     /// DXF parity-gate file (`mech_check "file.dxf";`), relative to
     /// the .bhdl.
     pub mech_check: Option<String>,
+    /// `assembly double_sided;` — free SMD parts may flip to the back.
+    pub double_sided: bool,
 }

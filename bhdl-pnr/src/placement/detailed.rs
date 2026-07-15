@@ -13,6 +13,49 @@ use crate::types::*;
 
 /// Legality: component k's envelope keeps courtyard clearance from every
 /// other component and stays inside the board with edge clearance.
+/// Mean XY of the other pins on this component's nets — where HPWL
+/// wants the part. None when the part has no netted pins.
+fn connection_centroid(board: &Board, k: usize) -> Option<(f64, f64)> {
+    let my_id = board.components[k].id;
+    let my_nets: std::collections::BTreeSet<_> = board.components[k]
+        .pins
+        .iter()
+        .filter_map(|p| p.net)
+        .collect();
+    if my_nets.is_empty() {
+        return None;
+    }
+    let mut sx = 0.0;
+    let mut sy = 0.0;
+    let mut count = 0usize;
+    for net in &board.nets {
+        if !my_nets.contains(&net.id) {
+            continue;
+        }
+        for &(comp_id, pin_id) in &net.pins {
+            if comp_id == my_id {
+                continue;
+            }
+            let Some(comp) = board.components.iter().find(|c| c.id == comp_id) else {
+                continue;
+            };
+            let Some(pin) = comp.pins.iter().find(|p| p.pin_id == pin_id) else {
+                continue;
+            };
+            let cos_t = comp.theta.cos();
+            let sin_t = comp.theta.sin();
+            sx += comp.x + pin.dx * cos_t - pin.dy * sin_t;
+            sy += comp.y + pin.dx * sin_t + pin.dy * cos_t;
+            count += 1;
+        }
+    }
+    if count == 0 {
+        None
+    } else {
+        Some((sx / count as f64, sy / count as f64))
+    }
+}
+
 fn is_legal(board: &Board, k: usize) -> bool {
     let ec = board.config.edge_clearance_mm;
     let bw = board.config.outline.width();
@@ -65,7 +108,7 @@ fn is_legal(board: &Board, k: usize) -> bool {
         }
     }
     for (j, other) in board.components.iter().enumerate() {
-        if j == k {
+        if j == k || !board.components[k].shares_surface(other) {
             continue;
         }
         let (cxj, cyj, hwj, hhj) = other.envelope();
@@ -110,6 +153,63 @@ pub fn refine(board: &mut Board, max_passes: usize) -> (f64, f64) {
                 improved = true;
             }
             board.components[k].theta = best_theta;
+        }
+
+        // Side-flip trials (double-sided assembly only): a flip alone
+        // never changes HPWL (XY metric), so the move is flip + relocate
+        // to the part's connection centroid — the spot HPWL wants, which
+        // is occupied on the top (the IC) but free on the back. The
+        // decoupler-under-the-IC idiom, discovered by the optimizer.
+        if board.config.double_sided {
+            for k in 0..n {
+                if !board.components[k].placement.is_free() {
+                    continue;
+                }
+                let tht = board.components[k]
+                    .pins
+                    .iter()
+                    .any(|p| p.pad.as_ref().and_then(|pd| pd.drill_mm).is_some());
+                if tht {
+                    continue; // through-hole parts have one mounting side
+                }
+                let Some((tx, ty)) = connection_centroid(board, k) else {
+                    continue;
+                };
+                // Snap to the placement grid: the raw centroid is
+                // fractional, and off-grid pads strand the router's
+                // escape geometry (oracle: 0.3mm GND fragment short of
+                // a back pad at x.x78).
+                let snap = 0.5;
+                let (tx, ty) = (
+                    (tx / snap).round() * snap,
+                    (ty / snap).round() * snap,
+                );
+                let orig = (
+                    board.components[k].side,
+                    board.components[k].x,
+                    board.components[k].y,
+                );
+                let flipped = match orig.0 {
+                    crate::types::BoardSide::Top => crate::types::BoardSide::Bottom,
+                    crate::types::BoardSide::Bottom => crate::types::BoardSide::Top,
+                };
+                board.components[k].side = flipped;
+                board.components[k].x = tx;
+                board.components[k].y = ty;
+                let wl = if is_legal(board, k) {
+                    compute_hpwl(board)
+                } else {
+                    f64::INFINITY
+                };
+                if wl < best - 1e-9 {
+                    best = wl;
+                    improved = true;
+                } else {
+                    board.components[k].side = orig.0;
+                    board.components[k].x = orig.1;
+                    board.components[k].y = orig.2;
+                }
+            }
         }
 
         // Pairwise position swaps (positions only; rotations stay).

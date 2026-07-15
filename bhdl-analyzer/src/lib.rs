@@ -3102,6 +3102,7 @@ pub fn extract_layout_definitions(
         let mounting_holes = layout_def.mounting_holes();
         let keepouts = layout_def.keepouts();
         let mech_check = layout_def.mech_check();
+        let double_sided = layout_def.double_sided();
         let cutouts = layout_def.cutouts();
 
         definitions.insert(entity_name.clone(), LayoutDefinition {
@@ -3116,6 +3117,7 @@ pub fn extract_layout_definitions(
             keepouts,
             cutouts,
             mech_check,
+            double_sided,
         });
     }
 

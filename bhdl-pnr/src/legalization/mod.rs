@@ -240,7 +240,7 @@ fn position_legal(board: &Board, i: usize, x: f64, y: f64) -> bool {
         }
     }
     for (j, other) in board.components.iter().enumerate() {
-        if j == i {
+        if j == i || !comp.shares_surface(other) {
             continue;
         }
         let (ocx, ocy, ohw, ohh) = other.envelope();
@@ -345,6 +345,9 @@ fn resolve_overlaps(board: &mut Board) {
 
         for i in 0..n {
             for j in (i + 1)..n {
+                if !board.components[i].shares_surface(&board.components[j]) {
+                    continue; // opposite-side SMD parts may share XY
+                }
                 let (cxi, cyi, hwi, hhi) = board.components[i].envelope();
                 let (cxj, cyj, hwj, hhj) = board.components[j].envelope();
 

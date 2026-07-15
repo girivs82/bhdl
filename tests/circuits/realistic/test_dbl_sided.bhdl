@@ -1,0 +1,47 @@
+// Double-sided assembly fixture: a deliberately tight board where the
+// four pull resistors cannot all fit around the IC on the top —
+// `assembly double_sided;` lets detailed placement flip free SMD
+// parts to the back at their connection centroid (the classic
+// decoupler-under-the-IC idiom, found by the optimizer, not declared).
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+entity Mcu() {
+    pin A: signal out;
+    pin B: signal out;
+    pin C: signal out;
+    pin D: signal out;
+    pin VCC: power in;
+    pin GND: ground;
+
+    attribute component_class = "ic";
+}
+
+layout Mcu {
+    package SOIC-8;
+}
+
+board DblSided {
+    power VCC = 3.3V @ 100mA;
+    ground GND;
+
+    u1: Mcu();
+    u1.VCC -> @VCC;
+    u1.GND -> @GND;
+
+    u1.A -> ra: Res(10000).1;
+    ra.2 -> @GND;
+    u1.B -> rb: Res(10000).1;
+    rb.2 -> @GND;
+    u1.C -> rc: Res(10000).1;
+    rc.2 -> @GND;
+    u1.D -> rd: Res(10000).1;
+    rd.2 -> @GND;
+}
+
+layout DblSided {
+    layer_stackup 2;
+    outline rect 12 10;
+    place u1 at (6, 5) rot 0;
+    assembly double_sided;
+}
