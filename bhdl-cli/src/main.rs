@@ -268,6 +268,18 @@ enum Commands {
         html: bool,
     },
 
+    /// Transcribe a MCAD DXF (positional FILE) into layout-block
+    /// mechanical statements: outline, mounting_hole, mech_check.
+    /// One-time onboarding — paste the output into the board's layout
+    /// block; thereafter the .bhdl is authoritative and mech_check
+    /// catches drift on every build.
+    MechImport {
+        /// DXF is Y-up (typical MCAD export) — mirror into the board's
+        /// Y-down frame
+        #[arg(long)]
+        flip_y: bool,
+    },
+
     /// Generate power domain documentation
     Doc {
         /// Output file path
@@ -392,6 +404,19 @@ async fn main() -> Result<()> {
         bhdl_synthesizer::set_global_library_resolver(resolver);
     }
 
+    // mech-import takes a DXF as its positional input, not BHDL —
+    // dispatch before the source-file read/parse pipeline.
+    if let Some(Commands::MechImport { flip_y }) = &cli.command {
+        let dxf = mech_check::parse_dxf(&cli.input)?;
+        let name = cli
+            .input
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| cli.input.display().to_string());
+        print!("{}", mech_check::render_import(&dxf, &name, *flip_y)?);
+        return Ok(());
+    }
+
     // Read input file
     let input_content = fs::read_to_string(&cli.input)
         .with_context(|| format!("Failed to read file: {}", cli.input.display()))?;
@@ -455,6 +480,8 @@ async fn main() -> Result<()> {
     
     // Handle commands
     match cli.command {
+        // Dispatched before the parse pipeline above.
+        Some(Commands::MechImport { .. }) => unreachable!("handled pre-parse"),
         None => {
             // Default: run analysis
             run_analysis(&source_file, false, "text").await?;

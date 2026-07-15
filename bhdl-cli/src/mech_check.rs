@@ -143,6 +143,115 @@ pub fn check_parity(
     Ok(())
 }
 
+/// Format a mm coordinate for HDL output: 3 decimals, trailing zeros
+/// trimmed.
+fn fmt_mm(v: f64) -> String {
+    let s = format!("{v:.3}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    if s == "-0" { "0".to_string() } else { s.to_string() }
+}
+
+fn polygon_area(pts: &[(f64, f64)]) -> f64 {
+    let n = pts.len();
+    let mut a = 0.0;
+    for i in 0..n {
+        let (x0, y0) = pts[i];
+        let (x1, y1) = pts[(i + 1) % n];
+        a += x0 * y1 - x1 * y0;
+    }
+    a.abs() / 2.0
+}
+
+/// Transcribe a MCAD DXF into layout-block mechanical statements: the
+/// one-time onboarding path. After pasting the output the .bhdl is
+/// authoritative and the emitted `mech_check` line keeps both sides
+/// honest on every subsequent build.
+pub fn render_import(dxf: &Dxf, dxf_name: &str, flip_y: bool) -> Result<String> {
+    if dxf.polylines.is_empty() {
+        bail!("mech-import: no closed LWPOLYLINE found — nothing to use as a board outline");
+    }
+    // Largest-area polyline is the outline; anything else is likely an
+    // interior feature we don't model yet (cutouts are a queued arc).
+    let outline_idx = (0..dxf.polylines.len())
+        .max_by(|&a, &b| {
+            polygon_area(&dxf.polylines[a])
+                .partial_cmp(&polygon_area(&dxf.polylines[b]))
+                .unwrap()
+        })
+        .unwrap();
+    let mut pts = dxf.polylines[outline_idx].clone();
+    let mut holes: Vec<(f64, f64, f64)> =
+        dxf.circles.iter().map(|&(x, y, r)| (x, y, 2.0 * r)).collect();
+
+    if flip_y {
+        for p in &mut pts {
+            p.1 = -p.1;
+        }
+        for h in &mut holes {
+            h.1 = -h.1;
+        }
+    }
+    // Normalize: board frame has the outline's min corner at (0,0).
+    let minx = pts.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
+    let miny = pts.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
+    for p in &mut pts {
+        p.0 -= minx;
+        p.1 -= miny;
+    }
+    for h in &mut holes {
+        h.0 -= minx;
+        h.1 -= miny;
+    }
+
+    let mut out = String::new();
+    if minx.abs() > 1e-9 || miny.abs() > 1e-9 {
+        out.push_str(&format!(
+            "// translated by ({}, {}) so the outline's min corner sits at (0,0)\n",
+            fmt_mm(-minx),
+            fmt_mm(-miny)
+        ));
+    }
+    if dxf.polylines.len() > 1 {
+        out.push_str(&format!(
+            "// NOTE: {} additional polyline(s) in the DXF ignored (interior features?)\n",
+            dxf.polylines.len() - 1
+        ));
+    }
+    out.push_str("layout <Board> {\n");
+
+    // Axis-aligned 4-vertex polygon degrades to the simpler rect form.
+    let is_rect = pts.len() == 4 && {
+        let xs: Vec<f64> = pts.iter().map(|p| p.0).collect();
+        let ys: Vec<f64> = pts.iter().map(|p| p.1).collect();
+        (0..4).all(|i| {
+            let j = (i + 1) % 4;
+            (xs[i] - xs[j]).abs() < 1e-9 || (ys[i] - ys[j]).abs() < 1e-9
+        })
+    };
+    if is_rect {
+        let w = pts.iter().map(|p| p.0).fold(0.0_f64, f64::max);
+        let h = pts.iter().map(|p| p.1).fold(0.0_f64, f64::max);
+        out.push_str(&format!("    outline rect {} {};\n", fmt_mm(w), fmt_mm(h)));
+    } else {
+        out.push_str("    outline polygon");
+        for &(x, y) in &pts {
+            out.push_str(&format!(" ({}, {})", fmt_mm(x), fmt_mm(y)));
+        }
+        out.push_str(";\n");
+    }
+    for &(x, y, d) in &holes {
+        out.push_str(&format!(
+            "    mounting_hole ({}, {}) drill {} keepout 2.0; // keepout: DXF carries none — set per chassis\n",
+            fmt_mm(x),
+            fmt_mm(y),
+            fmt_mm(d)
+        ));
+    }
+    out.push_str(&format!("    mech_check \"{dxf_name}\";\n"));
+    out.push_str("}\n");
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,6 +296,53 @@ mod tests {
         // Hole present but wrong drill (M3 vs declared 3.2).
         let dxf = dxf_with(L_SHAPE.to_vec(), vec![(36.0, 4.0, 1.5)]);
         assert!(check_parity(&L_SHAPE, &[(36.0, 4.0, 3.2)], &dxf, 30.0).is_err());
+    }
+
+    #[test]
+    fn import_renders_l_shape() {
+        let dxf = dxf_with(L_SHAPE.to_vec(), vec![(36.0, 4.0, 1.6)]);
+        let out = render_import(&dxf, "board.dxf", false).unwrap();
+        assert!(out.contains(
+            "outline polygon (0, 0) (40, 0) (40, 18) (28, 18) (28, 30) (0, 30);"
+        ));
+        assert!(out.contains("mounting_hole (36, 4) drill 3.2 keepout 2.0;"));
+        assert!(out.contains("mech_check \"board.dxf\";"));
+    }
+
+    #[test]
+    fn import_flip_y_matches_direct() {
+        // A Y-up MCAD export imported with --flip-y must transcribe to
+        // the same board-frame statements as a Y-down DXF without it.
+        let up: Vec<_> = L_SHAPE.iter().map(|&(x, y)| (x, 30.0 - y)).collect();
+        let a = render_import(
+            &dxf_with(up, vec![(36.0, 26.0, 1.6)]),
+            "b.dxf",
+            true,
+        )
+        .unwrap();
+        let b = render_import(
+            &dxf_with(L_SHAPE.to_vec(), vec![(36.0, 4.0, 1.6)]),
+            "b.dxf",
+            false,
+        )
+        .unwrap();
+        // The flip introduces a translation provenance comment; the
+        // emitted STATEMENTS must be identical.
+        let stmts = |s: &str| -> Vec<String> {
+            s.lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .map(|l| l.to_string())
+                .collect()
+        };
+        assert_eq!(stmts(&a), stmts(&b));
+    }
+
+    #[test]
+    fn import_detects_rect() {
+        let rect = vec![(5.0, 5.0), (51.0, 5.0), (51.0, 37.0), (5.0, 37.0)];
+        let out = render_import(&dxf_with(rect, vec![]), "r.dxf", false).unwrap();
+        assert!(out.contains("outline rect 46 32;"), "{out}");
+        assert!(out.contains("translated by (-5, -5)"));
     }
 
     #[test]
