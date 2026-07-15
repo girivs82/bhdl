@@ -789,6 +789,36 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         }
     }
 
+    // 5.95. 45° corner mitering (verified post-pass) + one final
+    // guarantee round: any miter the local check mis-judged is
+    // amputated/trimmed by the validator like all copper.
+    {
+        // TRANSACTIONAL: elegance never costs connectivity. If the
+        // guarantee round amputates anything on a mitered net (a case
+        // the local check missed), that net reverts to its pre-miter
+        // route wholesale — validated copper we already had.
+        let saved = final_routes.clone();
+        let mitered = miter_pass(&board, &mut final_routes);
+        if mitered > 0 {
+            info!("45° miter pass: {} corners cut", mitered);
+            let post: Vec<usize> =
+                final_routes.iter().map(|r| r.segments.len()).collect();
+            let mut bv: Vec<(usize, (f64, f64))> = Vec::new();
+            let mut bd: Vec<(usize, (f64, f64))> = Vec::new();
+            let _ = validate_and_rip(&board, &mut final_routes, &mut bv, &mut bd);
+            let mut reverted = 0;
+            for i in 0..final_routes.len() {
+                if final_routes[i].segments.len() < post[i] {
+                    final_routes[i] = saved[i].clone();
+                    reverted += 1;
+                }
+            }
+            if reverted > 0 {
+                info!("45° miter pass: {reverted} net(s) reverted (guarantee round objected)");
+            }
+        }
+    }
+
     // 6. DRC
     if std::env::var("BHDL_PNR_DEBUG_CLEARANCE").is_ok() {
         debug_check_foreign_pads(&board, &final_routes, "final");
@@ -910,6 +940,226 @@ fn segments_too_close(
 /// may intersect or under-clear. The cell model has deliberate blind
 /// spots (blocked pad-halo cells exempt from overflow), so the last
 /// word is geometry. Returns the indices of nets ripped this call.
+/// 45° corner mitering: replace right-angle corners with diagonal
+/// cuts wherever the EXACT geometry stays legal — the length and
+/// elegance Manhattan-only routing leaves on the table, recovered as
+/// a verified post-pass (routing WITH diagonals is unsafe at pitch
+/// cells: parallel adjacent diagonals sit 0.212mm apart). Every miter
+/// is validated against foreign copper before applying, and the
+/// final validate_and_rip round remains the shipping guarantee.
+fn miter_pass(board: &Board, final_routes: &mut [Route]) -> usize {
+    let clearance = board.config.min_spacing_mm;
+    let bw = board.config.outline.width();
+    let bh = board.config.outline.height();
+    let edge = board.config.edge_clearance_mm;
+    let via_r = board.layer_stack.via.pad_mm / 2.0;
+
+    // Foreign-copper snapshot (pads incl. NC).
+    struct PadObs {
+        net: Option<NetId>,
+        layer_top: bool,
+        layer_bot: bool,
+        cx: f64,
+        cy: f64,
+        hx: f64,
+        hy: f64,
+    }
+    let n_layers = board.layer_stack.layers.len();
+    let mut pads: Vec<PadObs> = Vec::new();
+    for comp in &board.components {
+        let cos_t = comp.theta.cos();
+        let sin_t = comp.theta.sin();
+        let quarter =
+            ((comp.theta / std::f64::consts::FRAC_PI_2).round() as i64).rem_euclid(2);
+        for pin in &comp.pins {
+            if pin.unplaced {
+                continue;
+            }
+            let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
+            let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+            let (pw, ph, thru) = match &pin.pad {
+                Some(p) => (p.width_mm, p.height_mm, p.drill_mm.is_some()),
+                None => (0.5, 0.5, false),
+            };
+            let (pw, ph) = if quarter == 1 { (ph, pw) } else { (pw, ph) };
+            pads.push(PadObs {
+                net: pin.net,
+                layer_top: thru || matches!(comp.side, BoardSide::Top),
+                layer_bot: thru || matches!(comp.side, BoardSide::Bottom),
+                cx: gx,
+                cy: gy,
+                hx: pw / 2.0,
+                hy: ph / 2.0,
+            });
+        }
+    }
+    let pad_on_layer = |p: &PadObs, layer: usize| -> bool {
+        (layer == 0 && p.layer_top) || (layer == n_layers - 1 && p.layer_bot)
+    };
+
+    // Snapshot foreign segments/vias per net lazily is O(n²); boards are
+    // small — clone the pre-pass geometry once and validate against it
+    // (miters only SHRINK copper, so validating against the original is
+    // conservative-safe).
+    let originals: Vec<Route> = final_routes.to_vec();
+
+    let mut mitered = 0usize;
+    for i in 0..final_routes.len() {
+        let net_id = final_routes[i].net_id;
+        let r = &mut final_routes[i];
+        for sp in 0..r.path_spans.len() {
+            let (ps, pl) = r.path_spans[sp];
+            if pl < 2 {
+                continue;
+            }
+            // Rebuild this span's segments with miters.
+            let mut out: Vec<RouteSegment> = Vec::with_capacity(pl + 4);
+            out.push(r.segments[ps].clone());
+            for k in 1..pl {
+                let b = r.segments[ps + k].clone();
+                let a = out.last().unwrap().clone();
+                // Corner: a.end == b.start, same layer/width, perpendicular.
+                let corner = (a.end.0 - b.start.0).abs() < 1e-9
+                    && (a.end.1 - b.start.1).abs() < 1e-9
+                    && a.layer == b.layer
+                    && (a.width_mm - b.width_mm).abs() < 1e-9
+                    && {
+                        let da = (a.end.0 - a.start.0, a.end.1 - a.start.1);
+                        let db = (b.end.0 - b.start.0, b.end.1 - b.start.1);
+                        (da.0 * db.0 + da.1 * db.1).abs() < 1e-9
+                    };
+                if !corner {
+                    out.push(b);
+                    continue;
+                }
+                // Never miter a JUNCTION corner: a child span or a via
+                // attaches at the corner point, and cutting the corner
+                // removes the very copper it anchors to (the guarantee
+                // round then amputates the child — a +1 unc on nearly
+                // every mitering board until this check).
+                let corner_pt = a.end;
+                let is_junction = originals[i].segments.iter().enumerate().any(
+                    |(si2, sg)| {
+                        (si2 < ps || si2 >= ps + pl)
+                            && (((sg.start.0 - corner_pt.0).abs() < 1e-6
+                                && (sg.start.1 - corner_pt.1).abs() < 1e-6)
+                                || ((sg.end.0 - corner_pt.0).abs() < 1e-6
+                                    && (sg.end.1 - corner_pt.1).abs() < 1e-6))
+                    },
+                ) || originals[i].vias.iter().any(|v| {
+                    (v.x - corner_pt.0).abs() < 1e-6 && (v.y - corner_pt.1).abs() < 1e-6
+                });
+                if is_junction {
+                    out.push(b);
+                    continue;
+                }
+                let la = (a.end.0 - a.start.0).hypot(a.end.1 - a.start.1);
+                let lb = (b.end.0 - b.start.0).hypot(b.end.1 - b.start.1);
+                let d = (la.min(lb) * 0.5).min(0.9);
+                if d < 0.15 {
+                    out.push(b);
+                    continue;
+                }
+                let ua = ((a.end.0 - a.start.0) / la, (a.end.1 - a.start.1) / la);
+                let ub = ((b.end.0 - b.start.0) / lb, (b.end.1 - b.start.1) / lb);
+                let p1 = (a.end.0 - ua.0 * d, a.end.1 - ua.1 * d);
+                let p2 = (b.start.0 + ub.0 * d, b.start.1 + ub.1 * d);
+                // Validate the diagonal against FOREIGN copper + edge.
+                let w = a.width_mm;
+                let m = w / 2.0;
+                let inside = p1.0.min(p2.0) - m > edge
+                    && p1.1.min(p2.1) - m > edge
+                    && p1.0.max(p2.0) + m < bw - edge
+                    && p1.1.max(p2.1) + m < bh - edge;
+                let mut ok = inside;
+                if ok {
+                    'chk: for (j, other) in originals.iter().enumerate() {
+                        let foreign = board.nets.get(j).map(|x| x.id) != Some(net_id);
+                        if !foreign {
+                            continue;
+                        }
+                        for sg in &other.segments {
+                            if sg.layer != a.layer {
+                                continue;
+                            }
+                            if segments_too_close(
+                                p1,
+                                p2,
+                                sg.start,
+                                sg.end,
+                                m + sg.width_mm / 2.0 + clearance,
+                            ) {
+                                ok = false;
+                                break 'chk;
+                            }
+                        }
+                        for v in &other.vias {
+                            if segment_point_too_close(
+                                p1,
+                                p2,
+                                (v.x, v.y),
+                                m + via_r + clearance,
+                            ) {
+                                ok = false;
+                                break 'chk;
+                            }
+                        }
+                    }
+                }
+                if ok {
+                    for p in &pads {
+                        if p.net == Some(net_id) || !pad_on_layer(p, a.layer) {
+                            continue;
+                        }
+                        // sample the diagonal vs pad rect
+                        for t in 0..=6 {
+                            let tt = t as f64 / 6.0;
+                            let x = p1.0 + tt * (p2.0 - p1.0);
+                            let y = p1.1 + tt * (p2.1 - p1.1);
+                            if (x - p.cx).abs() < p.hx + m + clearance
+                                && (y - p.cy).abs() < p.hy + m + clearance
+                            {
+                                ok = false;
+                                break;
+                            }
+                        }
+                        if !ok {
+                            break;
+                        }
+                    }
+                }
+                if !ok {
+                    out.push(b);
+                    continue;
+                }
+                // Apply: shorten a, insert diagonal, shorten b.
+                let last = out.last_mut().unwrap();
+                last.end = p1;
+                out.push(RouteSegment {
+                    layer: a.layer,
+                    start: p1,
+                    end: p2,
+                    width_mm: w,
+                });
+                let mut nb = b;
+                nb.start = p2;
+                out.push(nb);
+                mitered += 1;
+            }
+            // Splice the rebuilt span back, shifting later spans.
+            let delta = out.len() as i64 - pl as i64;
+            r.segments.splice(ps..ps + pl, out);
+            r.path_spans[sp].1 = (pl as i64 + delta) as usize;
+            for (qi, q) in r.path_spans.iter_mut().enumerate() {
+                if qi != sp && q.0 > ps {
+                    q.0 = (q.0 as i64 + delta) as usize;
+                }
+            }
+        }
+    }
+    mitered
+}
+
 /// Compute split-plane band regions for Power layers shared by
 /// multiple rails. Single-net planes (and Ground planes) keep
 /// plane_region = None (whole layer).
