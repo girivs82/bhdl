@@ -161,14 +161,24 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
         let a = rot_deg.to_radians();
         let ldx = odx * a.cos() - ody * a.sin();
         let ldy = odx * a.sin() + ody * a.cos();
+        // Back-side text must be mirrored (KiCad DRC:
+        // nonmirrored_text_on_back_layer).
+        let mirror = match comp.side {
+            BoardSide::Top => "",
+            BoardSide::Bottom => " (justify mirror)",
+        };
+        let fab = match comp.side {
+            BoardSide::Top => "F.Fab",
+            BoardSide::Bottom => "B.Fab",
+        };
         out.push_str(&format!(
-            "    (property \"Reference\" \"{}\" (at {ldx:.3} {ldy:.3} 0) (layer \"{}\") (effects (font (size {font_mm} {font_mm}) (thickness {:.3}))))\n",
+            "    (property \"Reference\" \"{}\" (at {ldx:.3} {ldy:.3} 0) (layer \"{}\") (effects (font (size {font_mm} {font_mm}) (thickness {:.3})){mirror}))\n",
             comp.refdes,
             silk,
             (font_mm * 0.15f64).max(0.1)
         ));
         out.push_str(&format!(
-            "    (property \"Value\" \"{}\" (at 0 {} 0) (layer \"F.Fab\") (effects (font (size 1 1) (thickness 0.15))))\n",
+            "    (property \"Value\" \"{}\" (at 0 {} 0) (layer \"{fab}\") (effects (font (size 1 1) (thickness 0.15)){mirror}))\n",
             comp.name,
             comp.height_mm / 2.0 + 1.0
         ));

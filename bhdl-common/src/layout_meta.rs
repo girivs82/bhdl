@@ -15,7 +15,7 @@ pub struct LayoutDefinition {
     pub layer_stackup: Option<usize>,
     /// MECHANICAL CONTRACT — chassis-locked truth PnR works within:
     /// (handle, x, y, rot_deg) locked part positions.
-    pub places: Vec<(String, f64, f64, f64)>,
+    pub places: Vec<(String, f64, f64, f64, bool)>, // (handle, x, y, rot, back_side)
     /// (handle, x0, y0, x1, y1) region-constrained parts (thermal
     /// bosses: part must sit WITHIN the zone, position otherwise free).
     pub region_places: Vec<(String, f64, f64, f64, f64)>,

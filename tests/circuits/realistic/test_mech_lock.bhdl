@@ -40,6 +40,8 @@ layout MechLock {
     layer_stackup 2;
     outline rect 46 32;
     place j_pwr at (4, 15) rot 90;
+    // Status LED on the BACK (chassis light-pipe from below).
+    place led1 at (30, 8) rot 0 side back;
     mounting_hole (42, 4) drill 3.2 keepout 2.0;
     mounting_hole (42, 28) drill 3.2 keepout 2.0;
     keepout rect (36, 13) (46, 19);

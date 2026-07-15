@@ -568,6 +568,13 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
     info!("Routing complete: {} pass1, {} pass2",
         routed_pass1, final_routes.iter().filter(|r| !r.is_empty()).count() - routed_pass1);
 
+    // 5.4. COMPLETION: pass 1 is via-less and pass 2 only takes nets
+    // with NO copper — a net that reached some sinks on the pin layer
+    // but has a sink unreachable without vias (a back-side pad) stays
+    // incomplete forever, and recovery only touches RIPPED nets.
+    // Extend every incomplete non-plane net with vias allowed.
+    completion_pass(&board, &mut final_routes);
+
     // 5.5. Via drops for plane-assigned nets: through-hole barrels
     // pierce their plane directly; each SURFACE pad gets a short stub
     // to a legally-sited via. A pad with no legal site within reach
@@ -747,6 +754,20 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         }
     }
 
+    // 5.93. Completion RE-RUN: the recovery loop's final validate can
+    // dangle-TRIM copper without counting as a rip (rips are what gate
+    // another round), leaving a sink disconnected with no repair.
+    // Completion is cheap when nothing is missing; guarantee-validate
+    // anything it adds.
+    {
+        let extended = completion_pass(&board, &mut final_routes);
+        if extended > 0 {
+            let mut bv: Vec<(usize, (f64, f64))> = Vec::new();
+            let mut bd: Vec<(usize, (f64, f64))> = Vec::new();
+            validate_and_rip(&board, &mut final_routes, &mut bv, &mut bd);
+        }
+    }
+
     // 5.95. 45° corner mitering (verified post-pass) + one final
     // guarantee round: any miter the local check mis-judged is
     // amputated/trimmed by the validator like all copper.
@@ -871,6 +892,9 @@ fn segments_too_close(
     d: (f64, f64),
     min_gap: f64,
 ) -> bool {
+    // 1µm epsilon: rule-exact spacing is legal (see
+    // segment_point_too_close).
+    let min_gap = min_gap - 1e-6;
     fn orient(p: (f64, f64), q: (f64, f64), r: (f64, f64)) -> f64 {
         (q.0 - p.0) * (r.1 - p.1) - (q.1 - p.1) * (r.0 - p.0)
     }
@@ -1281,6 +1305,44 @@ fn assign_plane_regions(board: &mut Board) {
 /// and AGAIN after geometric recovery — plane nets are excluded from
 /// tree recovery, so re-siting here is the only repair path when the
 /// validator amputates a drop that later copper made illegal.
+/// Extend every incomplete non-plane net (unreached sinks, vias
+/// allowed) on a grid where all other committed copper is blocked.
+/// Cheap when nothing is missing (grid-free pre-filter). Returns the
+/// number of sinks reclaimed.
+fn completion_pass(board: &Board, final_routes: &mut Vec<Route>) -> usize {
+    let mut total = 0usize;
+    for i in 0..board.nets.len() {
+        if board.nets[i].is_plane_connected(&board.layer_stack) {
+            continue;
+        }
+        if final_routes[i].is_empty() {
+            continue; // pass 2 already tried from scratch
+        }
+        if pathfinder::unreached_sink_count(&board.nets[i], &board, &final_routes[i]) == 0 {
+            continue;
+        }
+        let mut ext_grid = RoutingGrid::build(board);
+        for (j, route) in final_routes.iter().enumerate() {
+            if j != i && !route.is_empty() {
+                pathfinder::block_route_geometry(&mut ext_grid, route, board);
+            }
+        }
+        let mut route = final_routes[i].clone();
+        let got = pathfinder::extend_route(
+            &mut ext_grid, &board.nets[i], board, &mut route, 1.0, 1.0, &[], &[], false,
+        );
+        if got > 0 {
+            info!(
+                "completion: extended '{}' to {got} sink(s) unreachable without vias",
+                board.nets[i].name
+            );
+            final_routes[i] = route;
+            total += got;
+        }
+    }
+    total
+}
+
 fn plane_drop_pass(board: &Board, final_routes: &mut [Route]) -> usize {
     // FIXPOINT: siting anticipates the fill's hole punches, but the
     // authoritative swallow test runs against the hole set AFTER all
@@ -1744,7 +1806,10 @@ fn segment_point_too_close(a: (f64, f64), b: (f64, f64), p: (f64, f64), gap: f64
         (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / len2).clamp(0.0, 1.0)
     };
     let (cx, cy) = (a.0 + t * dx, a.1 + t * dy);
-    (p.0 - cx).hypot(p.1 - cy) < gap
+    // 1µm epsilon: geometry at EXACTLY the rule distance is legal
+    // (KiCad passes >=); flagging 0.2999999999999998 < 0.3 amputated
+    // rule-exact grid-pitch copper in an endless churn.
+    (p.0 - cx).hypot(p.1 - cy) < gap - 1e-6
 }
 
 fn validate_and_rip(

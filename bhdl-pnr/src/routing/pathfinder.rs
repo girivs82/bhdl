@@ -979,6 +979,66 @@ impl Ord for DijkState {
 /// conservative). Used by the geometric-recovery loop after subtree
 /// amputation: rebuilding a 90%-good power tree from scratch loses to
 /// extending it.
+/// Grid-free count of a net's pins whose pad is NOT touched by
+/// tree-connected copper — the cheap pre-filter for the completion
+/// pass (building an extension grid per net is the expensive part).
+pub(crate) fn unreached_sink_count(net: &PnrNet, board: &Board, route: &Route) -> usize {
+    if route.is_empty() {
+        return net.pins.len();
+    }
+    let comp_idx: HashMap<ComponentId, usize> = board
+        .components
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.id, i))
+        .collect();
+    let comps = route_components(route);
+    let tree_comp: Option<usize> = {
+        let mut pop: std::collections::HashMap<usize, usize> =
+            std::collections::HashMap::new();
+        for &c in &comps {
+            *pop.entry(c).or_insert(0) += 1;
+        }
+        pop.into_iter().max_by_key(|&(c, n)| (n, std::cmp::Reverse(c))).map(|(c, _)| c)
+    };
+    let mut unreached = 0usize;
+    for &(comp_id, pin_id) in &net.pins {
+        let Some(&ci) = comp_idx.get(&comp_id) else { continue };
+        let comp = &board.components[ci];
+        let Some(pin) = comp.pins.iter().find(|p| p.pin_id == pin_id) else { continue };
+        if pin.unplaced {
+            continue;
+        }
+        let cos_t = comp.theta.cos();
+        let sin_t = comp.theta.sin();
+        let px = comp.x + pin.dx * cos_t - pin.dy * sin_t;
+        let py = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+        let half = pin
+            .pad
+            .as_ref()
+            .map(|p| p.width_mm.min(p.height_mm) / 2.0)
+            .unwrap_or(0.4);
+        let touched = route.segments.iter().enumerate().any(|(si, sg)| {
+            if Some(comps[si]) != tree_comp {
+                return false;
+            }
+            let (dx, dy) = (sg.end.0 - sg.start.0, sg.end.1 - sg.start.1);
+            let len2 = dx * dx + dy * dy;
+            let t = if len2 <= 1e-12 {
+                0.0
+            } else {
+                (((px - sg.start.0) * dx + (py - sg.start.1) * dy) / len2).clamp(0.0, 1.0)
+            };
+            let (cx, cy) = (sg.start.0 + t * dx, sg.start.1 + t * dy);
+            (px - cx).hypot(py - cy) < sg.width_mm / 2.0 + half - 0.001
+        });
+        if !touched {
+            unreached += 1;
+        }
+    }
+    unreached
+}
+
 pub(crate) fn extend_route(
     grid: &mut RoutingGrid,
     net: &PnrNet,
@@ -1030,24 +1090,6 @@ pub(crate) fn extend_route(
         })
         .collect();
 
-    // Existing copper = source set; unreached pins = sinks. "Reached"
-    // is GEOMETRY, not cell membership: route_cells includes a fat
-    // trunk's width ring, and a pin cell covered by the ring can still
-    // have no copper touching its pad (that unc was invisible here —
-    // extension thought there was nothing to do).
-    let mut source_set: BTreeSet<CellCoord> = route_cells(grid, route);
-    if source_set.is_empty() {
-        // From-scratch greedy mode: seed from the first pin and grow the
-        // tree sink by sink — no negotiation, so a lone fat net on a
-        // crowded grid can't overflow-rip itself the way the negotiated
-        // reroute does.
-        match pin_targets.first() {
-            Some((c, _, _)) => {
-                source_set.insert(*c);
-            }
-            None => return 0,
-        }
-    }
     // Tree-connected pads only: an orphan fragment touching the pad is
     // NOT a connection (it made extension skip pins whose copper was a
     // stranded stub — shipped as unconnected). The tree = the LARGEST
@@ -1061,6 +1103,49 @@ pub(crate) fn extend_route(
         }
         pop.into_iter().max_by_key(|&(c, n)| (n, std::cmp::Reverse(c))).map(|(c, _)| c)
     };
+    // Existing TREE copper = source set; unreached pins = sinks.
+    // Sources must come from the tree component only: seeding from ALL
+    // copper let recovery attach a new path to an orphan fragment (an
+    // amputation leftover) — "reached" per the model, an island per
+    // KiCad. "Reached" is GEOMETRY, not cell membership: route_cells
+    // includes a fat trunk's width ring, and a pin cell covered by the
+    // ring can still have no copper touching its pad (that unc was
+    // invisible here — extension thought there was nothing to do).
+    let tree_route = Route {
+        segments: route
+            .segments
+            .iter()
+            .enumerate()
+            .filter(|(si, _)| Some(comps[*si]) == tree_comp)
+            .map(|(_, sg)| sg.clone())
+            .collect(),
+        vias: route
+            .vias
+            .iter()
+            .filter(|v| {
+                route.segments.iter().enumerate().any(|(si, sg)| {
+                    Some(comps[si]) == tree_comp
+                        && ((v.x - sg.start.0).hypot(v.y - sg.start.1) < 0.02
+                            || (v.x - sg.end.0).hypot(v.y - sg.end.1) < 0.02)
+                })
+            })
+            .cloned()
+            .collect(),
+        ..Route::empty(route.net_id)
+    };
+    let mut source_set: BTreeSet<CellCoord> = route_cells(grid, &tree_route);
+    if source_set.is_empty() {
+        // From-scratch greedy mode: seed from the first pin and grow the
+        // tree sink by sink — no negotiation, so a lone fat net on a
+        // crowded grid can't overflow-rip itself the way the negotiated
+        // reroute does.
+        match pin_targets.first() {
+            Some((c, _, _)) => {
+                source_set.insert(*c);
+            }
+            None => return 0,
+        }
+    }
     let pad_connected = |px: f64, py: f64, half: f64| {
         route.segments.iter().enumerate().any(|(si, sg)| {
             if Some(comps[si]) != tree_comp {
@@ -1169,16 +1254,109 @@ pub(crate) fn extend_route(
                 // strands it (extension-era track_dangling).
                 let parent = path.first().and_then(|c0| {
                     let (ax, ay) = grid.cell_center(*c0);
-                    route.path_spans.iter().position(|&(ps, pl)| {
+                    let endpoint_hit = route.path_spans.iter().position(|&(ps, pl)| {
                         route.segments[ps..ps + pl].iter().any(|seg| {
                             (seg.start.0 - ax).abs() < 1e-6 && (seg.start.1 - ay).abs() < 1e-6
                                 || (seg.end.0 - ax).abs() < 1e-6
                                     && (seg.end.1 - ay).abs() < 1e-6
                         })
+                    });
+                    // Mid-segment attach: endpoint equality misses it,
+                    // parent = None, and later amputation of the host
+                    // span cannot cascade here — orphan fragments.
+                    endpoint_hit.or_else(|| {
+                        route.path_spans.iter().position(|&(ps, pl)| {
+                            route.segments[ps..ps + pl].iter().any(|seg| {
+                                let (dx, dy) =
+                                    (seg.end.0 - seg.start.0, seg.end.1 - seg.start.1);
+                                let l2 = dx * dx + dy * dy;
+                                let t = if l2 <= 1e-12 {
+                                    0.0
+                                } else {
+                                    (((ax - seg.start.0) * dx + (ay - seg.start.1) * dy)
+                                        / l2)
+                                        .clamp(0.0, 1.0)
+                                };
+                                (ax - (seg.start.0 + t * dx))
+                                    .hypot(ay - (seg.start.1 + t * dy))
+                                    < seg.width_mm / 2.0 + 0.02
+                            })
+                        })
                     })
                 });
                 let (segs, vias) = path_to_segments(grid, &path, share_width);
                 via_keepout.extend(vias.iter().map(|v| (v.x, v.y)));
+                // JOINT: the attach cell can be a width-ring cell of a
+                // fat trunk — covered by route_cells but with no copper
+                // AT the cell center. An extension starting there is
+                // endpoint-graph dangling (KiCad and the validator both
+                // see a stray end) and the guarantee trim eats the
+                // whole path. Weld it: a short segment from the nearest
+                // point ON existing same-layer copper to the attach
+                // point.
+                if let Some(c0) = path.first() {
+                    let (ax, ay) = grid.cell_center(*c0);
+                    let anchored = route
+                        .segments
+                        .iter()
+                        .enumerate()
+                        .any(|(si, sg)| {
+                            comps.get(si).map_or(true, |c| Some(*c) == tree_comp)
+                                && sg.layer == c0.layer
+                                && {
+                                    let (dx, dy) =
+                                        (sg.end.0 - sg.start.0, sg.end.1 - sg.start.1);
+                                    let l2 = dx * dx + dy * dy;
+                                    let t = if l2 <= 1e-12 {
+                                        0.0
+                                    } else {
+                                        (((ax - sg.start.0) * dx + (ay - sg.start.1) * dy)
+                                            / l2)
+                                            .clamp(0.0, 1.0)
+                                    };
+                                    (ax - (sg.start.0 + t * dx))
+                                        .hypot(ay - (sg.start.1 + t * dy))
+                                        < 0.01
+                                }
+                        })
+                        || route
+                            .vias
+                            .iter()
+                            .any(|v| (v.x - ax).hypot(v.y - ay) < 0.01);
+                    if !anchored {
+                        let mut best: Option<((f64, f64), f64)> = None;
+                        for (si, sg) in route.segments.iter().enumerate() {
+                            if !(comps.get(si).map_or(true, |c| Some(*c) == tree_comp))
+                                || sg.layer != c0.layer
+                            {
+                                continue;
+                            }
+                            let (dx, dy) = (sg.end.0 - sg.start.0, sg.end.1 - sg.start.1);
+                            let l2 = dx * dx + dy * dy;
+                            let t = if l2 <= 1e-12 {
+                                0.0
+                            } else {
+                                (((ax - sg.start.0) * dx + (ay - sg.start.1) * dy) / l2)
+                                    .clamp(0.0, 1.0)
+                            };
+                            let (jx, jy) = (sg.start.0 + t * dx, sg.start.1 + t * dy);
+                            let d = (ax - jx).hypot(ay - jy);
+                            if best.as_ref().map_or(true, |&(_, bd)| d < bd) {
+                                best = Some(((jx, jy), d));
+                            }
+                        }
+                        if let Some(((jx, jy), d)) = best {
+                            if d > 1e-6 && d < 1.5 {
+                                route.segments.push(RouteSegment {
+                                    layer: c0.layer,
+                                    start: (jx, jy),
+                                    end: (ax, ay),
+                                    width_mm: share_width,
+                                });
+                            }
+                        }
+                    }
+                }
                 route.segments.extend(segs);
                 route.vias.extend(vias);
                 // Pad-escape stub for the newly reached pin(s) at this cell.

@@ -1567,7 +1567,7 @@ impl LayoutDef {
     }
 
     /// `place <handle> at (x, y) [rot D];` — locked part positions.
-    pub fn places(&self) -> Vec<(String, f64, f64, f64)> {
+    pub fn places(&self) -> Vec<(String, f64, f64, f64, bool)> {
         let mut out = Vec::new();
         for n in self
             .0
@@ -1594,7 +1594,10 @@ impl LayoutDef {
             } else {
                 0.0
             };
-            out.push((handle, nums[0], nums[1], rot));
+            let back = toks
+                .windows(2)
+                .any(|w| w[0] == "side" && w[1] == "back");
+            out.push((handle, nums[0], nums[1], rot, back));
         }
         out
     }

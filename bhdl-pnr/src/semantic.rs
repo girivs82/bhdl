@@ -442,7 +442,10 @@ pub fn build_board(
             bbox_dx,
             bbox_dy,
             pins,
-            side: BoardSide::Top,
+            side: fixed_placements
+                .get(&instance.name)
+                .map(|fp| fp.side)
+                .unwrap_or(BoardSide::Top),
             group: None,
             thermal_power_w: thermal_power,
             placement,

@@ -1775,18 +1775,19 @@ async fn run_layout(
                 BoardOutline, BoardSide, FixedPlacement, KeepoutTarget, KeepoutZone,
                 MountingHole, ZoneShape,
             };
-            for &(ref handle, x, y, rot) in &lay.places {
+            for &(ref handle, x, y, rot, back) in &lay.places {
                 sem_config.board_config.fixed_placements.push(FixedPlacement {
                     instance_name: handle.clone(),
                     x_mm: x,
                     y_mm: y,
                     rotation_deg: rot,
-                    side: BoardSide::Top,
+                    side: if back { BoardSide::Bottom } else { BoardSide::Top },
                     edge: None,
                 });
                 println!(
-                    "  {} Locked: {handle} at ({x}, {y}) rot {rot}° (layout {name})",
-                    "✓".green()
+                    "  {} Locked: {handle} at ({x}, {y}) rot {rot}°{} (layout {name})",
+                    "✓".green(),
+                    if back { " side back" } else { "" }
                 );
             }
             for &(ref handle, x0, y0, x1, y1) in &lay.region_places {
