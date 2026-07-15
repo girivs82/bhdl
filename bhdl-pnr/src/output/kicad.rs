@@ -391,9 +391,10 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
             }
             None => (m, m, w - m, h - m),
         };
+        let cutout_rects = plane_cutout_rects(board);
         let pts = match &poly_boundary {
-            Some(b) => fracture_fill_poly(b, &holes),
-            None => fracture_fill(fx0, fy0, fx1, fy1, &holes),
+            Some(b) => fracture_fill_poly(b, &holes, &cutout_rects),
+            None => fracture_fill(fx0, fy0, fx1, fy1, &holes, &cutout_rects),
         };
         out.push_str(&format!("    (filled_polygon (layer \"{}\") (pts\n", layer_name));
         for (x, y) in &pts {
@@ -725,7 +726,31 @@ pub(crate) fn clip_poly_to_rect(
 fn fracture_fill_poly(
     boundary: &[(f64, f64)],
     holes_in: &[(f64, f64, f64)],
+    rects_in: &[(f64, f64, f64, f64)],
 ) -> Vec<(f64, f64)> {
+    // Cutout rects: v1 punches those fully INSIDE the boundary (a
+    // cutout crossing a polygon fill edge is rare; warn + skip — the
+    // grid already blocks routing there and the swallow test knows
+    // the aperture).
+    let rects: Vec<(f64, f64, f64, f64)> = rects_in
+        .iter()
+        .filter(|&&(rx0, ry0, rx1, ry1)| {
+            let corners =
+                [(rx0, ry0), (rx1, ry0), (rx1, ry1), (rx0, ry1)];
+            let inside = corners
+                .iter()
+                .all(|&(x, y)| point_in_poly(boundary, x, y));
+            if !inside
+                && corners.iter().any(|&(x, y)| point_in_poly(boundary, x, y))
+            {
+                log::warn!(
+                    "plane fill: cutout rect ({rx0:.1},{ry0:.1})-({rx1:.1},{ry1:.1})                      crosses the polygon fill boundary — not punched (fill may                      under-clear; keep cutouts clear of polygon fill edges)"
+                );
+            }
+            inside
+        })
+        .copied()
+        .collect();
     let holes = merge_holes(
         holes_in
             .iter()
@@ -813,7 +838,16 @@ fn fracture_fill_poly(
             poly.push(pb);
         }
     }
-    punch_interior_holes(&mut poly, interior);
+    let mut rings: Vec<RingKind> = interior
+        .into_iter()
+        .map(|(cx, cy, r)| RingKind::Circle { cx, cy, r })
+        .collect();
+    rings.extend(
+        rects
+            .into_iter()
+            .map(|(rx0, ry0, rx1, ry1)| RingKind::Rect { x0: rx0, y0: ry0, x1: rx1, y1: ry1 }),
+    );
+    punch_interior_rings(&mut poly, rings);
     poly
 }
 
@@ -823,18 +857,44 @@ fn fracture_fill(
     x1: f64,
     y1: f64,
     holes_in: &[(f64, f64, f64)],
+    rects_in: &[(f64, f64, f64, f64)],
 ) -> Vec<(f64, f64)> {
+    // Cutout RECTS: absorb any circle hole overlapping a rect into an
+    // expanded rect (two overlapping interior rings would self-
+    // intersect through their slits), clamp to the fill, classify
+    // boundary-crossing rects as notches below.
+    let mut rects: Vec<(f64, f64, f64, f64)> = rects_in
+        .iter()
+        .filter(|&&(rx0, ry0, rx1, ry1)| rx1 > x0 && rx0 < x1 && ry1 > y0 && ry0 < y1)
+        .copied()
+        .collect();
     // Merge overlapping holes into enclosing circles (a slit through a
     // neighboring hole would self-intersect).
-    let holes: Vec<(f64, f64, f64)> = merge_holes(
-        holes_in
-            .iter()
-            .filter(|&&(cx, cy, r)| {
-                cx + r > x0 && cx - r < x1 && cy + r > y0 && cy - r < y1
-            })
-            .copied()
-            .collect(),
-    );
+    let mut circle_holes: Vec<(f64, f64, f64)> = Vec::new();
+    'circles: for &(cx, cy, r) in holes_in {
+        if !(cx + r > x0 && cx - r < x1 && cy + r > y0 && cy - r < y1) {
+            continue;
+        }
+        for rect in rects.iter_mut() {
+            let (rx0, ry0, rx1, ry1) = *rect;
+            let nx = cx.clamp(rx0, rx1);
+            let ny = cy.clamp(ry0, ry1);
+            if (cx - nx).hypot(cy - ny) < r {
+                // Overlaps a cutout rect: grow the rect to cover the
+                // circle (conservative, but far less copper than the
+                // old enclosing-circle punch of the whole cutout).
+                *rect = (
+                    rx0.min(cx - r),
+                    ry0.min(cy - r),
+                    rx1.max(cx + r),
+                    ry1.max(cy + r),
+                );
+                continue 'circles;
+            }
+        }
+        circle_holes.push((cx, cy, r));
+    }
+    let holes: Vec<(f64, f64, f64)> = merge_holes(circle_holes);
     // Split holes: interior ones become slit-fractured octagons; ones
     // whose punch crosses the fill boundary become EDGE NOTCHES —
     // rectangular detours cut into the outline (clamping an interior
@@ -880,6 +940,26 @@ fn fracture_fill(
         }
         out
     };
+    // Cutout rects near a fill side become EXACT rectangular notches;
+    // fully interior rects become RingKind::Rect punches.
+    let mut interior_rects: Vec<(f64, f64, f64, f64)> = Vec::new();
+    for &(rx0, ry0, rx1, ry1) in &rects {
+        let crosses_left = rx0 < x0 + slack;
+        let crosses_right = rx1 > x1 - slack;
+        let crosses_top = ry0 < y0 + slack;
+        let crosses_bottom = ry1 > y1 - slack;
+        if crosses_bottom {
+            notches_bottom.push((rx0.max(x0), rx1.min(x1), ry0.max(y0)));
+        } else if crosses_top {
+            notches_top.push((rx0.max(x0), rx1.min(x1), ry1.min(y1)));
+        } else if crosses_right {
+            notches_right.push((ry0.max(y0), ry1.min(y1), rx0.max(x0)));
+        } else if crosses_left {
+            notches_left.push((ry0.max(y0), ry1.min(y1), rx1.min(x1)));
+        } else {
+            interior_rects.push((rx0, ry0, rx1, ry1));
+        }
+    }
     let notches_bottom = merge_iv(notches_bottom);
     let notches_top = merge_iv(notches_top);
     let notches_right = merge_iv(notches_right);
@@ -919,7 +999,16 @@ fn fracture_fill(
         poly.push((xd, ya));
         poly.push((x0, ya));
     }
-    punch_interior_holes(&mut poly, holes);
+    let mut rings: Vec<RingKind> = holes
+        .into_iter()
+        .map(|(cx, cy, r)| RingKind::Circle { cx, cy, r })
+        .collect();
+    rings.extend(
+        interior_rects
+            .into_iter()
+            .map(|(rx0, ry0, rx1, ry1)| RingKind::Rect { x0: rx0, y0: ry0, x1: rx1, y1: ry1 }),
+    );
+    punch_interior_rings(&mut poly, rings);
     poly
 }
 
@@ -929,31 +1018,74 @@ fn fracture_fill(
 /// rows so a ray never runs along an existing slit). The ray casts
 /// against the CURRENT vertex chain, so notch detours and previously
 /// inserted slits are all valid targets.
-fn punch_interior_holes(poly: &mut Vec<(f64, f64)>, holes: Vec<(f64, f64, f64)>) {
+/// Interior fracture ring kinds: circles (foreign barrels) and rects
+/// (cutout apertures / slots).
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum RingKind {
+    Circle { cx: f64, cy: f64, r: f64 },
+    Rect { x0: f64, y0: f64, x1: f64, y1: f64 },
+}
+
+impl RingKind {
+    fn cy(&self) -> f64 {
+        match self {
+            RingKind::Circle { cy, .. } => *cy,
+            RingKind::Rect { y0, y1, .. } => (y0 + y1) / 2.0,
+        }
+    }
+    fn center_x(&self) -> f64 {
+        match self {
+            RingKind::Circle { cx, .. } => *cx,
+            RingKind::Rect { x0, x1, .. } => (x0 + x1) / 2.0,
+        }
+    }
+}
+
+fn punch_interior_rings(poly: &mut Vec<(f64, f64)>, mut rings: Vec<RingKind>) {
+    // Rightmost first (by CENTER-x — the same key the circle-only
+    // fracture always used, keeping those boards byte-identical);
+    // jitter duplicate slit rows so a ray never runs along an
+    // existing horizontal slit.
+    rings.sort_by(|a, b| {
+        b.center_x()
+            .partial_cmp(&a.center_x())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     let mut used_y: Vec<f64> = Vec::new();
-    for &(cx, cy, r) in &holes {
-        let mut ry = cy;
+    for ring in rings {
+        let mut ry = ring.cy();
         while used_y.iter().any(|&u| (u - ry).abs() < 1e-4) {
             ry += 2e-4;
         }
         used_y.push(ry);
-        // Octagon CW starting at rightmost vertex, at slit height ry.
-        let k = r / (1.0 + std::f64::consts::SQRT_2);
-        // Hole ring must wind OPPOSITE the outline or the polygon
-        // self-overlaps and KiCad's normalization erases the holes.
-        // CIRCUMSCRIBED octagon (vertices at r/cos(22.5°)): a polygon
-        // with vertices ON the circle has edges cutting inside the
-        // punch radius — the fill edge sat 0.25mm from vias that need
-        // 0.30.
-        let rr = r / (std::f64::consts::PI / 8.0).cos();
-        let mut oct = [(0.0f64, 0.0f64); 8];
-        for (q, slot) in oct.iter_mut().enumerate() {
-            let ang = -(q as f64) * std::f64::consts::FRAC_PI_4;
-            *slot = (cx + rr * ang.cos(), cy + rr * ang.sin());
-        }
-        oct[0].1 = ry; // slit entry rides the (jittered) ray row
-        let _ = k;
-        // Ray from (cx + r, ry) rightward: nearest boundary crossing.
+        // Ring vertices CW (opposite the outline winding), starting at
+        // the slit-entry point on the ring's rightmost extent at row ry.
+        let (entry, ring_pts): ((f64, f64), Vec<(f64, f64)>) = match ring {
+            RingKind::Circle { cx, cy, r } => {
+                // CIRCUMSCRIBED octagon (vertices at r/cos(22.5°)): a
+                // polygon with vertices ON the circle has edges cutting
+                // inside the punch radius.
+                let rr = r / (std::f64::consts::PI / 8.0).cos();
+                let mut oct = [(0.0f64, 0.0f64); 8];
+                for (q, slot) in oct.iter_mut().enumerate() {
+                    let ang = -(q as f64) * std::f64::consts::FRAC_PI_4;
+                    *slot = (cx + rr * ang.cos(), cy + rr * ang.sin());
+                }
+                oct[0].1 = ry; // slit entry rides the (jittered) ray row
+                (oct[0], oct.to_vec())
+            }
+            RingKind::Rect { x0, y0, x1, y1 } => {
+                // Same rotational order as the octagon (entry on the
+                // right edge, first step toward smaller y).
+                let entry = (x1, ry.clamp(y0 + 1e-4, y1 - 1e-4));
+                (
+                    entry,
+                    vec![entry, (x1, y0), (x0, y0), (x0, y1), (x1, y1)],
+                )
+            }
+        };
+        let ry = entry.1;
+        // Ray from the entry point rightward: nearest boundary crossing.
         let n = poly.len();
         let mut best: Option<(f64, usize)> = None;
         for e in 0..n {
@@ -967,27 +1099,36 @@ fn punch_interior_holes(poly: &mut Vec<(f64, f64)>, holes: Vec<(f64, f64, f64)>)
                 continue;
             }
             let ix = a.0 + t * (b.0 - a.0);
-            if ix > cx + r + 1e-9 && best.map_or(true, |(bx, _)| ix < bx) {
+            if ix > entry.0 + 1e-9 && best.map_or(true, |(bx, _)| ix < bx) {
                 best = Some((ix, e));
             }
         }
         let Some((ix, e)) = best else {
             log::warn!(
-                "plane fill: slit ray from hole at ({cx:.2},{cy:.2}) r={r:.2} \
-                 found no boundary — hole NOT punched (foreign barrel may \
-                 under-clear the fill)"
+                "plane fill: slit ray from ring at ({:.2},{ry:.2}) found no                  boundary — hole NOT punched (copper may under-clear)",
+                entry.0
             );
             continue;
         };
         let mut insert: Vec<(f64, f64)> = vec![(ix, ry)];
-        insert.extend_from_slice(&oct);
-        insert.push(oct[0]);
+        insert.extend_from_slice(&ring_pts);
+        insert.push(ring_pts[0]);
         insert.push((ix, ry));
         let at = e + 1;
         for (ofs, p) in insert.into_iter().enumerate() {
             poly.insert(at + ofs, p);
         }
     }
+}
+
+fn punch_interior_holes(poly: &mut Vec<(f64, f64)>, holes: Vec<(f64, f64, f64)>) {
+    punch_interior_rings(
+        poly,
+        holes
+            .into_iter()
+            .map(|(cx, cy, r)| RingKind::Circle { cx, cy, r })
+            .collect(),
+    );
 }
 
 
@@ -1028,14 +1169,8 @@ pub(crate) fn plane_foreign_holes(
             holes.push((gx, gy, barrel + zc + 0.05));
         }
     }
-    // Interior cutouts: no copper in the aperture — punch the
-    // enclosing circle (conservative for elongated slots; a rect
-    // fracture primitive is a later refinement).
-    for &(x0, y0, x1, y1) in &board.config.cutouts {
-        let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
-        let half_diag = ((x1 - x0) / 2.0).hypot((y1 - y0) / 2.0);
-        holes.push((cx, cy, half_diag + zc + 0.05));
-    }
+    // Interior cutouts are punched as RECTS by the fracture (see
+    // plane_cutout_rects) — not added to the circle list.
     // Mounting holes: NPTH barrels pierce every layer and carry no
     // net — always foreign, always punched.
     for mh in &board.config.mounting_holes {
@@ -1045,6 +1180,19 @@ pub(crate) fn plane_foreign_holes(
         holes.push((mh.x_mm, mh.y_mm, (mh.drill_mm + 0.5) / 2.0 + zc + 0.05));
     }
     holes
+}
+
+/// Interior cutout apertures inflated by the zone clearance — punched
+/// from plane fills as exact RECTS (the old enclosing-circle punch
+/// wasted a half-diagonal disc of copper on elongated slots).
+pub(crate) fn plane_cutout_rects(board: &Board) -> Vec<(f64, f64, f64, f64)> {
+    let m = 0.3 + 0.05;
+    board
+        .config
+        .cutouts
+        .iter()
+        .map(|&(x0, y0, x1, y1)| (x0 - m, y0 - m, x1 + m, y1 + m))
+        .collect()
 }
 
 /// Merge overlapping holes into enclosing circles — the SAME merge the
@@ -1099,6 +1247,13 @@ pub(crate) fn plane_swallows(
     // Outside the fill rect entirely = no plane contact.
     if x - via_r < x0 || x + via_r > x1 || y - via_r < y0 || y + via_r > y1 {
         return true;
+    }
+    // Interior cutout rects: a via whose disc overlaps the inflated
+    // aperture has no plane copper there.
+    for &(cx0, cy0, cx1, cy1) in &plane_cutout_rects(board) {
+        if x + via_r > cx0 && x - via_r < cx1 && y + via_r > cy0 && y - via_r < cy1 {
+            return true;
+        }
     }
     // Polygon outlines: the fill is clipped to the inset outline — a
     // via whose disc pokes outside it (e.g. into a cutout notch) has

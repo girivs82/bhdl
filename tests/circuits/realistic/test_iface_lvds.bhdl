@@ -58,4 +58,6 @@ board IfaceLvds {
 layout IfaceLvds {
     layer_stackup 4;
     outline rect 40 25;
+    // Slot aperture in the rect-fill path: planes punch the exact rect.
+    cutout rect (14, 16) (30, 18);
 }
