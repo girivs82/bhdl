@@ -1,0 +1,38 @@
+// Polygon-outline fixture (P2 v2): an L-shaped board — the top-right
+// corner is cut away for a chassis fitting. Everything (placement,
+// routing, silk) must stay inside the polygon; the notch is off-board.
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
+
+entity PwrJack() {
+    pin VIN: power out;
+    pin GND: ground;
+
+    attribute component_class = "connector";
+}
+
+layout PwrJack {
+    package SOT-223;
+}
+
+board MechPoly {
+    power VCC = 5V @ 100mA;
+    ground GND;
+
+    j_pwr: PwrJack();
+    j_pwr.VIN -> @VCC;
+    j_pwr.GND -> @GND;
+
+    @VCC -> led1: LED(color="green").A;
+    led1.K -> r_led: Res(220).1;
+    r_led.2 -> @GND;
+}
+
+layout MechPoly {
+    layer_stackup 2;
+    // L-shape: 40x30 with the (28..40, 18..30) corner cut away.
+    outline polygon (0,0) (40,0) (40,18) (28,18) (28,30) (0,30);
+    place j_pwr at (4, 15) rot 90;
+    mounting_hole (36, 4) drill 3.2 keepout 2.0;
+}

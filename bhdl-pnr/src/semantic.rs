@@ -624,7 +624,12 @@ pub fn build_board(
     // was amputated — fixed; planes-on is oracle-clean or better than
     // planes-off on every board (pds 47→0 unc, uno copper CLEAN
     // unc 57→48, shorts zero).
-    if std::env::var("BHDL_PNR_NO_PLANES").is_err() {
+    if std::env::var("BHDL_PNR_NO_PLANES").is_err()
+        && !matches!(config.board_config.outline, BoardOutline::Polygon(_))
+    // Plane fills fracture against a RECT; on polygon outlines the
+    // fill would ship copper inside the cutout notches. Planes return
+    // for polygon boards when the fracture clips to the outline (v3).
+    {
         let gnd_idx = nets
             .iter()
             .position(|n| matches!(n.net_class, PnrNetClass::Ground));

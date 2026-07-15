@@ -27,6 +27,20 @@ fn is_legal(board: &Board, k: usize) -> bool {
     {
         return false;
     }
+    if let crate::types::BoardOutline::Polygon(pts) = &board.config.outline {
+        let corners = [
+            (cxk - hwk, cyk - hhk),
+            (cxk + hwk, cyk - hhk),
+            (cxk + hwk, cyk + hhk),
+            (cxk - hwk, cyk + hhk),
+        ];
+        if corners.iter().any(|&(x, y)| {
+            !board.config.outline.contains(x, y)
+                || crate::routing::grid::polygon_edge_distance(pts, x, y) < ec * 0.5
+        }) {
+            return false;
+        }
+    }
     for (j, other) in board.components.iter().enumerate() {
         if j == k {
             continue;

@@ -78,6 +78,42 @@ pub fn legalize(board: &mut Board, snap_grid_mm: f64) {
         let ec = board.config.edge_clearance_mm;
         let bw = board.config.outline.width();
         let bh = board.config.outline.height();
+        // Polygon outlines: nudge components whose envelope corners
+        // fall outside the polygon toward the polygon centroid (the
+        // bbox clamp alone lets parts sit in the cutout notches).
+        if let crate::types::BoardOutline::Polygon(pts) = &board.config.outline {
+            let n = pts.len() as f64;
+            let (ccx, ccy) = (
+                pts.iter().map(|p| p.0).sum::<f64>() / n,
+                pts.iter().map(|p| p.1).sum::<f64>() / n,
+            );
+            let pts = pts.clone();
+            for comp in board.components.iter_mut() {
+                if comp.placement.is_fixed() {
+                    continue;
+                }
+                for _ in 0..40 {
+                    let (ecx, ecy, hw, hh) = comp.envelope();
+                    let corners = [
+                        (ecx - hw, ecy - hh),
+                        (ecx + hw, ecy - hh),
+                        (ecx + hw, ecy + hh),
+                        (ecx - hw, ecy + hh),
+                    ];
+                    let ok = corners.iter().all(|&(x, y)| {
+                        board.config.outline.contains(x, y)
+                            && crate::routing::grid::polygon_edge_distance(&pts, x, y)
+                                >= ec * 0.5
+                    });
+                    if ok {
+                        break;
+                    }
+                    let d = (ccx - comp.x).hypot(ccy - comp.y).max(1e-6);
+                    comp.x += (ccx - comp.x) / d * 0.5;
+                    comp.y += (ccy - comp.y) / d * 0.5;
+                }
+            }
+        }
         for comp in board.components.iter_mut() {
             if comp.placement.is_fixed() { continue; }
             // Rotation-aware: clamping with the unrotated dims let a

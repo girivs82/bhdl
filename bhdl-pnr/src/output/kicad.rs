@@ -15,6 +15,7 @@
 //! `kicad-cli pcb drc` — the external oracle in scripts/sweep_layout_drc.sh.
 
 use crate::types::*;
+use crate::types::BoardOutline::Polygon as PnrBoardOutlinePoly;
 
 /// Export board and routes to KiCad PCB format.
 pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
@@ -445,10 +446,23 @@ fn place_reference_labels(board: &Board, routes: &[Route]) -> Vec<(f64, f64, f64
                         cand.0 + tw / 2.0,
                         cand.1 + th / 2.0,
                     );
-                    let inside = rect.0 > edge
+                    let mut inside = rect.0 > edge
                         && rect.1 > edge
                         && rect.2 < bw - edge
                         && rect.3 < bh - edge;
+                    if inside {
+                        if let PnrBoardOutlinePoly(pts) = &board.config.outline {
+                            let _ = pts;
+                            inside = [
+                                (rect.0, rect.1),
+                                (rect.2, rect.1),
+                                (rect.2, rect.3),
+                                (rect.0, rect.3),
+                            ]
+                            .iter()
+                            .all(|&(x, y)| board.config.outline.contains(x, y));
+                        }
+                    }
                     if !inside {
                         continue;
                     }

@@ -1658,14 +1658,25 @@ fn validate_and_rip(
                     let edge = board.config.edge_clearance_mm;
                     let bw = board.config.outline.width();
                     let bh = board.config.outline.height();
+                    let poly = match &board.config.outline {
+                        BoardOutline::Polygon(pts) => Some(pts.clone()),
+                        _ => None,
+                    };
+                    let edge_bad = |p: (f64, f64), m: f64| -> bool {
+                        if let Some(pts) = &poly {
+                            !board.config.outline.contains(p.0, p.1)
+                                || crate::routing::grid::polygon_edge_distance(
+                                    pts, p.0, p.1,
+                                ) < m
+                        } else {
+                            p.0 < m || p.1 < m || p.0 > bw - m || p.1 > bh - m
+                        }
+                    };
                     let mut hit: Option<usize> = None;
                     if bw > 0.0 && bh > 0.0 {
                         for (si, sg) in final_routes[i].segments.iter().enumerate() {
                             let m = edge + sg.width_mm / 2.0;
-                            let bad = [sg.start, sg.end].iter().any(|p| {
-                                p.0 < m || p.1 < m || p.0 > bw - m || p.1 > bh - m
-                            });
-                            if bad {
+                            if [sg.start, sg.end].iter().any(|p| edge_bad(*p, m)) {
                                 hit = Some(si);
                                 break;
                             }
@@ -1674,7 +1685,7 @@ fn validate_and_rip(
                     if hit.is_none() && bw > 0.0 && bh > 0.0 {
                         let vm = edge + board.layer_stack.via.pad_mm / 2.0;
                         if let Some(vi) = final_routes[i].vias.iter().position(|v| {
-                            v.x < vm || v.y < vm || v.x > bw - vm || v.y > bh - vm
+                            edge_bad((v.x, v.y), vm)
                         }) {
                             let r = &final_routes[i];
                             hit = r

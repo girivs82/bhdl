@@ -179,7 +179,19 @@ impl RoutingGrid {
                 let cy = (grid.y_coords[r] + grid.y_coords[r + 1]) / 2.0;
                 for c in 0..cols_n {
                     let cx = (grid.x_coords[c] + grid.x_coords[c + 1]) / 2.0;
-                    if cx < edge_band
+                    // Polygon outlines: everything OUTSIDE the polygon
+                    // (or within the edge band of a polygon edge) is
+                    // off-board — the bounding-box band alone lets
+                    // routing wander into the cutout notches.
+                    let poly_block = match &board.config.outline {
+                        crate::types::BoardOutline::Polygon(pts) => {
+                            !board.config.outline.contains(cx, cy)
+                                || polygon_edge_distance(pts, cx, cy) < edge_band
+                        }
+                        _ => false,
+                    };
+                    if poly_block
+                        || cx < edge_band
                         || cy < edge_band
                         || cx > outline_w - edge_band
                         || cy > outline_h - edge_band
@@ -536,4 +548,25 @@ fn mark_shape_blocked(
             }
         }
     }
+}
+
+
+/// Minimum distance from a point to the polygon boundary.
+pub(crate) fn polygon_edge_distance(pts: &[(f64, f64)], x: f64, y: f64) -> f64 {
+    let mut best = f64::INFINITY;
+    let n = pts.len();
+    for i in 0..n {
+        let a = pts[i];
+        let b = pts[(i + 1) % n];
+        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+        let l2 = dx * dx + dy * dy;
+        let t = if l2 <= 1e-12 {
+            0.0
+        } else {
+            (((x - a.0) * dx + (y - a.1) * dy) / l2).clamp(0.0, 1.0)
+        };
+        let d = (x - (a.0 + t * dx)).hypot(y - (a.1 + t * dy));
+        best = best.min(d);
+    }
+    best
 }
