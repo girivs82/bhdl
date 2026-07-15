@@ -12,7 +12,6 @@ entity ClkDriver() {
     pin VCC: power in;
     pin GND: ground;
 
-    attribute component_class = "ic";
     attribute intf_const__CLK__topology = "star";
     attribute intf_const__CLK__layer = "top";
     attribute intf_const__EN__topology = "daisy_chain";

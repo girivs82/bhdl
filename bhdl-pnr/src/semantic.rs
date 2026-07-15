@@ -185,7 +185,7 @@ pub fn build_board(
         // Skip power/ground symbol instances — these are netlist-level
         // constructs (power rails, ground symbols), not physical components.
         // They have no package and shouldn't appear on the PCB.
-        if is_power_symbol(module_def, instance) {
+        if is_power_symbol(module_def, instance, netlist) {
             continue;
         }
 
@@ -1308,6 +1308,7 @@ fn footprint_extent(fp: &bhdl_components::ComponentFootprint) -> (f64, f64, f64,
 fn is_power_symbol(
     module_def: &bhdl_netlist::ModuleDefinition,
     instance: &bhdl_netlist::Instance,
+    netlist: &Netlist,
 ) -> bool {
     // component_class may live on the INSTANCE (stamped by synthesis /
     // GLACIER selection) or only on the MODULE — same-file entities keep
@@ -1323,8 +1324,31 @@ fn is_power_symbol(
             let c = c.trim_matches('"');
             matches!(c, "power_source" | "ground_symbol" | "power" | "ground" | "power_symbol" | "net")
         }
-        // No class anywhere = a netlist-level symbol, not a part.
-        None => true,
+        // No class anywhere: infer by SHAPE. A module with two or more
+        // real pins, at least one of them a signal, is a part — the
+        // old "no class = symbol" rule silently dropped every
+        // class-less same-file entity from the board (they needed an
+        // explicit `attribute component_class = …` to exist at all).
+        // Rail symbols keep their signature: ≤1 pin, or power/ground
+        // pins only.
+        None => {
+            let mut real_pins = 0usize;
+            let mut signal_pins = 0usize;
+            for &pid in &module_def.pins {
+                let Some(p) = netlist.pins.get(pid) else { continue };
+                if p.is_virtual {
+                    continue;
+                }
+                real_pins += 1;
+                if !matches!(
+                    p.pin_type,
+                    bhdl_netlist::PinType::Power | bhdl_netlist::PinType::Ground
+                ) {
+                    signal_pins += 1;
+                }
+            }
+            real_pins < 2 || signal_pins == 0
+        }
     }
 }
 
