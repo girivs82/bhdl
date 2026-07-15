@@ -3423,9 +3423,32 @@ impl<'t> Parser<'t> {
                 Some(SyntaxKind::R_BRACE) | None => break,
                 Some(SyntaxKind::PACKAGE_KW) => self.parse_layout_package(),
                 Some(SyntaxKind::LAYER_STACKUP_KW) => self.parse_layout_stackup(),
+                // Mechanical-contract statements are CONTEXTUAL idents
+                // (never global keywords — the `package` collision
+                // lesson): place / outline / mounting_hole / keepout.
+                Some(SyntaxKind::IDENT) => {
+                    let kind = match self.peek_text().as_deref() {
+                        Some("place") => SyntaxKind::LAYOUT_PLACE,
+                        Some("outline") => SyntaxKind::LAYOUT_OUTLINE,
+                        Some("mounting_hole") => SyntaxKind::LAYOUT_MOUNTING_HOLE,
+                        Some("keepout") => SyntaxKind::LAYOUT_KEEPOUT,
+                        _ => {
+                            self.error(
+                                "Expected 'package', 'layer_stackup', 'place', \
+                                 'outline', 'mounting_hole' or 'keepout' in layout \
+                                 definition"
+                                    .to_string(),
+                            );
+                            self.bump_any();
+                            continue;
+                        }
+                    };
+                    self.parse_layout_mech_stmt(kind);
+                }
                 _ => {
                     self.error(
-                        "Expected 'package' or 'layer_stackup' in layout definition"
+                        "Expected a layout statement (package, layer_stackup, \
+                         place, outline, mounting_hole, keepout)"
                             .to_string(),
                     );
                     self.bump_any();
@@ -3451,6 +3474,21 @@ impl<'t> Parser<'t> {
             self.bump_any();
         }
 
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+
+    /// Parse one mechanical-contract statement: everything up to the
+    /// semicolon becomes children of the given node kind; the AST layer
+    /// interprets the token stream (numbers, idents, parens).
+    fn parse_layout_mech_stmt(&mut self, kind: SyntaxKind) {
+        self.builder.start_node(kind.into());
+        while self.peek() != Some(SyntaxKind::SEMI)
+            && self.peek() != Some(SyntaxKind::R_BRACE)
+            && self.peek().is_some()
+        {
+            self.bump_any();
+        }
         self.expect(SyntaxKind::SEMI);
         self.builder.finish_node();
     }

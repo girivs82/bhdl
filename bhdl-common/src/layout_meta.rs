@@ -6,11 +6,21 @@
 use serde::{Serialize, Deserialize};
 
 /// Layout definition for an entity (PCB footprint metadata).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LayoutDefinition {
     pub entity_name: String,
     pub package: Option<String>,
     /// Board-level layer count from `layer_stackup N;` — a declared
     /// stackup is an INPUT to PnR, not something routing discovers.
     pub layer_stackup: Option<usize>,
+    /// MECHANICAL CONTRACT — chassis-locked truth PnR works within:
+    /// (handle, x, y, rot_deg) locked part positions.
+    pub places: Vec<(String, f64, f64, f64)>,
+    /// Declared outline: Rect(w,h) as (w, h, empty) or Polygon points.
+    pub outline_rect: Option<(f64, f64)>,
+    pub outline_polygon: Option<Vec<(f64, f64)>>,
+    /// (x, y, drill, keepout) plated-free mounting holes.
+    pub mounting_holes: Vec<(f64, f64, f64, f64)>,
+    /// (x0, y0, x1, y1) rectangular keepouts (chassis bosses etc.).
+    pub keepouts: Vec<(f64, f64, f64, f64)>,
 }

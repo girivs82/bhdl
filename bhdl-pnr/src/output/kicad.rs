@@ -99,10 +99,18 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
     out.push('\n');
 
     // ── Mounting holes ──
-    for hole in &board.config.mounting_holes {
+    for (hi, hole) in board.config.mounting_holes.iter().enumerate() {
+        // Bare footprint name (a Library: prefix references a library
+        // KiCad can't find → lib_footprint_issues) + a real refdes (H1…)
+        // so DRC has nothing to say about anonymous footprints.
         out.push_str(&format!(
-            "  (footprint \"MountingHole:MountingHole_{:.1}mm\" (layer \"F.Cu\") (at {} {})\n",
+            "  (footprint \"MountingHole_{:.1}mm\" (layer \"F.Cu\") (at {} {})\n",
             hole.drill_mm, hole.x_mm, hole.y_mm
+        ));
+        out.push_str(&format!(
+            "    (property \"Reference\" \"H{}\" (at 0 {:.2} 0) (layer \"F.SilkS\") (effects (font (size 0.8 0.8) (thickness 0.12))))\n",
+            hi + 1,
+            -(hole.drill_mm / 2.0 + 1.2)
         ));
         out.push_str(&format!(
             "    (pad \"\" np_thru_hole circle (at 0 0) (size {} {}) (drill {}) (layers \"*.Cu\" \"*.Mask\"))\n",

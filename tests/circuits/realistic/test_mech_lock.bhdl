@@ -1,0 +1,41 @@
+// Mechanical-contract fixture (P2 v1): a chassis-locked connector, a
+// declared rectangular outline, mounting holes and a keepout — the
+// mechanical truth PnR must place-and-route WITHIN, never override.
+// The locked part's exported coordinates are the oracle-checkable
+// contract: they must land EXACTLY where the layout block says.
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
+
+entity PwrJack() {
+    pin VIN: power out;
+    pin GND: ground;
+
+    attribute component_class = "connector";
+}
+
+layout PwrJack {
+    package SOT-223;
+}
+
+board MechLock {
+    power VCC = 5V @ 100mA;
+    ground GND;
+
+    j_pwr: PwrJack();
+    j_pwr.VIN -> @VCC;
+    j_pwr.GND -> @GND;
+
+    @VCC -> led1: LED(color="green").A;
+    led1.K -> r_led: Res(220).1;
+    r_led.2 -> @GND;
+}
+
+layout MechLock {
+    layer_stackup 2;
+    outline rect 40 30;
+    place j_pwr at (4, 15) rot 90;
+    mounting_hole (36, 4) drill 3.2 keepout 2.0;
+    mounting_hole (36, 26) drill 3.2 keepout 2.0;
+    keepout rect (30, 12) (40, 18);
+}

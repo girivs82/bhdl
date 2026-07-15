@@ -1737,6 +1737,76 @@ async fn run_layout(
             }
         }
     }
+    // Mechanical contract from the layout block: chassis-locked parts,
+    // declared outline, mounting holes, keepouts — INPUT that PnR works
+    // within (like the stackup), reported with provenance.
+    if let Some(name) = &board_module_name {
+        if let Some(lay) = analysis.layout_definitions.get(name) {
+            use bhdl_pnr::types::{
+                BoardOutline, BoardSide, FixedPlacement, KeepoutTarget, KeepoutZone,
+                MountingHole, ZoneShape,
+            };
+            for &(ref handle, x, y, rot) in &lay.places {
+                sem_config.board_config.fixed_placements.push(FixedPlacement {
+                    instance_name: handle.clone(),
+                    x_mm: x,
+                    y_mm: y,
+                    rotation_deg: rot,
+                    side: BoardSide::Top,
+                    edge: None,
+                });
+                println!(
+                    "  {} Locked: {handle} at ({x}, {y}) rot {rot}° (layout {name})",
+                    "✓".green()
+                );
+            }
+            if let Some((w, h)) = lay.outline_rect {
+                sem_config.board_config.outline =
+                    BoardOutline::Rectangle { width_mm: w, height_mm: h };
+                println!("  {} Outline: rect {w}×{h}mm (declared)", "✓".green());
+            } else if let Some(pts) = &lay.outline_polygon {
+                sem_config.board_config.outline = BoardOutline::Polygon(pts.clone());
+                println!(
+                    "  {} Outline: polygon, {} vertices (declared)",
+                    "✓".green(),
+                    pts.len()
+                );
+            }
+            for &(x, y, drill, keep) in &lay.mounting_holes {
+                sem_config.board_config.mounting_holes.push(MountingHole {
+                    x_mm: x,
+                    y_mm: y,
+                    drill_mm: drill,
+                    keepout_mm: keep,
+                });
+            }
+            if !lay.mounting_holes.is_empty() {
+                println!(
+                    "  {} Mounting holes: {} (declared)",
+                    "✓".green(),
+                    lay.mounting_holes.len()
+                );
+            }
+            for &(x0, y0, x1, y1) in &lay.keepouts {
+                sem_config.board_config.keepout_zones.push(KeepoutZone {
+                    shape: ZoneShape::Rectangle {
+                        x: x0.min(x1),
+                        y: y0.min(y1),
+                        w: (x1 - x0).abs(),
+                        h: (y1 - y0).abs(),
+                    },
+                    applies_to: KeepoutTarget::All,
+                });
+            }
+            if !lay.keepouts.is_empty() {
+                println!(
+                    "  {} Keepouts: {} (declared)",
+                    "✓".green(),
+                    lay.keepouts.len()
+                );
+            }
+        }
+    }
     let declared_stackup =
         !matches!(sem_config.board_config.stackup, bhdl_pnr::types::StackupSource::Auto);
     let board_result = semantic::build_board(

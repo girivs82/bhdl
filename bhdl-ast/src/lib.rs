@@ -76,3 +76,10 @@ pub use behavioral_models::{BehavioralModel, OptimizationStrategy, ComponentKnow
 // Add tests module
 #[cfg(test)]
 mod tests; 
+
+/// Board outline declared in a layout block.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LayoutOutline {
+    Rect { w: f64, h: f64 },
+    Polygon(Vec<(f64, f64)>),
+}

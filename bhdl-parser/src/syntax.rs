@@ -417,6 +417,10 @@ pub enum SyntaxKind {
     LAYOUT_DEF,            // layout EntityName { ... }
     LAYOUT_PACKAGE,        // package HTSSOP-16;
     LAYOUT_STACKUP,        // layer_stackup 4;
+    LAYOUT_PLACE,          // place j_usb at (0, 20) rot 270;
+    LAYOUT_OUTLINE,        // outline rect 80 50; | outline polygon (..) ..;
+    LAYOUT_MOUNTING_HOLE,  // mounting_hole (5,5) drill 3.2 keepout 6;
+    LAYOUT_KEEPOUT,        // keepout rect (60,40) (80,50);
 
     // Placement block nodes (entity-level PCB placement recipes)
     PLACEMENT_BLOCK,       // placement { ... }

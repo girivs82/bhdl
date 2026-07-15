@@ -3092,11 +3092,24 @@ pub fn extract_layout_definitions(
 
         let package = layout_def.package();
         let layer_stackup = layout_def.layer_stackup();
+        let places = layout_def.places();
+        let (outline_rect, outline_polygon) = match layout_def.outline() {
+            Some(bhdl_ast::LayoutOutline::Rect { w, h }) => (Some((w, h)), None),
+            Some(bhdl_ast::LayoutOutline::Polygon(pts)) => (None, Some(pts)),
+            None => (None, None),
+        };
+        let mounting_holes = layout_def.mounting_holes();
+        let keepouts = layout_def.keepouts();
 
         definitions.insert(entity_name.clone(), LayoutDefinition {
             entity_name,
             package,
             layer_stackup,
+            places,
+            outline_rect,
+            outline_polygon,
+            mounting_holes,
+            keepouts,
         });
     }
 

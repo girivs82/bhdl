@@ -1526,6 +1526,117 @@ impl LayoutDef {
             })
     }
 
+    /// Tokens of a mech statement as (text) list, keyword + numbers etc.
+    fn mech_tokens(node: &rowan::SyntaxNode<crate::BhdlLanguage>) -> Vec<String> {
+        node.children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .filter(|t| {
+                !matches!(
+                    t.kind(),
+                    SyntaxKind::WHITESPACE | SyntaxKind::COMMENT | SyntaxKind::SEMI
+                )
+            })
+            .map(|t| t.text().to_string())
+            .collect()
+    }
+
+    /// `place <handle> at (x, y) [rot D];` — locked part positions.
+    pub fn places(&self) -> Vec<(String, f64, f64, f64)> {
+        let mut out = Vec::new();
+        for n in self
+            .0
+            .children()
+            .filter(|n| n.kind() == SyntaxKind::LAYOUT_PLACE)
+        {
+            let toks = Self::mech_tokens(&n);
+            // place <handle> at ( x , y ) [rot d]
+            let nums: Vec<f64> = toks
+                .iter()
+                .filter_map(|t| t.trim_start_matches('-').parse::<f64>().ok().map(|v| {
+                    if t.starts_with('-') { -v } else { v }
+                }))
+                .collect();
+            let handle = toks.get(1).cloned().unwrap_or_default();
+            if handle.is_empty() || nums.len() < 2 {
+                continue;
+            }
+            let rot = if toks.iter().any(|t| t == "rot") && nums.len() >= 3 {
+                nums[2]
+            } else {
+                0.0
+            };
+            out.push((handle, nums[0], nums[1], rot));
+        }
+        out
+    }
+
+    /// `outline rect W H;` or `outline polygon (x,y) (x,y) ...;`
+    pub fn outline(&self) -> Option<crate::LayoutOutline> {
+        let n = self
+            .0
+            .children()
+            .find(|n| n.kind() == SyntaxKind::LAYOUT_OUTLINE)?;
+        let toks = Self::mech_tokens(&n);
+        let nums: Vec<f64> = toks
+            .iter()
+            .filter_map(|t| t.trim_start_matches('-').parse::<f64>().ok().map(|v| {
+                if t.starts_with('-') { -v } else { v }
+            }))
+            .collect();
+        if toks.iter().any(|t| t == "rect") && nums.len() >= 2 {
+            Some(crate::LayoutOutline::Rect {
+                w: nums[0],
+                h: nums[1],
+            })
+        } else if toks.iter().any(|t| t == "polygon") && nums.len() >= 6 {
+            Some(crate::LayoutOutline::Polygon(
+                nums.chunks(2).map(|c| (c[0], c[1])).collect(),
+            ))
+        } else {
+            None
+        }
+    }
+
+    /// `mounting_hole (x, y) drill D keepout K;`
+    pub fn mounting_holes(&self) -> Vec<(f64, f64, f64, f64)> {
+        let mut out = Vec::new();
+        for n in self
+            .0
+            .children()
+            .filter(|n| n.kind() == SyntaxKind::LAYOUT_MOUNTING_HOLE)
+        {
+            let toks = Self::mech_tokens(&n);
+            let nums: Vec<f64> = toks
+                .iter()
+                .filter_map(|t| t.parse::<f64>().ok())
+                .collect();
+            if nums.len() >= 3 {
+                out.push((nums[0], nums[1], nums[2], nums.get(3).copied().unwrap_or(1.0)));
+            }
+        }
+        out
+    }
+
+    /// `keepout rect (x0, y0) (x1, y1);`
+    pub fn keepouts(&self) -> Vec<(f64, f64, f64, f64)> {
+        let mut out = Vec::new();
+        for n in self
+            .0
+            .children()
+            .filter(|n| n.kind() == SyntaxKind::LAYOUT_KEEPOUT)
+        {
+            let toks = Self::mech_tokens(&n);
+            let nums: Vec<f64> = toks
+                .iter()
+                .filter_map(|t| t.parse::<f64>().ok())
+                .collect();
+            if nums.len() >= 4 {
+                out.push((nums[0], nums[1], nums[2], nums[3]));
+            }
+        }
+        out
+    }
+
     /// Board-level layer count from `layer_stackup N;`.
     pub fn layer_stackup(&self) -> Option<usize> {
         self.0

@@ -968,8 +968,24 @@ pub(crate) fn extend_route(
             None => return 0,
         }
     }
+    // Tree-connected pads only: an orphan fragment touching the pad is
+    // NOT a connection (it made extension skip pins whose copper was a
+    // stranded stub — shipped as unconnected). The tree = the LARGEST
+    // copper component of the surviving route.
+    let comps = route_components(route);
+    let tree_comp: Option<usize> = {
+        let mut pop: std::collections::HashMap<usize, usize> =
+            std::collections::HashMap::new();
+        for &c in &comps {
+            *pop.entry(c).or_insert(0) += 1;
+        }
+        pop.into_iter().max_by_key(|&(c, n)| (n, std::cmp::Reverse(c))).map(|(c, _)| c)
+    };
     let pad_connected = |px: f64, py: f64, half: f64| {
-        route.segments.iter().any(|sg| {
+        route.segments.iter().enumerate().any(|(si, sg)| {
+            if Some(comps[si]) != tree_comp {
+                return false;
+            }
             let (dx, dy) = (sg.end.0 - sg.start.0, sg.end.1 - sg.start.1);
             let len2 = dx * dx + dy * dy;
             let t = if len2 <= 1e-12 {
@@ -979,10 +995,7 @@ pub(crate) fn extend_route(
             };
             let (cx, cy) = (sg.start.0 + t * dx, sg.start.1 + t * dy);
             (px - cx).hypot(py - cy) < sg.width_mm / 2.0 + half - 0.001
-        }) || route
-            .vias
-            .iter()
-            .any(|v| (v.x - px).hypot(v.y - py) < half + 0.15)
+        })
     };
     let mut remaining: BTreeSet<CellCoord> = pin_targets
         .iter()
@@ -1112,6 +1125,12 @@ pub(crate) fn count_connected_sinks(board: &Board, routes: &[Route]) -> usize {
         if route.is_empty() && net.plane_layer.is_none() {
             continue;
         }
+        // Ratsnest semantics: a pin is connected only if its touching
+        // copper COMPONENT also reaches another pin (an orphan stub
+        // touching one pad is not a connection).
+        let comps = route_components(route);
+        let mut pin_comp: Vec<Option<usize>> = Vec::new();
+        let mut pin_thru_plane: Vec<bool> = Vec::new();
         for &(comp_id, pin_id) in &net.pins {
             let Some(&ci) = comp_idx.get(&comp_id) else { continue };
             let comp = &board.components[ci];
@@ -1131,10 +1150,12 @@ pub(crate) fn count_connected_sinks(board: &Board, routes: &[Route]) -> usize {
             if net.plane_layer.is_some()
                 && pin.pad.as_ref().and_then(|p| p.drill_mm).is_some()
             {
-                connected += 1;
+                pin_thru_plane.push(true);
+                pin_comp.push(None);
                 continue;
             }
-            let hit = route.segments.iter().any(|sg| {
+            pin_thru_plane.push(false);
+            let hit = route.segments.iter().enumerate().find_map(|(si, sg)| {
                 let (dx, dy) = (sg.end.0 - sg.start.0, sg.end.1 - sg.start.1);
                 let len2 = dx * dx + dy * dy;
                 let t = if len2 <= 1e-12 {
@@ -1144,13 +1165,30 @@ pub(crate) fn count_connected_sinks(board: &Board, routes: &[Route]) -> usize {
                         .clamp(0.0, 1.0)
                 };
                 let (cx, cy) = (sg.start.0 + t * dx, sg.start.1 + t * dy);
-                (px - cx).hypot(py - cy) < sg.width_mm / 2.0 + half - 0.001
-            }) || route
-                .vias
-                .iter()
-                .any(|v| (v.x - px).hypot(v.y - py) < half + 0.15);
-            if hit {
+                ((px - cx).hypot(py - cy) < sg.width_mm / 2.0 + half - 0.001)
+                    .then_some(comps[si])
+            });
+            pin_comp.push(hit);
+        }
+        // Component pin-population: a plane net's plane counts as a
+        // "pin" every drop-via component reaches (via drops connect
+        // stub components through the fill).
+        let mut pop: std::collections::HashMap<usize, usize> =
+            std::collections::HashMap::new();
+        for c in pin_comp.iter().flatten() {
+            *pop.entry(*c).or_insert(0) += 1;
+        }
+        let plane_bonus = net.plane_layer.is_some();
+        for (k, &c) in pin_comp.iter().enumerate() {
+            if pin_thru_plane[k] {
                 connected += 1;
+                continue;
+            }
+            match c {
+                Some(cc) if pop.get(&cc).copied().unwrap_or(0) >= 2 || plane_bonus => {
+                    connected += 1;
+                }
+                _ => {}
             }
         }
     }
@@ -1225,4 +1263,72 @@ pub(crate) fn block_route_geometry(
             }
         }
     }
+}
+
+
+/// Connected components of a route's copper: segments union by shared
+/// endpoints (or endpoint-on-interior T-joints), vias union everything
+/// at their position. Returns per-segment component ids. The
+/// "pad-touched = connected" shortcut counted ORPHAN fragments (a
+/// leftover stub touching the pad) as reached pins — ratsnest truth
+/// requires the touching copper to reach ANOTHER pin of the net.
+pub(crate) fn route_components(route: &Route) -> Vec<usize> {
+    let n = route.segments.len();
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn find(p: &mut Vec<usize>, i: usize) -> usize {
+        if p[i] != i {
+            let r = find(p, p[i]);
+            p[i] = r;
+        }
+        p[i]
+    }
+    let near = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).hypot(a.1 - b.1) < 0.02;
+    let on_seg = |sg: &RouteSegment, pt: (f64, f64)| -> bool {
+        let (dx, dy) = (sg.end.0 - sg.start.0, sg.end.1 - sg.start.1);
+        let l2 = dx * dx + dy * dy;
+        let t = if l2 <= 1e-12 {
+            0.0
+        } else {
+            (((pt.0 - sg.start.0) * dx + (pt.1 - sg.start.1) * dy) / l2).clamp(0.0, 1.0)
+        };
+        (pt.0 - (sg.start.0 + t * dx)).hypot(pt.1 - (sg.start.1 + t * dy)) < 0.02
+    };
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let (a, b) = (&route.segments[i], &route.segments[j]);
+            if a.layer == b.layer
+                && (near(a.start, b.start)
+                    || near(a.start, b.end)
+                    || near(a.end, b.start)
+                    || near(a.end, b.end)
+                    || on_seg(b, a.start)
+                    || on_seg(b, a.end)
+                    || on_seg(a, b.start)
+                    || on_seg(a, b.end))
+            {
+                let (ri, rj) = (find(&mut parent, i), find(&mut parent, j));
+                if ri != rj {
+                    parent[ri] = rj;
+                }
+            }
+        }
+    }
+    // Vias join segments across layers at their position.
+    for v in &route.vias {
+        let mut first: Option<usize> = None;
+        for i in 0..n {
+            if on_seg(&route.segments[i], (v.x, v.y)) {
+                match first {
+                    None => first = Some(i),
+                    Some(f) => {
+                        let (ri, rf) = (find(&mut parent, i), find(&mut parent, f));
+                        if ri != rf {
+                            parent[ri] = rf;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    (0..n).map(|i| find(&mut parent, i)).collect()
 }
