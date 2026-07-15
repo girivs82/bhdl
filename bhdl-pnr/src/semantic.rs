@@ -704,7 +704,14 @@ pub fn build_board(
             // Also consider that components have courtyard around them.
             let n_comps = components.len() as f64;
             let avg_dim = (total_area / n_comps.max(1.0)).sqrt();
-            let side = ((n_comps.sqrt().ceil() + 2.0) * (avg_dim + 2.0)).max(50.0);
+            // Dense boards need routing headroom that scales faster
+            // than component count: at 60+ components the diffuse
+            // congestion tail (many nets each losing one pin) is an
+            // AREA problem — negotiation converges, sinks are simply
+            // unreachable at grid granularity.
+            let headroom = if n_comps > 40.0 { 1.15 } else { 1.0 };
+            let side =
+                ((n_comps.sqrt().ceil() + 2.0) * (avg_dim + 2.0) * headroom).max(50.0);
             BoardOutline::Rectangle {
                 width_mm: side,
                 height_mm: side,
