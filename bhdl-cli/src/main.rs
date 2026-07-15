@@ -1768,7 +1768,12 @@ async fn run_layout(
     // Mechanical contract from the layout block: chassis-locked parts,
     // declared outline, mounting holes, keepouts — INPUT that PnR works
     // within (like the stackup), reported with provenance.
-    let mut mech_gate: Option<(String, Vec<(f64, f64)>, Vec<(f64, f64, f64)>)> = None;
+    let mut mech_gate: Option<(
+        String,
+        Vec<(f64, f64)>,
+        Vec<(f64, f64, f64)>,
+        Vec<(f64, f64, f64, f64)>,
+    )> = None;
     if let Some(name) = &board_module_name {
         if let Some(lay) = analysis.layout_definitions.get(name) {
             use bhdl_pnr::types::{
@@ -1904,7 +1909,7 @@ async fn run_layout(
                     .map(|&(x, y, d, _)| (x, y, d))
                     .collect();
                 println!("  {} Mech check: {dxf} (declared)", "✓".green());
-                mech_gate = Some((dxf.clone(), outline_pts, holes));
+                mech_gate = Some((dxf.clone(), outline_pts, holes, lay.cutouts.clone()));
             }
         }
     }
@@ -2037,7 +2042,7 @@ async fn run_layout(
 
     // MCAD parity gate: the exported board's mechanical contract must
     // match the referenced DXF, or the build fails.
-    if let Some((dxf_rel, outline_pts, holes)) = &mech_gate {
+    if let Some((dxf_rel, outline_pts, holes, cutouts)) = &mech_gate {
         let dxf_path = source_path
             .parent()
             .unwrap_or_else(|| std::path::Path::new("."))
@@ -2047,7 +2052,7 @@ async fn run_layout(
             .iter()
             .map(|&(_, y)| y)
             .fold(0.0_f64, f64::max);
-        mech_check::check_parity(outline_pts, holes, &dxf, board_h)?;
+        mech_check::check_parity(outline_pts, holes, cutouts, &dxf, board_h)?;
     }
 
     // HTML visualization (always generate, or only with --html flag)

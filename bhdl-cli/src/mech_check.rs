@@ -85,6 +85,7 @@ fn points_match(expected: &[(f64, f64)], got: &[(f64, f64)], tol: f64) -> bool {
 pub fn check_parity(
     outline_pts: &[(f64, f64)],
     holes: &[(f64, f64, f64)], // (x, y, drill)
+    cutouts: &[(f64, f64, f64, f64)],
     dxf: &Dxf,
     board_h: f64,
 ) -> Result<()> {
@@ -93,26 +94,77 @@ pub fn check_parity(
         pts.iter().map(|&(x, y)| (x, board_h - y)).collect()
     };
 
-    // Outline: match against any DXF polyline, direct or Y-mirrored.
-    let mut outline_ok = None;
-    for pl in &dxf.polylines {
-        if points_match(outline_pts, pl, TOL) {
-            outline_ok = Some("direct");
-            break;
-        }
-        if points_match(&mirror(outline_pts), pl, TOL) {
-            outline_ok = Some("y-mirrored");
-            break;
+    // Outline: the LARGEST-area DXF polyline is the board edge (the
+    // rest are interior apertures); match direct or Y-mirrored.
+    let area = |pts: &[(f64, f64)]| -> f64 {
+        let n = pts.len();
+        (0..n)
+            .map(|i| {
+                let (ax, ay) = pts[i];
+                let (bx, by) = pts[(i + 1) % n];
+                ax * by - bx * ay
+            })
+            .sum::<f64>()
+            .abs()
+            / 2.0
+    };
+    let outline_idx = (0..dxf.polylines.len())
+        .max_by(|&a, &b| {
+            area(&dxf.polylines[a])
+                .partial_cmp(&area(&dxf.polylines[b]))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    let Some(outline_idx) = outline_idx else {
+        bail!("mech_check FAILED: DXF contains no closed polyline");
+    };
+    let frame = if points_match(outline_pts, &dxf.polylines[outline_idx], TOL) {
+        "direct"
+    } else if points_match(&mirror(outline_pts), &dxf.polylines[outline_idx], TOL) {
+        "y-mirrored"
+    } else {
+        bail!(
+            "mech_check FAILED: board outline ({} vertices) does not match \
+             the DXF's largest polyline (tried direct and y-mirrored frames, \
+             tol {TOL}mm)",
+            outline_pts.len()
+        )
+    };
+
+    // Cutouts: every declared aperture must match a remaining DXF
+    // polyline in the SAME frame — and every remaining DXF polyline
+    // must be a declared aperture (an undeclared hole in the MCAD
+    // model is exactly the drift this gate exists to catch).
+    let mut claimed: Vec<bool> = dxf.polylines.iter().map(|_| false).collect();
+    claimed[outline_idx] = true;
+    for &(x0, y0, x1, y1) in cutouts {
+        let corners = vec![(x0, y0), (x1, y0), (x1, y1), (x0, y1)];
+        let corners = if frame == "y-mirrored" {
+            mirror(&corners)
+        } else {
+            corners
+        };
+        let hit = dxf.polylines.iter().enumerate().find_map(|(k, pl)| {
+            (!claimed[k] && points_match(&corners, pl, TOL)).then_some(k)
+        });
+        match hit {
+            Some(k) => claimed[k] = true,
+            None => bail!(
+                "mech_check FAILED: declared cutout ({x0},{y0})-({x1},{y1}) \
+                 has no matching DXF polyline ({frame} frame, tol {TOL}mm)"
+            ),
         }
     }
-    let frame = match outline_ok {
-        Some(f) => f,
-        None => bail!(
-            "mech_check FAILED: board outline ({} vertices) matches no DXF \
-             polyline (tried direct and y-mirrored frames, tol {TOL}mm)",
-            outline_pts.len()
-        ),
-    };
+    if let Some(k) = claimed.iter().position(|c| !c) {
+        let pl = &dxf.polylines[k];
+        bail!(
+            "mech_check FAILED: DXF contains an aperture not declared in the \
+             .bhdl ({} vertices near ({:.1},{:.1})) — declare it with a \
+             `cutout` statement or remove it from the MCAD model",
+            pl.len(),
+            pl[0].0,
+            pl[0].1
+        );
+    }
 
     // Holes: every declared hole must have a DXF circle at its position
     // with radius = drill/2, in the SAME frame the outline matched.
@@ -134,10 +186,12 @@ pub fn check_parity(
         }
     }
     println!(
-        "  ✓ Mech parity: outline {} vertices ✓, holes {}/{} ✓ ({} frame)",
+        "  ✓ Mech parity: outline {} vertices ✓, holes {}/{} ✓, cutouts {}/{} ✓ ({} frame)",
         outline_pts.len(),
         holes.len(),
         holes.len(),
+        cutouts.len(),
+        cutouts.len(),
         frame
     );
     Ok(())
@@ -211,10 +265,51 @@ pub fn render_import(dxf: &Dxf, dxf_name: &str, flip_y: bool) -> Result<String> 
             fmt_mm(-miny)
         ));
     }
-    if dxf.polylines.len() > 1 {
+    // Interior polylines: axis-aligned 4-vertex rects transcribe to
+    // `cutout` statements; anything else is flagged for the designer.
+    let mut cutout_lines: Vec<String> = Vec::new();
+    let mut odd_interior = 0usize;
+    for (k, pl) in dxf.polylines.iter().enumerate() {
+        if k == outline_idx {
+            continue;
+        }
+        // Same frame transform as the outline: flip, then translate.
+        let pl: Vec<(f64, f64)> = pl
+            .iter()
+            .map(|&(x, y)| (x, if flip_y { -y } else { y }))
+            .collect();
+        let rect4 = pl.len() == 4
+            && (0..4).all(|i| {
+                let (ax, ay) = pl[i];
+                let (bx, by) = pl[(i + 1) % 4];
+                (ax - bx).abs() < 1e-9 || (ay - by).abs() < 1e-9
+            });
+        if rect4 {
+            let xs: Vec<f64> = pl.iter().map(|p| p.0 - minx).collect();
+            let ys: Vec<f64> = pl.iter().map(|p| p.1 - miny).collect();
+            let (x0, x1) = (
+                xs.iter().cloned().fold(f64::INFINITY, f64::min),
+                xs.iter().cloned().fold(0.0_f64, f64::max),
+            );
+            let (y0, y1) = (
+                ys.iter().cloned().fold(f64::INFINITY, f64::min),
+                ys.iter().cloned().fold(0.0_f64, f64::max),
+            );
+            cutout_lines.push(format!(
+                "    cutout rect ({}, {}) ({}, {});\n",
+                fmt_mm(x0),
+                fmt_mm(y0),
+                fmt_mm(x1),
+                fmt_mm(y1)
+            ));
+        } else {
+            odd_interior += 1;
+        }
+    }
+    if odd_interior > 0 {
         out.push_str(&format!(
-            "// NOTE: {} additional polyline(s) in the DXF ignored (interior features?)\n",
-            dxf.polylines.len() - 1
+            "// NOTE: {odd_interior} non-rectangular interior polyline(s) in the DXF \
+             cannot be transcribed (only rect cutouts are supported)\n"
         ));
     }
     out.push_str("layout <Board> {\n");
@@ -247,6 +342,9 @@ pub fn render_import(dxf: &Dxf, dxf_name: &str, flip_y: bool) -> Result<String> 
             fmt_mm(d)
         ));
     }
+    for line in &cutout_lines {
+        out.push_str(line);
+    }
     out.push_str(&format!("    mech_check \"{dxf_name}\";\n"));
     out.push_str("}\n");
     Ok(out)
@@ -272,7 +370,7 @@ mod tests {
     #[test]
     fn direct_frame_matches() {
         let dxf = dxf_with(L_SHAPE.to_vec(), vec![(36.0, 4.0, 1.6)]);
-        check_parity(&L_SHAPE, &[(36.0, 4.0, 3.2)], &dxf, 30.0).unwrap();
+        check_parity(&L_SHAPE, &[(36.0, 4.0, 3.2)], &[], &dxf, 30.0).unwrap();
     }
 
     #[test]
@@ -280,7 +378,7 @@ mod tests {
         // MCAD Y-up: y -> 30 - y for every feature.
         let pl: Vec<_> = L_SHAPE.iter().map(|&(x, y)| (x, 30.0 - y)).collect();
         let dxf = dxf_with(pl, vec![(36.0, 26.0, 1.6)]);
-        check_parity(&L_SHAPE, &[(36.0, 4.0, 3.2)], &dxf, 30.0).unwrap();
+        check_parity(&L_SHAPE, &[(36.0, 4.0, 3.2)], &[], &dxf, 30.0).unwrap();
     }
 
     #[test]
@@ -288,14 +386,70 @@ mod tests {
         let mut pl = L_SHAPE.to_vec();
         pl[2] = (40.0, 18.5); // 0.5mm notch drift
         let dxf = dxf_with(pl, vec![(36.0, 4.0, 1.6)]);
-        assert!(check_parity(&L_SHAPE, &[(36.0, 4.0, 3.2)], &dxf, 30.0).is_err());
+        assert!(check_parity(&L_SHAPE, &[(36.0, 4.0, 3.2)], &[], &dxf, 30.0).is_err());
     }
 
     #[test]
     fn hole_drill_drift_fails() {
         // Hole present but wrong drill (M3 vs declared 3.2).
         let dxf = dxf_with(L_SHAPE.to_vec(), vec![(36.0, 4.0, 1.5)]);
-        assert!(check_parity(&L_SHAPE, &[(36.0, 4.0, 3.2)], &dxf, 30.0).is_err());
+        assert!(check_parity(&L_SHAPE, &[(36.0, 4.0, 3.2)], &[], &dxf, 30.0).is_err());
+    }
+
+    #[test]
+    fn cutout_parity_roundtrip() {
+        let slot = vec![(10.0, 10.0), (20.0, 10.0), (20.0, 12.0), (10.0, 12.0)];
+        let dxf = Dxf {
+            polylines: vec![L_SHAPE.to_vec(), slot],
+            circles: vec![(36.0, 4.0, 1.6)],
+        };
+        check_parity(
+            &L_SHAPE,
+            &[(36.0, 4.0, 3.2)],
+            &[(10.0, 10.0, 20.0, 12.0)],
+            &dxf,
+            30.0,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn undeclared_aperture_fails() {
+        let slot = vec![(10.0, 10.0), (20.0, 10.0), (20.0, 12.0), (10.0, 12.0)];
+        let dxf = Dxf {
+            polylines: vec![L_SHAPE.to_vec(), slot],
+            circles: vec![(36.0, 4.0, 1.6)],
+        };
+        let e = check_parity(&L_SHAPE, &[(36.0, 4.0, 3.2)], &[], &dxf, 30.0)
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("not declared"), "{e}");
+    }
+
+    #[test]
+    fn missing_cutout_in_dxf_fails() {
+        let dxf = dxf_with(L_SHAPE.to_vec(), vec![(36.0, 4.0, 1.6)]);
+        let e = check_parity(
+            &L_SHAPE,
+            &[(36.0, 4.0, 3.2)],
+            &[(10.0, 10.0, 20.0, 12.0)],
+            &dxf,
+            30.0,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(e.contains("declared cutout"), "{e}");
+    }
+
+    #[test]
+    fn import_emits_cutout() {
+        let slot = vec![(10.0, 10.0), (20.0, 10.0), (20.0, 12.0), (10.0, 12.0)];
+        let dxf = Dxf {
+            polylines: vec![L_SHAPE.to_vec(), slot],
+            circles: vec![],
+        };
+        let out = render_import(&dxf, "b.dxf", false).unwrap();
+        assert!(out.contains("cutout rect (10, 10) (20, 12);"), "{out}");
     }
 
     #[test]
