@@ -723,6 +723,86 @@ fn cell_cost(cell: &crate::routing::grid::GridCell, history_factor: f64, present
 }
 
 /// Convert a cell path to physical route segments and vias.
+/// Routed plane-drop fallback: when no straight stub from the pad
+/// reaches a legal via site (post-recovery congestion), route one with
+/// dijkstra on the pad's layer — sinks are every grid cell whose center
+/// passes the caller's `site_ok`. Returns the stub segments (pad-escape
+/// included) and the via position, or None if the pad is truly walled
+/// in (honest unconnected).
+pub(crate) fn routed_plane_drop(
+    grid: &RoutingGrid,
+    net: &PnrNet,
+    board: &Board,
+    pad: (f64, f64),
+    comp_center: (f64, f64),
+    stub_layer: usize,
+    share: f64,
+    site_ok: &dyn Fn(f64, f64) -> bool,
+) -> Option<(Vec<RouteSegment>, (f64, f64))> {
+    let natural = grid.point_to_cell(pad.0, pad.1, stub_layer);
+    let start = escape_cell(
+        grid,
+        net.id,
+        natural,
+        pad,
+        (pad.0 - comp_center.0, pad.1 - comp_center.1),
+    );
+    let mut sources = BTreeSet::new();
+    sources.insert(start);
+    let mut sinks: BTreeSet<CellCoord> = BTreeSet::new();
+    for (col, &x) in grid.x_coords.iter().enumerate() {
+        if (x - pad.0).abs() > 20.0 {
+            continue;
+        }
+        for (row, &y) in grid.y_coords.iter().enumerate() {
+            if (y - pad.1).abs() > 20.0 {
+                continue;
+            }
+            if site_ok(x, y) {
+                sinks.insert(CellCoord { col, row, layer: stub_layer });
+            }
+        }
+    }
+    if sinks.is_empty() {
+        return None;
+    }
+    let pitch = if grid.x_coords.len() > 1 {
+        grid.x_coords[1] - grid.x_coords[0]
+    } else {
+        0.25
+    };
+    let clear_ring = (((share - board.config.min_trace_width_mm).max(0.0) / 2.0)
+        / pitch)
+        .ceil() as usize;
+    let (path, reached) = dijkstra_to_any(
+        grid,
+        &sources,
+        &sinks,
+        net,
+        &board.layer_stack,
+        1.0,
+        1.0,
+        false, // stub stays on the pad's layer; the via IS the drop
+        &[],
+        &[],
+        clear_ring,
+    )?;
+    let (mut segs, _vias) = path_to_segments(grid, &path, share);
+    let (sx, sy) = grid.cell_center(start);
+    if (sx - pad.0).hypot(sy - pad.1) > 1e-6 {
+        segs.insert(
+            0,
+            RouteSegment {
+                layer: stub_layer,
+                start: pad,
+                end: (sx, sy),
+                width_mm: share,
+            },
+        );
+    }
+    Some((segs, grid.cell_center(reached)))
+}
+
 fn path_to_segments(
     grid: &RoutingGrid,
     path: &[CellCoord],
@@ -1002,6 +1082,36 @@ pub(crate) fn extend_route(
         .filter(|(_, (px, py), half)| !pad_connected(*px, *py, *half))
         .map(|(c, _, _)| *c)
         .collect();
+    if let Ok(filt) = std::env::var("BHDL_PNR_DEBUG_NETS") {
+        if filt != "1" && net.name.contains(&filt) {
+            for (c, (px, py), half) in &pin_targets {
+                let nearest = route
+                    .segments
+                    .iter()
+                    .map(|sg| {
+                        let (dx, dy) = (sg.end.0 - sg.start.0, sg.end.1 - sg.start.1);
+                        let len2 = dx * dx + dy * dy;
+                        let t = if len2 <= 1e-12 {
+                            0.0
+                        } else {
+                            (((px - sg.start.0) * dx + (py - sg.start.1) * dy) / len2)
+                                .clamp(0.0, 1.0)
+                        };
+                        let (cx, cy) = (sg.start.0 + t * dx, sg.start.1 + t * dy);
+                        (px - cx).hypot(py - cy) - sg.width_mm / 2.0
+                    })
+                    .fold(f64::INFINITY, f64::min);
+                log::warn!(
+                    "extend_route '{}' pin ({px:.2},{py:.2}) half={half:.2}:                      connected={} nearest_copper_edge={nearest:.3} in_remaining={}                      segs={} comps_tree={:?}",
+                    net.name,
+                    pad_connected(*px, *py, *half),
+                    remaining.contains(c),
+                    route.segments.len(),
+                    tree_comp
+                );
+            }
+        }
+    }
     let share_width = if full_width {
         // From-scratch trunks may end up carrying the whole rail; use
         // the IPC width for the full current rather than a leaf share.
@@ -1103,6 +1213,37 @@ pub(crate) fn extend_route(
              surviving-copper grid)",
             net.name, reclaimed, n_missing, remaining.len()
         );
+        if std::env::var("BHDL_PNR_DEBUG_NETS").is_ok() {
+            for cell in &remaining {
+                let (cx, cy) = grid.cell_center(*cell);
+                let gc = grid.get(*cell);
+                log::warn!(
+                    "extend_route '{}' STUCK sink cell ({cx:.2},{cy:.2}) L{}: \
+                     blocked={} hard={} nc={} owners_has_net={} demand={}/{} \
+                     src_cells={} banned_sites={}",
+                    net.name, cell.layer, gc.blocked, gc.hard, gc.nc_blocked,
+                    gc.owners.contains(&net.id), gc.demand, gc.capacity,
+                    source_set.len(), banned_sites.len()
+                );
+                // Neighbor ring: is the sink an island?
+                for (dx, dy) in [(-1i32, 0i32), (1, 0), (0, -1), (0, 1)] {
+                    let nx = cell.col as i32 + dx;
+                    let ny = cell.row as i32 + dy;
+                    if nx < 0 || ny < 0 {
+                        continue;
+                    }
+                    let nc = CellCoord { col: nx as usize, row: ny as usize, layer: cell.layer };
+                    if nc.col >= grid.x_coords.len() || nc.row >= grid.y_coords.len() {
+                        continue;
+                    }
+                    let g = grid.get(nc);
+                    log::warn!(
+                        "    nbr({dx:+},{dy:+}): blocked={} hard={} nc={} owners_has_net={}",
+                        g.blocked, g.hard, g.nc_blocked, g.owners.contains(&net.id)
+                    );
+                }
+            }
+        }
     }
     reclaimed
 }

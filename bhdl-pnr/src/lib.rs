@@ -573,73 +573,9 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
     // to a legally-sited via. A pad with no legal site within reach
     // stays honestly unconnected.
     {
-        let dropped = plane_via_drops(&board, &mut final_routes);
+        let dropped = plane_drop_pass(&board, &mut final_routes);
         if dropped > 0 {
             info!("plane via drops: {} surface pad(s) connected", dropped);
-        }
-        // Verify every drop still TOUCHES its plane after hole merging:
-        // punches around clustered foreign barrels chain-merge into
-        // circles bigger than any siting gap anticipates, and a drop
-        // fully inside one has no plane contact (ships as
-        // via_dangling). Remove swallowed drops — honest unconnected.
-        let via_r = board.layer_stack.via.pad_mm / 2.0;
-        for i in 0..board.nets.len() {
-            if board.nets[i].plane_layer.is_none() {
-                continue;
-            }
-            let holes = output::kicad::merge_holes(output::kicad::plane_foreign_holes(
-                &board,
-                &final_routes,
-                board.nets[i].id,
-            ));
-            let r = &mut final_routes[i];
-            let mut vi = 0;
-            while vi < r.vias.len() {
-                let v = &r.vias[vi];
-                let swallowed = output::kicad::plane_swallows(
-                    &board,
-                    &holes,
-                    v.x,
-                    v.y,
-                    via_r,
-                    board.nets[i].plane_region,
-                );
-                if swallowed {
-                    log::warn!(
-                        "plane via drop at ({:.2},{:.2}) on '{}' swallowed by a merged \
-                         fill punch — removed (pad stays unconnected)",
-                        v.x, v.y, board.nets[i].name
-                    );
-                    // Drop spans are (1 segment, 1 via) each, appended in
-                    // order: find the span whose via range contains vi.
-                    if let Some(sp) = r
-                        .via_spans
-                        .iter()
-                        .position(|&(vs, vl)| vl > 0 && vi >= vs && vi < vs + vl)
-                    {
-                        let (ps, pl) = r.path_spans[sp];
-                        r.segments.drain(ps..ps + pl);
-                        r.vias.remove(vi);
-                        r.path_spans.remove(sp);
-                        r.path_parents.remove(sp);
-                        r.via_spans.remove(sp);
-                        for q in r.path_spans.iter_mut() {
-                            if q.0 > ps {
-                                q.0 -= pl;
-                            }
-                        }
-                        for q in r.via_spans.iter_mut() {
-                            if q.0 > vi {
-                                q.0 -= 1;
-                            }
-                        }
-                    } else {
-                        r.vias.remove(vi);
-                    }
-                } else {
-                    vi += 1;
-                }
-            }
         }
     }
 
@@ -786,6 +722,28 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                     pathfinder::block_route_geometry(rec_grid, &final_routes[i], &board);
                 }
             }
+        }
+    }
+
+    // 5.92. Plane-drop REPAIR: recovery's new copper can have made an
+    // original drop site illegal (validator amputates the stub), and
+    // plane nets are excluded from tree recovery — re-run the drop pass
+    // so those pads get a fresh drop sited around the post-recovery
+    // copper. Idempotent: pads with a live drop are skipped.
+    {
+        let repaired = plane_drop_pass(&board, &mut final_routes);
+        if repaired > 0 {
+            info!(
+                "plane drop repair: {repaired} pad(s) re-dropped after recovery"
+            );
+            // Guarantee round for the repair: only the new drops have
+            // changed since the recovery loop's last validate, so any
+            // amputation here is a mis-sited drop — removed, honest
+            // unconnected (the miter guarantee only validates when
+            // corners were actually cut, so it cannot backstop this).
+            let mut bv: Vec<(usize, (f64, f64))> = Vec::new();
+            let mut bd: Vec<(usize, (f64, f64))> = Vec::new();
+            validate_and_rip(&board, &mut final_routes, &mut bv, &mut bd);
         }
     }
 
@@ -1310,7 +1268,114 @@ fn assign_plane_regions(board: &mut Board) {
 /// stub + via. Sites are searched deterministically on rings around the
 /// pad and checked geometrically against ALL existing copper (foreign
 /// pads, tracks, vias, board edge). Returns the number of pads dropped.
-fn plane_via_drops(board: &Board, final_routes: &mut [Route]) -> usize {
+/// Drop vias for plane-assigned nets + swallow verification, as one
+/// idempotent pass: pads with a live drop are skipped, pads without one
+/// get a freshly-sited drop, and any drop whose plane contact was eaten
+/// by merged fill punches is removed (honest unconnected). Runs at 5.5
+/// and AGAIN after geometric recovery — plane nets are excluded from
+/// tree recovery, so re-siting here is the only repair path when the
+/// validator amputates a drop that later copper made illegal.
+fn plane_drop_pass(board: &Board, final_routes: &mut [Route]) -> usize {
+    // FIXPOINT: siting anticipates the fill's hole punches, but the
+    // authoritative swallow test runs against the hole set AFTER all
+    // drops land — a drop can be sited legally and still end up
+    // swallowed. Ban each removed site and re-site until no drop is
+    // removed (bounded; each iteration shrinks the candidate space).
+    let mut banned: Vec<(f64, f64)> = Vec::new();
+    let mut total = 0usize;
+    for _ in 0..4 {
+        let before = banned.len();
+        let dropped = plane_drop_iteration(board, final_routes, &mut banned);
+        total += dropped;
+        if banned.len() == before {
+            break; // no drop removed — stable
+        }
+    }
+    total
+}
+
+/// One drop + swallow-verify iteration. Removed drop sites are appended
+/// to `banned`; returns how many drops were newly placed (before
+/// removal).
+fn plane_drop_iteration(
+    board: &Board,
+    final_routes: &mut [Route],
+    banned: &mut Vec<(f64, f64)>,
+) -> usize {
+    let dropped = plane_via_drops(board, final_routes, banned);
+    // Verify every drop still TOUCHES its plane after hole merging:
+    // punches around clustered foreign barrels chain-merge into
+    // circles bigger than any siting gap anticipates, and a drop
+    // fully inside one has no plane contact (ships as
+    // via_dangling). Remove swallowed drops — honest unconnected.
+    let via_r = board.layer_stack.via.pad_mm / 2.0;
+    for i in 0..board.nets.len() {
+        if board.nets[i].plane_layer.is_none() {
+            continue;
+        }
+        let holes = output::kicad::merge_holes(output::kicad::plane_foreign_holes(
+            board,
+            final_routes,
+            board.nets[i].id,
+        ));
+        let r = &mut final_routes[i];
+        let mut vi = 0;
+        while vi < r.vias.len() {
+            let v = &r.vias[vi];
+            let swallowed = output::kicad::plane_swallows(
+                board,
+                &holes,
+                v.x,
+                v.y,
+                via_r,
+                board.nets[i].plane_region,
+            );
+            if swallowed {
+                banned.push((v.x, v.y));
+                log::warn!(
+                    "plane via drop at ({:.2},{:.2}) on '{}' swallowed by a merged \
+                     fill punch — removed (site banned, will re-site)",
+                    v.x, v.y, board.nets[i].name
+                );
+                // Drop spans are (1 segment, 1 via) each, appended in
+                // order: find the span whose via range contains vi.
+                if let Some(sp) = r
+                    .via_spans
+                    .iter()
+                    .position(|&(vs, vl)| vl > 0 && vi >= vs && vi < vs + vl)
+                {
+                    let (ps, pl) = r.path_spans[sp];
+                    r.segments.drain(ps..ps + pl);
+                    r.vias.remove(vi);
+                    r.path_spans.remove(sp);
+                    r.path_parents.remove(sp);
+                    r.via_spans.remove(sp);
+                    for q in r.path_spans.iter_mut() {
+                        if q.0 > ps {
+                            q.0 -= pl;
+                        }
+                    }
+                    for q in r.via_spans.iter_mut() {
+                        if q.0 > vi {
+                            q.0 -= 1;
+                        }
+                    }
+                } else {
+                    r.vias.remove(vi);
+                }
+            } else {
+                vi += 1;
+            }
+        }
+    }
+    dropped
+}
+
+fn plane_via_drops(
+    board: &Board,
+    final_routes: &mut [Route],
+    banned_sites: &[(f64, f64)],
+) -> usize {
     let via_r = board.layer_stack.via.pad_mm / 2.0;
     let drill = board.layer_stack.via.drill_mm;
     let clearance = board.config.min_spacing_mm;
@@ -1377,6 +1442,15 @@ fn plane_via_drops(board: &Board, final_routes: &mut [Route]) -> usize {
         )
         .max(0.3)
         .min(net.required_trace_width_mm);
+        // Merged fill punches for THIS net's plane: a drop sited inside
+        // one has no plane contact (the swallow verifier would remove
+        // it right after) — reject such sites during siting instead of
+        // churning site-then-remove.
+        let merged = output::kicad::merge_holes(output::kicad::plane_foreign_holes(
+            board,
+            final_routes,
+            net.id,
+        ));
         for &(comp_id, pin_id) in &net.pins {
             let Some(&ci) = comp_idx.get(&comp_id) else { continue };
             let comp = &board.components[ci];
@@ -1397,6 +1471,34 @@ fn plane_via_drops(board: &Board, final_routes: &mut [Route]) -> usize {
                 BoardSide::Top => 0,
                 BoardSide::Bottom => n_layers - 1,
             };
+            // Repair-pass guard: skip pads that still have a LIVE drop
+            // (a stub on the pad's layer touching pad copper whose far
+            // end carries a via). The validator can amputate a drop
+            // that later copper made illegal — plane nets are excluded
+            // from tree recovery, so a re-run of this pass is their
+            // only repair path, and it must not double-drop the pads
+            // that kept theirs.
+            let half = pin
+                .pad
+                .as_ref()
+                .map(|p| p.width_mm.min(p.height_mm) / 2.0)
+                .unwrap_or(0.25);
+            let has_live_drop = final_routes[i].segments.iter().any(|sg| {
+                if sg.layer != stub_layer {
+                    return false;
+                }
+                if segment_point_too_close(sg.start, sg.end, (px, py), sg.width_mm / 2.0 + half - 0.001) {
+                    final_routes[i].vias.iter().any(|v| {
+                        (v.x - sg.start.0).hypot(v.y - sg.start.1) < 0.01
+                            || (v.x - sg.end.0).hypot(v.y - sg.end.1) < 0.01
+                    })
+                } else {
+                    false
+                }
+            });
+            if has_live_drop {
+                continue;
+            }
             let region = net.plane_region;
             let site_ok = |x: f64, y: f64| -> bool {
                 if x < edge || y < edge || x > bw - edge || y > bh - edge {
@@ -1412,6 +1514,16 @@ fn plane_via_drops(board: &Board, final_routes: &mut [Route]) -> usize {
                     {
                         return false;
                     }
+                }
+                if output::kicad::plane_swallows(board, &merged, x, y, via_r, region) {
+                    return false;
+                }
+                // Sites whose drop a previous fixpoint iteration removed
+                // (swallow-verified against the POST-drop hole set, which
+                // siting cannot fully anticipate) — ban a pitch-sized disc
+                // so the retry actually moves.
+                if banned_sites.iter().any(|&(bx, by)| (x - bx).hypot(y - by) < 0.26) {
+                    return false;
                 }
                 for p in &pads {
                     let same = p.net == Some(net.id);
@@ -1461,6 +1573,61 @@ fn plane_via_drops(board: &Board, final_routes: &mut [Route]) -> usize {
                         return false;
                     }
                 }
+                // The STUB pad→via must also be legal, not just the via
+                // site: the repair pass can need multi-mm stubs (region
+                // projection, ring 10), and an unvalidated stub plows
+                // straight through whatever recovery routed in between
+                // (shipped as shorting_items on the fpga board).
+                let stub_a = (px, py);
+                let stub_b = (x, y);
+                for (k, r) in final_routes.iter().enumerate() {
+                    if k == i {
+                        continue; // own copper may touch its own stub
+                    }
+                    for sg in &r.segments {
+                        if sg.layer != stub_layer {
+                            continue;
+                        }
+                        if segments_too_close(
+                            stub_a,
+                            stub_b,
+                            sg.start,
+                            sg.end,
+                            share / 2.0 + sg.width_mm / 2.0 + clearance,
+                        ) {
+                            return false;
+                        }
+                    }
+                    for v in &r.vias {
+                        if segment_point_too_close(
+                            stub_a,
+                            stub_b,
+                            (v.x, v.y),
+                            share / 2.0 + via_r + clearance,
+                        ) {
+                            return false;
+                        }
+                    }
+                }
+                for p in &pads {
+                    if p.net == Some(net.id) {
+                        continue;
+                    }
+                    // Pad rect approximated by its four edges.
+                    let (x0, y0, x1, y1) =
+                        (p.cx - p.hx, p.cy - p.hy, p.cx + p.hx, p.cy + p.hy);
+                    let edges = [
+                        ((x0, y0), (x1, y0)),
+                        ((x1, y0), (x1, y1)),
+                        ((x1, y1), (x0, y1)),
+                        ((x0, y1), (x0, y0)),
+                    ];
+                    if edges.iter().any(|&(a, b)| {
+                        segments_too_close(stub_a, stub_b, a, b, share / 2.0 + clearance)
+                    }) {
+                        return false;
+                    }
+                }
                 true
             };
             // Ring search around the pad; for split planes ALSO around
@@ -1488,29 +1655,71 @@ fn plane_via_drops(board: &Board, final_routes: &mut [Route]) -> usize {
                     }
                 }
             }
-            let Some((vx, vy)) = placed_at else {
-                log::warn!(
-                    "plane via drop: no legal site near pad '{}' of '{}' (net '{}') — pad stays unconnected",
-                    pin.name, comp.refdes, net.name
-                );
-                continue;
+            // Straight-stub siting failed: fall back to a ROUTED drop —
+            // dijkstra on the pad's layer to any cell passing site_ok,
+            // on a grid where all committed copper is blocked. This is
+            // the post-recovery repair path (the original drop's site
+            // became illegal and the neighborhood is now congested).
+            let routed: Option<(Vec<RouteSegment>, (f64, f64))> =
+                if placed_at.is_none() {
+                    let mut fb_grid = routing::grid::RoutingGrid::build(board);
+                    for r in final_routes.iter() {
+                        if !r.is_empty() {
+                            pathfinder::block_route_geometry(&mut fb_grid, r, board);
+                        }
+                    }
+                    pathfinder::routed_plane_drop(
+                        &fb_grid,
+                        net,
+                        board,
+                        (px, py),
+                        (comp.x, comp.y),
+                        stub_layer,
+                        share,
+                        &site_ok,
+                    )
+                } else {
+                    None
+                };
+            let (stub_segs, vx, vy) = match (placed_at, routed) {
+                (Some((vx, vy)), _) => (
+                    vec![RouteSegment {
+                        layer: stub_layer,
+                        start: (px, py),
+                        end: (vx, vy),
+                        width_mm: share,
+                    }],
+                    vx,
+                    vy,
+                ),
+                (None, Some((segs, (vx, vy)))) => {
+                    log::info!(
+                        "plane via drop: routed fallback for pad '{}' of '{}' \
+                         (net '{}') — {} segment(s) to ({vx:.2},{vy:.2})",
+                        pin.name, comp.refdes, net.name, segs.len()
+                    );
+                    (segs, vx, vy)
+                }
+                (None, None) => {
+                    log::warn!(
+                        "plane via drop: no legal site near pad '{}' of '{}' (net '{}') — pad stays unconnected",
+                        pin.name, comp.refdes, net.name
+                    );
+                    continue;
+                }
             };
             let route = &mut final_routes[i];
             let seg_start = route.segments.len();
             let via_start = route.vias.len();
-            route.segments.push(RouteSegment {
-                layer: stub_layer,
-                start: (px, py),
-                end: (vx, vy),
-                width_mm: share,
-            });
+            let n_segs = stub_segs.len();
+            route.segments.extend(stub_segs);
             route.vias.push(RouteVia {
                 x: vx,
                 y: vy,
                 from_layer: 0,
                 to_layer: n_layers - 1,
             });
-            route.path_spans.push((seg_start, 1));
+            route.path_spans.push((seg_start, n_segs));
             route.path_parents.push(None);
             route.via_spans.push((via_start, 1));
             new_vias.push((vx, vy));
