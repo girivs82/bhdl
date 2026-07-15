@@ -829,6 +829,111 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
     );
 
     let connected_sinks = pathfinder::count_connected_sinks(&board, &final_routes);
+
+    // ── Constraint sign-off (constraint synthesis v1) ──
+    // Constraints promise, routed copper delivers: a `target vs
+    // achieved` row per net/signal constraint, honest FAILs included.
+    // Report-only — an unmet electrical constraint is a design review
+    // item, not illegal copper.
+    {
+        use crate::constraint::Constraint;
+        let idx_of = |nid: NetId| board.nets.iter().position(|n| n.id == nid);
+        let mut rows: Vec<String> = Vec::new();
+        for c in &board.constraints {
+            match c {
+                Constraint::DiffPair { p_net, n_net, length_match_mm, spacing_mm, .. } => {
+                    let (Some(pi), Some(ni)) = (idx_of(*p_net), idx_of(*n_net)) else {
+                        continue;
+                    };
+                    let lp = routing::measure::net_routed_length(&final_routes[pi]);
+                    let ln = routing::measure::net_routed_length(&final_routes[ni]);
+                    let skew = (lp - ln).abs();
+                    let gap = *spacing_mm as f64 + 3.0 * 0.3;
+                    let coupled = routing::measure::coupled_fraction(
+                        &final_routes[pi],
+                        &final_routes[ni],
+                        gap,
+                    );
+                    // The pair-lowering default is 0.1mm; a user-declared
+                    // `length_match` on the same two nets arrives as a
+                    // LengthMatchGroup — that tolerance is the designer's
+                    // word and wins.
+                    let limit = board
+                        .constraints
+                        .iter()
+                        .find_map(|c2| match c2 {
+                            Constraint::LengthMatchGroup { nets, tolerance_mm, .. }
+                                if nets.contains(p_net) && nets.contains(n_net) =>
+                            {
+                                Some(*tolerance_mm)
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or(*length_match_mm);
+                    let ok = skew <= limit as f64 && lp > 0.0 && ln > 0.0;
+                    rows.push(format!(
+                        "diff-pair {} / {}: P={lp:.2}mm N={ln:.2}mm skew={skew:.3}mm (limit {limit}mm) coupled={:.0}% — {}",
+                        board.nets[pi].name,
+                        board.nets[ni].name,
+                        coupled * 100.0,
+                        if ok { "PASS" } else { "FAIL" }
+                    ));
+                }
+                Constraint::LengthMatchGroup { nets, tolerance_mm, .. } => {
+                    let lens: Vec<(String, f64)> = nets
+                        .iter()
+                        .filter_map(|nid| idx_of(*nid))
+                        .map(|i| {
+                            (
+                                board.nets[i].name.clone(),
+                                routing::measure::net_routed_length(&final_routes[i]),
+                            )
+                        })
+                        .collect();
+                    if lens.len() < 2 {
+                        continue;
+                    }
+                    let min = lens.iter().map(|l| l.1).fold(f64::INFINITY, f64::min);
+                    let max = lens.iter().map(|l| l.1).fold(0.0_f64, f64::max);
+                    let spread = max - min;
+                    let ok = spread <= *tolerance_mm as f64 && min > 0.0;
+                    rows.push(format!(
+                        "length-match ({} nets): spread={spread:.3}mm (tolerance {tolerance_mm}mm) — {}",
+                        lens.len(),
+                        if ok { "PASS" } else { "FAIL" }
+                    ));
+                }
+                Constraint::Impedance { net, target_ohms, .. } => {
+                    let Some(i) = idx_of(*net) else { continue };
+                    let min_w = final_routes[i]
+                        .segments
+                        .iter()
+                        .map(|sg| sg.width_mm)
+                        .fold(f64::INFINITY, f64::min);
+                    if min_w.is_finite() {
+                        rows.push(format!(
+                            "impedance {}: target {target_ohms}Ω, routed min width {min_w:.2}mm (floor {:.2}mm)",
+                            board.nets[i].name, board.nets[i].required_trace_width_mm
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+        if !rows.is_empty() {
+            info!("── Constraint sign-off ──");
+            for r in &rows {
+                info!("  {r}");
+            }
+            // Also to stdout: the sign-off is a deliverable, like the
+            // supply report.
+            println!("\n  Constraint sign-off:");
+            for r in &rows {
+                println!("    {r}");
+            }
+        }
+    }
+
     Ok(PnrResult {
         board,
         routes: final_routes,

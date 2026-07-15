@@ -37,6 +37,24 @@ pub fn pathfinder_route(
         let wb = crate::routing::criticality::effective_weight(&nets[b], &crit);
         wb.partial_cmp(&wa).unwrap_or(Ordering::Equal)
     });
+    // Diff-pair partners: N shadows P — when a net's partner is already
+    // routed this iteration, cells near the partner's path cost less,
+    // pulling the pair together (constraint synthesis v1: attraction,
+    // not geometric lockstep — the sign-off report grades the result).
+    let partner: HashMap<usize, usize> = {
+        let idx_of: HashMap<NetId, usize> =
+            nets.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
+        let mut m = HashMap::new();
+        for c in &board.constraints {
+            if let crate::constraint::Constraint::DiffPair { p_net, n_net, .. } = c {
+                if let (Some(&pi), Some(&ni)) = (idx_of.get(p_net), idx_of.get(n_net)) {
+                    m.insert(pi, ni);
+                    m.insert(ni, pi);
+                }
+            }
+        }
+        m
+    };
 
     let comp_idx: HashMap<ComponentId, usize> = board
         .components
@@ -64,6 +82,21 @@ pub fn pathfinder_route(
                 remove_route_demand(grid, &routes[net_idx]);
             }
 
+            // Diff-pair attraction: cells of the routed partner's path
+            // (plus a one-cell ring) get discounted.
+            let attract: Option<BTreeSet<CellCoord>> = partner
+                .get(&net_idx)
+                .filter(|&&pi| !routes[pi].is_empty())
+                .map(|&pi| {
+                    let mut cells = route_cells(grid, &routes[pi]);
+                    let ring: Vec<CellCoord> = cells
+                        .iter()
+                        .flat_map(|c| grid.planar_neighbors(*c).into_iter().map(|(n, _)| n))
+                        .collect();
+                    cells.extend(ring);
+                    cells
+                });
+
             // Find shortest path with congestion-aware cost
             let route = shortest_path_3d(
                 grid,
@@ -73,6 +106,7 @@ pub fn pathfinder_route(
                 history_factor,
                 present_factor,
                 allow_vias,
+                attract.as_ref(),
             );
 
             // Add route demand
@@ -147,6 +181,7 @@ fn shortest_path_3d(
     history_factor: f64,
     present_factor: f64,
     allow_vias: bool,
+    attract: Option<&BTreeSet<CellCoord>>,
 ) -> Route {
     if net.pins.len() < 2 {
         return Route::empty(net.id);
@@ -237,6 +272,7 @@ fn shortest_path_3d(
             &via_keepout,
             &[],
             0,
+            attract,
         );
 
         match result {
@@ -510,6 +546,7 @@ fn escape_cell(
 }
 
 /// Dijkstra from any source cell to any sink cell.
+#[allow(clippy::too_many_arguments)]
 fn dijkstra_to_any(
     grid: &RoutingGrid,
     sources: &BTreeSet<CellCoord>,
@@ -522,6 +559,7 @@ fn dijkstra_to_any(
     via_keepout: &[(f64, f64)],
     banned_sites: &[(f64, f64)],
     clear_ring: usize,
+    attract: Option<&BTreeSet<CellCoord>>,
 ) -> Option<(Vec<CellCoord>, CellCoord)> {
     let mut dist: HashMap<CellCoord, f64> = HashMap::new();
     let mut prev: HashMap<CellCoord, CellCoord> = HashMap::new();
@@ -630,7 +668,14 @@ fn dijkstra_to_any(
 
             let edge_cost = cell_cost(gc, history_factor, present_factor);
             let width_factor = (net.required_trace_width_mm / 0.2).max(1.0);
-            let new_cost = cost + edge_cost * width_factor * move_cost;
+            // Diff-pair attraction: riding alongside the routed partner
+            // is cheap — the pair converges to a coupled run without
+            // geometric lockstep.
+            let attract_factor = match attract {
+                Some(set) if set.contains(&nbr) => 0.25,
+                _ => 1.0,
+            };
+            let new_cost = cost + edge_cost * width_factor * move_cost * attract_factor;
 
             if new_cost < *dist.get(&nbr).unwrap_or(&f64::INFINITY) {
                 dist.insert(nbr, new_cost);
@@ -786,6 +831,7 @@ pub(crate) fn routed_plane_drop(
         &[],
         &[],
         clear_ring,
+        None,
     )?;
     let (mut segs, _vias) = path_to_segments(grid, &path, share);
     let (sx, sy) = grid.cell_center(start);
@@ -1239,6 +1285,7 @@ pub(crate) fn extend_route(
             &via_keepout,
             banned_sites,
             clear_ring,
+            None,
         );
         match result {
             Some((path, reached)) => {

@@ -2,4 +2,5 @@
 
 pub mod criticality;
 pub mod grid;
+pub mod measure;
 pub mod pathfinder;

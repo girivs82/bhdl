@@ -781,6 +781,62 @@ pub fn build_board(
         );
     }
 
+    // Impedance → trace-width floor (constraint synthesis v1): the
+    // stackup's outer dielectric + IPC-2141 microstrip give the width
+    // that hits the target. Differential targets count per-line as
+    // Z0 ≈ Zdiff/2 (loosely-coupled approximation). A target the
+    // stackup can't reach in a routable width floors NOTHING — the
+    // sign-off report shows the honest FAIL instead of shipping a
+    // fabricated width.
+    {
+        use crate::constraint::Constraint;
+        let h = layer_stack.dielectrics.first().map(|d| (d.thickness_mm, d.er));
+        let t = layer_stack.layers.first().map(|l| l.thickness_mm).unwrap_or(0.035);
+        if let Some((h_mm, er)) = h {
+            let diff_nets: std::collections::HashSet<NetId> = iface_constraints
+                .iter()
+                .filter_map(|c| match c {
+                    Constraint::DiffPair { p_net, n_net, .. } => Some([*p_net, *n_net]),
+                    _ => None,
+                })
+                .flatten()
+                .collect();
+            for c in &iface_constraints {
+                if let Constraint::Impedance { net, target_ohms, .. } = c {
+                    let z0 = if diff_nets.contains(net) {
+                        *target_ohms as f64 / 2.0
+                    } else {
+                        *target_ohms as f64
+                    };
+                    match crate::routing::measure::microstrip_width_for(z0, h_mm, t, er) {
+                        Some(w) if w <= 2.0 => {
+                            if let Some(n) = nets.iter_mut().find(|n| n.id == *net) {
+                                if w > n.required_trace_width_mm {
+                                    log::info!(
+                                        "impedance floor: '{}' {:.0}Ω → {:.2}mm trace \
+                                         (h={h_mm}mm er={er})",
+                                        n.name, z0, w
+                                    );
+                                    n.required_trace_width_mm = w;
+                                }
+                            }
+                        }
+                        _ => {
+                            if let Some(n) = nets.iter().find(|n| n.id == *net) {
+                                log::warn!(
+                                    "impedance floor: '{}' {:.0}Ω unreachable on this \
+                                     stackup (outer dielectric {h_mm}mm) — no width \
+                                     applied, sign-off will show the miss",
+                                    n.name, z0
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     Ok(Board {
         config: board_config,
         layer_stack,
@@ -821,15 +877,23 @@ fn extract_interface_constraints(
             Some(m) => m,
             None => continue,
         };
-        if module.attributes.is_empty() {
+        if module.attributes.is_empty() && instance.attributes.is_empty() {
             continue;
         }
 
-        let attrs: Vec<(&str, &str)> = module
+        // Module attrs carry interface-emitted constraints; INSTANCE
+        // attrs carry entity `attribute intf_const__…` statements
+        // (stamped per instance by the synthesizer). Read both —
+        // instance wins on key collision.
+        let mut merged: std::collections::BTreeMap<&str, &str> = module
             .attributes
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
+        for (k, v) in &instance.attributes {
+            merged.insert(k.as_str(), v.as_str());
+        }
+        let attrs: Vec<(&str, &str)> = merged.into_iter().collect();
         let (parsed, pdiags) = parse_interface_attrs(attrs.iter().copied());
         diags.extend(pdiags);
         if parsed.is_empty() {
@@ -848,12 +912,44 @@ fn extract_interface_constraints(
 
         // Resolver: dotted leaf pin-path → NetId, scoped to this instance.
         let resolve = |path: &str| -> Option<NetId> {
-            let pin_def = module.pins.iter().copied().find(|&pid| {
-                netlist.pins.get(pid).map(|p| p.name == path).unwrap_or(false)
-            })?;
-            let nl_net = inst_pin_to_net.get(&(inst_id, pin_def))?;
-            let idx = id_map.net_to_idx.get(nl_net)?;
-            id_map.net_ids.get(*idx).copied()
+            let to_pnr = |nl_net: &NlNetId| -> Option<NetId> {
+                let idx = id_map.net_to_idx.get(nl_net)?;
+                id_map.net_ids.get(*idx).copied()
+            };
+            // Primary: the pin INSTANCE carries the connected net
+            // directly (connection resolution binds there; the
+            // (instance, pin_def) side map misses connections recorded
+            // only on pin instances).
+            netlist
+                .pin_instances
+                .values()
+                .find_map(|pi| {
+                    if pi.instance != inst_id {
+                        return None;
+                    }
+                    let pdef = netlist.pins.get(pi.pin_def)?;
+                    if pdef.name != path {
+                        return None;
+                    }
+                    to_pnr(&pi.net?)
+                })
+                .or_else(|| {
+                    // Fallback: (instance, pin_def) side map. Scan EVERY
+                    // pin def with this name — duplicate defs happen and
+                    // the connection binds to one of them.
+                    module
+                        .pins
+                        .iter()
+                        .copied()
+                        .filter(|&pid| {
+                            netlist
+                                .pins
+                                .get(pid)
+                                .map(|p| p.name == path)
+                                .unwrap_or(false)
+                        })
+                        .find_map(|pid| to_pnr(inst_pin_to_net.get(&(inst_id, pid))?))
+                })
         };
 
         let (cons, ldiags) =

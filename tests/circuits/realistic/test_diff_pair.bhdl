@@ -1,0 +1,56 @@
+// Constraint-synthesis fixture: an LVDS link whose entities carry the
+// shipped v0.8 interface-constraint ATTRIBUTES directly (the same
+// intf_const__* contract the interface `constraints {}` block emits).
+// The `_t` / `_c` suffix pair triggers diff-pair sibling inference in
+// the constraint reader; the router routes the pair with attraction;
+// the sign-off report grades skew, coupling, and the impedance width
+// floor computed from the 4-layer stackup's real dielectric.
+
+entity LvdsDriver() {
+    pin TX_t: signal out;
+    pin TX_c: signal out;
+    pin VCC: power in;
+    pin GND: ground;
+
+    attribute component_class = "ic";
+    attribute intf_const__TX_t__differential = "100ohm";
+    attribute intf_const_rel__TX_t__TX_c__length_match = "65ps";
+}
+
+layout LvdsDriver {
+    package SOIC-8;
+}
+
+entity LvdsSink() {
+    pin RX_t: signal in;
+    pin RX_c: signal in;
+    pin VCC: power in;
+    pin GND: ground;
+
+    attribute component_class = "ic";
+}
+
+layout LvdsSink {
+    package SOIC-8;
+}
+
+board DiffDemo {
+    power VCC = 3.3V @ 100mA;
+    ground GND;
+
+    drv: LvdsDriver();
+    snk: LvdsSink();
+
+    drv.VCC -> @VCC;
+    drv.GND -> @GND;
+    snk.VCC -> @VCC;
+    snk.GND -> @GND;
+
+    drv.TX_t -> snk.RX_t;
+    drv.TX_c -> snk.RX_c;
+}
+
+layout DiffDemo {
+    layer_stackup 4;
+    outline rect 40 25;
+}
