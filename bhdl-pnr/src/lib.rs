@@ -1602,9 +1602,12 @@ fn meander_pass(board: &Board, final_routes: &mut Vec<Route>) -> usize {
         // (A full validate_and_rip here is wrong: the validator is
         // stricter than KiCad in spots and would rip PRE-EXISTING
         // shipped-legal copper, poisoning the transaction.)
-        'attempts: for run_rank in 0..4 {
-        for depth in [0.6, 0.45, 0.3] {
-        for side in [1.0, -1.0] {
+        'attempts: for run_rank in 0..64 {
+        for depth in [1.2, 0.9, 0.6, 0.45, 0.3] {
+        // side 0.0 = ALTERNATING serpentine (odd bumps up, even bumps
+        // down): fits tight corridors where a one-sided bump field
+        // needs the full depth clear on a single side.
+        for side in [1.0, -1.0, 0.0] {
             let snapshot = final_routes[i].clone();
             let Some((s0, sn)) =
                 apply_meander(board, &mut final_routes[i], needed, side, depth, run_rank)
@@ -1876,7 +1879,11 @@ fn apply_meander(
         (sg.end.0 - sg.start.0).signum() * if (sg.end.0 - sg.start.0).abs() > 1e-9 { 1.0 } else { 0.0 },
         (sg.end.1 - sg.start.1).signum() * if (sg.end.1 - sg.start.1).abs() > 1e-9 { 1.0 } else { 0.0 },
     );
-    let (nx, ny) = (-uy * side, ux * side);
+    // side ±1 = one-sided bump field; side 0 = alternating (odd bumps
+    // one way, even bumps the other).
+    let alternating = side.abs() < 1e-9;
+    let base_side = if alternating { 1.0 } else { side };
+    let (nx, ny) = (-uy * base_side, ux * base_side);
     // Build the serpentine polyline from sg.start to sg.end.
     let mut pts: Vec<(f64, f64)> = vec![sg.start];
     let mut pos = sg.start;
@@ -1885,10 +1892,11 @@ fn apply_meander(
         pts.push(*pos);
     };
     adv(&mut pts, &mut pos, ux * margin, uy * margin);
-    for _ in 0..n {
-        adv(&mut pts, &mut pos, nx * d, ny * d);
+    for k in 0..n {
+        let flip = if alternating && k % 2 == 1 { -1.0 } else { 1.0 };
+        adv(&mut pts, &mut pos, nx * d * flip, ny * d * flip);
         adv(&mut pts, &mut pos, ux * (w + spacing), uy * (w + spacing));
-        adv(&mut pts, &mut pos, -nx * d, -ny * d);
+        adv(&mut pts, &mut pos, -nx * d * flip, -ny * d * flip);
         adv(&mut pts, &mut pos, ux * (w + spacing), uy * (w + spacing));
     }
     pts.push(sg.end);
