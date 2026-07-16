@@ -29,6 +29,7 @@
 
 pub mod constraint;
 pub mod geom;
+use geom::{segment_point_too_close, segments_too_close};
 pub mod feedback;
 pub mod footprint;
 pub mod intent;
@@ -44,7 +45,7 @@ pub mod types;
 use anyhow::Result;
 use feedback::congestion;
 use feedback::convergence::{ConvergenceAction, ConvergenceMonitor};
-use log::info;
+use log::{debug, info};
 use placement::analytical;
 use placement::grouping;
 use placement::optimizer::{self, AdamState};
@@ -596,6 +597,10 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         let mut round = 0;
         let mut banned_vias: Vec<(usize, (f64, f64))> = Vec::new();
         let mut banned_dangles: Vec<(usize, (f64, f64))> = Vec::new();
+        // Nets whose extension the commit gate stripped: nothing
+        // illegal shipped, so the validator won't re-queue them — they
+        // still deserve their retry round (with the new site bans).
+        let mut gate_retry: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
         loop {
             if std::env::var("BHDL_PNR_DEBUG_PLANES").is_ok() {
                 for (i, n) in board.nets.iter().enumerate() {
@@ -610,12 +615,18 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                     }
                 }
             }
-            let ripped = validate_and_rip(
+            let mut ripped = validate_and_rip(
                 &board,
                 &mut final_routes,
                 &mut banned_vias,
                 &mut banned_dangles,
             );
+            for &i in &gate_retry {
+                if !ripped.contains(&i) {
+                    ripped.push(i);
+                }
+            }
+            gate_retry.clear();
             if ripped.is_empty() || round >= 3 {
                 break;
             }
@@ -658,12 +669,31 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                     attract.as_ref(),
                 );
                 if !rebuilt.is_empty() {
-                    info!(
-                        "recovery: topology rebuild of '{}' ({} span(s))",
-                        board.nets[i].name,
-                        rebuilt.path_spans.len()
+                    // Shape topologies are all-or-nothing: stripping a
+                    // hop breaks the declared chain — gate WHOLE.
+                    let mut rebuilt = rebuilt;
+                    let mut bans = Vec::new();
+                    let total = rebuilt.path_spans.len();
+                    let kept = exact_commit_strip(
+                        &board, &final_routes, i, &mut rebuilt, 0, &mut bans,
                     );
-                    final_routes[i] = rebuilt;
+                    for pt in bans {
+                        banned_dangles.push((i, pt));
+                    }
+                    if kept == total {
+                        info!(
+                            "recovery: topology rebuild of '{}' ({} span(s))",
+                            board.nets[i].name,
+                            rebuilt.path_spans.len()
+                        );
+                        final_routes[i] = rebuilt;
+                    } else {
+                        debug!(
+                            "commit gate: topology rebuild of '{}' rejected ({} of {} spans illegal)",
+                            board.nets[i].name, total - kept, total
+                        );
+                        gate_retry.insert(i);
+                    }
                 }
             }
             let (partial, whole): (Vec<usize>, Vec<usize>) =
@@ -687,16 +717,32 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                     .map(|&(_, xy)| xy)
                     .collect();
                 let attract = pair_attract(&board, &final_routes, &ext_grid, i);
+                let from_span = route.path_spans.len();
                 let got = pathfinder::extend_route(
                     &mut ext_grid, &board.nets[i], &board, &mut route, 1.0, 1.0, &banned,
                     &dangles, false, attract.as_ref(),
                 );
                 if got > 0 {
-                    info!(
-                        "recovery: extended '{}' to {got} previously-cut sink(s)",
-                        board.nets[i].name
+                    // Span-level gate: illegal new branches are stripped
+                    // (their sites banned for the next round); clean
+                    // branches commit.
+                    let mut bans = Vec::new();
+                    let kept = exact_commit_strip(
+                        &board, &final_routes, i, &mut route, from_span, &mut bans,
                     );
-                    final_routes[i] = route;
+                    if !bans.is_empty() {
+                        gate_retry.insert(i);
+                    }
+                    for pt in bans {
+                        banned_dangles.push((i, pt));
+                    }
+                    if kept > 0 {
+                        info!(
+                            "recovery: extended '{}' ({kept} legal branch(es) of {got} sink(s) reached)",
+                            board.nets[i].name
+                        );
+                        final_routes[i] = route;
+                    }
                 }
             }
             // Whole-ripped nets recover SEQUENTIALLY, fat nets first:
@@ -754,12 +800,24 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                     &banned_v, &banned_d, false, attract.as_ref(),
                 );
                 if got > 0 {
-                    info!(
-                        "recovery: greedy reroute of '{}' reached {got} sink(s)",
-                        board.nets[i].name
+                    let mut bans = Vec::new();
+                    let kept = exact_commit_strip(
+                        &board, &final_routes, i, &mut fresh, 0, &mut bans,
                     );
-                    final_routes[i] = fresh;
-                    pathfinder::block_route_geometry(rec_grid, &final_routes[i], &board);
+                    if !bans.is_empty() {
+                        gate_retry.insert(i);
+                    }
+                    for pt in bans {
+                        banned_dangles.push((i, pt));
+                    }
+                    if kept > 0 {
+                        info!(
+                            "recovery: greedy reroute of '{}' reached {got} sink(s) ({kept} legal branch(es))",
+                            board.nets[i].name
+                        );
+                        final_routes[i] = fresh;
+                        pathfinder::block_route_geometry(rec_grid, &final_routes[i], &board);
+                    }
                 }
             }
         }
@@ -1204,40 +1262,6 @@ fn debug_check_foreign_pads(board: &Board, routes: &[Route], tag: &str) {
     }
 }
 
-/// True when segment AB and segment CD (as center-lines) intersect or
-/// pass within `min_gap` of each other.
-fn segments_too_close(
-    a: (f64, f64),
-    b: (f64, f64),
-    c: (f64, f64),
-    d: (f64, f64),
-    min_gap: f64,
-) -> bool {
-    // 1µm epsilon: rule-exact spacing is legal (see
-    // segment_point_too_close).
-    let min_gap = min_gap - 1e-6;
-    fn orient(p: (f64, f64), q: (f64, f64), r: (f64, f64)) -> f64 {
-        (q.0 - p.0) * (r.1 - p.1) - (q.1 - p.1) * (r.0 - p.0)
-    }
-    let (o1, o2) = (orient(a, b, c), orient(a, b, d));
-    let (o3, o4) = (orient(c, d, a), orient(c, d, b));
-    if o1 * o2 < 0.0 && o3 * o4 < 0.0 {
-        return true;
-    }
-    fn seg_pt(p: (f64, f64), q: (f64, f64), r: (f64, f64)) -> f64 {
-        let (dx, dy) = (q.0 - p.0, q.1 - p.1);
-        let l2 = dx * dx + dy * dy;
-        let t = if l2 == 0.0 {
-            0.0
-        } else {
-            (((r.0 - p.0) * dx + (r.1 - p.1) * dy) / l2).clamp(0.0, 1.0)
-        };
-        let (nx, ny) = (p.0 + t * dx, p.1 + t * dy);
-        ((r.0 - nx).powi(2) + (r.1 - ny).powi(2)).sqrt()
-    }
-    seg_pt(a, b, c).min(seg_pt(a, b, d)).min(seg_pt(c, d, a)).min(seg_pt(c, d, b)) < min_gap
-}
-
 /// Geometric final validation + rip (the shipping guarantee): no two
 /// different-net copper items (track-track or track-PAD) on one layer
 /// may intersect or under-clear. The cell model has deliberate blind
@@ -1672,6 +1696,219 @@ fn pair_attract(
     Some(pathfinder::build_attract_set(grid, &final_routes[pi]))
 }
 
+/// Remove the `doomed` spans from a route: drain their segments and
+/// vias, shift the survivors' span starts, remap parent indices.
+/// (Same surgery the validator's subtree amputation performs.)
+fn strip_route_spans(r: &mut Route, doomed: &[bool]) {
+    let n = r.path_spans.len();
+    let mut order: Vec<usize> = (0..n).filter(|&i| doomed[i]).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse(r.path_spans[i].0));
+    for &i in &order {
+        let (ps, pl) = r.path_spans[i];
+        r.segments.drain(ps..ps + pl);
+        for j in 0..n {
+            if !doomed[j] && r.path_spans[j].0 > ps {
+                r.path_spans[j].0 -= pl;
+            }
+        }
+    }
+    let mut vorder: Vec<usize> =
+        (0..n).filter(|&i| doomed[i] && i < r.via_spans.len()).collect();
+    vorder.sort_by_key(|&i| std::cmp::Reverse(r.via_spans[i].0));
+    for &i in &vorder {
+        let (vs, vl) = r.via_spans[i];
+        if vl > 0 && vs + vl <= r.vias.len() {
+            r.vias.drain(vs..vs + vl);
+            for j in 0..n {
+                if !doomed[j] && j < r.via_spans.len() && r.via_spans[j].0 > vs {
+                    r.via_spans[j].0 -= vl;
+                }
+            }
+        }
+    }
+    let mut remap = vec![usize::MAX; n];
+    let mut next = 0usize;
+    for i in 0..n {
+        if !doomed[i] {
+            remap[i] = next;
+            next += 1;
+        }
+    }
+    let spans: Vec<(usize, usize)> =
+        (0..n).filter(|&i| !doomed[i]).map(|i| r.path_spans[i]).collect();
+    let parents: Vec<Option<usize>> = (0..n)
+        .filter(|&i| !doomed[i])
+        .map(|i| {
+            r.path_parents.get(i).copied().flatten().and_then(|pp| {
+                if doomed[pp] { None } else { Some(remap[pp]) }
+            })
+        })
+        .collect();
+    let vspans: Vec<(usize, usize)> = (0..n)
+        .filter(|&i| !doomed[i])
+        .map(|i| r.via_spans.get(i).copied().unwrap_or((0, 0)))
+        .collect();
+    r.path_spans = spans;
+    r.path_parents = parents;
+    r.via_spans = vspans;
+}
+
+/// M3: span-level commit gate. Every NEW span (index >= `from_span`)
+/// of a route mutation is checked against the exact clearance index;
+/// offending spans — and their new-span descendants — are STRIPPED
+/// before the mutation enters the board, at the same granularity the
+/// validator's subtree amputation would have used after the fact.
+/// Clean spans keep their sinks: partial progress survives, illegal
+/// copper never ships. Conflict points are appended to `bans`.
+/// Returns the number of new spans kept.
+fn exact_commit_strip(
+    board: &Board,
+    final_routes: &[Route],
+    i: usize,
+    candidate: &mut Route,
+    from_span: usize,
+    bans: &mut Vec<(f64, f64)>,
+) -> usize {
+    let net = &board.nets[i];
+    let n = candidate.path_spans.len();
+    if from_span >= n {
+        return 0;
+    }
+    let idx = geom::ClearanceIndex::build(board, final_routes, Some(net.id));
+    let via_r = board.layer_stack.via.pad_mm / 2.0;
+    let mut doomed = vec![false; n];
+    for si in from_span..n {
+        let (ps, pl) = candidate.path_spans[si];
+        'span: for sg in &candidate.segments[ps..ps + pl] {
+            if let Some(c) =
+                idx.first_conflict(sg.start, sg.end, sg.width_mm, sg.layer, net.id)
+            {
+                debug!(
+                    "commit gate: '{}' span {si} conflicts ({:?}) at ({:.2},{:.2})-({:.2},{:.2})",
+                    net.name, c, sg.start.0, sg.start.1, sg.end.0, sg.end.1
+                );
+                bans.push((
+                    (sg.start.0 + sg.end.0) / 2.0,
+                    (sg.start.1 + sg.end.1) / 2.0,
+                ));
+                doomed[si] = true;
+                break 'span;
+            }
+        }
+        if !doomed[si] {
+            if let Some(&(vs, vl)) = candidate.via_spans.get(si) {
+                if vl > 0 && vs + vl <= candidate.vias.len() {
+                    for v in &candidate.vias[vs..vs + vl] {
+                        if idx.via_conflict(v.x, v.y, via_r, net.id).is_some() {
+                            bans.push((v.x, v.y));
+                            doomed[si] = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Descendants of a doomed new span are stranded — strip them too.
+    loop {
+        let mut grew = false;
+        for si in from_span..n {
+            if !doomed[si] {
+                if let Some(Some(pp)) = candidate.path_parents.get(si) {
+                    if doomed[*pp] {
+                        doomed[si] = true;
+                        grew = true;
+                    }
+                }
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    let cut = doomed.iter().filter(|d| **d).count();
+    if cut > 0 {
+        strip_route_spans(candidate, &doomed);
+        // Prune stubs the cut orphaned (same rule as the validator's
+        // post-amputation prune): a short parentless span anchored to
+        // nothing — no other surviving span's copper, no via, no
+        // own-net pad — is dangling copper the oracle flags and the
+        // retry extension trips over.
+        let mut own_pads: Vec<(f64, f64, f64, f64)> = Vec::new();
+        for comp in &board.components {
+            let cos_t = comp.theta.cos();
+            let sin_t = comp.theta.sin();
+            let quarter = ((comp.theta / std::f64::consts::FRAC_PI_2).round() as i64)
+                .rem_euclid(2);
+            for pin in &comp.pins {
+                if pin.net != Some(net.id) || pin.unplaced {
+                    continue;
+                }
+                let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
+                let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+                let (pw, ph) = match &pin.pad {
+                    Some(p) => (p.width_mm, p.height_mm),
+                    None => (0.5, 0.5),
+                };
+                let (pw, ph) = if quarter == 1 { (ph, pw) } else { (pw, ph) };
+                own_pads.push((gx, gy, pw / 2.0, ph / 2.0));
+            }
+        }
+        loop {
+            let r = &*candidate;
+            let mut drop_span: Option<usize> = None;
+            'stubs: for (si, &(ps, pl)) in r.path_spans.iter().enumerate() {
+                if pl == 0 || pl > 2 {
+                    continue;
+                }
+                if r.path_parents.get(si).copied().flatten().is_some() {
+                    continue;
+                }
+                let len: f64 = r.segments[ps..ps + pl]
+                    .iter()
+                    .map(|sg| (sg.end.0 - sg.start.0).hypot(sg.end.1 - sg.start.1))
+                    .sum();
+                if len > 1.0 {
+                    continue;
+                }
+                let ends = [r.segments[ps].start, r.segments[ps + pl - 1].end];
+                for e in ends {
+                    let w = r.segments[ps].width_mm / 2.0;
+                    let anchored = r
+                        .path_spans
+                        .iter()
+                        .enumerate()
+                        .filter(|&(sj, _)| sj != si)
+                        .any(|(_, &(qs, ql))| {
+                            r.segments[qs..qs + ql].iter().any(|sg| {
+                                geom::point_segment_dist(e, sg.start, sg.end)
+                                    <= sg.width_mm / 2.0 + w
+                            })
+                        })
+                        || r.vias.iter().any(|v| (v.x - e.0).hypot(v.y - e.1) <= 0.5)
+                        || own_pads.iter().any(|&(cx, cy, hx, hy)| {
+                            (e.0 - cx).abs() <= hx && (e.1 - cy).abs() <= hy
+                        });
+                    if anchored {
+                        continue 'stubs;
+                    }
+                }
+                drop_span = Some(si);
+                break;
+            }
+            match drop_span {
+                Some(si) => {
+                    let mut d = vec![false; candidate.path_spans.len()];
+                    d[si] = true;
+                    strip_route_spans(candidate, &d);
+                }
+                None => break,
+            }
+        }
+    }
+    (n - from_span) - cut
+}
+
 fn completion_pass(board: &Board, final_routes: &mut Vec<Route>) -> usize {
     let mut total = 0usize;
     for i in 0..board.nets.len() {
@@ -1700,8 +1937,16 @@ fn completion_pass(board: &Board, final_routes: &mut Vec<Route>) -> usize {
                 true,
                 attract.as_ref(),
             );
-            if pathfinder::unreached_sink_count(&board.nets[i], board, &rebuilt)
-                < pathfinder::unreached_sink_count(&board.nets[i], board, &final_routes[i])
+            let whole_legal = {
+                let mut probe = rebuilt.clone();
+                let mut bans = Vec::new();
+                let total = probe.path_spans.len();
+                exact_commit_strip(board, final_routes, i, &mut probe, 0, &mut bans)
+                    == total
+            };
+            if whole_legal
+                && pathfinder::unreached_sink_count(&board.nets[i], board, &rebuilt)
+                    < pathfinder::unreached_sink_count(&board.nets[i], board, &final_routes[i])
             {
                 info!(
                     "completion: topology rebuild of '{}'",
@@ -1713,17 +1958,23 @@ fn completion_pass(board: &Board, final_routes: &mut Vec<Route>) -> usize {
             continue;
         }
         let mut route = final_routes[i].clone();
+        let from_span = route.path_spans.len();
         let got = pathfinder::extend_route(
             &mut ext_grid, &board.nets[i], board, &mut route, 1.0, 1.0, &[], &[], false,
             attract.as_ref(),
         );
         if got > 0 {
-            info!(
-                "completion: extended '{}' to {got} sink(s) unreachable without vias",
-                board.nets[i].name
-            );
-            final_routes[i] = route;
-            total += got;
+            let mut bans = Vec::new();
+            let kept =
+                exact_commit_strip(board, final_routes, i, &mut route, from_span, &mut bans);
+            if kept > 0 {
+                info!(
+                    "completion: extended '{}' ({kept} legal branch(es), {got} sink(s) reached)",
+                    board.nets[i].name
+                );
+                final_routes[i] = route;
+                total += got;
+            }
         }
         // TARGETED RIP-UP-AND-REROUTE (single victim): a sink still
         // walled in after extension is usually fenced by ONE other
@@ -2063,11 +2314,24 @@ fn shove_one_blocker(
         }
         // Extend us with the blocker's copper absent.
         let mut mine = final_routes[i].clone();
+        let mine_span = mine.path_spans.len();
         let got = pathfinder::extend_route(
             &mut grid, &board.nets[i], board, &mut mine, 1.0, 1.0, &[], &[], false, None,
         );
         if got == 0 {
             continue; // j wasn't the fence
+        }
+        // Gate vs everything except the ripped blocker j (its copper
+        // is absent from the trial board by construction).
+        {
+            let mut trial_board: Vec<Route> = final_routes.clone();
+            trial_board[j] = Route::empty(final_routes[j].net_id);
+            let mut bans = Vec::new();
+            if exact_commit_strip(board, &trial_board, i, &mut mine, mine_span, &mut bans)
+                == 0
+            {
+                continue;
+            }
         }
         final_routes[i] = mine;
         // Re-route the blocker on the updated board.
@@ -2081,6 +2345,12 @@ fn shove_one_blocker(
         pathfinder::extend_route(
             &mut jgrid, &board.nets[j], board, &mut fresh, 1.0, 1.0, &[], &[], false, None,
         );
+        {
+            let mut bans = Vec::new();
+            let mut trial_board: Vec<Route> = final_routes.clone();
+            trial_board[j] = Route::empty(final_routes[j].net_id);
+            exact_commit_strip(board, &trial_board, j, &mut fresh, 0, &mut bans);
+        }
         let j_unreached_before =
             pathfinder::unreached_sink_count(&board.nets[j], board, &snap_j);
         let j_unreached_after =
@@ -2791,21 +3061,6 @@ fn plane_via_drops(
         }
     }
     dropped
-}
-
-fn segment_point_too_close(a: (f64, f64), b: (f64, f64), p: (f64, f64), gap: f64) -> bool {
-    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-    let len2 = dx * dx + dy * dy;
-    let t = if len2 <= 1e-12 {
-        0.0
-    } else {
-        (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / len2).clamp(0.0, 1.0)
-    };
-    let (cx, cy) = (a.0 + t * dx, a.1 + t * dy);
-    // 1µm epsilon: geometry at EXACTLY the rule distance is legal
-    // (KiCad passes >=); flagging 0.2999999999999998 < 0.3 amputated
-    // rule-exact grid-pitch copper in an endless churn.
-    (p.0 - cx).hypot(p.1 - cy) < gap - 1e-6
 }
 
 fn validate_and_rip(

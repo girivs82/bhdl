@@ -151,6 +151,11 @@ enum Item {
         cy: f64,
         hx: f64,
         hy: f64,
+        /// Corner radius of the EXPORTED pad shape (roundrect 0.25
+        /// ratio, oval/circle = stadium). A sharp-rect model over-
+        /// claims the corner by r·(1−1/√2) — up to ~0.12mm on big
+        /// pads, which rejected copper KiCad accepts.
+        corner_r: f64,
     },
 }
 
@@ -241,9 +246,19 @@ impl ClearanceIndex {
                 }
                 let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
                 let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
-                let (pw, ph, thru) = match &pin.pad {
-                    Some(p) => (p.width_mm, p.height_mm, p.drill_mm.is_some()),
-                    None => (0.5, 0.5, false), // exporter fallback pad
+                let (pw, ph, thru, corner_r) = match &pin.pad {
+                    Some(p) => {
+                        let m = p.width_mm.min(p.height_mm);
+                        // Matches the exporter's shape emission.
+                        let r = match p.shape {
+                            crate::types::PadShapeKind::RoundRect => 0.25 * m,
+                            crate::types::PadShapeKind::Oval
+                            | crate::types::PadShapeKind::Circle => m / 2.0,
+                            crate::types::PadShapeKind::Rect => 0.0,
+                        };
+                        (p.width_mm, p.height_mm, p.drill_mm.is_some(), r)
+                    }
+                    None => (0.5, 0.5, false, 0.0), // exporter fallback = rect
                 };
                 let (pw, ph) = if quarter == 1 { (ph, pw) } else { (pw, ph) };
                 idx.insert_bbox(gx - pw, gy - ph, gx + pw, gy + ph);
@@ -255,6 +270,7 @@ impl ClearanceIndex {
                     cy: gy,
                     hx: pw / 2.0,
                     hy: ph / 2.0,
+                    corner_r,
                 });
             }
         }
@@ -345,7 +361,7 @@ impl ClearanceIndex {
                                 return Some(Conflict::Via { net: *n });
                             }
                         }
-                        Item::Pad { net: n, layer_top, layer_bot, cx, cy, hx, hy } => {
+                        Item::Pad { net: n, layer_top, layer_bot, cx, cy, hx, hy, corner_r } => {
                             if n.is_some() && *n == Some(net) {
                                 continue;
                             }
@@ -355,9 +371,14 @@ impl ClearanceIndex {
                             if !on_layer {
                                 continue;
                             }
+                            // Exact rounded-corner distance: distance to
+                            // the rect inset by corner_r, minus corner_r
+                            // (a roundrect is the Minkowski sum of the
+                            // inset rect and a disc of radius corner_r).
+                            let r = corner_r.min(*hx).min(*hy);
                             let (rx0, ry0, rx1, ry1) =
-                                (cx - hx, cy - hy, cx + hx, cy + hy);
-                            if segment_rect_dist(a, b, rx0, ry0, rx1, ry1)
+                                (cx - hx + r, cy - hy + r, cx + hx - r, cy + hy - r);
+                            if segment_rect_dist(a, b, rx0, ry0, rx1, ry1) - r
                                 < half + self.spacing - EPS
                             {
                                 return Some(Conflict::Pad { net: *n, at: (*cx, *cy) });
@@ -503,15 +524,17 @@ impl ClearanceIndex {
                                 return Some(Conflict::Via { net: *n });
                             }
                         }
-                        Item::Pad { net: n, cx, cy, hx, hy, .. } => {
+                        Item::Pad { net: n, cx, cy, hx, hy, corner_r, .. } => {
                             if n.is_some() && *n == Some(net) {
                                 continue;
                             }
                             // Barrel touches every layer: any foreign pad
-                            // conflicts.
-                            let nx = x.clamp(cx - hx, cx + hx);
-                            let ny = y.clamp(cy - hy, cy + hy);
-                            if (x - nx).hypot(y - ny) < r + self.spacing - EPS {
+                            // conflicts. Rounded corners modeled exactly
+                            // (inset rect + disc).
+                            let rc = corner_r.min(*hx).min(*hy);
+                            let nx = x.clamp(cx - hx + rc, cx + hx - rc);
+                            let ny = y.clamp(cy - hy + rc, cy + hy - rc);
+                            if (x - nx).hypot(y - ny) - rc < r + self.spacing - EPS {
                                 return Some(Conflict::Pad { net: *n, at: (*cx, *cy) });
                             }
                         }
