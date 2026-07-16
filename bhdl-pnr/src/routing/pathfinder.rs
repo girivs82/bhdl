@@ -1400,6 +1400,16 @@ pub(crate) fn extend_route(
         // From-scratch trunks may end up carrying the whole rail; use
         // the IPC width for the full current rather than a leaf share.
         net.required_trace_width_mm
+    } else if !matches!(
+        net.net_class,
+        crate::types::PnrNetClass::Power { .. } | crate::types::PnrNetClass::Ground
+    ) {
+        // Leaf-share TAPER is a power-tree concept (current splits
+        // across sinks). A SIGNAL net's width is a rule — the
+        // impedance floor in particular must hold on every segment
+        // (the oracle showed a floored net extended at 0.15mm under a
+        // 0.17mm floor).
+        net.required_trace_width_mm
     } else {
         crate::stackup::trace_width_for_current(
             crate::stackup::current_for_trace_width(net.required_trace_width_mm)

@@ -3,6 +3,50 @@
 use crate::types::*;
 
 /// Build a layer stack from a standard preset.
+/// Curated laminate table — PUBLISHED typical values (εr at ~1GHz,
+/// loss tangent). Real-Data doctrine: an unknown material is a hard
+/// error listing what IS known, never a guessed number.
+pub fn laminate(name: &str) -> Option<(&'static str, f64, f64)> {
+    match name.to_ascii_lowercase().as_str() {
+        "fr4" => Some(("FR4", 4.3, 0.02)),
+        "rogers4350b" | "ro4350b" => Some(("Rogers 4350B", 3.48, 0.0037)),
+        "rogers4003c" | "ro4003c" => Some(("Rogers 4003C", 3.38, 0.0027)),
+        "polyimide" => Some(("Polyimide", 3.5, 0.008)),
+        "ptfe" => Some(("PTFE", 2.1, 0.0009)),
+        "isola370hr" => Some(("Isola 370HR", 4.04, 0.021)),
+        _ => None,
+    }
+}
+
+pub const KNOWN_LAMINATES: &[&str] = &[
+    "fr4",
+    "rogers4350b",
+    "rogers4003c",
+    "polyimide",
+    "ptfe",
+    "isola370hr",
+];
+
+/// Override every dielectric's material/εr/loss with the named
+/// laminate. Geometry (thicknesses) keeps the preset's build.
+pub fn apply_material(stack: &mut LayerStack, name: &str) -> Result<(), String> {
+    let Some((label, er, tan)) = laminate(name) else {
+        return Err(format!(
+            "unknown stackup material '{name}' — known: {}",
+            KNOWN_LAMINATES.join(", ")
+        ));
+    };
+    for d in &mut stack.dielectrics {
+        d.material = label.to_string();
+        d.er = er;
+        d.loss_tangent = tan;
+    }
+    for l in &mut stack.layers {
+        l.dielectric_constant = er;
+    }
+    Ok(())
+}
+
 pub fn stackup_preset(preset: StackupPreset) -> LayerStack {
     match preset {
         StackupPreset::TwoLayer => LayerStack {

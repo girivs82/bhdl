@@ -60,6 +60,8 @@ pub struct BoardConfig {
     /// Double-sided assembly declared (`assembly double_sided;`) —
     /// detailed placement may flip free SMD parts to the back.
     pub double_sided: bool,
+    /// Laminate selection (`layer_stackup N material <name>;`).
+    pub stackup_material: Option<String>,
     pub placement_regions: Vec<PlacementRegion>,
     /// IPC-7351B courtyard excess (per side, mm) added to each
     /// component's pad/body extent to form its keepout boundary. Set from
@@ -82,6 +84,7 @@ impl Default for BoardConfig {
             keepout_zones: Vec::new(),
             cutouts: Vec::new(),
             double_sided: false,
+            stackup_material: None,
             placement_regions: Vec::new(),
             courtyard_excess_mm: 0.25, // IPC nominal
         }

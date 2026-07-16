@@ -618,13 +618,26 @@ pub fn build_board(
     // 10. Resolve stackup
     let num_power = count_power_domains(netlist);
     let has_hs = has_high_speed_nets(netlist);
-    let layer_stack = stackup::resolve_stackup(
+    let mut layer_stack = stackup::resolve_stackup(
         &config.board_config.stackup,
         components.len(),
         nets.len(),
         num_power,
         has_hs,
     );
+    // Laminate override: geometry keeps the preset's build; εr/loss
+    // come from the declared material (delay grading and the
+    // impedance width floor inherit automatically).
+    if let Some(mat) = &config.board_config.stackup_material {
+        if let Err(e) = stackup::apply_material(&mut layer_stack, mat) {
+            log::error!("{e}"); // CLI validates first; defensive here
+        } else {
+            log::info!(
+                "stackup material: {} applied to all dielectrics",
+                mat
+            );
+        }
+    }
 
     // 10.5 Assign plane layers to nets. The stackup is INPUT (resolved
     // above); Ground-kind planes carry the ground net, each Power-kind

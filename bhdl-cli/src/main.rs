@@ -1883,6 +1883,21 @@ async fn run_layout(
                     lay.cutouts.len()
                 );
             }
+            if let Some(mat) = &lay.stackup_material {
+                match bhdl_pnr::stackup::laminate(mat) {
+                    Some((label, er, _)) => {
+                        sem_config.board_config.stackup_material = Some(mat.clone());
+                        println!(
+                            "  {} Material: {label} (εr {er}, declared)",
+                            "✓".green()
+                        );
+                    }
+                    None => anyhow::bail!(
+                        "unknown stackup material '{mat}' — known: {}",
+                        bhdl_pnr::stackup::KNOWN_LAMINATES.join(", ")
+                    ),
+                }
+            }
             if lay.double_sided {
                 sem_config.board_config.double_sided = true;
                 println!(

@@ -56,7 +56,10 @@ board IfaceLvds {
 }
 
 layout IfaceLvds {
-    layer_stackup 4;
+    // Rogers 4350B: lower εr than FR4 — the impedance floor computes a
+    // WIDER trace (0.17mm, now binding above the 0.15 default) and the
+    // delay grading runs faster ps/mm.
+    layer_stackup 4 material rogers4350b;
     outline rect 40 25;
     // Slot aperture in the rect-fill path: planes punch the exact rect.
     cutout rect (14, 16) (30, 18);

@@ -33,4 +33,6 @@ pub struct LayoutDefinition {
     pub mech_check: Option<String>,
     /// `assembly double_sided;` — free SMD parts may flip to the back.
     pub double_sided: bool,
+    /// `layer_stackup N material <name>;` — laminate selection.
+    pub stackup_material: Option<String>,
 }
