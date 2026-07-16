@@ -44,4 +44,8 @@ layout PolyPlanes {
     // punch the exact rect (the old enclosing-circle punch would have
     // cost a 5mm-radius disc of copper).
     cutout rect (14, 10) (24, 12);
+    // Near-edge aperture: its clearance-inflated punch CROSSES the
+    // inset fill boundary — the fill must notch the boundary edge
+    // around it (v1 skipped these and shipped under-clearing copper).
+    cutout rect (0.7, 20) (3, 24);
 }

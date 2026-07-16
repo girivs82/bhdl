@@ -728,29 +728,28 @@ fn fracture_fill_poly(
     holes_in: &[(f64, f64, f64)],
     rects_in: &[(f64, f64, f64, f64)],
 ) -> Vec<(f64, f64)> {
-    // Cutout rects: v1 punches those fully INSIDE the boundary (a
-    // cutout crossing a polygon fill edge is rare; warn + skip — the
-    // grid already blocks routing there and the swallow test knows
-    // the aperture).
-    let rects: Vec<(f64, f64, f64, f64)> = rects_in
-        .iter()
-        .filter(|&&(rx0, ry0, rx1, ry1)| {
-            let corners =
-                [(rx0, ry0), (rx1, ry0), (rx1, ry1), (rx0, ry1)];
-            let inside = corners
-                .iter()
-                .all(|&(x, y)| point_in_poly(boundary, x, y));
-            if !inside
-                && corners.iter().any(|&(x, y)| point_in_poly(boundary, x, y))
-            {
-                log::warn!(
-                    "plane fill: cutout rect ({rx0:.1},{ry0:.1})-({rx1:.1},{ry1:.1})                      crosses the polygon fill boundary — not punched (fill may                      under-clear; keep cutouts clear of polygon fill edges)"
-                );
-            }
-            inside
-        })
-        .copied()
-        .collect();
+    // Cutout rects: fully-interior ones punch as rect rings; rects
+    // whose punch CROSSES the fill boundary become rectangular NOTCHES
+    // cut into the crossing edge (v1 warned + skipped these — the
+    // saved fill silently covered copper the fab routs away, a drift
+    // headless KiCad cannot see because it doesn't re-check saved
+    // fills against interior Edge.Cuts).
+    let mut interior_cut_rects: Vec<(f64, f64, f64, f64)> = Vec::new();
+    let mut crossing_rects: Vec<(f64, f64, f64, f64)> = Vec::new();
+    for &(rx0, ry0, rx1, ry1) in rects_in {
+        let corners = [(rx0, ry0), (rx1, ry0), (rx1, ry1), (rx0, ry1)];
+        let ins = corners
+            .iter()
+            .filter(|&&(x, y)| point_in_poly(boundary, x, y))
+            .count();
+        if ins == 4 {
+            interior_cut_rects.push((rx0, ry0, rx1, ry1));
+        } else if ins > 0 {
+            crossing_rects.push((rx0, ry0, rx1, ry1));
+        }
+        // ins == 0: entirely outside the fill — nothing to punch.
+    }
+    let rects = interior_cut_rects;
     let holes = merge_holes(
         holes_in
             .iter()
@@ -799,6 +798,51 @@ fn fracture_fill_poly(
         }
         // else: fully outside (e.g. inside a cutout bite) — no copper
         // to punch.
+    }
+    // Edge-crossing cutout rects → per-edge rectangular notches:
+    // project the rect onto each axis-aligned boundary edge; where the
+    // spans overlap AND the rect straddles the edge line, cut a notch
+    // (clamped span, inward penetration depth).
+    for &(rx0, ry0, rx1, ry1) in &crossing_rects {
+        let mut cut = false;
+        for e in 0..nb {
+            let a = boundary[e];
+            let b = boundary[(e + 1) % nb];
+            let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+            let len = (dx * dx + dy * dy).sqrt();
+            if len < 1e-9 {
+                continue;
+            }
+            let (ux, uy) = (dx / len, dy / len);
+            let (nx, ny) = (-uy, ux); // interior side (positive area)
+            let corners = [(rx0, ry0), (rx1, ry0), (rx1, ry1), (rx0, ry1)];
+            let ts: Vec<f64> = corners
+                .iter()
+                .map(|&(x, y)| (x - a.0) * ux + (y - a.1) * uy)
+                .collect();
+            let ds: Vec<f64> = corners
+                .iter()
+                .map(|&(x, y)| (x - a.0) * nx + (y - a.1) * ny)
+                .collect();
+            let (tmin, tmax) = (
+                ts.iter().cloned().fold(f64::INFINITY, f64::min),
+                ts.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+            );
+            let (dmin, dmax) = (
+                ds.iter().cloned().fold(f64::INFINITY, f64::min),
+                ds.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+            );
+            // Straddles this edge's line and overlaps its span?
+            if dmin < slack && dmax > 0.0 && tmax > 0.0 && tmin < len {
+                edge_notches[e].push((tmin.max(0.0), tmax.min(len), dmax));
+                cut = true;
+            }
+        }
+        if !cut {
+            log::warn!(
+                "plane fill: edge-crossing cutout ({rx0:.1},{ry0:.1})-({rx1:.1},{ry1:.1}) matched no boundary edge — not punched"
+            );
+        }
     }
     // Merge overlapping notches per edge (same rule as merge_iv: union
     // the span, keep the deeper cut).
