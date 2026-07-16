@@ -28,6 +28,7 @@
 //! ```
 
 pub mod constraint;
+pub mod geom;
 pub mod feedback;
 pub mod footprint;
 pub mod intent;
@@ -1877,6 +1878,10 @@ fn meander_pass(board: &Board, final_routes: &mut Vec<Route>) -> usize {
             continue;
         }
         let mut ok = false;
+        // ONE exact-geometry index per job: other nets' copper is
+        // stable across attempts (P1 kernel M1 — replaces this file's
+        // hand-rolled copy of the clearance predicates).
+        let cidx = geom::ClearanceIndex::build(board, final_routes, Some(board.nets[i].id));
         // A bump field toward the coupled partner collides with its
         // copper, and tight corridors reject deep bumps — walk
         // (run × depth × side) until the LOCAL clearance check accepts.
@@ -1907,7 +1912,11 @@ fn meander_pass(board: &Board, final_routes: &mut Vec<Route>) -> usize {
                     );
                 }
             }
-            if meander_clear(board, final_routes, i, s0, sn) {
+            let clear = final_routes[i].segments[s0..s0 + sn].iter().all(|sg| {
+                cidx.first_conflict(sg.start, sg.end, sg.width_mm, sg.layer, board.nets[i].id)
+                    .is_none()
+            });
+            if clear {
                 ok = true;
                 break 'attempts;
             }
@@ -1927,131 +1936,6 @@ fn meander_pass(board: &Board, final_routes: &mut Vec<Route>) -> usize {
     done
 }
 
-/// Local legality of net `i`'s copper against every OTHER net's
-/// copper, pads, and the board edge — the meander transaction's
-/// acceptance test. Deliberately scoped: pre-existing geometry of
-/// other nets is not re-judged.
-fn meander_clear(
-    board: &Board,
-    final_routes: &[Route],
-    i: usize,
-    s0: usize,
-    sn: usize,
-) -> bool {
-    let spacing = board.config.min_spacing_mm;
-    let via_r = board.layer_stack.via.pad_mm / 2.0;
-    let bw = board.config.outline.width();
-    let bh = board.config.outline.height();
-    let ec = board.config.edge_clearance_mm;
-    let my_net = board.nets[i].id;
-    // Only the NEW serpentine copper is judged: the net's pre-existing
-    // geometry already shipped (KiCad-legal) and re-judging it with the
-    // stricter local model would veto every meander.
-    for sg in &final_routes[i].segments[s0..s0 + sn] {
-        let half = sg.width_mm / 2.0;
-        // Board edge (bbox; polygon boards re-checked by the oracle).
-        for &(x, y) in &[sg.start, sg.end] {
-            if x < ec + half || y < ec + half || x > bw - ec - half || y > bh - ec - half {
-                return false;
-            }
-        }
-        for &(cx0, cy0, cx1, cy1) in &board.config.cutouts {
-            let edges = [
-                ((cx0, cy0), (cx1, cy0)),
-                ((cx1, cy0), (cx1, cy1)),
-                ((cx1, cy1), (cx0, cy1)),
-                ((cx0, cy1), (cx0, cy0)),
-            ];
-            if edges.iter().any(|&(a, b)| {
-                segments_too_close(sg.start, sg.end, a, b, half + ec)
-            }) {
-                return false;
-            }
-        }
-        for (j, r) in final_routes.iter().enumerate() {
-            if j == i {
-                continue;
-            }
-            for so in &r.segments {
-                if so.layer != sg.layer {
-                    continue;
-                }
-                if segments_too_close(
-                    sg.start,
-                    sg.end,
-                    so.start,
-                    so.end,
-                    half + so.width_mm / 2.0 + spacing,
-                ) {
-                    if std::env::var("BHDL_PNR_DEBUG_NETS").is_ok() {
-                        log::warn!(
-                            "meander_clear: new seg ({:.2},{:.2})-({:.2},{:.2}) vs '{}' seg ({:.2},{:.2})-({:.2},{:.2})",
-                            sg.start.0, sg.start.1, sg.end.0, sg.end.1,
-                            board.nets[j].name, so.start.0, so.start.1, so.end.0, so.end.1
-                        );
-                    }
-                    return false;
-                }
-            }
-            for v in &r.vias {
-                if segment_point_too_close(sg.start, sg.end, (v.x, v.y), half + via_r + spacing)
-                {
-                    return false;
-                }
-            }
-        }
-        // Foreign pads (rect approx via center extents).
-        for comp in &board.components {
-            let cos_t = comp.theta.cos();
-            let sin_t = comp.theta.sin();
-            let quarter =
-                ((comp.theta / std::f64::consts::FRAC_PI_2).round() as i64).rem_euclid(2);
-            for pin in &comp.pins {
-                if pin.unplaced || pin.net == Some(my_net) {
-                    continue;
-                }
-                let Some(pad) = &pin.pad else { continue };
-                let thru = pad.drill_mm.is_some();
-                let on_layer = thru
-                    || match comp.side {
-                        BoardSide::Top => sg.layer == 0,
-                        BoardSide::Bottom => {
-                            sg.layer == board.layer_stack.layers.len() - 1
-                        }
-                    };
-                if !on_layer {
-                    continue;
-                }
-                let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
-                let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
-                let (pw, ph) = if quarter == 1 {
-                    (pad.height_mm, pad.width_mm)
-                } else {
-                    (pad.width_mm, pad.height_mm)
-                };
-                let (hx, hy) = (pw / 2.0, ph / 2.0);
-                let edges = [
-                    ((gx - hx, gy - hy), (gx + hx, gy - hy)),
-                    ((gx + hx, gy - hy), (gx + hx, gy + hy)),
-                    ((gx + hx, gy + hy), (gx - hx, gy + hy)),
-                    ((gx - hx, gy + hy), (gx - hx, gy - hy)),
-                ];
-                if edges.iter().any(|&(a, b)| {
-                    segments_too_close(sg.start, sg.end, a, b, half + spacing)
-                }) {
-                    if std::env::var("BHDL_PNR_DEBUG_NETS").is_ok() {
-                        log::warn!(
-                            "meander_clear: new seg ({:.2},{:.2})-({:.2},{:.2}) vs pad of {} at ({gx:.2},{gy:.2})",
-                            sg.start.0, sg.start.1, sg.end.0, sg.end.1, comp.refdes
-                        );
-                    }
-                    return false;
-                }
-            }
-        }
-    }
-    true
-}
 
 /// Replace part of the longest straight tree segment with a square-wave
 /// serpentine adding ~`needed` mm. Returns false when no segment offers
