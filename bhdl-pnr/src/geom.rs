@@ -121,7 +121,7 @@ pub fn poly_edge_dist(pts: &[(f64, f64)], x: f64, y: f64) -> f64 {
 /// What a candidate segment collided with.
 #[derive(Debug, Clone)]
 pub enum Conflict {
-    Track { net: NetId, layer: usize },
+    Track { net: NetId, layer: usize, a: (f64, f64), b: (f64, f64) },
     Via { net: NetId },
     Pad { net: Option<NetId>, at: (f64, f64) },
     Edge,
@@ -349,7 +349,12 @@ impl ClearanceIndex {
                                 continue;
                             }
                             if segments_too_close(a, b, *sa, *sb, half + sh + self.spacing) {
-                                return Some(Conflict::Track { net: *n, layer: *l });
+                                return Some(Conflict::Track {
+                                    net: *n,
+                                    layer: *l,
+                                    a: *sa,
+                                    b: *sb,
+                                });
                             }
                         }
                         Item::Via { net: n, x, y, r: vr } => {
@@ -465,6 +470,37 @@ pub fn route_escape(
     None
 }
 
+/// Probe the escape paths (direct, both L-bends) from `from` to `to`
+/// and return the first TRACK conflict — the shovable blocker kind.
+/// Pads, vias, and board features can't be deformed.
+pub fn escape_blocker(
+    idx: &ClearanceIndex,
+    from: (f64, f64),
+    to: (f64, f64),
+    width: f64,
+    layer: usize,
+    net: NetId,
+) -> Option<Conflict> {
+    let legs: [Vec<(f64, f64)>; 3] = [
+        vec![from, to],
+        vec![from, (from.0, to.1), to],
+        vec![from, (to.0, from.1), to],
+    ];
+    for path in &legs {
+        for w in path.windows(2) {
+            if (w[0].0 - w[1].0).hypot(w[0].1 - w[1].1) < 1e-9 {
+                continue;
+            }
+            if let Some(c) = idx.first_conflict(w[0], w[1], width, layer, net) {
+                if matches!(c, Conflict::Track { .. }) {
+                    return Some(c);
+                }
+            }
+        }
+    }
+    None
+}
+
 impl ClearanceIndex {
     /// Exact legality of a NEW via barrel at (x, y) with pad radius
     /// `r` for `net`: the barrel is copper on EVERY layer (any
@@ -512,7 +548,12 @@ impl ClearanceIndex {
                             if point_segment_dist((x, y), *a, *b)
                                 < r + half + self.spacing - EPS
                             {
-                                return Some(Conflict::Track { net: *n, layer: *l });
+                                return Some(Conflict::Track {
+                                    net: *n,
+                                    layer: *l,
+                                    a: *a,
+                                    b: *b,
+                                });
                             }
                         }
                         Item::Via { net: n, x: vx, y: vy, r: vr } => {

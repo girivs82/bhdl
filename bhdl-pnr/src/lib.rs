@@ -1992,6 +1992,275 @@ fn completion_pass(board: &Board, final_routes: &mut Vec<Route>) -> usize {
     total
 }
 
+/// M4: true push-and-shove, v1. Geometrically DEFORM a blocking
+/// foreign track — a lateral bump around the escape corridor, every
+/// new segment exactly gated — instead of ripping and rebuilding its
+/// net. Connectivity is preserved by construction (the detour keeps
+/// the segment's endpoints); the victim's net stays whole. On
+/// success the deformation is committed to `final_routes` and the
+/// pre-shove route is pushed onto `snapshots` for the caller to
+/// revert if the escape still fails.
+fn try_shove_track(
+    board: &Board,
+    final_routes: &mut [Route],
+    i: usize,
+    blocker: &geom::Conflict,
+    from: (f64, f64),
+    to: (f64, f64),
+    escape_width: f64,
+    snapshots: &mut Vec<(usize, Route)>,
+) -> bool {
+    let geom::Conflict::Track { net: bnet, layer, a, b } = *blocker else {
+        return false;
+    };
+    let Some(j) = board.nets.iter().position(|n| n.id == bnet) else {
+        return false;
+    };
+    if j == i || board.nets[j].plane_layer.is_some() {
+        return false;
+    }
+    let close = |p: (f64, f64), q: (f64, f64)| (p.0 - q.0).hypot(p.1 - q.1) < 1e-6;
+    let Some(sj) = final_routes[j].segments.iter().position(|sg| {
+        sg.layer == layer
+            && ((close(sg.start, a) && close(sg.end, b))
+                || (close(sg.start, b) && close(sg.end, a)))
+    }) else {
+        return false;
+    };
+    // Grid routes are chains of pitch-length pieces: bumping one
+    // 0.3mm piece can't open a corridor. Expand to the maximal
+    // COLLINEAR RUN containing the blocker (within its span) and
+    // deform the run as one unit.
+    let (span_lo, span_hi) = {
+        let r = &final_routes[j];
+        match r
+            .path_spans
+            .iter()
+            .find(|&&(ps, pl)| ps <= sj && sj < ps + pl)
+        {
+            Some(&(ps, pl)) => (ps, ps + pl - 1),
+            None => (sj, sj),
+        }
+    };
+    let r = &final_routes[j];
+    let dir_of = |sg: &RouteSegment| -> (f64, f64) {
+        let l = (sg.end.0 - sg.start.0).hypot(sg.end.1 - sg.start.1);
+        if l < 1e-9 {
+            (0.0, 0.0)
+        } else {
+            ((sg.end.0 - sg.start.0) / l, (sg.end.1 - sg.start.1) / l)
+        }
+    };
+    let d0 = dir_of(&r.segments[sj]);
+    let collinear = |sg: &RouteSegment| -> bool {
+        let d = dir_of(sg);
+        (d.0 * d0.1 - d.1 * d0.0).abs() < 1e-6 && (d.0 * d0.0 + d.1 * d0.1) > 0.0
+    };
+    let wj = r.segments[sj].width_mm;
+    let mut k0 = sj;
+    while k0 > span_lo
+        && close(r.segments[k0 - 1].end, r.segments[k0].start)
+        && r.segments[k0 - 1].layer == layer
+        && (r.segments[k0 - 1].width_mm - wj).abs() < 1e-9
+        && collinear(&r.segments[k0 - 1])
+    {
+        k0 -= 1;
+    }
+    let mut k1 = sj;
+    while k1 < span_hi
+        && close(r.segments[k1].end, r.segments[k1 + 1].start)
+        && r.segments[k1 + 1].layer == layer
+        && (r.segments[k1 + 1].width_mm - wj).abs() < 1e-9
+        && collinear(&r.segments[k1 + 1])
+    {
+        k1 += 1;
+    }
+    let (sa, sb) = (r.segments[k0].start, r.segments[k1].end);
+    let run_len = (sb.0 - sa.0).hypot(sb.1 - sa.1);
+    if run_len < 0.2 {
+        return false;
+    }
+    // A blocker that properly CROSSES the escape chord separates the
+    // endpoints on this layer — no lateral push un-crosses it (the
+    // bump just ping-pongs). Only parallel squeezes are shovable.
+    // (In via-siting mode from == to and there is no chord.)
+    if (from.0 - to.0).hypot(from.1 - to.1) > 1e-9 {
+        let orient = |p: (f64, f64), q: (f64, f64), r: (f64, f64)| -> f64 {
+            (q.0 - p.0) * (r.1 - p.1) - (q.1 - p.1) * (r.0 - p.0)
+        };
+        let (o1, o2) = (orient(sa, sb, from), orient(sa, sb, to));
+        let (o3, o4) = (orient(from, to, sa), orient(from, to, sb));
+        if o1 * o2 < 0.0 && o3 * o4 < 0.0 {
+            return false;
+        }
+    }
+    let u = ((sb.0 - sa.0) / run_len, (sb.1 - sa.1) / run_len);
+    let nv = (-u.1, u.0);
+    let mut t_c = run_len / 2.0;
+    let mut best = f64::MAX;
+    for k in 0..=64 {
+        let t = run_len * k as f64 / 64.0;
+        let p = (sa.0 + u.0 * t, sa.1 + u.1 * t);
+        let d = geom::point_segment_dist(p, from, to);
+        if d < best {
+            best = d;
+            t_c = t;
+        }
+    }
+    let c = (sa.0 + u.0 * t_c, sa.1 + u.1 * t_c);
+    let em = ((from.0 + to.0) / 2.0, (from.1 + to.1) / 2.0);
+    let mut side = (nv.0 * (em.0 - c.0) + nv.1 * (em.1 - c.1)).signum();
+    if side == 0.0 {
+        side = 1.0;
+    }
+    let spacing = board.config.min_spacing_mm;
+    // Entanglement guard: same-net branches or vias anchored ON the
+    // run's INTERIOR would be disconnected by the detour. The run's
+    // own endpoints stay put and are exempt.
+    let anchored_inside = |p: (f64, f64)| -> bool {
+        if close(p, sa) || close(p, sb) {
+            return false;
+        }
+        geom::point_segment_dist(p, sa, sb) < wj / 2.0 + 0.05
+    };
+    for (sk, sg) in r.segments.iter().enumerate() {
+        if (sk < k0 || sk > k1) && (anchored_inside(sg.start) || anchored_inside(sg.end)) {
+            return false;
+        }
+    }
+    if r.vias.iter().any(|v| anchored_inside((v.x, v.y))) {
+        return false;
+    }
+    for delta in [
+        escape_width / 2.0 + wj / 2.0 + 2.0 * spacing + 0.05,
+        escape_width / 2.0 + wj / 2.0 + 2.0 * spacing + 0.3,
+        escape_width / 2.0 + wj / 2.0 + 2.0 * spacing + 0.7,
+    ] {
+        let lm = delta + wj / 2.0 + escape_width / 2.0 + spacing + 0.2;
+        let t1 = (t_c - lm).max(0.0);
+        let t2 = (t_c + lm).min(run_len);
+        let off = (nv.0 * delta * -side, nv.1 * delta * -side);
+        let q1 = (sa.0 + u.0 * t1, sa.1 + u.1 * t1);
+        let q2 = (sa.0 + u.0 * t2, sa.1 + u.1 * t2);
+        let mut poly = vec![sa];
+        if t1 > 1e-6 {
+            poly.push(q1);
+        }
+        poly.push((q1.0 + off.0, q1.1 + off.1));
+        poly.push((q2.0 + off.0, q2.1 + off.1));
+        if t2 < run_len - 1e-6 {
+            poly.push(q2);
+        }
+        poly.push(sb);
+        let idx_j = geom::ClearanceIndex::build(board, final_routes, Some(bnet));
+        let legal = poly.windows(2).all(|w| {
+            (w[0].0 - w[1].0).hypot(w[0].1 - w[1].1) < 1e-9
+                || idx_j
+                    .first_conflict(w[0], w[1], wj, layer, bnet)
+                    .is_none()
+        });
+        if !legal {
+            continue;
+        }
+        let new_segs: Vec<RouteSegment> = poly
+            .windows(2)
+            .filter(|w| (w[0].0 - w[1].0).hypot(w[0].1 - w[1].1) > 1e-9)
+            .map(|w| RouteSegment {
+                layer,
+                start: w[0],
+                end: w[1],
+                width_mm: wj,
+            })
+            .collect();
+        let m = new_segs.len();
+        let removed = k1 - k0 + 1;
+        snapshots.push((j, final_routes[j].clone()));
+        let rj = &mut final_routes[j];
+        rj.segments.splice(k0..k1 + 1, new_segs);
+        for (ps, pl) in rj.path_spans.iter_mut() {
+            if *ps <= k0 && k0 < *ps + *pl {
+                *pl = *pl + m - removed;
+            } else if *ps > k0 {
+                *ps = *ps + m - removed;
+            }
+        }
+        info!(
+            "shove: bumped a '{}' run ({removed} piece(s)) by {delta:.2}mm to open the '{}' escape",
+            board.nets[j].name, board.nets[i].name
+        );
+        return true;
+    }
+    false
+}
+
+/// Find a legal via site ringing `center`, shoving foreign tracks
+/// aside (exactly-gated) when a site is blocked only by copper that
+/// can move. Successful shoves stay committed and their snapshots
+/// accumulate in `snapshots` for the caller to revert on failure.
+fn claim_via_site(
+    board: &Board,
+    final_routes: &mut [Route],
+    i: usize,
+    center: (f64, f64),
+    via_r: f64,
+    avoid: Option<(f64, f64)>,
+    snapshots: &mut Vec<(usize, Route)>,
+    shove_budget: &mut usize,
+) -> Option<(f64, f64)> {
+    let net_id = board.nets[i].id;
+    let hole_gap = board.layer_stack.via.drill_mm + 0.25;
+    for ring in 0..5 {
+        let rr = 0.6 + ring as f64 * 0.35;
+        for k in 0..8 {
+            let ang = k as f64 * std::f64::consts::FRAC_PI_4;
+            let (vx, vy) = (center.0 + rr * ang.cos(), center.1 + rr * ang.sin());
+            if let Some(av) = avoid {
+                if (vx - av.0).hypot(vy - av.1)
+                    < hole_gap.max(2.0 * via_r + board.config.min_spacing_mm)
+                {
+                    continue;
+                }
+            }
+            let mark = snapshots.len();
+            let mut ok = false;
+            for _ in 0..3 {
+                let idx =
+                    geom::ClearanceIndex::build(board, final_routes, Some(net_id));
+                match idx.via_conflict(vx, vy, via_r, net_id) {
+                    None => {
+                        ok = true;
+                        break;
+                    }
+                    Some(c @ geom::Conflict::Track { .. }) if *shove_budget > 0 => {
+                        if !try_shove_track(
+                            board,
+                            final_routes,
+                            i,
+                            &c,
+                            (vx, vy),
+                            (vx, vy),
+                            2.0 * via_r,
+                            snapshots,
+                        ) {
+                            break;
+                        }
+                        *shove_budget -= 1;
+                    }
+                    Some(_) => break,
+                }
+            }
+            if ok {
+                return Some((vx, vy));
+            }
+            while snapshots.len() > mark {
+                let (jj, old) = snapshots.pop().unwrap();
+                final_routes[jj] = old;
+            }
+        }
+    }
+    None
+}
+
 /// Connect each unreached pad of net `i` to its nearest tree copper
 /// with geom::route_escape. Returns sinks gained.
 fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usize {
@@ -2141,21 +2410,73 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
                     continue;
                 }
                 // Via sites ring the pad.
+                let mut shove_budget = 6usize;
                 for ring in 0..6 {
                     let rr = 0.6 + ring as f64 * 0.35;
                     for k in 0..8 {
                         let ang = k as f64 * std::f64::consts::FRAC_PI_4;
                         let (vx, vy) = (px + rr * ang.cos(), py + rr * ang.sin());
-                        if cidx.via_conflict(vx, vy, via_r, net.id).is_some() {
+                        // M4: a site blocked ONLY by a track is not
+                        // dead — shove the track aside (exactly-gated
+                        // bump away from the via barrel) and re-check.
+                        let mut site_snapshots: Vec<(usize, Route)> = Vec::new();
+                        let mut site_ok =
+                            cidx.via_conflict(vx, vy, via_r, net.id).is_none();
+                        if !site_ok && shove_budget > 0 {
+                            for _ in 0..2 {
+                                let idx_now = geom::ClearanceIndex::build(
+                                    board,
+                                    final_routes,
+                                    Some(net.id),
+                                );
+                                match idx_now.via_conflict(vx, vy, via_r, net.id) {
+                                    None => {
+                                        site_ok = true;
+                                        break;
+                                    }
+                                    Some(c @ geom::Conflict::Track { .. }) => {
+                                        if shove_budget == 0
+                                            || !try_shove_track(
+                                                board,
+                                                final_routes,
+                                                i,
+                                                &c,
+                                                (vx, vy),
+                                                (vx, vy),
+                                                2.0 * via_r,
+                                                &mut site_snapshots,
+                                            )
+                                        {
+                                            break;
+                                        }
+                                        shove_budget -= 1;
+                                    }
+                                    Some(_) => break,
+                                }
+                            }
+                        }
+                        if !site_ok {
+                            for (jj, old) in site_snapshots.into_iter().rev() {
+                                final_routes[jj] = old;
+                            }
                             continue;
                         }
+                        let cidx = geom::ClearanceIndex::build(
+                            board,
+                            final_routes,
+                            Some(net.id),
+                        );
                         // Stub pad→via on the pad's layer.
                         if cidx
                             .first_conflict((px, py), (vx, vy), width, layer, net.id)
                             .is_some()
                         {
+                            for (jj, old) in site_snapshots.into_iter().rev() {
+                                final_routes[jj] = old;
+                            }
                             continue;
                         }
+                        let mut hop_done = false;
                         for &(q, _) in &attach2 {
                             if let Some(path) = geom::route_escape(
                                 &cidx,
@@ -2202,10 +2523,170 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
                                 );
                                 gained += 1;
                                 connected = true;
+                                hop_done = true;
                                 break 'hop;
                             }
                         }
+                        if !hop_done {
+                            for (jj, old) in site_snapshots.into_iter().rev() {
+                                final_routes[jj] = old;
+                            }
+                        }
                     }
+                }
+            }
+        }
+        // M4 CROSS-UNDER: the fence CROSSES the corridor, so no
+        // same-layer move helps and the tree has no far-layer copper
+        // to hop to — tunnel beneath it: pad -> via -> far-layer leg
+        // -> via -> back up to the tree. Both via sites are claimed
+        // with shove assistance (foreign tracks bumped aside, every
+        // move exactly gated).
+        if !connected {
+            let via_r = board.layer_stack.via.pad_mm / 2.0;
+            let hole_gap = board.layer_stack.via.drill_mm + 0.25;
+            let signal_layers = board.layer_stack.signal_layer_indices();
+            let mut budget = 8usize;
+            'under: for &l2 in signal_layers.iter().filter(|&&l| l != layer) {
+                for &(q, _) in attach.iter().take(3) {
+                    let mut snaps: Vec<(usize, Route)> = Vec::new();
+                    let Some(v1) = claim_via_site(
+                        board, final_routes, i, (px, py), via_r, None, &mut snaps,
+                        &mut budget,
+                    ) else {
+                        for (jj, old) in snaps.into_iter().rev() {
+                            final_routes[jj] = old;
+                        }
+                        continue;
+                    };
+                    let Some(v2) = claim_via_site(
+                        board, final_routes, i, q, via_r, Some(v1), &mut snaps,
+                        &mut budget,
+                    ) else {
+                        for (jj, old) in snaps.into_iter().rev() {
+                            final_routes[jj] = old;
+                        }
+                        continue;
+                    };
+                    if (v1.0 - v2.0).hypot(v1.1 - v2.1)
+                        < hole_gap.max(2.0 * via_r + board.config.min_spacing_mm)
+                    {
+                        for (jj, old) in snaps.into_iter().rev() {
+                            final_routes[jj] = old;
+                        }
+                        continue;
+                    }
+                    let idx =
+                        geom::ClearanceIndex::build(board, final_routes, Some(net.id));
+                    // stub pad->v1 and leg v2->q on the pad's layer,
+                    // tunnel v1->v2 on the far layer — all exact.
+                    let stub_ok = idx
+                        .first_conflict((px, py), v1, width, layer, net.id)
+                        .is_none();
+                    let leg_ok = idx
+                        .first_conflict(v2, q, width, layer, net.id)
+                        .is_none();
+                    let tunnel = if stub_ok && leg_ok {
+                        geom::route_escape(&idx, v1, v2, width, l2, net.id)
+                    } else {
+                        None
+                    };
+                    let Some(path) = tunnel else {
+                        for (jj, old) in snaps.into_iter().rev() {
+                            final_routes[jj] = old;
+                        }
+                        continue;
+                    };
+                    let route = &mut final_routes[i];
+                    let seg_start = route.segments.len();
+                    let via_start = route.vias.len();
+                    route.segments.push(RouteSegment {
+                        layer,
+                        start: (px, py),
+                        end: v1,
+                        width_mm: width,
+                    });
+                    for w in path.windows(2) {
+                        if (w[0].0 - w[1].0).hypot(w[0].1 - w[1].1) > 1e-9 {
+                            route.segments.push(RouteSegment {
+                                layer: l2,
+                                start: w[0],
+                                end: w[1],
+                                width_mm: width,
+                            });
+                        }
+                    }
+                    route.segments.push(RouteSegment {
+                        layer,
+                        start: v2,
+                        end: q,
+                        width_mm: width,
+                    });
+                    let n_l = board.layer_stack.layers.len() - 1;
+                    route.vias.push(RouteVia { x: v1.0, y: v1.1, from_layer: 0, to_layer: n_l });
+                    route.vias.push(RouteVia { x: v2.0, y: v2.1, from_layer: 0, to_layer: n_l });
+                    route.path_spans.push((seg_start, route.segments.len() - seg_start));
+                    route.path_parents.push(None);
+                    route.via_spans.push((via_start, 2));
+                    info!(
+                        "completion: OFF-GRID cross-under connected a '{}' pad at ({px:.2},{py:.2}) under the fence via ({:.2},{:.2})/({:.2},{:.2})",
+                        net.name, v1.0, v1.1, v2.0, v2.1
+                    );
+                    gained += 1;
+                    connected = true;
+                    break 'under;
+                }
+            }
+        }
+        // M4 TRUE SHOVE: same-layer escape blocked by ONE foreign
+        // track — deform it (exactly-gated lateral bump away from the
+        // corridor) and retry. Rip-free: the neighbor's net stays
+        // whole, only its geometry moves.
+        if !connected {
+            let mut snapshots: Vec<(usize, Route)> = Vec::new();
+            'shove: for &(q, _) in attach.iter().take(4) {
+                let undo_mark = snapshots.len();
+                for _round in 0..5 {
+                    let cidx2 =
+                        geom::ClearanceIndex::build(board, final_routes, Some(net.id));
+                    if let Some(path) =
+                        geom::route_escape(&cidx2, (px, py), q, width, layer, net.id)
+                    {
+                        commit_escape(&mut final_routes[i], &path, layer, width, None, &net.name);
+                        gained += 1;
+                        connected = true;
+                        break 'shove;
+                    }
+                    let bl = geom::escape_blocker(&cidx2, (px, py), q, width, layer, net.id);
+                    debug!(
+                        "shove probe: '{}' pad ({px:.2},{py:.2}) -> ({:.2},{:.2}): {:?}",
+                        net.name, q.0, q.1, bl
+                    );
+                    let Some(bl) = bl else {
+                        break;
+                    };
+                    if !try_shove_track(
+                        board,
+                        final_routes,
+                        i,
+                        &bl,
+                        (px, py),
+                        q,
+                        width,
+                        &mut snapshots,
+                    ) {
+                        break;
+                    }
+                }
+                // This attach point failed: undo its deformations.
+                while snapshots.len() > undo_mark {
+                    let (j, old) = snapshots.pop().unwrap();
+                    final_routes[j] = old;
+                }
+            }
+            if !connected {
+                for (j, old) in snapshots.into_iter().rev() {
+                    final_routes[j] = old;
                 }
             }
         }
