@@ -391,6 +391,39 @@ pub fn build_board(
             estimate_pin_positions(&pin_defs, netlist, width, height)
         };
 
+        // The envelope must cover the ACTUAL emitted copper. The
+        // footprint path folds pad protrusion in via footprint_extent,
+        // but the estimated-pin fallback (unknown package) places pads
+        // AT the assumed body edge — half of each pad sticks out of the
+        // default envelope, so the legalizer's edge clamp certifies
+        // spots whose copper violates copper_edge_clearance. Union the
+        // envelope with every pad rect (pad-less estimated pins emit
+        // the exporter's 0.5mm default square) so the legalization
+        // guarantee is measured on real copper on both paths.
+        let (width, height, bbox_dx, bbox_dy) = {
+            let mut x_min = bbox_dx - width / 2.0;
+            let mut x_max = bbox_dx + width / 2.0;
+            let mut y_min = bbox_dy - height / 2.0;
+            let mut y_max = bbox_dy + height / 2.0;
+            for p in pins.iter().filter(|p| !p.unplaced) {
+                let (pw, ph) = p
+                    .pad
+                    .as_ref()
+                    .map(|pad| (pad.width_mm, pad.height_mm))
+                    .unwrap_or((0.5, 0.5));
+                x_min = x_min.min(p.dx - pw / 2.0);
+                x_max = x_max.max(p.dx + pw / 2.0);
+                y_min = y_min.min(p.dy - ph / 2.0);
+                y_max = y_max.max(p.dy + ph / 2.0);
+            }
+            (
+                x_max - x_min,
+                y_max - y_min,
+                (x_min + x_max) / 2.0,
+                (y_min + y_max) / 2.0,
+            )
+        };
+
         // Thermal power from GLACIER
         let thermal_power = simulation
             .and_then(|sim| sim.instance_power.get(&instance.name).copied())

@@ -33,5 +33,5 @@ board FlowDemo {
 
 layout FlowDemo {
     layer_stackup 2;
-    outline rect 28 22;
+    outline rect 26 20;
 }
