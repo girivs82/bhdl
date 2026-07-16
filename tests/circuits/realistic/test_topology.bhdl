@@ -14,7 +14,8 @@ entity ClkDriver() {
 
     attribute intf_const__CLK__topology = "star";
     attribute intf_const__CLK__layer = "top";
-    attribute intf_const__EN__topology = "daisy_chain";
+    attribute intf_const__EN__topology = "fly_by";
+    attribute intf_const__EN__stub_max = "2mm";
 }
 
 layout ClkDriver {
@@ -44,5 +45,11 @@ board TopoDemo {
 
 layout TopoDemo {
     layer_stackup 2;
-    outline rect 30 22;
+    outline rect 34 26;
+    // Fly-by devices sit in a row — the chain runs straight and the
+    // stub budget is meetable (a scattered placement makes the spur a
+    // real stub, and the sign-off honestly FAILs it).
+    place u1 at (6, 13) rot 0;
+    place rd at (17, 13) rot 0;
+    place re at (26, 13) rot 0;
 }

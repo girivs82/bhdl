@@ -61,6 +61,9 @@ pub enum IfaceProp {
     /// `layer top|bottom|outer|inner` — bind the net's copper to
     /// specific layers.
     Layer { bind: crate::constraint::LayerBind },
+    /// `stub_max 25ps` / `stub_max 2mm` — fly-by stub budget, patched
+    /// onto the same net's Topology constraint after lowering.
+    StubMax { mm: f32 },
     Differential { ohms: f32 },
     SignalClass { class: String },
     MaxFreqHz { hz: f64 },
@@ -156,6 +159,10 @@ fn parse_prop(name: &str, value: &str) -> IfaceProp {
             None => unknown(name, value),
         },
         "signal_class" => IfaceProp::SignalClass { class: value.to_string() },
+        "stub_max" => match parse_len_mm(value) {
+            Some(mm) => IfaceProp::StubMax { mm },
+            None => unknown(name, value),
+        },
         "layer" => match value.trim() {
             "top" => IfaceProp::Layer { bind: crate::constraint::LayerBind::Top },
             "bottom" => IfaceProp::Layer { bind: crate::constraint::LayerBind::Bottom },
@@ -222,6 +229,18 @@ fn parse_freq_hz(v: &str) -> Option<f64> {
     num.trim().parse::<f64>().ok().map(|x| x * mult)
 }
 
+/// `25ps` (time → length at PS_PER_MM) or `2mm` / bare mm number.
+fn parse_len_mm(v: &str) -> Option<f32> {
+    let v = v.trim().trim_matches('"');
+    if let Some(ps) = v.strip_suffix("ps") {
+        return ps.trim().parse::<f32>().ok().map(|p| p / PS_PER_MM);
+    }
+    if let Some(mm) = v.strip_suffix("mm") {
+        return mm.trim().parse::<f32>().ok();
+    }
+    v.parse::<f32>().ok()
+}
+
 fn parse_topology(v: &str) -> Option<TopoKind> {
     match v.trim() {
         "star" => Some(TopoKind::Star),
@@ -256,6 +275,7 @@ pub fn lower_interface_constraints(
     // pin-path → scope, for swizzle prefix reconstruction.
     let mut swizzle_within: Vec<String> = Vec::new();
     let mut swizzle_across: Vec<String> = Vec::new();
+    let mut stub_budgets: Vec<(NetId, f32)> = Vec::new();
 
     // Build a ConstraintSource, enriched with the synth side's provenance
     // sidecar (handshake §10/§11): the winning contributor's `.bhdl` line
@@ -331,6 +351,11 @@ pub fn lower_interface_constraints(
                         tolerance_pct: 5.0,
                         source: src(&c.key, "differential"),
                     });
+                }
+            }
+            (IfaceTarget::PerSignal(path), IfaceProp::StubMax { mm }) => {
+                if let Some(net) = resolve_or_warn(path, "stub_max", &mut diags) {
+                    stub_budgets.push((net, *mm));
                 }
             }
             (IfaceTarget::PerSignal(path), IfaceProp::Layer { bind }) => {
@@ -415,6 +440,27 @@ pub fn lower_interface_constraints(
     // (handshake §8.2.2): members sharing the dotted parent are one group.
     lower_swizzle(&swizzle_within, SwizzleScope::WithinGroup, instance, resolve, &src, &mut out, &mut diags);
     lower_swizzle(&swizzle_across, SwizzleScope::AcrossGroups, instance, resolve, &src, &mut out, &mut diags);
+
+    // Patch stub budgets onto the same net's Topology constraints
+    // (per-signal props lower independently; the budget belongs to
+    // the topology it grades).
+    for (net, mm) in stub_budgets {
+        let mut applied = false;
+        for c in out.iter_mut() {
+            if let Constraint::Topology { net: n, stub_max_mm, .. } = c {
+                if *n == net {
+                    *stub_max_mm = Some(mm);
+                    applied = true;
+                }
+            }
+        }
+        if !applied {
+            diags.push(
+                "interface:stub_max: no topology constraint on the same net — budget dropped"
+                    .to_string(),
+            );
+        }
+    }
 
     (out, diags)
 }

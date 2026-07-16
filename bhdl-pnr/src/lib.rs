@@ -941,13 +941,67 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                         ));
                     }
                 }
-                Constraint::Topology { net, kind, .. } => {
+                Constraint::Topology { net, kind, stub_max_mm, .. } => {
                     let Some(i) = idx_of(*net) else { continue };
                     if final_routes[i].is_empty() {
                         continue;
                     }
+                    // Stub grading (fly-by budgets): measure every pin's
+                    // dead-end branch off the trunk.
+                    let stub_note = if let Some(limit) = stub_max_mm {
+                        let comp_idx: std::collections::HashMap<ComponentId, usize> =
+                            board
+                                .components
+                                .iter()
+                                .enumerate()
+                                .map(|(k, c)| (c.id, k))
+                                .collect();
+                        let pads: Vec<(f64, f64, f64)> = board.nets[i]
+                            .pins
+                            .iter()
+                            .filter_map(|&(cid, pid)| {
+                                let comp = &board.components[*comp_idx.get(&cid)?];
+                                let pin = comp.pins.iter().find(|p| p.pin_id == pid)?;
+                                let cos_t = comp.theta.cos();
+                                let sin_t = comp.theta.sin();
+                                Some((
+                                    comp.x + pin.dx * cos_t - pin.dy * sin_t,
+                                    comp.y + pin.dx * sin_t + pin.dy * cos_t,
+                                    pin.pad
+                                        .as_ref()
+                                        .map(|p| p.width_mm.min(p.height_mm) / 2.0)
+                                        .unwrap_or(0.25),
+                                ))
+                            })
+                            .collect();
+                        let max_stub = pads
+                            .iter()
+                            .enumerate()
+                            .map(|(k, &(px, py, h))| {
+                                let others: Vec<(f64, f64, f64)> = pads
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|&(j, _)| j != k)
+                                    .map(|(_, &p)| p)
+                                    .collect();
+                                routing::measure::pin_stub_length(
+                                    &final_routes[i],
+                                    (px, py),
+                                    h,
+                                    &others,
+                                )
+                            })
+                            .fold(0.0_f64, f64::max);
+                        let ok = max_stub <= *limit as f64;
+                        format!(
+                            ", max stub {max_stub:.2}mm (limit {limit}mm) — {}",
+                            if ok { "PASS" } else { "FAIL" }
+                        )
+                    } else {
+                        String::new()
+                    };
                     rows.push(format!(
-                        "topology {:?} on '{}': constructed ({} span(s))",
+                        "topology {:?} on '{}': constructed ({} span(s)){stub_note}",
                         kind,
                         board.nets[i].name,
                         final_routes[i].path_spans.len()

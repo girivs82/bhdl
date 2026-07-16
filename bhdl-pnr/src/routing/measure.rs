@@ -82,6 +82,98 @@ pub(crate) fn coupled_fraction(a: &Route, b: &Route, gap_mm: f64) -> f64 {
     coupled / total
 }
 
+/// Length of the dead-end branch serving a pad: walk from the pad's
+/// touching segment through degree-2 endpoint-graph nodes until a
+/// junction (degree ≥ 3). Reaching another PAD first means the walk
+/// followed the trunk itself — stub 0 (the pad taps the through-route
+/// directly; fly-by end devices terminate the trunk).
+pub(crate) fn pin_stub_length(
+    route: &Route,
+    pad: (f64, f64),
+    pad_half: f64,
+    other_pads: &[(f64, f64, f64)], // (x, y, half)
+) -> f64 {
+    let q = |x: f64| (x * 1000.0).round() as i64;
+    let key = |p: (f64, f64)| (q(p.0), q(p.1));
+    // Endpoint degree map (vias merge layers; the walk is layer-blind
+    // on purpose — a via mid-stub is still stub).
+    let mut degree: std::collections::HashMap<(i64, i64), usize> =
+        std::collections::HashMap::new();
+    for sg in &route.segments {
+        *degree.entry(key(sg.start)).or_insert(0) += 1;
+        *degree.entry(key(sg.end)).or_insert(0) += 1;
+    }
+    // Segment touching the pad, preferring the one whose ENDPOINT is
+    // nearest the pad (the escape stub).
+    let touching = route.segments.iter().enumerate().find(|(_, sg)| {
+        let (dx, dy) = (sg.end.0 - sg.start.0, sg.end.1 - sg.start.1);
+        let l2 = dx * dx + dy * dy;
+        let t = if l2 <= 1e-12 {
+            0.0
+        } else {
+            (((pad.0 - sg.start.0) * dx + (pad.1 - sg.start.1) * dy) / l2).clamp(0.0, 1.0)
+        };
+        (pad.0 - (sg.start.0 + t * dx)).hypot(pad.1 - (sg.start.1 + t * dy))
+            < sg.width_mm / 2.0 + pad_half - 0.001
+    });
+    let Some((si, sg0)) = touching else { return 0.0 };
+    // Walk outward from the pad end of the touching segment.
+    let (mut node, mut far) = {
+        let ds = (sg0.start.0 - pad.0).hypot(sg0.start.1 - pad.1);
+        let de = (sg0.end.0 - pad.0).hypot(sg0.end.1 - pad.1);
+        if ds <= de {
+            (sg0.start, sg0.end)
+        } else {
+            (sg0.end, sg0.start)
+        }
+    };
+    let near_pad = |p: (f64, f64)| -> bool {
+        other_pads
+            .iter()
+            .any(|&(px, py, h)| (p.0 - px).hypot(p.1 - py) < h + 0.05)
+    };
+    // A junction sitting AT another device (its escape cell) means the
+    // walked path was the trunk itself — the chain head/terminator's
+    // connection is trunk, not stub.
+    let junction_at_device = |p: (f64, f64)| -> bool {
+        other_pads
+            .iter()
+            .any(|&(px, py, _)| (p.0 - px).hypot(p.1 - py) < 1.0)
+    };
+    let mut len = 0.0;
+    let mut prev = si;
+    for _ in 0..route.segments.len() + 1 {
+        len += (far.0 - node.0).hypot(far.1 - node.1);
+        if degree.get(&key(far)).copied().unwrap_or(0) >= 3 {
+            if junction_at_device(far) {
+                return 0.0; // trunk tap at a device — no stub
+            }
+            return len; // mid-copper junction — this was the stub
+        }
+        if near_pad(far) {
+            return 0.0; // walked the trunk into another device — no stub
+        }
+        // Continue through the degree-2 node.
+        let next = route.segments.iter().enumerate().find(|(sj, sg)| {
+            *sj != prev
+                && (key(sg.start) == key(far) || key(sg.end) == key(far))
+        });
+        let Some((sj, sg)) = next else {
+            return 0.0; // dead end at bare copper — dangling, not a graded stub
+        };
+        prev = sj;
+        let (a, b) = (sg.start, sg.end);
+        if key(a) == key(far) {
+            node = a;
+            far = b;
+        } else {
+            node = b;
+            far = a;
+        }
+    }
+    len
+}
+
 /// IPC-2141 surface-microstrip impedance for width `w` over dielectric
 /// height `h` (both mm), trace thickness `t`, relative permittivity
 /// `er`. Valid for 0.1 < w/h < 3 — the practical PCB range.
