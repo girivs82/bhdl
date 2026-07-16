@@ -635,8 +635,38 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                 .into_iter()
                 .filter(|&i| board.nets[i].plane_layer.is_none())
                 .collect();
+            // Topology-shaped nets rebuild WHOLE through the topology
+            // router — extension/greedy would regrow a Steiner tree
+            // and silently lose the declared star/chain (the stub
+            // grading catches it; recovery should not cause it).
+            let (topo, rest): (Vec<usize>, Vec<usize>) =
+                ripped.iter().partition(|&&i| has_shape_topology(&board, i));
+            for &i in &topo {
+                let mut ext_grid = RoutingGrid::build(&board);
+                for (j, route) in final_routes.iter().enumerate() {
+                    if j != i && !route.is_empty() {
+                        pathfinder::block_route_geometry(&mut ext_grid, route, &board);
+                    }
+                }
+                let attract = pair_attract(&board, &final_routes, &ext_grid, i);
+                let rebuilt = pathfinder::route_single_net(
+                    &ext_grid,
+                    &board.nets[i],
+                    &board,
+                    true,
+                    attract.as_ref(),
+                );
+                if !rebuilt.is_empty() {
+                    info!(
+                        "recovery: topology rebuild of '{}' ({} span(s))",
+                        board.nets[i].name,
+                        rebuilt.path_spans.len()
+                    );
+                    final_routes[i] = rebuilt;
+                }
+            }
             let (partial, whole): (Vec<usize>, Vec<usize>) =
-                ripped.iter().partition(|&&i| !final_routes[i].is_empty());
+                rest.iter().partition(|&&i| !final_routes[i].is_empty());
             for &i in &partial {
                 let mut ext_grid = RoutingGrid::build(&board);
                 for (j, route) in final_routes.iter().enumerate() {
@@ -1579,6 +1609,24 @@ fn assign_plane_regions(board: &mut Board) {
 /// (recovery, completion): the partner's routed corridor, when it
 /// exists. Without this, a pair member re-routed after validation
 /// abandons the coupled run (and cheap empty-layer vias).
+/// Nets whose Topology constraint declares a SHAPE (star / chain):
+/// tree extension cannot preserve it — recovery rebuilds these whole.
+fn has_shape_topology(board: &Board, i: usize) -> bool {
+    use crate::constraint::{Constraint, TopoKind};
+    let id = board.nets[i].id;
+    board.constraints.iter().any(|c| {
+        matches!(
+            c,
+            Constraint::Topology { net, kind, .. }
+                if *net == id
+                    && matches!(
+                        kind,
+                        TopoKind::Star | TopoKind::DaisyChain | TopoKind::FlyBy
+                    )
+        )
+    })
+}
+
 fn pair_attract(
     board: &Board,
     final_routes: &[Route],
@@ -1617,8 +1665,29 @@ fn completion_pass(board: &Board, final_routes: &mut Vec<Route>) -> usize {
                 pathfinder::block_route_geometry(&mut ext_grid, route, board);
             }
         }
-        let mut route = final_routes[i].clone();
         let attract = pair_attract(board, final_routes, &ext_grid, i);
+        if has_shape_topology(board, i) {
+            // Shape topologies complete by WHOLE rebuild.
+            let rebuilt = pathfinder::route_single_net(
+                &ext_grid,
+                &board.nets[i],
+                board,
+                true,
+                attract.as_ref(),
+            );
+            if pathfinder::unreached_sink_count(&board.nets[i], board, &rebuilt)
+                < pathfinder::unreached_sink_count(&board.nets[i], board, &final_routes[i])
+            {
+                info!(
+                    "completion: topology rebuild of '{}'",
+                    board.nets[i].name
+                );
+                final_routes[i] = rebuilt;
+                total += 1;
+            }
+            continue;
+        }
+        let mut route = final_routes[i].clone();
         let got = pathfinder::extend_route(
             &mut ext_grid, &board.nets[i], board, &mut route, 1.0, 1.0, &[], &[], false,
             attract.as_ref(),

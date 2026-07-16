@@ -1176,6 +1176,27 @@ impl Ord for DijkState {
 /// conservative). Used by the geometric-recovery loop after subtree
 /// amputation: rebuilding a 90%-good power tree from scratch loses to
 /// extending it.
+/// Route ONE net on the given grid — the full topology-aware
+/// construction (star roots, daisy hops, Steiner default). Recovery
+/// uses this to REBUILD a topology-constrained net wholesale:
+/// extension/greedy tree repair would regrow it as a Steiner tree and
+/// silently lose the declared shape.
+pub(crate) fn route_single_net(
+    grid: &RoutingGrid,
+    net: &PnrNet,
+    board: &Board,
+    allow_vias: bool,
+    attract: Option<&BTreeSet<CellCoord>>,
+) -> Route {
+    let comp_idx: HashMap<ComponentId, usize> = board
+        .components
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.id, i))
+        .collect();
+    shortest_path_3d(grid, net, board, &comp_idx, 1.0, 1.0, allow_vias, attract)
+}
+
 /// Grid-free count of a net's pins whose pad is NOT touched by
 /// tree-connected copper — the cheap pre-filter for the completion
 /// pass (building an extension grid per net is the expensive part).
