@@ -820,6 +820,20 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                     }
                 }
             }
+            // Exact ladder for whatever the grid passes left behind
+            // this round (escape / via-hop / cross-under / shove).
+            for &i in &ripped {
+                if board.nets[i].plane_layer.is_none()
+                    && !final_routes[i].is_empty()
+                    && pathfinder::unreached_sink_count(
+                        &board.nets[i],
+                        &board,
+                        &final_routes[i],
+                    ) > 0
+                {
+                    offgrid_escape(&board, &mut final_routes, i);
+                }
+            }
         }
     }
 
@@ -1391,6 +1405,25 @@ fn miter_pass(board: &Board, final_routes: &mut [Route]) -> usize {
                 let ub = ((b.end.0 - b.start.0) / lb, (b.end.1 - b.start.1) / lb);
                 let p1 = (a.end.0 - ua.0 * d, a.end.1 - ua.1 * d);
                 let p2 = (b.start.0 + ub.0 * d, b.start.1 + ub.1 * d);
+                // Exact-committed spans (escapes / cross-unders) attach
+                // MID-SEGMENT: an anchor anywhere on the cut portions
+                // (last d of leg a, first d of leg b) — not just at the
+                // corner point — dangles if the miter removes it.
+                let anchor_in_cut = {
+                    let on_cut = |pt: (f64, f64)| -> bool {
+                        geom::point_segment_dist(pt, p1, a.end) < a.width_mm / 2.0 + 1e-6
+                            || geom::point_segment_dist(pt, b.start, p2)
+                                < b.width_mm / 2.0 + 1e-6
+                    };
+                    originals[i].segments.iter().enumerate().any(|(si2, sg)| {
+                        (si2 < ps || si2 >= ps + pl)
+                            && (on_cut(sg.start) || on_cut(sg.end))
+                    }) || originals[i].vias.iter().any(|v| on_cut((v.x, v.y)))
+                };
+                if anchor_in_cut {
+                    out.push(b);
+                    continue;
+                }
                 // Validate the diagonal against FOREIGN copper + edge.
                 let w = a.width_mm;
                 let m = w / 2.0;
@@ -1987,6 +2020,15 @@ fn completion_pass(board: &Board, final_routes: &mut Vec<Route>) -> usize {
         // geometry kernel parked as P1.)
         if pathfinder::unreached_sink_count(&board.nets[i], board, &final_routes[i]) > 0 {
             total += shove_one_blocker(board, final_routes, i);
+        }
+        // The exact ladder (escape / via-hop / cross-under / shove)
+        // used to run only as the final 5.97 pass; running it here
+        // lets later passes see the copper and the validator (now
+        // exact on pads too) polices it like everything else.
+        if pathfinder::unreached_sink_count(&board.nets[i], board, &final_routes[i]) > 0
+            && !final_routes[i].is_empty()
+        {
+            total += offgrid_escape(board, final_routes, i);
         }
     }
     total
@@ -3568,6 +3610,7 @@ fn validate_and_rip(
             hx: f64,
             hy: f64,
             drill_r: f64,
+            corner_r: f64,
         }
         let mut pad_rects: Vec<PadRect> = Vec::new();
         let n_layers = board.layer_stack.layers.len();
@@ -3582,17 +3625,28 @@ fn validate_and_rip(
                 }
                 let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
                 let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
-                let (pw, ph, thru, drill_r) = match &pin.pad {
-                    Some(p) => (
-                        p.width_mm,
-                        p.height_mm,
-                        p.drill_mm.is_some(),
-                        p.drill_mm.unwrap_or(0.0) / 2.0,
-                    ),
+                let (pw, ph, thru, drill_r, corner_r) = match &pin.pad {
+                    Some(p) => {
+                        let m = p.width_mm.min(p.height_mm);
+                        // Same shape rule the exporter emits.
+                        let r = match p.shape {
+                            crate::types::PadShapeKind::RoundRect => 0.25 * m,
+                            crate::types::PadShapeKind::Oval
+                            | crate::types::PadShapeKind::Circle => m / 2.0,
+                            crate::types::PadShapeKind::Rect => 0.0,
+                        };
+                        (
+                            p.width_mm,
+                            p.height_mm,
+                            p.drill_mm.is_some(),
+                            p.drill_mm.unwrap_or(0.0) / 2.0,
+                            r,
+                        )
+                    }
                     // 0.5 matches the EXPORTER's fallback pad — the validator
                     // modeling 0.8 while the file ships 0.5 let stubs pass
                     // as pad-anchored that KiCad sees dangling.
-                    None => (0.5, 0.5, false, 0.0),
+                    None => (0.5, 0.5, false, 0.0, 0.0),
                 };
                 let (pw, ph) = if quarter == 1 { (ph, pw) } else { (pw, ph) };
                 let on_top = thru || matches!(comp.side, BoardSide::Top);
@@ -3606,26 +3660,29 @@ fn validate_and_rip(
                     hx: pw / 2.0,
                     hy: ph / 2.0,
                     drill_r,
+                    corner_r,
                 });
             }
         }
         let pad_on_layer = |p: &PadRect, layer: usize| -> bool {
             (layer == 0 && p.layer_top) || (layer == n_layers - 1 && p.layer_bot)
         };
-        // Min distance from segment AB to an axis-aligned rect ≈ distance
-        // to the rect's center clamped by extents: sample-based (rects
-        // are small vs segments; 9 samples along the segment suffice at
-        // 0.3mm cells).
+        // Exact segment-to-pad distance on the EXPORTED shape: a
+        // roundrect/oval is the Minkowski sum of the corner-inset rect
+        // and a disc, so distance = dist(seg, inset rect) − corner_r.
+        // (Replaces a 9-sample box test that was stricter than KiCad
+        // at corners and could miss grazes between samples.)
         let seg_hits_rect = |a: (f64, f64), b: (f64, f64), p: &PadRect, gap: f64| -> bool {
-            for i in 0..=8 {
-                let t = i as f64 / 8.0;
-                let x = a.0 + t * (b.0 - a.0);
-                let y = a.1 + t * (b.1 - a.1);
-                if (x - p.cx).abs() < p.hx + gap && (y - p.cy).abs() < p.hy + gap {
-                    return true;
-                }
-            }
-            false
+            let rc = p.corner_r.min(p.hx).min(p.hy);
+            geom::segment_rect_dist(
+                a,
+                b,
+                p.cx - p.hx + rc,
+                p.cy - p.hy + rc,
+                p.cx + p.hx - rc,
+                p.cy + p.hy - rc,
+            ) - rc
+                < gap - 1e-6
         };
 
         let mut ripped = 0usize;
@@ -3896,12 +3953,20 @@ fn validate_and_rip(
                         if p.net == Some(net_id) {
                             continue;
                         }
-                        if (v.x - p.cx).abs() < p.hx + pad_margin
-                            && (v.y - p.cy).abs() < p.hy + pad_margin
                         {
-                            bad = true;
-                            why = "foreign-pad";
-                            break;
+                            // Exact roundrect distance (inset rect +
+                            // disc) — the old Chebyshev box was
+                            // stricter than KiCad at pad corners and
+                            // amputated gate-legal cross-under vias in
+                            // an endless re-commit loop.
+                            let rc = p.corner_r.min(p.hx).min(p.hy);
+                            let nx = v.x.clamp(p.cx - p.hx + rc, p.cx + p.hx - rc);
+                            let ny = v.y.clamp(p.cy - p.hy + rc, p.cy + p.hy - rc);
+                            if (v.x - nx).hypot(v.y - ny) - rc < pad_margin - 1e-6 {
+                                bad = true;
+                                why = "foreign-pad";
+                                break;
+                            }
                         }
                         // hole_to_hole: drill-to-drill spacing for THT
                         // pads (board setup default 0.25mm).
