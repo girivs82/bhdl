@@ -369,6 +369,62 @@ impl ClearanceIndex {
     }
 }
 
+// ── M2: off-grid escape routing ─────────────────────────────────────
+
+/// Continuous-geometry single-layer connect: exact endpoints, no grid.
+/// Tries direct, both L-bends, then Z-paths with sampled middle legs —
+/// every leg exact-checked against the index. Returns the polyline on
+/// success. This is the last-mile router for sinks the grid walls in:
+/// the pad's CELL is blocked but a skinny off-grid corridor exists.
+pub fn route_escape(
+    idx: &ClearanceIndex,
+    from: (f64, f64),
+    to: (f64, f64),
+    width: f64,
+    layer: usize,
+    net: NetId,
+) -> Option<Vec<(f64, f64)>> {
+    let clear = |a: (f64, f64), b: (f64, f64)| -> bool {
+        (a.0 - b.0).hypot(a.1 - b.1) < 1e-9
+            || idx.first_conflict(a, b, width, layer, net).is_none()
+    };
+    // Direct.
+    if clear(from, to) {
+        return Some(vec![from, to]);
+    }
+    // L-bends.
+    for corner in [(from.0, to.1), (to.0, from.1)] {
+        if clear(from, corner) && clear(corner, to) {
+            return Some(vec![from, corner, to]);
+        }
+    }
+    // Z-paths: middle leg at sampled coordinate ± offsets, both
+    // orientations (HVH: middle leg vertical at x=c; VHV: horizontal
+    // at y=c).
+    let offsets = [0.0, 0.3, -0.3, 0.6, -0.6, 1.0, -1.0, 1.5, -1.5];
+    for t in [0.5, 0.25, 0.75] {
+        let cx0 = from.0 + t * (to.0 - from.0);
+        let cy0 = from.1 + t * (to.1 - from.1);
+        for off in offsets {
+            // HVH: from → (c,from.y) → (c,to.y) → to
+            let c = cx0 + off;
+            let p1 = (c, from.1);
+            let p2 = (c, to.1);
+            if clear(from, p1) && clear(p1, p2) && clear(p2, to) {
+                return Some(vec![from, p1, p2, to]);
+            }
+            // VHV: from → (from.x,c) → (to.x,c) → to
+            let c = cy0 + off;
+            let p1 = (from.0, c);
+            let p2 = (to.0, c);
+            if clear(from, p1) && clear(p1, p2) && clear(p2, to) {
+                return Some(vec![from, p1, p2, to]);
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

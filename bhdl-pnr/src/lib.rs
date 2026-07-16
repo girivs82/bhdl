@@ -883,6 +883,30 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         routed_count, total_nets, plane_nets, drc_violations.len()
     );
 
+    // 5.97. M2 OFF-GRID ESCAPE — the LAST routing pass, after every
+    // validate: the 2-layer tail's sinks die when final validates
+    // amputate grid-built extensions with no repair stage after. The
+    // continuous router connects each still-unreached pad straight to
+    // tree copper (direct / L / sampled-Z), every leg exact-checked
+    // against the ClearanceIndex — legal BY CONSTRUCTION, the first
+    // copper that ships without a validator pass (M3 preview; the
+    // KiCad oracle still grades the result).
+    {
+        let mut escaped = 0usize;
+        for i in 0..board.nets.len() {
+            if board.nets[i].plane_layer.is_some() || final_routes[i].is_empty() {
+                continue;
+            }
+            if pathfinder::unreached_sink_count(&board.nets[i], &board, &final_routes[i]) > 0
+            {
+                escaped += offgrid_escape(&board, &mut final_routes, i);
+            }
+        }
+        if escaped > 0 {
+            info!("off-grid escape: {escaped} sink(s) connected exactly");
+        }
+    }
+
     let connected_sinks = pathfinder::count_connected_sinks(&board, &final_routes);
 
     // ── Constraint sign-off (constraint synthesis v1) ──
@@ -1717,6 +1741,133 @@ fn completion_pass(board: &Board, final_routes: &mut Vec<Route>) -> usize {
     total
 }
 
+/// Connect each unreached pad of net `i` to its nearest tree copper
+/// with geom::route_escape. Returns sinks gained.
+fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usize {
+    use crate::routing::pathfinder::route_components;
+    let net = &board.nets[i];
+    let width = net.required_trace_width_mm;
+    let comp_idx: std::collections::HashMap<ComponentId, usize> = board
+        .components
+        .iter()
+        .enumerate()
+        .map(|(k, c)| (c.id, k))
+        .collect();
+    let n_layers = board.layer_stack.layers.len();
+    let mut gained = 0usize;
+    loop {
+        let route = &final_routes[i];
+        if route.is_empty() {
+            return gained;
+        }
+        let comps = route_components(route);
+        let tree = {
+            let mut pop: std::collections::HashMap<usize, usize> =
+                std::collections::HashMap::new();
+            for &c in &comps {
+                *pop.entry(c).or_insert(0) += 1;
+            }
+            pop.into_iter()
+                .max_by_key(|&(c, n)| (n, std::cmp::Reverse(c)))
+                .map(|(c, _)| c)
+        };
+        // First unreached pad.
+        let mut target: Option<((f64, f64), usize)> = None; // (pad, layer)
+        for &(cid, pid) in &net.pins {
+            let Some(&ci) = comp_idx.get(&cid) else { continue };
+            let comp = &board.components[ci];
+            let Some(pin) = comp.pins.iter().find(|p| p.pin_id == pid) else { continue };
+            if pin.unplaced {
+                continue;
+            }
+            let cos_t = comp.theta.cos();
+            let sin_t = comp.theta.sin();
+            let px = comp.x + pin.dx * cos_t - pin.dy * sin_t;
+            let py = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+            let half = pin
+                .pad
+                .as_ref()
+                .map(|p| p.width_mm.min(p.height_mm) / 2.0)
+                .unwrap_or(0.25);
+            let touched = route.segments.iter().enumerate().any(|(si, sg)| {
+                Some(comps[si]) == tree
+                    && geom::point_segment_dist((px, py), sg.start, sg.end)
+                        < sg.width_mm / 2.0 + half - 0.001
+            });
+            if !touched {
+                let layer = match comp.side {
+                    BoardSide::Top => 0,
+                    BoardSide::Bottom => n_layers - 1,
+                };
+                target = Some(((px, py), layer));
+                break;
+            }
+        }
+        let Some(((px, py), layer)) = target else { return gained };
+        // Candidate attach points: projections onto same-layer tree
+        // segments, nearest first, top 5.
+        let mut attach: Vec<((f64, f64), f64)> = route
+            .segments
+            .iter()
+            .enumerate()
+            .filter(|(si, sg)| Some(comps[*si]) == tree && sg.layer == layer)
+            .map(|(_, sg)| {
+                let (dx, dy) = (sg.end.0 - sg.start.0, sg.end.1 - sg.start.1);
+                let l2 = dx * dx + dy * dy;
+                let t = if l2 <= 1e-12 {
+                    0.0
+                } else {
+                    (((px - sg.start.0) * dx + (py - sg.start.1) * dy) / l2)
+                        .clamp(0.0, 1.0)
+                };
+                let q = (sg.start.0 + t * dx, sg.start.1 + t * dy);
+                let d = (px - q.0).hypot(py - q.1);
+                (q, d)
+            })
+            .collect();
+        attach.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        attach.truncate(5);
+        if attach.is_empty() {
+            return gained;
+        }
+        let cidx = geom::ClearanceIndex::build(board, final_routes, Some(net.id));
+        let mut connected = false;
+        for (q, _) in attach {
+            if let Some(path) = geom::route_escape(&cidx, (px, py), q, width, layer, net.id)
+            {
+                let route = &mut final_routes[i];
+                let seg_start = route.segments.len();
+                for w in path.windows(2) {
+                    if (w[0].0 - w[1].0).hypot(w[0].1 - w[1].1) > 1e-9 {
+                        route.segments.push(RouteSegment {
+                            layer,
+                            start: w[0],
+                            end: w[1],
+                            width_mm: width,
+                        });
+                    }
+                }
+                let n_new = route.segments.len() - seg_start;
+                if n_new > 0 {
+                    route.path_spans.push((seg_start, n_new));
+                    route.path_parents.push(None);
+                    route.via_spans.push((route.vias.len(), 0));
+                    info!(
+                        "completion: OFF-GRID escape connected a '{}' pad at ({px:.2},{py:.2}) ({n_new} seg(s))",
+                        net.name
+                    );
+                    gained += 1;
+                    connected = true;
+                }
+                break;
+            }
+        }
+        if !connected {
+            return gained;
+        }
+    }
+}
+
 /// Targeted single-victim rip-up-and-reroute for the completion pass.
 /// Returns sinks gained.
 fn shove_one_blocker(
@@ -2267,6 +2418,11 @@ fn plane_via_drops(
             final_routes,
             net.id,
         ));
+        // Exact-clearance index for STUB legality (P1 kernel M1b —
+        // replaces this file's second hand-rolled predicate copy).
+        // Rebuilt per net: earlier nets' drops in this pass are
+        // foreign copper the index must see.
+        let cidx = geom::ClearanceIndex::build(board, final_routes, Some(net.id));
         for &(comp_id, pin_id) in &net.pins {
             let Some(&ci) = comp_idx.get(&comp_id) else { continue };
             let comp = &board.components[ci];
@@ -2389,60 +2545,17 @@ fn plane_via_drops(
                         return false;
                     }
                 }
-                // The STUB pad→via must also be legal, not just the via
-                // site: the repair pass can need multi-mm stubs (region
-                // projection, ring 10), and an unvalidated stub plows
-                // straight through whatever recovery routed in between
-                // (shipped as shorting_items on the fpga board).
-                let stub_a = (px, py);
-                let stub_b = (x, y);
-                for (k, r) in final_routes.iter().enumerate() {
-                    if k == i {
-                        continue; // own copper may touch its own stub
-                    }
-                    for sg in &r.segments {
-                        if sg.layer != stub_layer {
-                            continue;
-                        }
-                        if segments_too_close(
-                            stub_a,
-                            stub_b,
-                            sg.start,
-                            sg.end,
-                            share / 2.0 + sg.width_mm / 2.0 + clearance,
-                        ) {
-                            return false;
-                        }
-                    }
-                    for v in &r.vias {
-                        if segment_point_too_close(
-                            stub_a,
-                            stub_b,
-                            (v.x, v.y),
-                            share / 2.0 + via_r + clearance,
-                        ) {
-                            return false;
-                        }
-                    }
-                }
-                for p in &pads {
-                    if p.net == Some(net.id) {
-                        continue;
-                    }
-                    // Pad rect approximated by its four edges.
-                    let (x0, y0, x1, y1) =
-                        (p.cx - p.hx, p.cy - p.hy, p.cx + p.hx, p.cy + p.hy);
-                    let edges = [
-                        ((x0, y0), (x1, y0)),
-                        ((x1, y0), (x1, y1)),
-                        ((x1, y1), (x0, y1)),
-                        ((x0, y1), (x0, y0)),
-                    ];
-                    if edges.iter().any(|&(a, b)| {
-                        segments_too_close(stub_a, stub_b, a, b, share / 2.0 + clearance)
-                    }) {
-                        return false;
-                    }
+                // The STUB pad→via must also be legal, not just the
+                // via site: the repair pass can need multi-mm stubs
+                // (region projection, ring 10), and an unvalidated
+                // stub plows straight through whatever recovery routed
+                // in between (shipped as shorting_items on the fpga
+                // board). One exact-geometry query (P1 kernel).
+                if cidx
+                    .first_conflict((px, py), (x, y), share, stub_layer, net.id)
+                    .is_some()
+                {
+                    return false;
                 }
                 true
             };
