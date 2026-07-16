@@ -332,6 +332,7 @@ pub fn lower_interface_constraints(
                             n_net,
                             spacing_mm: 0.15,
                             length_match_mm: 0.1,
+                            length_match_ps: None,
                             source: src(&c.key, "differential"),
                         });
                         for net in [p_net, n_net] {
@@ -411,6 +412,9 @@ pub fn lower_interface_constraints(
                     out.push(Constraint::LengthMatchGroup {
                         nets: vec![na, nb],
                         tolerance_mm: ps / PS_PER_MM,
+                        // Declared in TIME — the sign-off grades routed
+                        // delay with per-layer stackup velocities.
+                        tolerance_ps: Some(*ps),
                         hardness: crate::constraint::Hardness::Hard,
                         source: src(&c.key, "length_match"),
                     });
@@ -423,6 +427,7 @@ pub fn lower_interface_constraints(
                     out.push(Constraint::LengthMatchGroup {
                         nets: vec![na, nb],
                         tolerance_mm: ps / PS_PER_MM,
+                        tolerance_ps: Some(*ps),
                         hardness: crate::constraint::Hardness::Soft {
                             shape: crate::constraint::CostShape::Hinge { slack: 0.0 },
                             weight: 1.0,

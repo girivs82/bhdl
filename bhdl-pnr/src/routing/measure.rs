@@ -174,6 +174,77 @@ pub(crate) fn pin_stub_length(
     len
 }
 
+/// Speed of light: 3.336 ps/mm in vacuum.
+const PS_PER_MM_C: f64 = 3.335_640_95;
+
+/// Per-layer propagation delay (ps/mm) from the DECLARED stackup —
+/// material dependence rides the declared εr, never an assumed FR4:
+/// - outer layers = microstrip: Hammerstad effective permittivity
+///   εr_eff ≈ (εr+1)/2 + (εr−1)/2·(1+12h/w)^−1/2 (field splits
+///   between air and dielectric; needs the trace width)
+/// - inner layers = stripline: the field is entirely in the
+///   dielectric, delay = 3.336·√εr
+pub(crate) fn layer_delay_ps_per_mm(stack: &LayerStack, layer: usize, w_mm: f64) -> f64 {
+    let n = stack.layers.len();
+    let outer = layer == 0 || layer + 1 == n;
+    if outer && !stack.dielectrics.is_empty() {
+        let d = if layer == 0 {
+            &stack.dielectrics[0]
+        } else {
+            stack.dielectrics.last().unwrap()
+        };
+        let er = d.er;
+        let h = d.thickness_mm.max(1e-3);
+        let w = w_mm.max(1e-3);
+        let er_eff = (er + 1.0) / 2.0 + (er - 1.0) / 2.0 / (1.0 + 12.0 * h / w).sqrt();
+        return PS_PER_MM_C * er_eff.sqrt();
+    }
+    // Inner signal layer: εr of the surrounding dielectrics (mean of
+    // the two adjacent when both exist).
+    let er = if stack.dielectrics.is_empty() {
+        4.3 // no dielectric declared at all — documented FR4 default
+    } else {
+        let above = stack.dielectrics.get(layer.saturating_sub(1));
+        let below = stack.dielectrics.get(layer.min(stack.dielectrics.len() - 1));
+        match (above, below) {
+            (Some(a), Some(b)) => (a.er + b.er) / 2.0,
+            (Some(a), None) => a.er,
+            (None, Some(b)) => b.er,
+            (None, None) => 4.3,
+        }
+    };
+    PS_PER_MM_C * er.sqrt()
+}
+
+/// Routed propagation delay of a net (ps): each tree segment's length
+/// × its LAYER's delay. A millimeter of copper is not a constant
+/// amount of time — outer microstrip runs faster than inner stripline.
+pub(crate) fn net_routed_delay_ps(route: &Route, stack: &LayerStack) -> f64 {
+    if route.is_empty() {
+        return 0.0;
+    }
+    let comps = route_components(route);
+    let tree = {
+        let mut pop: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        for &c in &comps {
+            *pop.entry(c).or_insert(0) += 1;
+        }
+        pop.into_iter()
+            .max_by_key(|&(c, n)| (n, std::cmp::Reverse(c)))
+            .map(|(c, _)| c)
+    };
+    route
+        .segments
+        .iter()
+        .enumerate()
+        .filter(|(si, _)| Some(comps[*si]) == tree)
+        .map(|(_, sg)| {
+            let len = (sg.end.0 - sg.start.0).hypot(sg.end.1 - sg.start.1);
+            len * layer_delay_ps_per_mm(stack, sg.layer, sg.width_mm)
+        })
+        .sum()
+}
+
 /// IPC-2141 surface-microstrip impedance for width `w` over dielectric
 /// height `h` (both mm), trace thickness `t`, relative permittivity
 /// `er`. Valid for 0.1 < w/h < 3 — the practical PCB range.
@@ -205,6 +276,18 @@ pub(crate) fn microstrip_width_for(z0: f64, h_mm: f64, t_mm: f64, er: f64) -> Op
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stripline_delay_tracks_material() {
+        let stack = crate::stackup::stackup_preset(crate::types::StackupPreset::FourLayer);
+        // Inner layer over the FR4 core (εr 4.2/4.3): ~6.9 ps/mm.
+        let d_in = layer_delay_ps_per_mm(&stack, 1, 0.15);
+        assert!((6.5..7.2).contains(&d_in), "stripline {d_in}");
+        // Outer microstrip is FASTER (field partly in air).
+        let d_out = layer_delay_ps_per_mm(&stack, 0, 0.15);
+        assert!(d_out < d_in, "microstrip {d_out} vs stripline {d_in}");
+        assert!((5.0..6.5).contains(&d_out), "microstrip {d_out}");
+    }
 
     #[test]
     fn microstrip_roundtrip() {

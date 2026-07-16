@@ -198,12 +198,18 @@ pub enum Constraint {
         n_net: NetId,
         spacing_mm: f32,
         length_match_mm: f32,
+        /// Set when the budget was DECLARED in time — the sign-off then
+        /// grades routed DELAY (per-layer velocity from the stackup)
+        /// instead of length.
+        length_match_ps: Option<f32>,
         source: ConstraintSource,
     },
     /// Length-match group. (Router-side.)
     LengthMatchGroup {
         nets: Vec<NetId>,
         tolerance_mm: f32,
+        /// Declared-in-time budget — see DiffPair::length_match_ps.
+        tolerance_ps: Option<f32>,
         hardness: Hardness,
         source: ConstraintSource,
     },

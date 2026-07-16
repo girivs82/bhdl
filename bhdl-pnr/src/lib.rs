@@ -881,51 +881,95 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                     // The pair-lowering default is 0.1mm; a user-declared
                     // `length_match` on the same two nets arrives as a
                     // LengthMatchGroup — that tolerance is the designer's
-                    // word and wins.
-                    let limit = board
-                        .constraints
-                        .iter()
-                        .find_map(|c2| match c2 {
-                            Constraint::LengthMatchGroup { nets, tolerance_mm, .. }
-                                if nets.contains(p_net) && nets.contains(n_net) =>
-                            {
-                                Some(*tolerance_mm)
-                            }
-                            _ => None,
-                        })
-                        .unwrap_or(*length_match_mm);
-                    let ok = skew <= limit as f64 && lp > 0.0 && ln > 0.0;
-                    rows.push(format!(
-                        "diff-pair {} / {}: P={lp:.2}mm N={ln:.2}mm skew={skew:.3}mm (limit {limit}mm) coupled={:.0}% — {}",
-                        board.nets[pi].name,
-                        board.nets[ni].name,
-                        coupled * 100.0,
-                        if ok { "PASS" } else { "FAIL" }
-                    ));
+                    // word and wins. A budget DECLARED IN TIME grades
+                    // routed DELAY (per-layer stackup velocity): a
+                    // millimeter of outer microstrip is not a millimeter
+                    // of inner stripline.
+                    let covering = board.constraints.iter().find_map(|c2| match c2 {
+                        Constraint::LengthMatchGroup {
+                            nets, tolerance_mm, tolerance_ps, ..
+                        } if nets.contains(p_net) && nets.contains(n_net) => {
+                            Some((*tolerance_mm, *tolerance_ps))
+                        }
+                        _ => None,
+                    });
+                    match covering {
+                        Some((_, Some(limit_ps))) => {
+                            let dp = routing::measure::net_routed_delay_ps(
+                                &final_routes[pi],
+                                &board.layer_stack,
+                            );
+                            let dn = routing::measure::net_routed_delay_ps(
+                                &final_routes[ni],
+                                &board.layer_stack,
+                            );
+                            let skew_ps = (dp - dn).abs();
+                            let ok = skew_ps <= limit_ps as f64 && lp > 0.0 && ln > 0.0;
+                            rows.push(format!(
+                                "diff-pair {} / {}: P={dp:.1}ps N={dn:.1}ps skew={skew_ps:.2}ps (limit {limit_ps}ps) coupled={:.0}% — {}",
+                                board.nets[pi].name,
+                                board.nets[ni].name,
+                                coupled * 100.0,
+                                if ok { "PASS" } else { "FAIL" }
+                            ));
+                        }
+                        _ => {
+                            let limit =
+                                covering.map(|(mm, _)| mm).unwrap_or(*length_match_mm);
+                            let ok = skew <= limit as f64 && lp > 0.0 && ln > 0.0;
+                            rows.push(format!(
+                                "diff-pair {} / {}: P={lp:.2}mm N={ln:.2}mm skew={skew:.3}mm (limit {limit}mm) coupled={:.0}% — {}",
+                                board.nets[pi].name,
+                                board.nets[ni].name,
+                                coupled * 100.0,
+                                if ok { "PASS" } else { "FAIL" }
+                            ));
+                        }
+                    }
                 }
-                Constraint::LengthMatchGroup { nets, tolerance_mm, .. } => {
-                    let lens: Vec<(String, f64)> = nets
-                        .iter()
-                        .filter_map(|nid| idx_of(*nid))
-                        .map(|i| {
-                            (
-                                board.nets[i].name.clone(),
-                                routing::measure::net_routed_length(&final_routes[i]),
-                            )
-                        })
-                        .collect();
-                    if lens.len() < 2 {
+                Constraint::LengthMatchGroup { nets, tolerance_mm, tolerance_ps, .. } => {
+                    let idxs: Vec<usize> =
+                        nets.iter().filter_map(|nid| idx_of(*nid)).collect();
+                    if idxs.len() < 2 {
                         continue;
                     }
-                    let min = lens.iter().map(|l| l.1).fold(f64::INFINITY, f64::min);
-                    let max = lens.iter().map(|l| l.1).fold(0.0_f64, f64::max);
-                    let spread = max - min;
-                    let ok = spread <= *tolerance_mm as f64 && min > 0.0;
-                    rows.push(format!(
-                        "length-match ({} nets): spread={spread:.3}mm (tolerance {tolerance_mm}mm) — {}",
-                        lens.len(),
-                        if ok { "PASS" } else { "FAIL" }
-                    ));
+                    if let Some(limit_ps) = tolerance_ps {
+                        // Declared in TIME: grade routed delay.
+                        let delays: Vec<f64> = idxs
+                            .iter()
+                            .map(|&i| {
+                                routing::measure::net_routed_delay_ps(
+                                    &final_routes[i],
+                                    &board.layer_stack,
+                                )
+                            })
+                            .collect();
+                        let min = delays.iter().cloned().fold(f64::INFINITY, f64::min);
+                        let max = delays.iter().cloned().fold(0.0_f64, f64::max);
+                        let spread = max - min;
+                        let ok = spread <= *limit_ps as f64 && min > 0.0;
+                        rows.push(format!(
+                            "delay-match ({} nets): spread={spread:.2}ps (tolerance {limit_ps}ps) — {}",
+                            idxs.len(),
+                            if ok { "PASS" } else { "FAIL" }
+                        ));
+                    } else {
+                        let lens: Vec<f64> = idxs
+                            .iter()
+                            .map(|&i| {
+                                routing::measure::net_routed_length(&final_routes[i])
+                            })
+                            .collect();
+                        let min = lens.iter().cloned().fold(f64::INFINITY, f64::min);
+                        let max = lens.iter().cloned().fold(0.0_f64, f64::max);
+                        let spread = max - min;
+                        let ok = spread <= *tolerance_mm as f64 && min > 0.0;
+                        rows.push(format!(
+                            "length-match ({} nets): spread={spread:.3}mm (tolerance {tolerance_mm}mm) — {}",
+                            idxs.len(),
+                            if ok { "PASS" } else { "FAIL" }
+                        ));
+                    }
                 }
                 Constraint::Impedance { net, target_ohms, .. } => {
                     let Some(i) = idx_of(*net) else { continue };
