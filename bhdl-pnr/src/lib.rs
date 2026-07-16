@@ -824,7 +824,6 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
             // this round (escape / via-hop / cross-under / shove).
             for &i in &ripped {
                 if board.nets[i].plane_layer.is_none()
-                    && !final_routes[i].is_empty()
                     && pathfinder::unreached_sink_count(
                         &board.nets[i],
                         &board,
@@ -966,7 +965,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
     {
         let mut escaped = 0usize;
         for i in 0..board.nets.len() {
-            if board.nets[i].plane_layer.is_some() || final_routes[i].is_empty() {
+            if board.nets[i].plane_layer.is_some() {
                 continue;
             }
             if pathfinder::unreached_sink_count(&board.nets[i], &board, &final_routes[i]) > 0
@@ -2025,9 +2024,7 @@ fn completion_pass(board: &Board, final_routes: &mut Vec<Route>) -> usize {
         // used to run only as the final 5.97 pass; running it here
         // lets later passes see the copper and the validator (now
         // exact on pads too) polices it like everything else.
-        if pathfinder::unreached_sink_count(&board.nets[i], board, &final_routes[i]) > 0
-            && !final_routes[i].is_empty()
-        {
+        if pathfinder::unreached_sink_count(&board.nets[i], board, &final_routes[i]) > 0 {
             total += offgrid_escape(board, final_routes, i);
         }
     }
@@ -2305,6 +2302,203 @@ fn claim_via_site(
 
 /// Connect each unreached pad of net `i` to its nearest tree copper
 /// with geom::route_escape. Returns sinks gained.
+/// Bootstrap a WHOLE-NET failure: an empty route has no tree copper
+/// for the escape ladder to attach to, so connect the net's first
+/// pad pair directly — same-layer exact route, then shove-assisted,
+/// then via-hop (mixed layers) / cross-under (same layer, crossing
+/// fence). Returns true when a first span was committed.
+pub fn bootstrap_empty_route(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> bool {
+    let net = &board.nets[i];
+    let width = net.required_trace_width_mm;
+    let n_layers = board.layer_stack.layers.len();
+    let comp_idx: std::collections::HashMap<ComponentId, usize> = board
+        .components
+        .iter()
+        .enumerate()
+        .map(|(k, c)| (c.id, k))
+        .collect();
+    let mut pads: Vec<((f64, f64), usize, bool)> = Vec::new(); // pos, layer, thru
+    for &(cid, pid) in &net.pins {
+        let Some(&ci) = comp_idx.get(&cid) else { continue };
+        let comp = &board.components[ci];
+        let Some(pin) = comp.pins.iter().find(|p| p.pin_id == pid) else { continue };
+        if pin.unplaced {
+            continue;
+        }
+        let cos_t = comp.theta.cos();
+        let sin_t = comp.theta.sin();
+        let px = comp.x + pin.dx * cos_t - pin.dy * sin_t;
+        let py = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+        let layer = match comp.side {
+            BoardSide::Top => 0,
+            BoardSide::Bottom => n_layers - 1,
+        };
+        let thru = pin.pad.as_ref().map(|p| p.drill_mm.is_some()).unwrap_or(false);
+        pads.push(((px, py), layer, thru));
+    }
+    if pads.len() < 2 {
+        return false;
+    }
+    let (seed, seed_layer, seed_thru) = pads[0];
+    let mut targets: Vec<((f64, f64), usize, bool)> = pads[1..].to_vec();
+    targets.sort_by(|a, b| {
+        let da = (a.0 .0 - seed.0).hypot(a.0 .1 - seed.1);
+        let db = (b.0 .0 - seed.0).hypot(b.0 .1 - seed.1);
+        da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let via_r = board.layer_stack.via.pad_mm / 2.0;
+    let hole_gap = board.layer_stack.via.drill_mm + 0.25;
+    let net_id = net.id;
+    for &(tgt, tgt_layer, tgt_thru) in targets.iter().take(3) {
+        // Layers the pair can legally meet on: THT pads reach every
+        // layer; SMD pads only their side.
+        let common: Option<usize> = if seed_layer == tgt_layer {
+            Some(seed_layer)
+        } else if seed_thru {
+            Some(tgt_layer)
+        } else if tgt_thru {
+            Some(seed_layer)
+        } else {
+            None
+        };
+        // 1) direct exact route on a common layer, with shoves.
+        if let Some(l) = common {
+            let mut snaps: Vec<(usize, Route)> = Vec::new();
+            for _round in 0..3 {
+                let idx = geom::ClearanceIndex::build(board, final_routes, Some(net_id));
+                if let Some(path) = geom::route_escape(&idx, seed, tgt, width, l, net_id) {
+                    commit_escape(&mut final_routes[i], &path, l, width, None, &net.name);
+                    info!(
+                        "bootstrap: whole-net '{}' seeded pad-to-pad on layer {l}",
+                        net.name
+                    );
+                    return true;
+                }
+                let Some(bl) = geom::escape_blocker(&idx, seed, tgt, width, l, net_id)
+                else {
+                    break;
+                };
+                if !try_shove_track(
+                    board, final_routes, i, &bl, seed, tgt, width, &mut snaps,
+                ) {
+                    break;
+                }
+            }
+            for (jj, old) in snaps.into_iter().rev() {
+                final_routes[jj] = old;
+            }
+        }
+        // 2) tunnel: via(s) + far-layer leg. Same-layer pair =
+        // cross-under (two vias); mixed pair = single-via hop.
+        let mut budget = 6usize;
+        for l2 in board.layer_stack.signal_layer_indices() {
+            if Some(l2) == common {
+                continue;
+            }
+            let mut snaps: Vec<(usize, Route)> = Vec::new();
+            // Seed side: SMD seed on another layer needs a via.
+            let (v1, seed_leg) = if seed_thru || seed_layer == l2 {
+                (None, None)
+            } else {
+                match claim_via_site(
+                    board, final_routes, i, seed, via_r, None, &mut snaps, &mut budget,
+                ) {
+                    Some(v) => (Some(v), Some((seed, v, seed_layer))),
+                    None => {
+                        for (jj, old) in snaps.into_iter().rev() {
+                            final_routes[jj] = old;
+                        }
+                        continue;
+                    }
+                }
+            };
+            let (v2, tgt_leg) = if tgt_thru || tgt_layer == l2 {
+                (None, None)
+            } else {
+                match claim_via_site(
+                    board, final_routes, i, tgt, via_r, v1, &mut snaps, &mut budget,
+                ) {
+                    Some(v) => (Some(v), Some((v, tgt, tgt_layer))),
+                    None => {
+                        for (jj, old) in snaps.into_iter().rev() {
+                            final_routes[jj] = old;
+                        }
+                        continue;
+                    }
+                }
+            };
+            if let (Some(a), Some(b)) = (v1, v2) {
+                if (a.0 - b.0).hypot(a.1 - b.1)
+                    < hole_gap.max(2.0 * via_r + board.config.min_spacing_mm)
+                {
+                    for (jj, old) in snaps.into_iter().rev() {
+                        final_routes[jj] = old;
+                    }
+                    continue;
+                }
+            }
+            let idx = geom::ClearanceIndex::build(board, final_routes, Some(net_id));
+            let t_from = v1.unwrap_or(seed);
+            let t_to = v2.unwrap_or(tgt);
+            let legs_ok = seed_leg
+                .map(|(a, b, l)| idx.first_conflict(a, b, width, l, net_id).is_none())
+                .unwrap_or(true)
+                && tgt_leg
+                    .map(|(a, b, l)| idx.first_conflict(a, b, width, l, net_id).is_none())
+                    .unwrap_or(true);
+            let tunnel = if legs_ok {
+                geom::route_escape(&idx, t_from, t_to, width, l2, net_id)
+            } else {
+                None
+            };
+            let Some(path) = tunnel else {
+                for (jj, old) in snaps.into_iter().rev() {
+                    final_routes[jj] = old;
+                }
+                continue;
+            };
+            let route = &mut final_routes[i];
+            let seg_start = route.segments.len();
+            let via_start = route.vias.len();
+            if let Some((a, b, l)) = seed_leg {
+                route.segments.push(RouteSegment { layer: l, start: a, end: b, width_mm: width });
+            }
+            for w in path.windows(2) {
+                if (w[0].0 - w[1].0).hypot(w[0].1 - w[1].1) > 1e-9 {
+                    route.segments.push(RouteSegment {
+                        layer: l2,
+                        start: w[0],
+                        end: w[1],
+                        width_mm: width,
+                    });
+                }
+            }
+            if let Some((a, b, l)) = tgt_leg {
+                route.segments.push(RouteSegment { layer: l, start: a, end: b, width_mm: width });
+            }
+            let n_l = board.layer_stack.layers.len() - 1;
+            let mut n_vias = 0usize;
+            if let Some(v) = v1 {
+                route.vias.push(RouteVia { x: v.0, y: v.1, from_layer: 0, to_layer: n_l });
+                n_vias += 1;
+            }
+            if let Some(v) = v2 {
+                route.vias.push(RouteVia { x: v.0, y: v.1, from_layer: 0, to_layer: n_l });
+                n_vias += 1;
+            }
+            route.path_spans.push((seg_start, route.segments.len() - seg_start));
+            route.path_parents.push(None);
+            route.via_spans.push((via_start, n_vias));
+            info!(
+                "bootstrap: whole-net '{}' seeded through layer {l2} ({} via(s))",
+                net.name, n_vias
+            );
+            return true;
+        }
+    }
+    false
+}
+
 fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usize {
     use crate::routing::pathfinder::route_components;
     let net = &board.nets[i];
@@ -2320,7 +2514,13 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
     loop {
         let route = &final_routes[i];
         if route.is_empty() {
-            return gained;
+            // Whole-net failure: seed a first pad-to-pad span, then
+            // the normal per-pad ladder takes over.
+            if !bootstrap_empty_route(board, final_routes, i) {
+                return gained;
+            }
+            gained += 1;
+            continue;
         }
         let comps = route_components(route);
         let tree = {
