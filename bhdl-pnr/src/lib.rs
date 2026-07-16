@@ -1700,8 +1700,122 @@ fn completion_pass(board: &Board, final_routes: &mut Vec<Route>) -> usize {
             final_routes[i] = route;
             total += got;
         }
+        // TARGETED RIP-UP-AND-REROUTE (single victim): a sink still
+        // walled in after extension is usually fenced by ONE other
+        // net's copper. Rip the cheapest nearby candidate, extend
+        // ourselves through the freed corridor, re-route the victim
+        // from scratch on what remains — accepted only when the
+        // board's total unreached strictly drops; otherwise both
+        // revert. (NOT push-and-shove: the victim is rebuilt, not
+        // geometrically deformed — true shove needs the continuous-
+        // geometry kernel parked as P1.)
+        if pathfinder::unreached_sink_count(&board.nets[i], board, &final_routes[i]) > 0 {
+            total += shove_one_blocker(board, final_routes, i);
+        }
     }
     total
+}
+
+/// Targeted single-victim rip-up-and-reroute for the completion pass.
+/// Returns sinks gained.
+fn shove_one_blocker(
+    board: &Board,
+    final_routes: &mut Vec<Route>,
+    i: usize,
+) -> usize {
+    // Unreached pad positions of net i (targets to unblock).
+    let comp_idx: std::collections::HashMap<ComponentId, usize> = board
+        .components
+        .iter()
+        .enumerate()
+        .map(|(k, c)| (c.id, k))
+        .collect();
+    let pads: Vec<(f64, f64)> = board.nets[i]
+        .pins
+        .iter()
+        .filter_map(|&(cid, pid)| {
+            let comp = &board.components[*comp_idx.get(&cid)?];
+            let pin = comp.pins.iter().find(|p| p.pin_id == pid)?;
+            let cos_t = comp.theta.cos();
+            let sin_t = comp.theta.sin();
+            Some((
+                comp.x + pin.dx * cos_t - pin.dy * sin_t,
+                comp.y + pin.dx * sin_t + pin.dy * cos_t,
+            ))
+        })
+        .collect();
+    // Candidate blockers: routed, non-plane, not us, copper within 3mm
+    // of any of our pads; cheapest routed length first; cap 6.
+    let mut candidates: Vec<(usize, f64)> = Vec::new();
+    for (j, r) in final_routes.iter().enumerate() {
+        if j == i || r.is_empty() || board.nets[j].plane_layer.is_some() {
+            continue;
+        }
+        let near = r.segments.iter().any(|sg| {
+            pads.iter().any(|&(px, py)| {
+                segment_point_too_close(sg.start, sg.end, (px, py), 3.0)
+            })
+        });
+        if near {
+            candidates.push((j, routing::measure::net_routed_length(r)));
+        }
+    }
+    candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    candidates.truncate(6);
+
+    let before_i = pathfinder::unreached_sink_count(&board.nets[i], board, &final_routes[i]);
+    for (j, _) in candidates {
+        let snap_i = final_routes[i].clone();
+        let snap_j = final_routes[j].clone();
+        // Grid with everything blocked EXCEPT nets i and j.
+        let mut grid = RoutingGrid::build(board);
+        for (k, r) in final_routes.iter().enumerate() {
+            if k != i && k != j && !r.is_empty() {
+                pathfinder::block_route_geometry(&mut grid, r, board);
+            }
+        }
+        // Extend us with the blocker's copper absent.
+        let mut mine = final_routes[i].clone();
+        let got = pathfinder::extend_route(
+            &mut grid, &board.nets[i], board, &mut mine, 1.0, 1.0, &[], &[], false, None,
+        );
+        if got == 0 {
+            continue; // j wasn't the fence
+        }
+        final_routes[i] = mine;
+        // Re-route the blocker on the updated board.
+        let mut jgrid = RoutingGrid::build(board);
+        for (k, r) in final_routes.iter().enumerate() {
+            if k != j && !r.is_empty() {
+                pathfinder::block_route_geometry(&mut jgrid, r, board);
+            }
+        }
+        let mut fresh = Route::empty(final_routes[j].net_id);
+        pathfinder::extend_route(
+            &mut jgrid, &board.nets[j], board, &mut fresh, 1.0, 1.0, &[], &[], false, None,
+        );
+        let j_unreached_before =
+            pathfinder::unreached_sink_count(&board.nets[j], board, &snap_j);
+        let j_unreached_after =
+            pathfinder::unreached_sink_count(&board.nets[j], board, &fresh);
+        let i_unreached_after =
+            pathfinder::unreached_sink_count(&board.nets[i], board, &final_routes[i]);
+        // Accept only a strict total win.
+        if i_unreached_after + j_unreached_after < before_i + j_unreached_before {
+            final_routes[j] = fresh;
+            info!(
+                "completion shove: '{}' freed by re-routing '{}' (unreached {} → {})",
+                board.nets[i].name,
+                board.nets[j].name,
+                before_i + j_unreached_before,
+                i_unreached_after + j_unreached_after
+            );
+            return before_i.saturating_sub(i_unreached_after);
+        }
+        final_routes[i] = snap_i;
+        final_routes[j] = snap_j;
+    }
+    0
 }
 
 /// Add serpentine length to the short member of each skew-violating
@@ -2674,6 +2788,18 @@ fn validate_and_rip(
                                 board.nets[i].name, sa.start.0, sa.start.1, sa.end.0, sa.end.1,
                                 sa.width_mm, p.cx, p.cy, p.hx, p.hy
                             );
+                            // Ban the offending copper's site: grid-
+                            // pitch quantization lets extensions place
+                            // this exact segment again and again — the
+                            // amputate/rebuild ping-pong never converges
+                            // without marking the spot.
+                            banned_dangles.push((
+                                i,
+                                (
+                                    (sa.start.0 + sa.end.0) / 2.0,
+                                    (sa.start.1 + sa.end.1) / 2.0,
+                                ),
+                            ));
                             offender = Some((i, Some(si)));
                             break 'scan;
                         }
@@ -3033,6 +3159,20 @@ fn validate_and_rip(
                                     board.nets[i].name, sa.start.0, sa.start.1, sa.end.0, sa.end.1, sa.width_mm,
                                     board.nets[j].name, sb.start.0, sb.start.1, sb.end.0, sb.end.1, sb.width_mm
                                 );
+                                // Ban the ripped side's site (same
+                                // ping-pong argument as track-vs-pad).
+                                let (bi, bseg) = if wj <= wi {
+                                    (j, sb)
+                                } else {
+                                    (i, sa)
+                                };
+                                banned_dangles.push((
+                                    bi,
+                                    (
+                                        (bseg.start.0 + bseg.end.0) / 2.0,
+                                        (bseg.start.1 + bseg.end.1) / 2.0,
+                                    ),
+                                ));
                                 offender = Some(if wj <= wi {
                                     (j, Some(sbi))
                                 } else {

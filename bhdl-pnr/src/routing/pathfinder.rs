@@ -371,6 +371,30 @@ fn shortest_path_3d(
             } else {
                 (source_set.clone(), remaining_sinks.clone())
             };
+        // Wide traces claim a ring of cells beyond their centerline —
+        // without this the negotiated router threads a 2mm power trace
+        // through a min-trace-sized gap and the validator amputates it
+        // late (the fat-net unc family; recovery paths already ring-
+        // check).
+        let pitch = if grid.x_coords.len() > 1 {
+            grid.x_coords[1] - grid.x_coords[0]
+        } else {
+            0.25
+        };
+        let extra_half =
+            (net.required_trace_width_mm - board.config.min_trace_width_mm).max(0.0) / 2.0;
+        // Hybrid rounding, measured per regime: heavy power traces
+        // (extra ≥ 0.5mm each side) genuinely need the full ceil ring —
+        // the partial cell holds real copper (buck's 2mm VOUT shipped
+        // only with it). Mid-width nets suffer from ceil's overclaim
+        // (intent_system_demo lost 2 legally-routable sinks) — floor,
+        // and the validator judges the final partial cell.
+        let ratio = extra_half / pitch;
+        let clear_ring = if extra_half >= 0.5 {
+            ratio.ceil() as usize
+        } else {
+            ratio.floor() as usize
+        };
         let result = dijkstra_to_any(
             grid,
             &iter_sources,
@@ -382,7 +406,7 @@ fn shortest_path_3d(
             allow_vias,
             &via_keepout,
             &[],
-            0,
+            clear_ring,
             attract,
         );
 
