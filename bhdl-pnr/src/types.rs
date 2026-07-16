@@ -398,6 +398,10 @@ pub struct Component {
     pub side: BoardSide,
     pub group: Option<GroupId>,
     pub thermal_power_w: f64,
+    /// GLACIER-solved branch current through this instance (A), when a
+    /// DC solve ran. Feeds the power-tree flow analysis with REAL
+    /// per-sink draws instead of the equal-share approximation.
+    pub solved_current_a: Option<f64>,
     pub package: String,
 
     // Placement constraint

@@ -217,6 +217,7 @@ mod tests {
             side: BoardSide::Top,
             group: None,
             thermal_power_w: 0.0,
+            solved_current_a: None,
             package: "p".into(),
             placement: PlacementConstraint::Free,
             x,

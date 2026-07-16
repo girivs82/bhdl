@@ -60,6 +60,7 @@ fn mcu(ids: &mut Ids, x: f64, y: f64) -> (Component, ComponentId, Vec<PinId>) {
         side: BoardSide::Top,
         group: None,
         thermal_power_w: 0.2,
+            solved_current_a: None,
         package: "DIP-28".into(),
         // Anchor the MCU so the test is about where the caps go.
         placement: PlacementConstraint::Fixed { x, y, theta: 0.0 },
@@ -90,6 +91,7 @@ fn cap(ids: &mut Ids, name: &str, x: f64, y: f64, intent: LayoutIntent) -> (Comp
         side: BoardSide::Top,
         group: None,
         thermal_power_w: 0.0,
+            solved_current_a: None,
         package: "0402".into(),
         placement: PlacementConstraint::Free,
         x,

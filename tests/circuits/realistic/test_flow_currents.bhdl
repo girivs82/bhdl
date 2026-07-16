@@ -1,0 +1,37 @@
+// Flow-analysis fixture: a 5V rail feeding a HEAVY load (10Ω → 0.5A)
+// and a LIGHT one (1kΩ → 5mA). With GLACIER-solved per-sink currents
+// the power tree tapers by REAL draw — the trunk toward the heavy
+// load is wide, the light branch stays thin. The equal-share
+// approximation would size both branches identically.
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+entity PwrIn() {
+    pin VOUT: power out;
+    pin GND: ground;
+
+    attribute component_class = "connector";
+}
+
+layout PwrIn {
+    package SOT-223;
+}
+
+board FlowDemo {
+    power VCC = 5V @ 600mA;
+    ground GND;
+
+    j1: PwrIn();
+    j1.VOUT -> @VCC;
+    j1.GND -> @GND;
+
+    @VCC -> r_heavy: Res(10).1;
+    r_heavy.2 -> @GND;
+    @VCC -> r_light: Res(1000).1;
+    r_light.2 -> @GND;
+}
+
+layout FlowDemo {
+    layer_stackup 2;
+    outline rect 28 22;
+}

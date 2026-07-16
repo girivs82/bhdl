@@ -47,6 +47,7 @@ fn make_component(
         side: BoardSide::Top,
         group: None,
         thermal_power_w: 0.0,
+            solved_current_a: None,
         package: "0402".into(),
         placement: PlacementConstraint::Free,
         x,

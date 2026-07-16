@@ -201,6 +201,10 @@ fn shortest_path_3d(
         return Route::empty(net.id);
     }
 
+    // Solved per-sink currents (GLACIER DC), keyed by sink cell — the
+    // flow analysis tapers by REAL draws when a solve ran.
+    let mut sink_current: std::collections::HashMap<CellCoord, Option<f64>> =
+        std::collections::HashMap::new();
     // Map pins to grid cells, keeping the EXACT pad coordinate per cell:
     // the fabricated track must land on pad copper, not the cell center
     // (a 1 mm cell center can sit off the pad entirely — KiCad's DRC
@@ -231,7 +235,13 @@ fn shortest_path_3d(
                 (gx, gy),
                 (gx - comp.x, gy - comp.y),
             );
-            Some((cell, (gx, gy)))
+            Some((cell, (gx, gy), comp.solved_current_a))
+        })
+        .collect::<Vec<(CellCoord, (f64, f64), Option<f64>)>>()
+        .into_iter()
+        .map(|(c, p, cur)| {
+            sink_current.insert(c, cur);
+            (c, p)
         })
         .collect();
     let pin_cells: Vec<CellCoord> = pin_targets.iter().map(|(c, _)| *c).collect();
@@ -474,31 +484,68 @@ fn shortest_path_3d(
     // through path p at-or-after cell i = 1 (p's own sink) + every
     // descendant path attached to p at index ≥ i, transitively.
     let n_paths = path_recs.len();
-    let mut downstream: Vec<Vec<usize>> = path_recs
-        .iter()
-        .map(|r| vec![1usize; r.cells.len().max(1)])
-        .collect();
-    // Children contribute to the parent prefix [0..=attach_idx].
-    // Process children before parents is unnecessary if we iterate to a
-    // fixpoint over the (acyclic, forward-attached) structure: children
-    // always have HIGHER indices than their parents, so one reverse
-    // pass suffices.
-    for p in (0..n_paths).rev() {
-        let served: usize = *downstream[p].first().unwrap_or(&1);
-        if let Some((pp, pi)) = path_recs[p].parent {
-            for i in 0..=pi.min(downstream[pp].len().saturating_sub(1)) {
-                downstream[pp][i] += served;
-            }
-        }
-    }
-    let share = if total_sinks > 0 {
-        // Net current back-derived from the rail width the classifier
-        // computed; equal-share approximation per sink.
+    // Per-sink draw: GLACIER-solved branch current when the DC solve
+    // ran for that sink's instance, else the equal-share fallback.
+    // When NO sink has a solved current, keep the original integer
+    // count × share math verbatim (bit-identical to the old code).
+    let fallback_share = if total_sinks > 0 {
         crate::stackup::current_for_trace_width(net.required_trace_width_mm)
             / total_sinks as f64
     } else {
         0.0
     };
+    let sink_draw = |p: usize| -> f64 {
+        path_recs[p]
+            .cells
+            .last()
+            .and_then(|c| sink_current.get(c).copied().flatten())
+            .unwrap_or(fallback_share)
+    };
+    let any_solved = (0..n_paths).any(|p| {
+        path_recs[p]
+            .cells
+            .last()
+            .and_then(|c| sink_current.get(c).copied().flatten())
+            .is_some()
+    });
+    let mut downstream_a: Vec<Vec<f64>> = Vec::new();
+    let mut downstream: Vec<Vec<usize>> = path_recs
+        .iter()
+        .map(|r| vec![1usize; r.cells.len().max(1)])
+        .collect();
+    if any_solved {
+        log::info!(
+            "flow analysis: solved per-sink currents on '{}' ({} sink(s))",
+            net.name,
+            total_sinks
+        );
+        downstream_a = path_recs
+            .iter()
+            .enumerate()
+            .map(|(p, r)| vec![sink_draw(p); r.cells.len().max(1)])
+            .collect();
+        for p in (0..n_paths).rev() {
+            let served: f64 = *downstream_a[p].first().unwrap_or(&0.0);
+            if let Some((pp, pi)) = path_recs[p].parent {
+                for i in 0..=pi.min(downstream_a[pp].len().saturating_sub(1)) {
+                    downstream_a[pp][i] += served;
+                }
+            }
+        }
+    } else {
+        // Children contribute to the parent prefix [0..=attach_idx].
+        // Children always have HIGHER indices than their parents, so
+        // one reverse pass suffices.
+        for p in (0..n_paths).rev() {
+            let served: usize = *downstream[p].first().unwrap_or(&1);
+            if let Some((pp, pi)) = path_recs[p].parent {
+                for i in 0..=pi.min(downstream[pp].len().saturating_sub(1)) {
+                    downstream[pp][i] += served;
+                }
+            }
+        }
+    }
+    let share = fallback_share;
     let mut path_spans: Vec<(usize, usize)> = Vec::new();
     let mut path_parents: Vec<Option<usize>> = Vec::new();
     let mut via_spans: Vec<(usize, usize)> = Vec::new();
@@ -518,7 +565,11 @@ fn shortest_path_3d(
         for w in 0..rec.cells.len().saturating_sub(1) {
             let a = rec.cells[w];
             let b = rec.cells[w + 1];
-            let seg_current = share * downstream[p][w + 1] as f64;
+            let seg_current = if any_solved {
+                downstream_a[p][w + 1]
+            } else {
+                share * downstream[p][w + 1] as f64
+            };
             let width = crate::stackup::trace_width_for_current(seg_current, 1.0, 10.0)
                 .max(0.15)
                 .min(net.required_trace_width_mm);

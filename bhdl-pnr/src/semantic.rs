@@ -448,6 +448,9 @@ pub fn build_board(
                 .unwrap_or(BoardSide::Top),
             group: None,
             thermal_power_w: thermal_power,
+            solved_current_a: simulation
+                .and_then(|sim| sim.instance_currents.get(&instance.name))
+                .map(|c| c.abs()),
             placement,
             x: 0.0,
             y: 0.0,

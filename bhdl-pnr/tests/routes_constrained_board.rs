@@ -35,6 +35,7 @@ fn netted_board() -> Board {
         side: BoardSide::Top,
         group: None,
         thermal_power_w: 0.0,
+            solved_current_a: None,
         package: "SOIC-8".into(),
         placement: PlacementConstraint::Free,
         x,
