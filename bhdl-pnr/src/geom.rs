@@ -169,6 +169,7 @@ pub struct ClearanceIndex {
     outline_poly: Option<Vec<(f64, f64)>>,
     cutouts: Vec<(f64, f64, f64, f64)>,
     spacing: f64,
+    via_drill: f64,
 }
 
 impl ClearanceIndex {
@@ -197,6 +198,7 @@ impl ClearanceIndex {
             },
             cutouts: board.config.cutouts.clone(),
             spacing: board.config.min_spacing_mm,
+            via_drill: board.layer_stack.via.drill_mm,
         };
         let via_r = board.layer_stack.via.pad_mm / 2.0;
         for (ni, route) in routes.iter().enumerate() {
@@ -422,7 +424,103 @@ pub fn route_escape(
             }
         }
     }
+    // U-detours: three-leg rectilinear paths that swing AROUND a
+    // fence via a rail outside the from/to bounding box.
+    let (xmin, xmax) = (from.0.min(to.0), from.0.max(to.0));
+    let (ymin, ymax) = (from.1.min(to.1), from.1.max(to.1));
+    for d in [0.5, 1.0, 1.5, 2.5, 4.0] {
+        let rails = [
+            ((xmin - d, from.1), (xmin - d, to.1)), // left rail
+            ((xmax + d, from.1), (xmax + d, to.1)), // right rail
+            ((from.0, ymin - d), (to.0, ymin - d)), // bottom rail
+            ((from.0, ymax + d), (to.0, ymax + d)), // top rail
+        ];
+        for (p1, p2) in rails {
+            if clear(from, p1) && clear(p1, p2) && clear(p2, to) {
+                return Some(vec![from, p1, p2, to]);
+            }
+        }
+    }
     None
+}
+
+impl ClearanceIndex {
+    /// Exact legality of a NEW via barrel at (x, y) with pad radius
+    /// `r` for `net`: the barrel is copper on EVERY layer (any
+    /// foreign segment / pad conflicts regardless of layer), other
+    /// vias need both barrel clearance and the drill-to-drill rule,
+    /// and the hole must respect edge / cutout margins.
+    pub fn via_conflict(&self, x: f64, y: f64, r: f64, net: NetId) -> Option<Conflict> {
+        if x < self.edge_clearance + r - EPS
+            || y < self.edge_clearance + r - EPS
+            || x > self.bw - self.edge_clearance - r + EPS
+            || y > self.bh - self.edge_clearance - r + EPS
+        {
+            return Some(Conflict::Edge);
+        }
+        if let Some(pts) = &self.outline_poly {
+            if !point_in_poly(pts, x, y)
+                || poly_edge_dist(pts, x, y) < self.edge_clearance + r - EPS
+            {
+                return Some(Conflict::Edge);
+            }
+        }
+        for &(cx0, cy0, cx1, cy1) in &self.cutouts {
+            let nx = x.clamp(cx0, cx1);
+            let ny = y.clamp(cy0, cy1);
+            if (x - nx).hypot(y - ny) < self.edge_clearance + r - EPS {
+                return Some(Conflict::Cutout);
+            }
+        }
+        let c0 = (((x - 2.0) / self.cell).floor().max(0.0) as usize).min(self.cols - 1);
+        let c1 = (((x + 2.0) / self.cell).ceil().max(0.0) as usize).min(self.cols - 1);
+        let r0 = (((y - 2.0) / self.cell).floor().max(0.0) as usize).min(self.rows - 1);
+        let r1 = (((y + 2.0) / self.cell).ceil().max(0.0) as usize).min(self.rows - 1);
+        let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        for row in r0..=r1 {
+            for col in c0..=c1 {
+                for &id in &self.buckets[row * self.cols + col] {
+                    if !seen.insert(id) {
+                        continue;
+                    }
+                    match &self.items[id as usize] {
+                        Item::Seg { net: n, layer: l, a, b, half } => {
+                            if *n == net {
+                                continue;
+                            }
+                            if point_segment_dist((x, y), *a, *b)
+                                < r + half + self.spacing - EPS
+                            {
+                                return Some(Conflict::Track { net: *n, layer: *l });
+                            }
+                        }
+                        Item::Via { net: n, x: vx, y: vy, r: vr } => {
+                            let d = (x - vx).hypot(y - vy);
+                            let barrel = r + vr + self.spacing;
+                            let hole = self.via_drill + 0.25;
+                            // Same-net vias still need the drill rule.
+                            if d < hole - EPS || (*n != net && d < barrel - EPS) {
+                                return Some(Conflict::Via { net: *n });
+                            }
+                        }
+                        Item::Pad { net: n, cx, cy, hx, hy, .. } => {
+                            if n.is_some() && *n == Some(net) {
+                                continue;
+                            }
+                            // Barrel touches every layer: any foreign pad
+                            // conflicts.
+                            let nx = x.clamp(cx - hx, cx + hx);
+                            let ny = y.clamp(cy - hy, cy + hy);
+                            if (x - nx).hypot(y - ny) < r + self.spacing - EPS {
+                                return Some(Conflict::Pad { net: *n, at: (*cx, *cy) });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
 }
 
 #[cfg(test)]

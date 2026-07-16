@@ -1832,40 +1832,175 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
         }
         let cidx = geom::ClearanceIndex::build(board, final_routes, Some(net.id));
         let mut connected = false;
-        for (q, _) in attach {
+        // Same-layer attempts first.
+        for &(q, _) in &attach {
             if let Some(path) = geom::route_escape(&cidx, (px, py), q, width, layer, net.id)
             {
-                let route = &mut final_routes[i];
-                let seg_start = route.segments.len();
-                for w in path.windows(2) {
-                    if (w[0].0 - w[1].0).hypot(w[0].1 - w[1].1) > 1e-9 {
-                        route.segments.push(RouteSegment {
-                            layer,
-                            start: w[0],
-                            end: w[1],
-                            width_mm: width,
-                        });
+                commit_escape(&mut final_routes[i], &path, layer, width, None, &net.name);
+                gained += 1;
+                connected = true;
+                break;
+            }
+        }
+        // M2b VIA HOP: the pad's own layer may be fenced while the
+        // other side is open. Site a via near the pad (exact barrel +
+        // drill-rule check), stub to it on the pad's layer, then run
+        // the continuous router on the far layer to same-net tree
+        // copper THERE.
+        if !connected {
+            let via_r = board.layer_stack.via.pad_mm / 2.0;
+            let signal_layers = board.layer_stack.signal_layer_indices();
+            'hop: for &l2 in signal_layers.iter().filter(|&&l| l != layer) {
+                // Attach candidates on the far layer.
+                let route = &final_routes[i];
+                let comps2 = route_components(route);
+                let tree2 = {
+                    let mut pop: std::collections::HashMap<usize, usize> =
+                        std::collections::HashMap::new();
+                    for &c in &comps2 {
+                        *pop.entry(c).or_insert(0) += 1;
+                    }
+                    pop.into_iter()
+                        .max_by_key(|&(c, n)| (n, std::cmp::Reverse(c)))
+                        .map(|(c, _)| c)
+                };
+                let mut attach2: Vec<((f64, f64), f64)> = route
+                    .segments
+                    .iter()
+                    .enumerate()
+                    .filter(|(si, sg)| Some(comps2[*si]) == tree2 && sg.layer == l2)
+                    .map(|(_, sg)| {
+                        let (dx, dy) = (sg.end.0 - sg.start.0, sg.end.1 - sg.start.1);
+                        let l2n = dx * dx + dy * dy;
+                        let t = if l2n <= 1e-12 {
+                            0.0
+                        } else {
+                            (((px - sg.start.0) * dx + (py - sg.start.1) * dy) / l2n)
+                                .clamp(0.0, 1.0)
+                        };
+                        let q = (sg.start.0 + t * dx, sg.start.1 + t * dy);
+                        ((q.0, q.1), (px - q.0).hypot(py - q.1))
+                    })
+                    .collect();
+                attach2.sort_by(|a, b| {
+                    a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+                });
+                attach2.truncate(4);
+                if attach2.is_empty() {
+                    continue;
+                }
+                // Via sites ring the pad.
+                for ring in 0..6 {
+                    let rr = 0.6 + ring as f64 * 0.35;
+                    for k in 0..8 {
+                        let ang = k as f64 * std::f64::consts::FRAC_PI_4;
+                        let (vx, vy) = (px + rr * ang.cos(), py + rr * ang.sin());
+                        if cidx.via_conflict(vx, vy, via_r, net.id).is_some() {
+                            continue;
+                        }
+                        // Stub pad→via on the pad's layer.
+                        if cidx
+                            .first_conflict((px, py), (vx, vy), width, layer, net.id)
+                            .is_some()
+                        {
+                            continue;
+                        }
+                        for &(q, _) in &attach2 {
+                            if let Some(path) = geom::route_escape(
+                                &cidx,
+                                (vx, vy),
+                                q,
+                                width,
+                                l2,
+                                net.id,
+                            ) {
+                                // Commit: stub (pad layer) + via + far path.
+                                let route = &mut final_routes[i];
+                                let seg_start = route.segments.len();
+                                let via_start = route.vias.len();
+                                route.segments.push(RouteSegment {
+                                    layer,
+                                    start: (px, py),
+                                    end: (vx, vy),
+                                    width_mm: width,
+                                });
+                                for w in path.windows(2) {
+                                    if (w[0].0 - w[1].0).hypot(w[0].1 - w[1].1) > 1e-9 {
+                                        route.segments.push(RouteSegment {
+                                            layer: l2,
+                                            start: w[0],
+                                            end: w[1],
+                                            width_mm: width,
+                                        });
+                                    }
+                                }
+                                route.vias.push(RouteVia {
+                                    x: vx,
+                                    y: vy,
+                                    from_layer: 0,
+                                    to_layer: board.layer_stack.layers.len() - 1,
+                                });
+                                route
+                                    .path_spans
+                                    .push((seg_start, route.segments.len() - seg_start));
+                                route.path_parents.push(None);
+                                route.via_spans.push((via_start, 1));
+                                info!(
+                                    "completion: OFF-GRID via-hop connected a '{}' pad at ({px:.2},{py:.2}) via ({vx:.2},{vy:.2})",
+                                    net.name
+                                );
+                                gained += 1;
+                                connected = true;
+                                break 'hop;
+                            }
+                        }
                     }
                 }
-                let n_new = route.segments.len() - seg_start;
-                if n_new > 0 {
-                    route.path_spans.push((seg_start, n_new));
-                    route.path_parents.push(None);
-                    route.via_spans.push((route.vias.len(), 0));
-                    info!(
-                        "completion: OFF-GRID escape connected a '{}' pad at ({px:.2},{py:.2}) ({n_new} seg(s))",
-                        net.name
-                    );
-                    gained += 1;
-                    connected = true;
-                }
-                break;
             }
         }
         if !connected {
             return gained;
         }
     }
+}
+
+/// Append an exact-routed escape polyline as one span.
+fn commit_escape(
+    route: &mut Route,
+    path: &[(f64, f64)],
+    layer: usize,
+    width: f64,
+    via: Option<RouteVia>,
+    net_name: &str,
+) {
+    let seg_start = route.segments.len();
+    let via_start = route.vias.len();
+    for w in path.windows(2) {
+        if (w[0].0 - w[1].0).hypot(w[0].1 - w[1].1) > 1e-9 {
+            route.segments.push(RouteSegment {
+                layer,
+                start: w[0],
+                end: w[1],
+                width_mm: width,
+            });
+        }
+    }
+    let n_new = route.segments.len() - seg_start;
+    if n_new == 0 {
+        return;
+    }
+    let n_vias = if let Some(v) = via {
+        route.vias.push(v);
+        1
+    } else {
+        0
+    };
+    route.path_spans.push((seg_start, n_new));
+    route.path_parents.push(None);
+    route.via_spans.push((via_start, n_vias));
+    info!(
+        "completion: OFF-GRID escape connected a '{net_name}' pad ({n_new} seg(s))"
+    );
 }
 
 /// Targeted single-victim rip-up-and-reroute for the completion pass.
