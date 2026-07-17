@@ -948,28 +948,50 @@ fn fracture_fill(
     let mut notches_top: Vec<(f64, f64, f64)> = Vec::new();
     let mut notches_right: Vec<(f64, f64, f64)> = Vec::new(); // (ya, yb, depth_to_x)
     let mut notches_left: Vec<(f64, f64, f64)> = Vec::new();
+    // Boundary-crossing circles keep the proven NOTCH path (boxes,
+    // drop-verifier-consistent). INTERIOR circles become octagon
+    // polygons, then near-touching/banded pairs merge by CONVEX HULL
+    // — polygon-level, bounded growth (a hull of two octagons is a
+    // capsule, not a covering circle), no cascade. The hull contains
+    // both punch discs, so the pair punches as one ring and the
+    // sub-clearance web between them never exists.
     let mut interior: Vec<(f64, f64, f64)> = Vec::new();
     for &(cx, cy, r) in &holes {
+        let crosses = cx - r < x0 + slack
+            || cx + r > x1 - slack
+            || cy - r < y0 + slack
+            || cy + r > y1 - slack;
+        if !crosses {
+            interior.push((cx, cy, r));
+            continue;
+        }
         let crosses_left = cx - r < x0 + slack;
         let crosses_right = cx + r > x1 - slack;
         let crosses_top = cy - r < y0 + slack;
         let crosses_bottom = cy + r > y1 - slack;
         if crosses_bottom {
-            notches_bottom.push((
-                (cx - r).max(x0),
-                (cx + r).min(x1),
-                (cy - r).max(y0),
-            ));
+            notches_bottom.push(((cx - r).max(x0), (cx + r).min(x1), (cy - r).max(y0)));
         } else if crosses_top {
             notches_top.push(((cx - r).max(x0), (cx + r).min(x1), (cy + r).min(y1)));
         } else if crosses_right {
             notches_right.push((((cy - r).max(y0)), (cy + r).min(y1), (cx - r).max(x0)));
         } else if crosses_left {
             notches_left.push((((cy - r).max(y0)), (cy + r).min(y1), (cx + r).min(x1)));
-        } else {
-            interior.push((cx, cy, r));
         }
     }
+    let mut poly_rings: Vec<Vec<(f64, f64)>> = interior
+        .iter()
+        .map(|&(cx, cy, r)| {
+            let rr = r / (std::f64::consts::PI / 8.0).cos();
+            (0..8)
+                .map(|q| {
+                    let ang = -(q as f64) * std::f64::consts::FRAC_PI_4;
+                    (cx + rr * ang.cos(), cy + rr * ang.sin())
+                })
+                .collect()
+        })
+        .collect();
+    hull_merge_close_rings(&mut poly_rings, 0.30);
     let merge_iv = |mut v: Vec<(f64, f64, f64)>| -> Vec<(f64, f64, f64)> {
         v.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
         let mut out: Vec<(f64, f64, f64)> = Vec::new();
@@ -1008,11 +1030,6 @@ fn fracture_fill(
     let notches_top = merge_iv(notches_top);
     let notches_right = merge_iv(notches_right);
     let notches_left = merge_iv(notches_left);
-    let holes = interior;
-    // Rightmost first; jitter duplicate slit rows so a ray never runs
-    // along an existing horizontal slit.
-    let mut holes = holes;
-    holes.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     // Outline with edge notches: bottom edge traversed x1→x0 (in the
     // ring (x0,y0)→(x1,y0)→(x1,y1)→(x0,y1)), top edge x0→x1.
     let mut poly: Vec<(f64, f64)> = vec![(x0, y0)];
@@ -1043,10 +1060,15 @@ fn fracture_fill(
         poly.push((xd, ya));
         poly.push((x0, ya));
     }
-    let mut rings: Vec<RingKind> = holes
-        .into_iter()
-        .map(|(cx, cy, r)| RingKind::Circle { cx, cy, r })
-        .collect();
+    if std::env::var("BHDL_PNR_DEBUG_PLANES").is_ok() {
+        log::info!(
+            "[fill2] fracture_fill rect ({x0:.1},{y0:.1})-({x1:.1},{y1:.1}): {} holes in, {} poly rings",
+            holes.len(),
+            poly_rings.len()
+        );
+    }
+    let mut rings: Vec<RingKind> =
+        poly_rings.into_iter().map(RingKind::Poly).collect();
     rings.extend(
         interior_rects
             .into_iter()
@@ -1064,10 +1086,15 @@ fn fracture_fill(
 /// inserted slits are all valid targets.
 /// Interior fracture ring kinds: circles (foreign barrels) and rects
 /// (cutout apertures / slots).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum RingKind {
     Circle { cx: f64, cy: f64, r: f64 },
     Rect { x0: f64, y0: f64, x1: f64, y1: f64 },
+    /// Arbitrary simple polygon ring (fills v2: a punch octagon
+    /// clipped exactly to the fill rect — replaces the circle notch
+    /// classification, whose boxes lost coverage for large merged
+    /// rings).
+    Poly(Vec<(f64, f64)>),
 }
 
 impl RingKind {
@@ -1075,94 +1102,320 @@ impl RingKind {
         match self {
             RingKind::Circle { cy, .. } => *cy,
             RingKind::Rect { y0, y1, .. } => (y0 + y1) / 2.0,
+            RingKind::Poly(pts) => {
+                // The slit ray must leave from the RIGHTMOST vertex's
+                // own row — using the bbox center teleported that
+                // vertex onto a foreign row, deforming the ring (KiCad
+                // normalization then erased it: vias at 0.0mm).
+                pts.iter()
+                    .fold(None::<(f64, f64)>, |best, p| match best {
+                        Some(b) if (b.0, -b.1) >= (p.0, -p.1) => Some(b),
+                        _ => Some(*p),
+                    })
+                    .map(|p| p.1)
+                    .unwrap_or(0.0)
+            }
         }
     }
     fn center_x(&self) -> f64 {
         match self {
             RingKind::Circle { cx, .. } => *cx,
             RingKind::Rect { x0, x1, .. } => (x0 + x1) / 2.0,
+            RingKind::Poly(pts) => {
+                let (lo, hi) = pts.iter().fold((f64::MAX, f64::MIN), |(l, h), p| {
+                    (l.min(p.0), h.max(p.0))
+                });
+                (lo + hi) / 2.0
+            }
         }
     }
 }
 
-fn punch_interior_rings(poly: &mut Vec<(f64, f64)>, mut rings: Vec<RingKind>) {
-    // Rightmost first (by CENTER-x — the same key the circle-only
-    // fracture always used, keeping those boards byte-identical);
-    // jitter duplicate slit rows so a ray never runs along an
-    // existing horizontal slit.
-    rings.sort_by(|a, b| {
-        b.center_x()
-            .partial_cmp(&a.center_x())
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    let mut used_y: Vec<f64> = Vec::new();
+
+/// Merge ring polygons that intersect or come within `web` of each
+/// other into their CONVEX HULL: the copper web between two near
+/// rings under-clears both barrels (and self-intersecting rings
+/// re-fill under KiCad normalization). Hull growth is bounded — a
+/// capsule over the pair — so no covering-circle cascade. Fixpoint.
+fn hull_merge_close_rings(rings: &mut Vec<Vec<(f64, f64)>>, web: f64) {
+    let seg_pt = |p: (f64, f64), a: (f64, f64), b: (f64, f64)| -> f64 {
+        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+        let l2 = dx * dx + dy * dy;
+        let t = if l2 <= 1e-12 {
+            0.0
+        } else {
+            (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / l2).clamp(0.0, 1.0)
+        };
+        (p.0 - (a.0 + t * dx)).hypot(p.1 - (a.1 + t * dy))
+    };
+    let poly_dist = |pa: &[(f64, f64)], pb: &[(f64, f64)]| -> f64 {
+        let mut d = f64::MAX;
+        for p in pa {
+            for e in 0..pb.len() {
+                d = d.min(seg_pt(*p, pb[e], pb[(e + 1) % pb.len()]));
+            }
+        }
+        for p in pb {
+            for e in 0..pa.len() {
+                d = d.min(seg_pt(*p, pa[e], pa[(e + 1) % pa.len()]));
+            }
+        }
+        d
+    };
+    let hull = |mut pts: Vec<(f64, f64)>| -> Vec<(f64, f64)> {
+        pts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        pts.dedup_by(|a, b| (a.0 - b.0).hypot(a.1 - b.1) < 1e-9);
+        if pts.len() < 3 {
+            return pts;
+        }
+        let cross = |o: (f64, f64), a: (f64, f64), b: (f64, f64)| {
+            (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
+        };
+        let mut lower: Vec<(f64, f64)> = Vec::new();
+        for &p in &pts {
+            while lower.len() >= 2
+                && cross(lower[lower.len() - 2], lower[lower.len() - 1], p) <= 0.0
+            {
+                lower.pop();
+            }
+            lower.push(p);
+        }
+        let mut upper: Vec<(f64, f64)> = Vec::new();
+        for &p in pts.iter().rev() {
+            while upper.len() >= 2
+                && cross(upper[upper.len() - 2], upper[upper.len() - 1], p) <= 0.0
+            {
+                upper.pop();
+            }
+            upper.push(p);
+        }
+        lower.pop();
+        upper.pop();
+        lower.extend(upper);
+        lower
+    };
+    loop {
+        let mut merged: Option<(usize, usize)> = None;
+        'find: for a in 0..rings.len() {
+            for b in a + 1..rings.len() {
+                if poly_dist(&rings[a], &rings[b]) < web {
+                    merged = Some((a, b));
+                    break 'find;
+                }
+            }
+        }
+        match merged {
+            Some((a, b)) => {
+                let mut pts = rings[a].clone();
+                pts.extend_from_slice(&rings[b]);
+                let h = hull(pts);
+                rings.remove(b);
+                rings.remove(a);
+                rings.push(h);
+            }
+            None => break,
+        }
+    }
+}
+
+fn punch_interior_rings(poly: &mut Vec<(f64, f64)>, rings: Vec<RingKind>) {
+    // Fills v2: STATIC KEYHOLE FOREST. The old builder inserted each
+    // ring into a LIVE polygon and scanned rays against the mutating
+    // result — order-sensitive, and interleaved insertions could
+    // leave copper inside earlier rings (measured: vias at 0.0mm).
+    // Here every slit ray is resolved against FINAL static geometry
+    // (the outline + every other ring), forming a parent forest that
+    // is provably acyclic (a ray lands strictly right of its ring's
+    // rightmost vertex, so rightmost-x strictly increases along any
+    // parent chain). One recursive emission pass then writes the
+    // whole keyhole polygon deterministically.
+    //
+    // Ring polygons: CW (opposite the outline), led by the rightmost
+    // vertex whose row (jittered unique) carries the slit ray.
+    let mut ring_pts: Vec<Vec<(f64, f64)>> = Vec::new();
     for ring in rings {
-        let mut ry = ring.cy();
+        let mut pts: Vec<(f64, f64)> = match ring {
+            RingKind::Circle { cx, cy, r } => {
+                let rr = r / (std::f64::consts::PI / 8.0).cos();
+                (0..8)
+                    .map(|q| {
+                        let ang = -(q as f64) * std::f64::consts::FRAC_PI_4;
+                        (cx + rr * ang.cos(), cy + rr * ang.sin())
+                    })
+                    .collect()
+            }
+            RingKind::Rect { x0, y0, x1, y1 } => {
+                vec![(x1, (y0 + y1) / 2.0), (x1, y0), (x0, y0), (x0, y1), (x1, y1)]
+            }
+            RingKind::Poly(pts) => pts,
+        };
+        // CW winding (negative shoelace), rightmost vertex leads.
+        let area: f64 = pts
+            .iter()
+            .enumerate()
+            .map(|(k, a)| {
+                let b = pts[(k + 1) % pts.len()];
+                a.0 * b.1 - b.0 * a.1
+            })
+            .sum();
+        if area > 0.0 {
+            pts.reverse();
+        }
+        let lead = pts
+            .iter()
+            .enumerate()
+            .max_by(|a, b| {
+                (a.1 .0, -a.1 .1)
+                    .partial_cmp(&(b.1 .0, -b.1 .1))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(k, _)| k)
+            .unwrap_or(0);
+        pts.rotate_left(lead);
+        ring_pts.push(pts);
+    }
+    // Unique slit rows (a shared row would collide two landings).
+    let mut used_y: Vec<f64> = Vec::new();
+    for pts in ring_pts.iter_mut() {
+        let mut ry = pts[0].1;
         while used_y.iter().any(|&u| (u - ry).abs() < 1e-4) {
             ry += 2e-4;
         }
         used_y.push(ry);
-        // Ring vertices CW (opposite the outline winding), starting at
-        // the slit-entry point on the ring's rightmost extent at row ry.
-        let (entry, ring_pts): ((f64, f64), Vec<(f64, f64)>) = match ring {
-            RingKind::Circle { cx, cy, r } => {
-                // CIRCUMSCRIBED octagon (vertices at r/cos(22.5°)): a
-                // polygon with vertices ON the circle has edges cutting
-                // inside the punch radius.
-                let rr = r / (std::f64::consts::PI / 8.0).cos();
-                let mut oct = [(0.0f64, 0.0f64); 8];
-                for (q, slot) in oct.iter_mut().enumerate() {
-                    let ang = -(q as f64) * std::f64::consts::FRAC_PI_4;
-                    *slot = (cx + rr * ang.cos(), cy + rr * ang.sin());
+        pts[0].1 = ry;
+    }
+    // Resolve every ring's ray against STATIC geometry: nearest
+    // crossing strictly right of the entry, over outline edges and
+    // every OTHER ring's edges.
+    let n = ring_pts.len();
+    let cross_at = |a: (f64, f64), b: (f64, f64), ry: f64| -> Option<f64> {
+        if (a.1 - b.1).abs() < 1e-12 {
+            return None;
+        }
+        let t = (ry - a.1) / (b.1 - a.1);
+        if !(0.0..=1.0).contains(&t) {
+            return None;
+        }
+        Some(a.0 + t * (b.0 - a.0))
+    };
+    // landing: (parent, edge index in parent, x). parent: None=outline.
+    let mut parent: Vec<(Option<usize>, usize, f64)> = Vec::with_capacity(n);
+    for i in 0..n {
+        let (ex, ry) = ring_pts[i][0];
+        let mut best: Option<(f64, Option<usize>, usize)> = None;
+        for (e, a) in poly.iter().enumerate() {
+            let b = poly[(e + 1) % poly.len()];
+            if let Some(ix) = cross_at(*a, b, ry) {
+                if ix > ex + 1e-9 && best.map_or(true, |(bx, _, _)| ix < bx) {
+                    best = Some((ix, None, e));
                 }
-                oct[0].1 = ry; // slit entry rides the (jittered) ray row
-                (oct[0], oct.to_vec())
             }
-            RingKind::Rect { x0, y0, x1, y1 } => {
-                // Same rotational order as the octagon (entry on the
-                // right edge, first step toward smaller y).
-                let entry = (x1, ry.clamp(y0 + 1e-4, y1 - 1e-4));
-                (
-                    entry,
-                    vec![entry, (x1, y0), (x0, y0), (x0, y1), (x1, y1)],
-                )
-            }
-        };
-        let ry = entry.1;
-        // Ray from the entry point rightward: nearest boundary crossing.
-        let n = poly.len();
-        let mut best: Option<(f64, usize)> = None;
-        for e in 0..n {
-            let a = poly[e];
-            let b = poly[(e + 1) % n];
-            if (a.1 - b.1).abs() < 1e-12 {
-                continue; // horizontal edge — parallel to ray
-            }
-            let t = (ry - a.1) / (b.1 - a.1);
-            if !(0.0..=1.0).contains(&t) {
+        }
+        for (j, other) in ring_pts.iter().enumerate() {
+            if j == i {
                 continue;
             }
-            let ix = a.0 + t * (b.0 - a.0);
-            if ix > entry.0 + 1e-9 && best.map_or(true, |(bx, _)| ix < bx) {
-                best = Some((ix, e));
+            for e in 0..other.len() {
+                let a = other[e];
+                let b = other[(e + 1) % other.len()];
+                if let Some(ix) = cross_at(a, b, ry) {
+                    if ix > ex + 1e-9 && best.map_or(true, |(bx, _, _)| ix < bx) {
+                        best = Some((ix, Some(j), e));
+                    }
+                }
             }
         }
-        let Some((ix, e)) = best else {
-            log::warn!(
-                "plane fill: slit ray from ring at ({:.2},{ry:.2}) found no                  boundary — hole NOT punched (copper may under-clear)",
-                entry.0
-            );
-            continue;
-        };
-        let mut insert: Vec<(f64, f64)> = vec![(ix, ry)];
-        insert.extend_from_slice(&ring_pts);
-        insert.push(ring_pts[0]);
-        insert.push((ix, ry));
-        let at = e + 1;
-        for (ofs, p) in insert.into_iter().enumerate() {
-            poly.insert(at + ofs, p);
+        match best {
+            Some((ix, par, e)) => parent.push((par, e, ix)),
+            None => {
+                log::warn!(
+                    "plane fill: ring at ({ex:.2},{ry:.2}) found no slit target — hole NOT punched"
+                );
+                parent.push((None, usize::MAX, f64::NAN));
+            }
         }
     }
+    // children[k] for outline (k = None mapped separately) and rings.
+    let mut ring_children: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut outline_children: Vec<usize> = Vec::new();
+    for i in 0..n {
+        match parent[i] {
+            (None, e, _) if e == usize::MAX => {}
+            (None, _, _) => outline_children.push(i),
+            (Some(j), _, _) => ring_children[j].push(i),
+        }
+    }
+    // Emit: walk a polygon's edges; at each landing (sorted along the
+    // edge), splice the child's keyhole. Rings recurse.
+    fn emit_ring(
+        i: usize,
+        ring_pts: &[Vec<(f64, f64)>],
+        ring_children: &[Vec<usize>],
+        parent: &[(Option<usize>, usize, f64)],
+        out: &mut Vec<(f64, f64)>,
+    ) {
+        let pts = &ring_pts[i];
+        let m = pts.len();
+        for e in 0..m {
+            out.push(pts[e]);
+            // children landing on THIS edge, ordered along a->b
+            let a = pts[e];
+            let b = pts[(e + 1) % m];
+            let mut here: Vec<(f64, usize)> = ring_children[i]
+                .iter()
+                .filter(|&&c| parent[c].1 == e)
+                .map(|&c| {
+                    let ix = parent[c].2;
+                    let t = if (b.0 - a.0).abs() > (b.1 - a.1).abs() {
+                        (ix - a.0) / (b.0 - a.0)
+                    } else {
+                        (ring_pts[c][0].1 - a.1) / (b.1 - a.1)
+                    };
+                    (t, c)
+                })
+                .collect();
+            here.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap_or(std::cmp::Ordering::Equal));
+            for (_, c) in here {
+                let land = (parent[c].2, ring_pts[c][0].1);
+                out.push(land);
+                out.push(ring_pts[c][0]);
+                emit_ring(c, ring_pts, ring_children, parent, out);
+                out.push(ring_pts[c][0]);
+                out.push(land);
+            }
+        }
+    }
+    let outline = poly.clone();
+    let mut out: Vec<(f64, f64)> = Vec::with_capacity(outline.len() + n * 12);
+    let on = outline.len();
+    for e in 0..on {
+        out.push(outline[e]);
+        let a = outline[e];
+        let b = outline[(e + 1) % on];
+        let mut here: Vec<(f64, usize)> = outline_children
+            .iter()
+            .filter(|&&c| parent[c].1 == e)
+            .map(|&c| {
+                let ix = parent[c].2;
+                let t = if (b.0 - a.0).abs() > (b.1 - a.1).abs() {
+                    (ix - a.0) / (b.0 - a.0)
+                } else {
+                    (ring_pts[c][0].1 - a.1) / (b.1 - a.1)
+                };
+                (t, c)
+            })
+            .collect();
+        here.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap_or(std::cmp::Ordering::Equal));
+        for (_, c) in here {
+            let land = (parent[c].2, ring_pts[c][0].1);
+            out.push(land);
+            out.push(ring_pts[c][0]);
+            emit_ring(c, &ring_pts, &ring_children, &parent, &mut out);
+            out.push(ring_pts[c][0]);
+            out.push(land);
+        }
+    }
+    *poly = out;
 }
 
 fn punch_interior_holes(poly: &mut Vec<(f64, f64)>, holes: Vec<(f64, f64, f64)>) {
@@ -1243,26 +1496,42 @@ pub(crate) fn plane_cutout_rects(board: &Board) -> Vec<(f64, f64, f64, f64)> {
 /// fracture applies, exposed so lib.rs can verify drop-via plane
 /// contact against the geometry that will actually be emitted.
 pub(crate) fn merge_holes(mut holes: Vec<(f64, f64, f64)>) -> Vec<(f64, f64, f64)> {
+    // Interleaved to fixpoint (fills v2):
+    // 1. OVERLAP MERGE — overlapping circles must punch as ONE ring
+    //    (self-intersecting slit-woven rings re-fill their overlap
+    //    under KiCad's polygon normalization).
+    // 2. OCTAGON-VERTEX BAND — a circumscribed octagon's vertex
+    //    overshoots its circle by 1/cos(22.5°) ≈ 8.2%: a ring
+    //    disjoint by microns can poke its vertex inside a neighbor's
+    //    punch disc (measured 0.5266mm vs 0.65 needed). Inflate the
+    //    smaller of a band pair until rule 1 merges them.
+    // Band pairs can APPEAR when a merge grows a ring, so the rules
+    // interleave. Any-size results are safe downstream: fills v2
+    // clips rings to the fill exactly (no notch reclassification).
+    let c = (std::f64::consts::PI / 8.0).cos();
     loop {
-        let mut merged = false;
-        'outer: for i in 0..holes.len() {
-            for j in (i + 1)..holes.len() {
-                let (ax, ay, ar) = holes[i];
-                let (bx, by, br) = holes[j];
-                let d = (ax - bx).hypot(ay - by);
-                if d < ar + br {
-                    let r = (d + ar + br) / 2.0;
-                    let t = if d > 1e-9 { (r - ar) / d } else { 0.0 };
-                    holes[i] = (ax + (bx - ax) * t, ay + (by - ay) * t, r);
-                    holes.remove(j);
-                    merged = true;
-                    break 'outer;
+        loop {
+            let mut merged = false;
+            'outer: for i in 0..holes.len() {
+                for j in (i + 1)..holes.len() {
+                    let (ax, ay, ar) = holes[i];
+                    let (bx, by, br) = holes[j];
+                    let d = (ax - bx).hypot(ay - by);
+                    if d < ar + br {
+                        let r = (d + ar + br) / 2.0;
+                        let t = if d > 1e-9 { (r - ar) / d } else { 0.0 };
+                        holes[i] = (ax + (bx - ax) * t, ay + (by - ay) * t, r);
+                        holes.remove(j);
+                        merged = true;
+                        break 'outer;
+                    }
                 }
             }
+            if !merged {
+                break;
+            }
         }
-        if !merged {
-            return holes;
-        }
+        return holes;
     }
 }
 
@@ -1338,12 +1607,17 @@ pub(crate) fn plane_swallows(
             if overlaps_box(x0, (cy - r).max(y0), (cx + r).min(x1), (cy + r).min(y1)) {
                 return true;
             }
-        } else if (x - cx).hypot(y - cy) < r + via_r + 0.05 {
+        } else if (x - cx).hypot(y - cy)
+            < r / (std::f64::consts::PI / 8.0).cos() + via_r + 0.05
+        {
             // OVERLAP counts as swallowed, not just full containment:
             // fracture normalization near crowded cutouts can lose more
             // copper than the ideal model says (two oracle-confirmed
             // danglers sat half-overlapped). Conservative = a few more
-            // honest unconnecteds, never dangling copper.
+            // honest unconnecteds, never dangling copper. The radius is
+            // the octagon VERTEX reach (r/cos22.5°) — the emitted hole,
+            // not the ideal circle (fills v2 merged rings are big
+            // enough that the 8.2% band strands drops).
             return true;
         }
     }

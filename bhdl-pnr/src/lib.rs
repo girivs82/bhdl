@@ -2595,6 +2595,22 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
                 (q, d)
             })
             .collect();
+        {
+            // Tree VIA centers as attach candidates too: a pad whose
+            // only nearby same-net copper is a via barrel had no
+            // candidates at all ("Pad VIN | Via [VIN_12V]" items).
+            let route = &final_routes[i];
+            for v in &route.vias {
+                let touches_tree = route.segments.iter().enumerate().any(|(si, sg)| {
+                    Some(comps[si]) == tree
+                        && (geom::point_segment_dist((v.x, v.y), sg.start, sg.end)
+                            < sg.width_mm / 2.0 + 0.05)
+                });
+                if touches_tree {
+                    attach.push(((v.x, v.y), (px - v.x).hypot(py - v.y)));
+                }
+            }
+        }
         attach.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         attach.truncate(5);
         if attach.is_empty() {
