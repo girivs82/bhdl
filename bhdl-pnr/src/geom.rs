@@ -450,6 +450,24 @@ pub fn route_escape(
             }
         }
     }
+    // 45-degree doglegs: a diagonal leg from one endpoint meeting the
+    // other's axis line — threads diagonal gaps rectilinear L/Z paths
+    // can't reach.
+    let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+    let (adx, ady) = (dx.abs(), dy.abs());
+    if adx > 1e-9 && ady > 1e-9 {
+        let d = adx.min(ady);
+        let corners = [
+            (from.0 + d * dx.signum(), from.1 + d * dy.signum()),
+            (to.0 - d * dx.signum(), to.1 - d * dy.signum()),
+        ];
+        for c in corners {
+            if clear(from, c) && clear(c, to) {
+                return Some(vec![from, c, to]);
+            }
+        }
+    }
+
     // U-detours: three-leg rectilinear paths that swing AROUND a
     // fence via a rail outside the from/to bounding box.
     let (xmin, xmax) = (from.0.min(to.0), from.0.max(to.0));

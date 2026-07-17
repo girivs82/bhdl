@@ -2511,6 +2511,10 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
         .collect();
     let n_layers = board.layer_stack.layers.len();
     let mut gained = 0usize;
+    // Pads the whole ladder failed for THIS invocation: skip them and
+    // keep trying the rest (an early return abandoned every pad after
+    // the first stuck one).
+    let mut failed: Vec<(f64, f64)> = Vec::new();
     loop {
         let route = &final_routes[i];
         if route.is_empty() {
@@ -2556,7 +2560,11 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
                     && geom::point_segment_dist((px, py), sg.start, sg.end)
                         < sg.width_mm / 2.0 + half - 0.001
             });
-            if !touched {
+            if !touched
+                && !failed
+                    .iter()
+                    .any(|f| (f.0 - px).hypot(f.1 - py) < 1e-6)
+            {
                 let layer = match comp.side {
                     BoardSide::Top => 0,
                     BoardSide::Bottom => n_layers - 1,
@@ -2880,6 +2888,70 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
                 }
             }
         }
+        // FRAGMENT SOURCES: the pad's entry stub often survives an
+        // amputation that killed the tree path — the pad's own
+        // little component. Its far endpoints can sit in open space
+        // the fenced pad center can't reach; escape from THEM (the
+        // pad connects through the fragment by copper overlap).
+        if !connected {
+            let route = &final_routes[i];
+            let comps2 = route_components(route);
+            let pad_comp: Option<usize> = route
+                .segments
+                .iter()
+                .enumerate()
+                .find(|(_, sg)| {
+                    sg.layer == layer
+                        && geom::point_segment_dist((px, py), sg.start, sg.end)
+                            < sg.width_mm / 2.0 + 0.25
+                })
+                .map(|(si, _)| comps2[si]);
+            if let Some(pc) = pad_comp {
+                if Some(pc) != tree {
+                    let mut sources: Vec<(f64, f64)> = Vec::new();
+                    for (si, sg) in route.segments.iter().enumerate() {
+                        if comps2[si] == pc && sg.layer == layer {
+                            sources.push(sg.start);
+                            sources.push(sg.end);
+                        }
+                    }
+                    sources.sort_by(|a, b| {
+                        let da = attach
+                            .first()
+                            .map(|&(q, _)| (a.0 - q.0).hypot(a.1 - q.1))
+                            .unwrap_or(0.0);
+                        let db = attach
+                            .first()
+                            .map(|&(q, _)| (b.0 - q.0).hypot(b.1 - q.1))
+                            .unwrap_or(0.0);
+                        da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                    sources.dedup_by(|a, b| (a.0 - b.0).hypot(a.1 - b.1) < 1e-6);
+                    sources.truncate(4);
+                    let cidx3 =
+                        geom::ClearanceIndex::build(board, final_routes, Some(net.id));
+                    'frag: for &src in &sources {
+                        for &(q, _) in attach.iter().take(3) {
+                            if let Some(path) = geom::route_escape(
+                                &cidx3, src, q, width, layer, net.id,
+                            ) {
+                                commit_escape(
+                                    &mut final_routes[i], &path, layer, width, None,
+                                    &net.name,
+                                );
+                                info!(
+                                    "completion: OFF-GRID fragment-end escape joined a '{}' island",
+                                    net.name
+                                );
+                                gained += 1;
+                                connected = true;
+                                break 'frag;
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // M4 TRUE SHOVE: same-layer escape blocked by ONE foreign
         // track — deform it (exactly-gated lateral bump away from the
         // corridor) and retry. Rip-free: the neighbor's net stays
@@ -2933,7 +3005,7 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
             }
         }
         if !connected {
-            return gained;
+            failed.push((px, py));
         }
     }
 }
