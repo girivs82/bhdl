@@ -3143,7 +3143,14 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
                 for &(q, ql, _) in &targets {
                     let Some(way) = geom::route_tunnel_ml(
                         &idx, (px, py), layer, q, ql, width, via_r, &signal_layers, net_id,
-                    ) else {
+                        4.0,
+                    )
+                    .or_else(|| {
+                        geom::route_tunnel_ml(
+                            &idx, (px, py), layer, q, ql, width, via_r, &signal_layers,
+                            net_id, 12.0,
+                        )
+                    }) else {
                         continue;
                     };
                     let hole_gap = board.layer_stack.via.drill_mm + 0.25;
@@ -4164,9 +4171,22 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
             attach_ml.truncate(3);
             let cidx5 = geom::ClearanceIndex::build(board, final_routes, Some(net.id));
             for &(q, ql, _) in &attach_ml {
+                // Normal wander first (preserves prior evolution
+                // exactly); the WIDE retry fires only where the
+                // normal region finds nothing — a 22mm connection
+                // whose only corridor swings far around the chip
+                // needs more than ±4mm of lateral room, but granting
+                // it everywhere reshuffled the whole board (1→4 unc).
                 let Some(way) = geom::route_tunnel_ml(
                     &cidx5, (px, py), layer, q, ql, width, via_r, &signal_layers, net.id,
-                ) else {
+                    4.0,
+                )
+                .or_else(|| {
+                    geom::route_tunnel_ml(
+                        &cidx5, (px, py), layer, q, ql, width, via_r, &signal_layers,
+                        net.id, 12.0,
+                    )
+                }) else {
                     continue;
                 };
                 // OWN-net vias are invisible to the index (skip_net),

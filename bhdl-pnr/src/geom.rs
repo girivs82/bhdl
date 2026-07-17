@@ -708,11 +708,12 @@ pub fn route_tunnel_ml(
     via_r: f64,
     layers: &[usize],
     net: NetId,
+    margin: f64,
 ) -> Option<Vec<(f64, f64, usize)>> {
     use std::cmp::Reverse;
     use std::collections::{BinaryHeap, HashMap};
     let step = (width + idx.spacing).max(0.25);
-    let margin = 4.0;
+    let margin = margin.max(1.0);
     let x0 = from.0.min(to.0) - margin;
     let y0 = from.1.min(to.1) - margin;
     let x1 = from.0.max(to.0) + margin;
@@ -763,7 +764,7 @@ pub fn route_tunnel_ml(
             break;
         }
         expanded += 1;
-        if expanded > 40_000 {
+        if expanded > if margin > 6.0 { 80_000 } else { 40_000 } {
             break;
         }
         let g_cur = gscore[&cur];
