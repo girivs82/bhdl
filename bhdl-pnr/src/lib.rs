@@ -987,6 +987,16 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         }
     }
 
+    // 5.995. PLANE SURFACE RESCUE — drop-less plane pads join their
+    // net over surface copper (the ladder skips plane nets; a pad
+    // outside its split-region band had no mechanism at all).
+    {
+        let rescued = plane_surface_rescue(&board, &mut final_routes);
+        if rescued > 0 {
+            info!("plane surface rescue: {rescued} pad(s) joined");
+        }
+    }
+
     let connected_sinks = pathfinder::count_connected_sinks(&board, &final_routes);
 
     // ── Constraint sign-off (constraint synthesis v1) ──
@@ -2311,6 +2321,136 @@ fn claim_via_site(
 
 /// Connect each unreached pad of net `i` to its nearest tree copper
 /// with geom::route_escape. Returns sinks gained.
+/// 5.995 PLANE SURFACE RESCUE: a plane net's pad with no legal drop
+/// site (out of its split-region band, or walled in) has NO
+/// mechanism at all — the escape ladder skips plane nets. Connect it
+/// on its own surface layer to the nearest same-net copper (another
+/// pad's drop stub or via) with the exact router. The plane carries
+/// it from there.
+fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
+    let comp_idx: std::collections::HashMap<ComponentId, usize> = board
+        .components
+        .iter()
+        .enumerate()
+        .map(|(k, c)| (c.id, k))
+        .collect();
+    let n_layers = board.layer_stack.layers.len();
+    let mut rescued = 0usize;
+    for i in 0..board.nets.len() {
+        if board.nets[i].plane_layer.is_none() {
+            continue;
+        }
+        let net_id = board.nets[i].id;
+        let width = board.nets[i].required_trace_width_mm.min(0.6);
+        // Pads not touching ANY same-net copper.
+        let mut todo: Vec<((f64, f64), usize)> = Vec::new();
+        for &(cid, pid) in &board.nets[i].pins {
+            let Some(&ci) = comp_idx.get(&cid) else { continue };
+            let comp = &board.components[ci];
+            let Some(pin) = comp.pins.iter().find(|p| p.pin_id == pid) else { continue };
+            if pin.unplaced {
+                continue;
+            }
+            // THT pads pierce the plane directly.
+            if pin.pad.as_ref().map(|p| p.drill_mm.is_some()).unwrap_or(false) {
+                continue;
+            }
+            let cos_t = comp.theta.cos();
+            let sin_t = comp.theta.sin();
+            let px = comp.x + pin.dx * cos_t - pin.dy * sin_t;
+            let py = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+            let half = pin
+                .pad
+                .as_ref()
+                .map(|p| p.width_mm.min(p.height_mm) / 2.0)
+                .unwrap_or(0.25);
+            let r = &final_routes[i];
+            let touched = r.segments.iter().any(|sg| {
+                geom::point_segment_dist((px, py), sg.start, sg.end)
+                    < sg.width_mm / 2.0 + half - 0.001
+            });
+            if !touched {
+                let layer = match comp.side {
+                    BoardSide::Top => 0,
+                    BoardSide::Bottom => n_layers - 1,
+                };
+                todo.push(((px, py), layer));
+            }
+        }
+        for ((px, py), layer) in todo {
+            // Candidates: projections onto same-net same-layer copper
+            // + drop via centers.
+            let r = &final_routes[i];
+            let mut attach: Vec<((f64, f64), f64)> = r
+                .segments
+                .iter()
+                .filter(|sg| sg.layer == layer)
+                .map(|sg| {
+                    let (dx, dy) = (sg.end.0 - sg.start.0, sg.end.1 - sg.start.1);
+                    let l2 = dx * dx + dy * dy;
+                    let t = if l2 <= 1e-12 {
+                        0.0
+                    } else {
+                        (((px - sg.start.0) * dx + (py - sg.start.1) * dy) / l2)
+                            .clamp(0.0, 1.0)
+                    };
+                    let q = (sg.start.0 + t * dx, sg.start.1 + t * dy);
+                    (q, (px - q.0).hypot(py - q.1))
+                })
+                .collect();
+            for v in &r.vias {
+                attach.push((((v.x, v.y)), (px - v.x).hypot(py - v.y)));
+            }
+            attach.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+            attach.truncate(5);
+            let mut connected = false;
+            // Exact route, then shove-assisted retry.
+            let mut snaps: Vec<(usize, Route)> = Vec::new();
+            'try_attach: for &(q, _) in &attach {
+                for _round in 0..3 {
+                    let idx = geom::ClearanceIndex::build(board, final_routes, Some(net_id));
+                    if let Some(path) =
+                        geom::route_escape(&idx, (px, py), q, width, layer, net_id)
+                    {
+                        commit_escape(
+                            &mut final_routes[i],
+                            &path,
+                            layer,
+                            width,
+                            None,
+                            &board.nets[i].name,
+                        );
+                        info!(
+                            "plane surface rescue: '{}' pad at ({px:.2},{py:.2}) joined by surface copper",
+                            board.nets[i].name
+                        );
+                        connected = true;
+                        break 'try_attach;
+                    }
+                    let Some(bl) =
+                        geom::escape_blocker(&idx, (px, py), q, width, layer, net_id)
+                    else {
+                        break;
+                    };
+                    if !try_shove_track(
+                        board, final_routes, i, &bl, (px, py), q, width, &mut snaps,
+                    ) {
+                        break;
+                    }
+                }
+            }
+            if connected {
+                rescued += 1;
+            } else {
+                for (jj, old) in snaps.into_iter().rev() {
+                    final_routes[jj] = old;
+                }
+            }
+        }
+    }
+    rescued
+}
+
 /// Total unreached sinks over non-plane nets (the accept metric for
 /// feedback-driven repair passes).
 fn total_unreached(board: &Board, final_routes: &[Route]) -> usize {
