@@ -954,6 +954,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         routed_count, total_nets, plane_nets, drc_violations.len()
     );
 
+
     // 5.97. M2 OFF-GRID ESCAPE — the LAST routing pass, after every
     // validate: the 2-layer tail's sinks die when final validates
     // amputate grid-built extensions with no repair stage after. The
@@ -3778,11 +3779,24 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
                         }
                     }
                     let n_l = board.layer_stack.layers.len() - 1;
-                    route.vias.push(RouteVia { x: v1.0, y: v1.1, from_layer: 0, to_layer: n_l });
-                    route.vias.push(RouteVia { x: v2.0, y: v2.1, from_layer: 0, to_layer: n_l });
+                    // Coincident own via = reuse (a re-cross-under of
+                    // the same pad lands the same site: oracle
+                    // holes_co_located); push only new barrels.
+                    let mut pushed = 0usize;
+                    for v in [v1, v2] {
+                        if !route.vias.iter().any(|e| (e.x - v.0).hypot(e.y - v.1) < 1e-6) {
+                            route.vias.push(RouteVia {
+                                x: v.0,
+                                y: v.1,
+                                from_layer: 0,
+                                to_layer: n_l,
+                            });
+                            pushed += 1;
+                        }
+                    }
                     route.path_spans.push((seg_start, route.segments.len() - seg_start));
                     route.path_parents.push(None);
-                    route.via_spans.push((via_start, 2));
+                    route.via_spans.push((via_start, pushed));
                     info!(
                         "completion: OFF-GRID cross-under connected a '{}' pad at ({px:.2},{py:.2}) under the fence via ({:.2},{:.2})/({:.2},{:.2})",
                         net.name, v1.0, v1.1, v2.0, v2.1
@@ -3791,6 +3805,108 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
                     connected = true;
                     break 'under;
                 }
+            }
+        }
+        // MULTI-LAYER MAZE: the final rung. A pad with NO via room
+        // nearby and NO single-layer corridor can still connect —
+        // the (x, y, layer) search wanders to wherever a via fits,
+        // dives, tunnels, resurfaces. Attach targets may sit on ANY
+        // signal layer (tree segments, any component == tree).
+        if !connected {
+            let via_r = board.layer_stack.via.pad_mm / 2.0;
+            let signal_layers = board.layer_stack.signal_layer_indices();
+            // Attach candidates across all signal layers.
+            let route = &final_routes[i];
+            let mut attach_ml: Vec<((f64, f64), usize, f64)> = route
+                .segments
+                .iter()
+                .enumerate()
+                .filter(|(si, sg)| {
+                    Some(comps[*si]) == tree && signal_layers.contains(&sg.layer)
+                })
+                .map(|(_, sg)| {
+                    let (dx, dy) = (sg.end.0 - sg.start.0, sg.end.1 - sg.start.1);
+                    let l2n = dx * dx + dy * dy;
+                    let t = if l2n <= 1e-12 {
+                        0.0
+                    } else {
+                        (((px - sg.start.0) * dx + (py - sg.start.1) * dy) / l2n)
+                            .clamp(0.0, 1.0)
+                    };
+                    let q = (sg.start.0 + t * dx, sg.start.1 + t * dy);
+                    (q, sg.layer, (px - q.0).hypot(py - q.1))
+                })
+                .collect();
+            attach_ml.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
+            attach_ml.truncate(3);
+            let cidx5 = geom::ClearanceIndex::build(board, final_routes, Some(net.id));
+            for &(q, ql, _) in &attach_ml {
+                let Some(way) = geom::route_tunnel_ml(
+                    &cidx5, (px, py), layer, q, ql, width, via_r, &signal_layers, net.id,
+                ) else {
+                    continue;
+                };
+                // OWN-net vias are invisible to the index (skip_net),
+                // but drill rules bind same-net too: a second maze
+                // path for this net can land a via on (or within hole
+                // gap of) one it placed earlier — oracle:
+                // holes_co_located. Coincident = reuse (skip push);
+                // near-but-not-coincident = reject this path.
+                let hole_gap = board.layer_stack.via.drill_mm + 0.25;
+                let own_conflict = way.windows(2).any(|w| {
+                    w[0].2 != w[1].2
+                        && final_routes[i].vias.iter().any(|v| {
+                            let d = (v.x - w[0].0).hypot(v.y - w[0].1);
+                            d > 1e-6 && d < hole_gap
+                        })
+                });
+                if own_conflict {
+                    continue;
+                }
+                let route = &mut final_routes[i];
+                let seg_start = route.segments.len();
+                let via_start = route.vias.len();
+                let n_l = board.layer_stack.layers.len() - 1;
+                for w in way.windows(2) {
+                    let (a, b) = (w[0], w[1]);
+                    if a.2 == b.2 {
+                        if (a.0 - b.0).hypot(a.1 - b.1) > 1e-9 {
+                            route.segments.push(RouteSegment {
+                                layer: a.2,
+                                start: (a.0, a.1),
+                                end: (b.0, b.1),
+                                width_mm: width,
+                            });
+                        }
+                    } else {
+                        // A chained switch (l0->l2->l4 at one lattice
+                        // point) needs ONE full-stack via, not two
+                        // stacked (oracle: holes_co_located).
+                        let dup = route
+                            .vias
+                            .iter()
+                            .any(|v| (v.x - a.0).hypot(v.y - a.1) < 1e-6);
+                        if !dup {
+                            route.vias.push(RouteVia {
+                                x: a.0,
+                                y: a.1,
+                                from_layer: 0,
+                                to_layer: n_l,
+                            });
+                        }
+                    }
+                }
+                let n_vias = route.vias.len() - via_start;
+                route.path_spans.push((seg_start, route.segments.len() - seg_start));
+                route.path_parents.push(None);
+                route.via_spans.push((via_start, n_vias));
+                info!(
+                    "completion: OFF-GRID multi-layer maze connected a '{}' pad at ({px:.2},{py:.2}) ({n_vias} via(s))",
+                    net.name
+                );
+                gained += 1;
+                connected = true;
+                break;
             }
         }
         // FRAGMENT SOURCES: the pad's entry stub often survives an
@@ -4790,6 +4906,22 @@ fn plane_via_drops(
                     continue;
                 }
             };
+            // EXACT COMMIT GATE: the straight-stub site test only
+            // checks pad->via clearance; the ROUTED fallback's dijkstra
+            // uses the grid, blind to sub-grid pad corners (a diagonal
+            // drop stub grazed a TQFP pad at 0.138mm vs 0.15 — oracle
+            // clearance). Re-check every stub segment against the exact
+            // index before committing; illegal drops stay honestly
+            // unconnected.
+            {
+                let idx = geom::ClearanceIndex::build(board, final_routes, Some(net.id));
+                if stub_segs.iter().any(|sg| {
+                    idx.first_conflict(sg.start, sg.end, sg.width_mm, sg.layer, net.id)
+                        .is_some()
+                }) {
+                    continue;
+                }
+            }
             let route = &mut final_routes[i];
             let seg_start = route.segments.len();
             let via_start = route.vias.len();

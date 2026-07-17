@@ -1060,13 +1060,6 @@ fn fracture_fill(
         poly.push((xd, ya));
         poly.push((x0, ya));
     }
-    if std::env::var("BHDL_PNR_DEBUG_PLANES").is_ok() {
-        log::info!(
-            "[fill2] fracture_fill rect ({x0:.1},{y0:.1})-({x1:.1},{y1:.1}): {} holes in, {} poly rings",
-            holes.len(),
-            poly_rings.len()
-        );
-    }
     let mut rings: Vec<RingKind> =
         poly_rings.into_iter().map(RingKind::Poly).collect();
     rings.extend(
@@ -1149,6 +1142,24 @@ fn hull_merge_close_rings(rings: &mut Vec<Vec<(f64, f64)>>, web: f64) {
         (p.0 - (a.0 + t * dx)).hypot(p.1 - (a.1 + t * dy))
     };
     let poly_dist = |pa: &[(f64, f64)], pb: &[(f64, f64)]| -> f64 {
+        // Vertex-to-edge alone misses pure EDGE crossings (both
+        // polygons' vertices far from the other's edges) — measured
+        // as an un-merged intersecting pair whose weave re-filled the
+        // overlap (0.2573mm zone clearance vs a via).
+        let orient = |p: (f64, f64), q: (f64, f64), r: (f64, f64)| -> f64 {
+            (q.0 - p.0) * (r.1 - p.1) - (q.1 - p.1) * (r.0 - p.0)
+        };
+        for ea in 0..pa.len() {
+            let (a1, a2) = (pa[ea], pa[(ea + 1) % pa.len()]);
+            for eb in 0..pb.len() {
+                let (b1, b2) = (pb[eb], pb[(eb + 1) % pb.len()]);
+                let (o1, o2) = (orient(a1, a2, b1), orient(a1, a2, b2));
+                let (o3, o4) = (orient(b1, b2, a1), orient(b1, b2, a2));
+                if o1 * o2 < 0.0 && o3 * o4 < 0.0 {
+                    return 0.0;
+                }
+            }
+        }
         let mut d = f64::MAX;
         for p in pa {
             for e in 0..pb.len() {
@@ -1385,6 +1396,10 @@ fn punch_interior_rings(poly: &mut Vec<(f64, f64)>, rings: Vec<RingKind>) {
             }
         }
     }
+    if std::env::var("BHDL_PNR_DEBUG_PLANES").is_ok() {
+        let orphans = parent.iter().filter(|p| p.1 == usize::MAX).count();
+        log::info!("[forest] {} rings, {} without slit target", n, orphans);
+    }
     let outline = poly.clone();
     let mut out: Vec<(f64, f64)> = Vec::with_capacity(outline.len() + n * 12);
     let on = outline.len();
@@ -1416,6 +1431,33 @@ fn punch_interior_rings(poly: &mut Vec<(f64, f64)>, rings: Vec<RingKind>) {
         }
     }
     *poly = out;
+    // SELF-CHECK (oracle-blind-spot doctrine): every ring's center
+    // must land OUTSIDE the emitted copper (even-odd). A center still
+    // inside means the weave lost that hole — exactly the class the
+    // oracle reports as zone-clearance-0.0 vias.
+    if std::env::var("BHDL_PNR_DEBUG_PLANES").is_ok() {
+        for (ri, pts) in ring_pts.iter().enumerate() {
+            let (cx, cy) = pts.iter().fold((0.0, 0.0), |a, p| (a.0 + p.0, a.1 + p.1));
+            let (cx, cy) = (cx / pts.len() as f64, cy / pts.len() as f64);
+            let mut inside = false;
+            let n2 = poly.len();
+            for k in 0..n2 {
+                let a = poly[k];
+                let b = poly[(k + 1) % n2];
+                if (a.1 > cy) != (b.1 > cy) {
+                    let x = a.0 + (cy - a.1) * (b.0 - a.0) / (b.1 - a.1);
+                    if x > cx {
+                        inside = !inside;
+                    }
+                }
+            }
+            if inside {
+                log::warn!(
+                    "[forest] ring {ri} center ({cx:.2},{cy:.2}) still INSIDE copper — hole lost"
+                );
+            }
+        }
+    }
 }
 
 fn punch_interior_holes(poly: &mut Vec<(f64, f64)>, holes: Vec<(f64, f64, f64)>) {
@@ -1518,9 +1560,22 @@ pub(crate) fn merge_holes(mut holes: Vec<(f64, f64, f64)>) -> Vec<(f64, f64, f64
                     let (bx, by, br) = holes[j];
                     let d = (ax - bx).hypot(ay - by);
                     if d < ar + br {
-                        let r = (d + ar + br) / 2.0;
-                        let t = if d > 1e-9 { (r - ar) / d } else { 0.0 };
-                        holes[i] = (ax + (bx - ax) * t, ay + (by - ay) * t, r);
+                        // CONTAINMENT: the enclosing formula
+                        // (d+ar+br)/2 yields a circle SMALLER than
+                        // the big member when one contains the other
+                        // — merging SHRANK coverage and swallowed
+                        // vias resurfaced as copper-at-via (latent;
+                        // first triggered by the multi-layer maze's
+                        // big via-cluster rings).
+                        holes[i] = if d + br <= ar {
+                            (ax, ay, ar)
+                        } else if d + ar <= br {
+                            (bx, by, br)
+                        } else {
+                            let r = (d + ar + br) / 2.0;
+                            let t = if d > 1e-9 { (r - ar) / d } else { 0.0 };
+                            (ax + (bx - ax) * t, ay + (by - ay) * t, r)
+                        };
                         holes.remove(j);
                         merged = true;
                         break 'outer;

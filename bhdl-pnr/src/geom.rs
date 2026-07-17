@@ -690,6 +690,201 @@ pub fn route_tunnel(
     Some(path)
 }
 
+/// MULTI-LAYER exact maze: A* over (x, y, layer) with via
+/// transitions, all exactly gated — planar edges through
+/// first_conflict, layer switches through via_conflict at the switch
+/// point. This is the site-MAKING generalization of the single-layer
+/// tunnel: a pad walled in with no via room nearby can wander to
+/// where a via fits, dive, tunnel, and resurface. Returns waypoints
+/// (x, y, layer); consecutive same-layer pairs are segments, a layer
+/// change at one point is a via.
+pub fn route_tunnel_ml(
+    idx: &ClearanceIndex,
+    from: (f64, f64),
+    from_layer: usize,
+    to: (f64, f64),
+    to_layer: usize,
+    width: f64,
+    via_r: f64,
+    layers: &[usize],
+    net: NetId,
+) -> Option<Vec<(f64, f64, usize)>> {
+    use std::cmp::Reverse;
+    use std::collections::{BinaryHeap, HashMap};
+    let step = (width + idx.spacing).max(0.25);
+    let margin = 4.0;
+    let x0 = from.0.min(to.0) - margin;
+    let y0 = from.1.min(to.1) - margin;
+    let x1 = from.0.max(to.0) + margin;
+    let y1 = from.1.max(to.1) + margin;
+    let cols = (((x1 - x0) / step).ceil() as i32).max(1) + 1;
+    let rows = (((y1 - y0) / step).ceil() as i32).max(1) + 1;
+    if cols as i64 * rows as i64 * layers.len() as i64 > 160_000 {
+        return None;
+    }
+    let li_of = |l: usize| layers.iter().position(|&x| x == l);
+    let (sl, gl) = (li_of(from_layer)?, li_of(to_layer)?);
+    let pt = |n: (i32, i32)| -> (f64, f64) {
+        (x0 + n.0 as f64 * step, y0 + n.1 as f64 * step)
+    };
+    let clear = |a: (f64, f64), b: (f64, f64), l: usize| -> bool {
+        idx.first_conflict(a, b, width, l, net).is_none()
+    };
+    type Node = (i32, i32, u8);
+    let start: Node = (
+        ((from.0 - x0) / step).round() as i32,
+        ((from.1 - y0) / step).round() as i32,
+        sl as u8,
+    );
+    let goal: Node = (
+        ((to.0 - x0) / step).round() as i32,
+        ((to.1 - y0) / step).round() as i32,
+        gl as u8,
+    );
+    let h = |n: Node| -> f64 {
+        let p = pt((n.0, n.1));
+        (p.0 - to.0).hypot(p.1 - to.1)
+    };
+    let via_cost = 2.0; // mm-equivalent penalty per layer switch
+    let key = |c: f64| Reverse(c.to_bits());
+    let mut open: BinaryHeap<(Reverse<u64>, Reverse<u64>, Node)> = BinaryHeap::new();
+    let mut gscore: HashMap<Node, f64> = HashMap::new();
+    let mut prev: HashMap<Node, Node> = HashMap::new();
+    gscore.insert(start, 0.0);
+    open.push((key(h(start)), key(0.0), start));
+    let dirs: [(i32, i32); 8] = [
+        (1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1),
+    ];
+    let mut expanded = 0usize;
+    let mut reached = false;
+    while let Some((_, _, cur)) = open.pop() {
+        if cur == goal {
+            reached = true;
+            break;
+        }
+        expanded += 1;
+        if expanded > 40_000 {
+            break;
+        }
+        let g_cur = gscore[&cur];
+        let cur_layer = layers[cur.2 as usize];
+        let pa = if (cur.0, cur.1) == (start.0, start.1) && cur.2 == start.2 {
+            from
+        } else {
+            pt((cur.0, cur.1))
+        };
+        // Planar moves.
+        for &(dx, dy) in &dirs {
+            let nb: Node = (cur.0 + dx, cur.1 + dy, cur.2);
+            if nb.0 < 0 || nb.1 < 0 || nb.0 >= cols || nb.1 >= rows {
+                continue;
+            }
+            let cost = if dx != 0 && dy != 0 {
+                std::f64::consts::SQRT_2 * step
+            } else {
+                step
+            };
+            let g_nb = g_cur + cost;
+            if gscore.get(&nb).map_or(false, |&g| g <= g_nb) {
+                continue;
+            }
+            let pb = if (nb.0, nb.1) == (goal.0, goal.1) && nb.2 == goal.2 {
+                to
+            } else {
+                pt((nb.0, nb.1))
+            };
+            if !clear(pa, pb, cur_layer) {
+                continue;
+            }
+            gscore.insert(nb, g_nb);
+            prev.insert(nb, cur);
+            open.push((key(g_nb + h(nb)), key(g_nb), nb));
+        }
+        // Layer switches (a via at this point).
+        for (nli, _) in layers.iter().enumerate() {
+            if nli == cur.2 as usize {
+                continue;
+            }
+            let nb: Node = (cur.0, cur.1, nli as u8);
+            let g_nb = g_cur + via_cost;
+            if gscore.get(&nb).map_or(false, |&g| g <= g_nb) {
+                continue;
+            }
+            if idx.via_conflict(pa.0, pa.1, via_r, net).is_some() {
+                continue;
+            }
+            gscore.insert(nb, g_nb);
+            prev.insert(nb, cur);
+            open.push((key(g_nb + h(nb)), key(g_nb), nb));
+        }
+    }
+    if !reached {
+        return None;
+    }
+    // Reconstruct with true endpoints at the ends.
+    let mut nodes: Vec<Node> = vec![goal];
+    let mut c = goal;
+    while c != start {
+        c = prev[&c];
+        nodes.push(c);
+    }
+    nodes.reverse();
+    let raw: Vec<(f64, f64, usize)> = nodes
+        .iter()
+        .enumerate()
+        .map(|(k, &n)| {
+            let p = if k == 0 {
+                from
+            } else if k == nodes.len() - 1 {
+                to
+            } else {
+                pt((n.0, n.1))
+            };
+            (p.0, p.1, layers[n.2 as usize])
+        })
+        .collect();
+    // String-pull WITHIN each same-layer run (via points stay fixed).
+    let mut out: Vec<(f64, f64, usize)> = Vec::with_capacity(raw.len());
+    let mut i = 0usize;
+    while i < raw.len() {
+        let l = raw[i].2;
+        let mut j = i;
+        while j + 1 < raw.len() && raw[j + 1].2 == l {
+            j += 1;
+        }
+        // pull raw[i..=j] on layer l
+        let run: Vec<(f64, f64)> = raw[i..=j].iter().map(|p| (p.0, p.1)).collect();
+        let mut k = 0usize;
+        out.push((run[0].0, run[0].1, l));
+        while k + 1 < run.len() {
+            let mut m = run.len() - 1;
+            while m > k + 1 && !clear(run[k], run[m], l) {
+                m -= 1;
+            }
+            out.push((run[m].0, run[m].1, l));
+            k = m;
+        }
+        i = j + 1;
+    }
+    // Belt-and-braces: re-check every segment and via.
+    for w in out.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        if a.2 == b.2 {
+            if (a.0 - b.0).hypot(a.1 - b.1) > 1e-9 && !clear((a.0, a.1), (b.0, b.1), a.2) {
+                return None;
+            }
+        } else {
+            if (a.0 - b.0).hypot(a.1 - b.1) > 1e-6 {
+                return None; // layer change must be at one point
+            }
+            if idx.via_conflict(a.0, a.1, via_r, net).is_some() {
+                return None;
+            }
+        }
+    }
+    Some(out)
+}
+
 impl ClearanceIndex {
     /// Exact legality of a NEW via barrel at (x, y) with pad radius
     /// `r` for `net`: the barrel is copper on EVERY layer (any
