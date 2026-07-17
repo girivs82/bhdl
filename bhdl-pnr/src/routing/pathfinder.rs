@@ -1353,8 +1353,20 @@ pub(crate) fn unreached_sink_count(net: &PnrNet, board: &Board, route: &Route) -
             .as_ref()
             .map(|p| p.width_mm.min(p.height_mm) / 2.0)
             .unwrap_or(0.4);
+        // LAYER-AWARE: copper on another layer does not reach an SMD
+        // pad (an In2 run passing 0.13mm under an F.Cu pad counted as
+        // "touched" and the pad was never repaired). THT pads reach
+        // every layer.
+        let thru = pin.pad.as_ref().map(|p| p.drill_mm.is_some()).unwrap_or(false);
+        let pin_layer = match comp.side {
+            BoardSide::Top => 0,
+            BoardSide::Bottom => board.layer_stack.layers.len() - 1,
+        };
         let touched = route.segments.iter().enumerate().any(|(si, sg)| {
             if Some(comps[si]) != tree_comp {
+                return false;
+            }
+            if !thru && sg.layer != pin_layer {
                 return false;
             }
             let (dx, dy) = (sg.end.0 - sg.start.0, sg.end.1 - sg.start.1);
@@ -1395,7 +1407,7 @@ pub(crate) fn extend_route(
         .collect();
 
     // Pin cells + exact pad coordinates + pad half-extent.
-    let pin_targets: Vec<(CellCoord, (f64, f64), f64)> = net
+    let pin_targets: Vec<(CellCoord, (f64, f64), f64, Option<usize>)> = net
         .pins
         .iter()
         .filter_map(|&(comp_id, pin_id)| {
@@ -1423,7 +1435,10 @@ pub(crate) fn extend_route(
                 (gx, gy),
                 (gx - comp.x, gy - comp.y),
             );
-            Some((cell, (gx, gy), half))
+            let thru = pin.pad.as_ref().map(|p| p.drill_mm.is_some()).unwrap_or(false);
+            // None = THT (reaches every layer); Some(l) = SMD layer.
+            let pad_layer = if thru { None } else { Some(layer) };
+            Some((cell, (gx, gy), half, pad_layer))
         })
         .collect();
 
@@ -1477,15 +1492,18 @@ pub(crate) fn extend_route(
         // crowded grid can't overflow-rip itself the way the negotiated
         // reroute does.
         match pin_targets.first() {
-            Some((c, _, _)) => {
+            Some((c, _, _, _)) => {
                 source_set.insert(*c);
             }
             None => return 0,
         }
     }
-    let pad_connected = |px: f64, py: f64, half: f64| {
+    let pad_connected = |px: f64, py: f64, half: f64, pad_layer: Option<usize>| {
         route.segments.iter().enumerate().any(|(si, sg)| {
             if Some(comps[si]) != tree_comp {
+                return false;
+            }
+            if pad_layer.map_or(false, |l| sg.layer != l) {
                 return false;
             }
             let (dx, dy) = (sg.end.0 - sg.start.0, sg.end.1 - sg.start.1);
@@ -1501,12 +1519,12 @@ pub(crate) fn extend_route(
     };
     let mut remaining: BTreeSet<CellCoord> = pin_targets
         .iter()
-        .filter(|(_, (px, py), half)| !pad_connected(*px, *py, *half))
-        .map(|(c, _, _)| *c)
+        .filter(|(_, (px, py), half, pl)| !pad_connected(*px, *py, *half, *pl))
+        .map(|(c, _, _, _)| *c)
         .collect();
     if let Ok(filt) = std::env::var("BHDL_PNR_DEBUG_NETS") {
         if filt != "1" && net.name.contains(&filt) {
-            for (c, (px, py), half) in &pin_targets {
+            for (c, (px, py), half, _) in &pin_targets {
                 let nearest = route
                     .segments
                     .iter()
@@ -1526,7 +1544,7 @@ pub(crate) fn extend_route(
                 log::warn!(
                     "extend_route '{}' pin ({px:.2},{py:.2}) half={half:.2}:                      connected={} nearest_copper_edge={nearest:.3} in_remaining={}                      segs={} comps_tree={:?}",
                     net.name,
-                    pad_connected(*px, *py, *half),
+                    pad_connected(*px, *py, *half, None),
                     remaining.contains(c),
                     route.segments.len(),
                     tree_comp
@@ -1709,7 +1727,7 @@ pub(crate) fn extend_route(
                 route.segments.extend(segs);
                 route.vias.extend(vias);
                 // Pad-escape stub for the newly reached pin(s) at this cell.
-                for (c, (px, py), _half) in &pin_targets {
+                for (c, (px, py), _half, _) in &pin_targets {
                     if *c == reached {
                         let (cx, cy) = grid.cell_center(reached);
                         if (cx - px).hypot(cy - py) > 1e-6 {
@@ -1823,7 +1841,15 @@ pub(crate) fn count_connected_sinks(board: &Board, routes: &[Route]) -> usize {
                 continue;
             }
             pin_thru_plane.push(false);
+            let thru = pin.pad.as_ref().map(|p| p.drill_mm.is_some()).unwrap_or(false);
+            let pin_layer = match comp.side {
+                BoardSide::Top => 0,
+                BoardSide::Bottom => board.layer_stack.layers.len() - 1,
+            };
             let hit = route.segments.iter().enumerate().find_map(|(si, sg)| {
+                if !thru && sg.layer != pin_layer {
+                    return None;
+                }
                 let (dx, dy) = (sg.end.0 - sg.start.0, sg.end.1 - sg.start.1);
                 let len2 = dx * dx + dy * dy;
                 let t = if len2 <= 1e-12 {

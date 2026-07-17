@@ -1049,6 +1049,11 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                             sg.layer, sg.start.0, sg.start.1, sg.end.0, sg.end.1, sg.width_mm
                         );
                     }
+                    if let Some(&(vs, vl)) = r.via_spans.get(si) {
+                        for v in r.vias.iter().skip(vs).take(vl) {
+                            log::info!("[sweep]    via ({:.3},{:.3})", v.x, v.y);
+                        }
+                    }
                 }
             }
             loop {
@@ -2686,13 +2691,18 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
             use crate::routing::pathfinder::route_components;
             let comps = route_components(r);
             let via_r = board.layer_stack.via.pad_mm / 2.0;
+            let pin_layer = match comp.side {
+                BoardSide::Top => 0,
+                BoardSide::Bottom => n_layers - 1,
+            };
             let pad_comp: Option<usize> = r
                 .segments
                 .iter()
                 .enumerate()
                 .find(|(_, sg)| {
-                    geom::point_segment_dist((px, py), sg.start, sg.end)
-                        < sg.width_mm / 2.0 + half - 0.001
+                    sg.layer == pin_layer
+                        && geom::point_segment_dist((px, py), sg.start, sg.end)
+                            < sg.width_mm / 2.0 + half - 0.001
                 })
                 .map(|(si, _)| comps[si]);
             let island_has_via = pad_comp.map_or(false, |pc| {
@@ -3003,8 +3013,14 @@ fn part_nudge_pass(board: &mut Board, final_routes: &mut Vec<Route>) -> usize {
                 .as_ref()
                 .map(|p| p.width_mm.min(p.height_mm) / 2.0)
                 .unwrap_or(0.25);
+            let pin_layer = match comp.side {
+                BoardSide::Top => 0,
+                BoardSide::Bottom => board.layer_stack.layers.len() - 1,
+            };
+            let thru = pin.pad.as_ref().map(|p| p.drill_mm.is_some()).unwrap_or(false);
             let touched = route.segments.iter().enumerate().any(|(si, sg)| {
                 Some(comps[si]) == tree
+                    && (thru || sg.layer == pin_layer)
                     && geom::point_segment_dist((px, py), sg.start, sg.end)
                         < sg.width_mm / 2.0 + half - 0.001
             });
@@ -3423,8 +3439,17 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
                 .as_ref()
                 .map(|p| p.width_mm.min(p.height_mm) / 2.0)
                 .unwrap_or(0.25);
+            let pin_layer = match comp.side {
+                BoardSide::Top => 0,
+                BoardSide::Bottom => n_layers - 1,
+            };
+            let thru = pin.pad.as_ref().map(|p| p.drill_mm.is_some()).unwrap_or(false);
+            // LAYER-AWARE: copper on another layer does not reach an
+            // SMD pad (an inner run passing under an F.Cu pad counted
+            // as touched — the pad was never repaired).
             let touched = route.segments.iter().enumerate().any(|(si, sg)| {
                 Some(comps[si]) == tree
+                    && (thru || sg.layer == pin_layer)
                     && geom::point_segment_dist((px, py), sg.start, sg.end)
                         < sg.width_mm / 2.0 + half - 0.001
             });
@@ -3433,11 +3458,7 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
                     .iter()
                     .any(|f| (f.0 - px).hypot(f.1 - py) < 1e-6)
             {
-                let layer = match comp.side {
-                    BoardSide::Top => 0,
-                    BoardSide::Bottom => n_layers - 1,
-                };
-                target = Some(((px, py), layer));
+                target = Some(((px, py), pin_layer));
                 break;
             }
         }
