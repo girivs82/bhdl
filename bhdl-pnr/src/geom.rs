@@ -175,6 +175,12 @@ pub struct ClearanceIndex {
     cutouts: Vec<(f64, f64, f64, f64)>,
     spacing: f64,
     via_drill: f64,
+    /// Foreign plane fills a new via barrel must be PUNCHABLE from:
+    /// (net, fill rect clamped to the board inset). A via fully
+    /// interior gets a punched hole; one straddling the fill boundary
+    /// ships un-punched copper under-clearing the barrel (measured
+    /// 0.2573mm vs the 0.30 zone rule).
+    plane_zones: Vec<(NetId, (f64, f64, f64, f64))>,
 }
 
 impl ClearanceIndex {
@@ -204,6 +210,25 @@ impl ClearanceIndex {
             cutouts: board.config.cutouts.clone(),
             spacing: board.config.min_spacing_mm,
             via_drill: board.layer_stack.via.drill_mm,
+            plane_zones: board
+                .nets
+                .iter()
+                .filter(|n| n.plane_layer.is_some())
+                .map(|n| {
+                    let ec = board.config.edge_clearance_mm;
+                    let (bx1, by1) = (
+                        board.config.outline.width() - ec,
+                        board.config.outline.height() - ec,
+                    );
+                    let rect = match n.plane_region {
+                        Some((x0, y0, x1, y1)) => {
+                            (x0.max(ec), y0.max(ec), x1.min(bx1), y1.min(by1))
+                        }
+                        None => (ec, ec, bx1, by1),
+                    };
+                    (n.id, rect)
+                })
+                .collect(),
         };
         let via_r = board.layer_stack.via.pad_mm / 2.0;
         for (ni, route) in routes.iter().enumerate() {
@@ -544,6 +569,26 @@ impl ClearanceIndex {
             let nx = x.clamp(cx0, cx1);
             let ny = y.clamp(cy0, cy1);
             if (x - nx).hypot(y - ny) < self.edge_clearance + r - EPS {
+                return Some(Conflict::Cutout);
+            }
+        }
+        // Foreign plane fills: the punch (barrel + zone clearance +
+        // margin, matching plane_foreign_holes) must be fully interior
+        // or fully outside the fill rect.
+        let punch = r + 0.3 + 0.05;
+        for &(zn, (zx0, zy0, zx1, zy1)) in &self.plane_zones {
+            if zn == net {
+                continue;
+            }
+            let intersects = x > zx0 - punch
+                && x < zx1 + punch
+                && y > zy0 - punch
+                && y < zy1 + punch;
+            let interior = x > zx0 + punch
+                && x < zx1 - punch
+                && y > zy0 + punch
+                && y < zy1 - punch;
+            if intersects && !interior {
                 return Some(Conflict::Cutout);
             }
         }

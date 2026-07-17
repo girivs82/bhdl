@@ -997,6 +997,320 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         }
     }
 
+    // 5.996. FINAL ORPHAN SWEEP (after every copper-moving pass): copper-moving passes (shove, miter,
+    // strip) can strand short parentless fragments after the last
+    // validate — the oracle reads them as track_dangling. KiCad
+    // endpoint-graph anchor semantics: an endpoint is anchored ON
+    // another segment's centerline, INSIDE a same-net pad, or ON a
+    // via barrel — lateral width-overlap never rescues a dangle.
+    {
+        let mut pruned = 0usize;
+        for i in 0..board.nets.len() {
+            if board.nets[i].plane_layer.is_some() || final_routes[i].is_empty() {
+                continue;
+            }
+            let mut own_pads: Vec<(f64, f64, f64, f64)> = Vec::new();
+            for comp in &board.components {
+                let cos_t = comp.theta.cos();
+                let sin_t = comp.theta.sin();
+                let quarter = ((comp.theta / std::f64::consts::FRAC_PI_2).round() as i64)
+                    .rem_euclid(2);
+                for pin in &comp.pins {
+                    if pin.net != Some(board.nets[i].id) || pin.unplaced {
+                        continue;
+                    }
+                    let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
+                    let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+                    let (pw, ph) = match &pin.pad {
+                        Some(p) => (p.width_mm, p.height_mm),
+                        None => (0.5, 0.5),
+                    };
+                    let (pw, ph) = if quarter == 1 { (ph, pw) } else { (pw, ph) };
+                    own_pads.push((gx, gy, pw / 2.0, ph / 2.0));
+                }
+            }
+            if std::env::var("BHDL_PNR_DEBUG_NETS")
+                .map(|v| board.nets[i].name.contains(&v))
+                .unwrap_or(false)
+            {
+                let r = &final_routes[i];
+                for (si, &(ps, pl)) in r.path_spans.iter().enumerate() {
+                    let len: f64 = r.segments[ps..ps + pl]
+                        .iter()
+                        .map(|sg| (sg.end.0 - sg.start.0).hypot(sg.end.1 - sg.start.1))
+                        .sum();
+                    log::info!(
+                        "[sweep] '{}' span {si}: pl={pl} len={len:.2}",
+                        board.nets[i].name
+                    );
+                    for sg in &r.segments[ps..ps + pl] {
+                        log::info!(
+                            "[sweep]    seg l{} ({:.3},{:.3})->({:.3},{:.3}) w{:.2}",
+                            sg.layer, sg.start.0, sg.start.1, sg.end.0, sg.end.1, sg.width_mm
+                        );
+                    }
+                }
+            }
+            loop {
+                let r = &final_routes[i];
+                let mut drop_span: Option<usize> = None;
+                'stubs: for (si, &(ps, pl)) in r.path_spans.iter().enumerate() {
+                    if pl == 0 || pl > 4 {
+                        continue;
+                    }
+                    let len: f64 = r.segments[ps..ps + pl]
+                        .iter()
+                        .map(|sg| (sg.end.0 - sg.start.0).hypot(sg.end.1 - sg.start.1))
+                        .sum();
+                    if len > 2.2 {
+                        continue;
+                    }
+                    let via_r = board.layer_stack.via.pad_mm / 2.0;
+                    // KiCad flags a track with ANY unconnected end —
+                    // a one-end-anchored spur dangles just the same.
+                    let ends = [r.segments[ps].start, r.segments[ps + pl - 1].end];
+                    let all_anchored = ends.iter().all(|&e| {
+                        r.path_spans
+                            .iter()
+                            .enumerate()
+                            .filter(|&(sj, _)| sj != si)
+                            .any(|(_, &(qs, ql))| {
+                                r.segments[qs..qs + ql].iter().any(|sg| {
+                                    geom::point_segment_dist(e, sg.start, sg.end) <= 0.05
+                                })
+                            })
+                            || r
+                                .vias
+                                .iter()
+                                .any(|v| (v.x - e.0).hypot(v.y - e.1) <= via_r)
+                            || own_pads.iter().any(|&(cx, cy, hx, hy)| {
+                                (e.0 - cx).abs() <= hx && (e.1 - cy).abs() <= hy
+                            })
+                            // Interior of the span's own polyline (a
+                            // zig-zag's middle joints anchor its ends).
+                            || r.segments[ps..ps + pl].iter().any(|sg| {
+                                geom::point_segment_dist(e, sg.start, sg.end) <= 0.05
+                                    && (e.0 - sg.start.0).hypot(e.1 - sg.start.1) > 1e-6
+                                    && (e.0 - sg.end.0).hypot(e.1 - sg.end.1) > 1e-6
+                            })
+                    });
+                    if all_anchored {
+                        continue 'stubs;
+                    }
+                    drop_span = Some(si);
+                    break;
+                }
+                match drop_span {
+                    Some(si) => {
+                        let mut d = vec![false; final_routes[i].path_spans.len()];
+                        d[si] = true;
+                        strip_route_spans(&mut final_routes[i], &d);
+                        pruned += 1;
+                    }
+                    None => break,
+                }
+            }
+            // COVERED DUPLICATES: an END segment whose whole body lies
+            // inside another same-net same-layer COLLINEAR segment is
+            // duplicate copper — KiCad keeps it as a separate track
+            // whose free tip dangles (the uno 0.6mm spur inside a
+            // parallel run). Deleting it leaves the span ending at a
+            // true junction.
+            loop {
+                let r = &final_routes[i];
+                let mut hit: Option<(usize, bool)> = None; // (span, from_back)
+                'covered: for (si, &(ps, pl)) in r.path_spans.iter().enumerate() {
+                    if pl == 0 {
+                        continue;
+                    }
+                    for (&at, &from_back) in [(ps, false), (ps + pl - 1, true)].iter()
+                        .map(|(a, b)| (a, b))
+                    {
+                        let sg = &r.segments[at];
+                        let d1 = (sg.end.0 - sg.start.0, sg.end.1 - sg.start.1);
+                        if d1.0.hypot(d1.1) < 1e-9 {
+                            continue;
+                        }
+                        let covered = r.segments.iter().enumerate().any(|(sk, o)| {
+                            if sk == at || o.layer != sg.layer {
+                                return false;
+                            }
+                            let d2 = (o.end.0 - o.start.0, o.end.1 - o.start.1);
+                            (d1.0 * d2.1 - d1.1 * d2.0).abs() < 1e-6
+                                && geom::point_segment_dist(sg.start, o.start, o.end) <= 0.02
+                                && geom::point_segment_dist(sg.end, o.start, o.end) <= 0.02
+                        });
+                        if covered {
+                            hit = Some((si, from_back));
+                            break 'covered;
+                        }
+                    }
+                }
+                let Some((si, from_back)) = hit else { break };
+                let (ps, pl) = final_routes[i].path_spans[si];
+                if pl == 1 {
+                    let mut d = vec![false; final_routes[i].path_spans.len()];
+                    d[si] = true;
+                    strip_route_spans(&mut final_routes[i], &d);
+                } else {
+                    let r = &mut final_routes[i];
+                    let at = if from_back { ps + pl - 1 } else { ps };
+                    r.segments.remove(at);
+                    r.path_spans[si].1 -= 1;
+                    for (qs, _) in r.path_spans.iter_mut() {
+                        if *qs > at {
+                            *qs -= 1;
+                        }
+                    }
+                }
+                pruned += 1;
+            }
+            // OUT-AND-BACK SPURS: consecutive COLLINEAR segments in
+            // opposite directions retrace copper — the overhang past
+            // the turnaround is a spur whose tip dangles at a MIDDLE
+            // vertex, invisible to end-based trimming (partial
+            // retraces too: out 1.2mm, back 0.6mm). Collapse the pair
+            // to a.start -> b.end; the path stays continuous, the
+            // spur tip goes.
+            loop {
+                let r = &final_routes[i];
+                let mut hit: Option<(usize, usize)> = None; // (span, first seg)
+                'outback: for (si, &(ps, pl)) in r.path_spans.iter().enumerate() {
+                    if pl < 2 {
+                        continue;
+                    }
+                    for k in ps..ps + pl - 1 {
+                        let a = &r.segments[k];
+                        let b = &r.segments[k + 1];
+                        if a.layer != b.layer {
+                            continue;
+                        }
+                        let da = (a.end.0 - a.start.0, a.end.1 - a.start.1);
+                        let db = (b.end.0 - b.start.0, b.end.1 - b.start.1);
+                        let la = da.0.hypot(da.1);
+                        let lb = db.0.hypot(db.1);
+                        if la < 1e-9 || lb < 1e-9 {
+                            continue;
+                        }
+                        let cross = da.0 * db.1 - da.1 * db.0;
+                        let dot = da.0 * db.0 + da.1 * db.1;
+                        if cross.abs() < 1e-6 && dot < 0.0 {
+                            hit = Some((si, k));
+                            break 'outback;
+                        }
+                    }
+                }
+                let Some((si, k)) = hit else { break };
+                let r = &mut final_routes[i];
+                let a_start = r.segments[k].start;
+                let b_end = r.segments[k + 1].end;
+                if (a_start.0 - b_end.0).hypot(a_start.1 - b_end.1) < 1e-6 {
+                    // Full retrace: both segments vanish.
+                    r.segments.drain(k..k + 2);
+                    r.path_spans[si].1 -= 2;
+                    for (qs, _) in r.path_spans.iter_mut() {
+                        if *qs > k {
+                            *qs -= 2;
+                        }
+                    }
+                } else {
+                    // Partial: one straight segment a.start -> b.end.
+                    r.segments[k].end = b_end;
+                    r.segments.remove(k + 1);
+                    r.path_spans[si].1 -= 1;
+                    for (qs, _) in r.path_spans.iter_mut() {
+                        if *qs > k {
+                            *qs -= 1;
+                        }
+                    }
+                }
+                pruned += 1;
+            }
+            // TAIL TRIM: a long span whose END dangles (post-validator
+            // passes can amputate what it attached to) — walk inward
+            // one segment at a time until a junction/anchor, exactly
+            // the validator's dangle-trim semantics.
+            let via_r = board.layer_stack.via.pad_mm / 2.0;
+            for _ in 0..64 {
+                let r = &final_routes[i];
+                // LAYER-AWARE + COLLINEAR-AWARE: a segment crossing
+                // on another layer anchors nothing without a via, and
+                // an endpoint landing in the INTERIOR of a COLLINEAR
+                // track is a merged-run interior, not a junction —
+                // KiCad merges collinear same-net tracks, so the run's
+                // interior can't terminate anything (the recorded
+                // "lateral width-overlap never rescues" lesson's
+                // collinear sibling). End-to-end contact and true
+                // T-junctions still anchor.
+                let anchored = |e: (f64, f64), layer: usize, dir: (f64, f64), skip: usize| -> bool {
+                    r.segments.iter().enumerate().any(|(sk, sg)| {
+                        if sk == skip
+                            || sg.layer != layer
+                            || geom::point_segment_dist(e, sg.start, sg.end) > 0.05
+                        {
+                            return false;
+                        }
+                        let _ = dir;
+                        true
+                    }) || r.vias.iter().any(|v| (v.x - e.0).hypot(v.y - e.1) <= via_r)
+                        || own_pads.iter().any(|&(cx, cy, hx, hy)| {
+                            (e.0 - cx).abs() <= hx && (e.1 - cy).abs() <= hy
+                        })
+                };
+                let mut cut: Option<(usize, bool)> = None; // (span, from_back)
+                'scan: for (si, &(ps, pl)) in r.path_spans.iter().enumerate() {
+                    if pl == 0 {
+                        continue;
+                    }
+                    let front = r.segments[ps].clone();
+                    let back = r.segments[ps + pl - 1].clone();
+                    let seg_len = |sg: &RouteSegment| {
+                        (sg.end.0 - sg.start.0).hypot(sg.end.1 - sg.start.1)
+                    };
+                    if std::env::var("BHDL_PNR_DEBUG_NETS")
+                        .map(|v| board.nets[i].name.contains(&v))
+                        .unwrap_or(false)
+                    {
+
+                    }
+                    let fdir = (front.end.0 - front.start.0, front.end.1 - front.start.1);
+                    let bdir = (back.end.0 - back.start.0, back.end.1 - back.start.1);
+                    if seg_len(&front) <= 1.5 && !anchored(front.start, front.layer, fdir, ps) {
+                        cut = Some((si, false));
+                        break 'scan;
+                    }
+                    if seg_len(&back) <= 1.5 && !anchored(back.end, back.layer, bdir, ps + pl - 1) {
+                        cut = Some((si, true));
+                        break 'scan;
+                    }
+                }
+                let Some((si, from_back)) = cut else { break };
+                let (ps, pl) = final_routes[i].path_spans[si];
+                if pl == 1 {
+                    let mut d = vec![false; final_routes[i].path_spans.len()];
+                    d[si] = true;
+                    strip_route_spans(&mut final_routes[i], &d);
+                } else {
+                    let r = &mut final_routes[i];
+                    let at = if from_back { ps + pl - 1 } else { ps };
+                    r.segments.remove(at);
+                    r.path_spans[si].1 -= 1;
+                    for (qs, _) in r.path_spans.iter_mut() {
+                        if *qs > at {
+                            *qs -= 1;
+                        }
+                    }
+                }
+                pruned += 1;
+            }
+        }
+        if pruned > 0 {
+            info!("final orphan sweep: {pruned} stranded fragment(s) pruned");
+        }
+    }
+
+
+
     let connected_sinks = pathfinder::count_connected_sinks(&board, &final_routes);
 
     // ── Constraint sign-off (constraint synthesis v1) ──
@@ -2343,7 +2657,7 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
         let net_id = board.nets[i].id;
         let width = board.nets[i].required_trace_width_mm.min(0.6);
         // Pads not touching ANY same-net copper.
-        let mut todo: Vec<((f64, f64), usize)> = Vec::new();
+        let mut todo: Vec<((f64, f64), usize, Option<usize>)> = Vec::new();
         for &(cid, pid) in &board.nets[i].pins {
             let Some(&ci) = comp_idx.get(&cid) else { continue };
             let comp = &board.components[ci];
@@ -2365,27 +2679,56 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
                 .map(|p| p.width_mm.min(p.height_mm) / 2.0)
                 .unwrap_or(0.25);
             let r = &final_routes[i];
-            let touched = r.segments.iter().any(|sg| {
-                geom::point_segment_dist((px, py), sg.start, sg.end)
-                    < sg.width_mm / 2.0 + half - 0.001
+            // "Touches copper" is not "reaches the plane": a drop
+            // stub whose via was swallowed leaves the pad on a DEAD
+            // ISLAND (the supply_tree 1.65mm fragment). The pad's
+            // copper component must contain a VIA.
+            use crate::routing::pathfinder::route_components;
+            let comps = route_components(r);
+            let via_r = board.layer_stack.via.pad_mm / 2.0;
+            let pad_comp: Option<usize> = r
+                .segments
+                .iter()
+                .enumerate()
+                .find(|(_, sg)| {
+                    geom::point_segment_dist((px, py), sg.start, sg.end)
+                        < sg.width_mm / 2.0 + half - 0.001
+                })
+                .map(|(si, _)| comps[si]);
+            let island_has_via = pad_comp.map_or(false, |pc| {
+                r.vias.iter().any(|v| {
+                    r.segments.iter().enumerate().any(|(si, sg)| {
+                        comps[si] == pc
+                            && geom::point_segment_dist((v.x, v.y), sg.start, sg.end)
+                                < sg.width_mm / 2.0 + via_r
+                    })
+                })
             });
-            if !touched {
+            if pad_comp.is_none() || !island_has_via {
                 let layer = match comp.side {
                     BoardSide::Top => 0,
                     BoardSide::Bottom => n_layers - 1,
                 };
-                todo.push(((px, py), layer));
+                debug!(
+                    "surface rescue queue: '{}' pad ({px:.2},{py:.2}) island={:?} has_via={island_has_via}",
+                    board.nets[i].name, pad_comp
+                );
+                todo.push(((px, py), layer, pad_comp));
             }
         }
-        for ((px, py), layer) in todo {
+        for ((px, py), layer, pad_comp) in todo {
             // Candidates: projections onto same-net same-layer copper
-            // + drop via centers.
+            // + drop via centers — EXCLUDING the pad's own dead
+            // island (attaching to it connects nothing).
             let r = &final_routes[i];
+            use crate::routing::pathfinder::route_components;
+            let comps = route_components(r);
             let mut attach: Vec<((f64, f64), f64)> = r
                 .segments
                 .iter()
-                .filter(|sg| sg.layer == layer)
-                .map(|sg| {
+                .enumerate()
+                .filter(|(si, sg)| sg.layer == layer && Some(comps[*si]) != pad_comp)
+                .map(|(_, sg)| {
                     let (dx, dy) = (sg.end.0 - sg.start.0, sg.end.1 - sg.start.1);
                     let l2 = dx * dx + dy * dy;
                     let t = if l2 <= 1e-12 {
@@ -2403,14 +2746,29 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
             }
             attach.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
             attach.truncate(5);
+            // Sources: the pad center, plus the dead island's segment
+            // endpoints (the stub's far end often has open space the
+            // pad itself lacks; overlap-connectivity carries the pad).
+            let mut sources: Vec<(f64, f64)> = vec![(px, py)];
+            if let Some(pc) = pad_comp {
+                for (si, sg) in r.segments.iter().enumerate() {
+                    if comps[si] == pc && sg.layer == layer {
+                        sources.push(sg.start);
+                        sources.push(sg.end);
+                    }
+                }
+            }
+            sources.dedup_by(|a, b| (a.0 - b.0).hypot(a.1 - b.1) < 1e-6);
+            sources.truncate(6);
             let mut connected = false;
             // Exact route, then shove-assisted retry.
             let mut snaps: Vec<(usize, Route)> = Vec::new();
-            'try_attach: for &(q, _) in &attach {
+            'try_attach: for &src in &sources {
+                for &(q, _) in &attach {
                 for _round in 0..3 {
                     let idx = geom::ClearanceIndex::build(board, final_routes, Some(net_id));
                     if let Some(path) =
-                        geom::route_escape(&idx, (px, py), q, width, layer, net_id)
+                        geom::route_escape(&idx, src, q, width, layer, net_id)
                     {
                         commit_escape(
                             &mut final_routes[i],
@@ -2428,20 +2786,139 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
                         break 'try_attach;
                     }
                     let Some(bl) =
-                        geom::escape_blocker(&idx, (px, py), q, width, layer, net_id)
+                        geom::escape_blocker(&idx, src, q, width, layer, net_id)
                     else {
                         break;
                     };
                     if !try_shove_track(
-                        board, final_routes, i, &bl, (px, py), q, width, &mut snaps,
+                        board, final_routes, i, &bl, src, q, width, &mut snaps,
                     ) {
                         break;
+                    }
+                }
+                }
+            }
+            // Stage 2 — EXACT ROUTED DROP: every surface path to
+            // existing copper is fenced; make NEW plane contact
+            // instead. Ring-search a legal via site (exact barrel +
+            // punchability + swallow + region rules), exact-route the
+            // stub, commit stub + via. The grid-based routed-drop
+            // fallback failed exactly here (grid fully blocked); the
+            // continuous router threads what the grid cannot.
+            if !connected {
+                // Stage 1's failed shove deformations must not ship —
+                // they opened corridors nothing uses (a stranded BOOT
+                // bump shipped as track_dangling).
+                for (jj, old) in snaps.drain(..).rev() {
+                    final_routes[jj] = old;
+                }
+                let via_r = board.layer_stack.via.pad_mm / 2.0;
+                let region = board.nets[i].plane_region;
+                let merged = output::kicad::merge_holes(output::kicad::plane_foreign_holes(
+                    board, final_routes, net_id,
+                ));
+                let mut budget = 4usize;
+                'site: for ring in 0..16 {
+                    let rr = 0.6 + ring as f64 * 0.35;
+                    for k in 0..12 {
+                        let ang = k as f64 * 2.0 * std::f64::consts::PI / 12.0;
+                        let (vx, vy) = (px + rr * ang.cos(), py + rr * ang.sin());
+                        if let Some((rx0, ry0, rx1, ry1)) = region {
+                            if vx - via_r < rx0 + 0.05
+                                || vy - via_r < ry0 + 0.05
+                                || vx + via_r > rx1 - 0.05
+                                || vy + via_r > ry1 - 0.05
+                            {
+                                continue;
+                            }
+                        }
+                        if output::kicad::plane_swallows(
+                            board, &merged, vx, vy, via_r, region,
+                        ) {
+                            continue;
+                        }
+                        let site_mark = snaps.len();
+                        let mut site_ok = false;
+                        for _ in 0..2 {
+                            let idx = geom::ClearanceIndex::build(
+                                board,
+                                final_routes,
+                                Some(net_id),
+                            );
+                            match idx.via_conflict(vx, vy, via_r, net_id) {
+                                None => {
+                                    site_ok = true;
+                                    break;
+                                }
+                                Some(c @ geom::Conflict::Track { .. }) if budget > 0 => {
+                                    if !try_shove_track(
+                                        board, final_routes, i, &c, (vx, vy), (vx, vy),
+                                        2.0 * via_r, &mut snaps,
+                                    ) {
+                                        break;
+                                    }
+                                    budget -= 1;
+                                }
+                                Some(_) => break,
+                            }
+                        }
+                        if !site_ok {
+                            while snaps.len() > site_mark {
+                                let (jj, old) = snaps.pop().unwrap();
+                                final_routes[jj] = old;
+                            }
+                            continue;
+                        }
+                        let idx =
+                            geom::ClearanceIndex::build(board, final_routes, Some(net_id));
+                        let Some(path) =
+                            geom::route_escape(&idx, (px, py), (vx, vy), width, layer, net_id)
+                        else {
+                            while snaps.len() > site_mark {
+                                let (jj, old) = snaps.pop().unwrap();
+                                final_routes[jj] = old;
+                            }
+                            continue;
+                        };
+                        let route = &mut final_routes[i];
+                        let seg_start = route.segments.len();
+                        let via_start = route.vias.len();
+                        for w in path.windows(2) {
+                            if (w[0].0 - w[1].0).hypot(w[0].1 - w[1].1) > 1e-9 {
+                                route.segments.push(RouteSegment {
+                                    layer,
+                                    start: w[0],
+                                    end: w[1],
+                                    width_mm: width,
+                                });
+                            }
+                        }
+                        route.vias.push(RouteVia {
+                            x: vx,
+                            y: vy,
+                            from_layer: 0,
+                            to_layer: board.layer_stack.layers.len() - 1,
+                        });
+                        route.path_spans.push((seg_start, route.segments.len() - seg_start));
+                        route.path_parents.push(None);
+                        route.via_spans.push((via_start, 1));
+                        info!(
+                            "plane surface rescue: '{}' pad at ({px:.2},{py:.2}) got an exact routed drop at ({vx:.2},{vy:.2})",
+                            board.nets[i].name
+                        );
+                        connected = true;
+                        break 'site;
                     }
                 }
             }
             if connected {
                 rescued += 1;
             } else {
+                debug!(
+                    "surface rescue FAILED: '{}' pad ({px:.2},{py:.2}), {} attach candidate(s)",
+                    board.nets[i].name,
+                    attach.len()
+                );
                 for (jj, old) in snaps.into_iter().rev() {
                     final_routes[jj] = old;
                 }
@@ -4091,6 +4568,35 @@ fn plane_via_drops(
                         || x + via_r > rx1 - 0.05
                         || y + via_r > ry1 - 0.05
                     {
+                        return false;
+                    }
+                }
+                // FOREIGN plane fills: the barrel must be punchable —
+                // a punch straddling a foreign fill boundary is never
+                // punched (same rule as via_conflict / dijkstra).
+                let punch = via_r + 0.35;
+                for other in board.nets.iter().filter(|n| n.id != net.id) {
+                    if other.plane_layer.is_none() {
+                        continue;
+                    }
+                    let (zx0, zy0, zx1, zy1) = match other.plane_region {
+                        Some((x0, y0, x1, y1)) => (
+                            x0.max(edge),
+                            y0.max(edge),
+                            x1.min(bw - edge),
+                            y1.min(bh - edge),
+                        ),
+                        None => (edge, edge, bw - edge, bh - edge),
+                    };
+                    let intersects = x > zx0 - punch
+                        && x < zx1 + punch
+                        && y > zy0 - punch
+                        && y < zy1 + punch;
+                    let interior = x > zx0 + punch
+                        && x < zx1 - punch
+                        && y > zy0 + punch
+                        && y < zy1 - punch;
+                    if intersects && !interior {
                         return false;
                     }
                 }

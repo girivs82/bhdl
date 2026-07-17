@@ -408,6 +408,7 @@ fn shortest_path_3d(
             &[],
             clear_ring,
             attract,
+            &plane_no_via_zones(board),
         );
 
         match result {
@@ -756,6 +757,30 @@ pub(crate) fn build_attract_set(grid: &RoutingGrid, route: &Route) -> BTreeSet<C
     cells
 }
 
+/// Foreign plane fills a grid-placed via must be punchable from
+/// (same rule as geom::via_conflict).
+pub(crate) fn plane_no_via_zones(board: &Board) -> Vec<(NetId, (f64, f64, f64, f64))> {
+    let ec = board.config.edge_clearance_mm;
+    let (bx1, by1) = (
+        board.config.outline.width() - ec,
+        board.config.outline.height() - ec,
+    );
+    board
+        .nets
+        .iter()
+        .filter(|n| n.plane_layer.is_some())
+        .map(|n| {
+            let rect = match n.plane_region {
+                Some((x0, y0, x1, y1)) => {
+                    (x0.max(ec), y0.max(ec), x1.min(bx1), y1.min(by1))
+                }
+                None => (ec, ec, bx1, by1),
+            };
+            (n.id, rect)
+        })
+        .collect()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn dijkstra_to_any(
     grid: &RoutingGrid,
@@ -770,6 +795,7 @@ fn dijkstra_to_any(
     banned_sites: &[(f64, f64)],
     clear_ring: usize,
     attract: Option<&BTreeSet<CellCoord>>,
+    no_via_zones: &[(NetId, (f64, f64, f64, f64))],
 ) -> Option<(Vec<CellCoord>, CellCoord)> {
     let mut dist: HashMap<CellCoord, f64> = HashMap::new();
     let mut prev: HashMap<CellCoord, CellCoord> = HashMap::new();
@@ -956,6 +982,21 @@ fn dijkstra_to_any(
                 {
                     continue;
                 }
+                // Fill-boundary punchability (mirrors via_conflict).
+                let punch = stack.via.pad_mm / 2.0 + 0.35;
+                if no_via_zones.iter().any(|&(zn, (zx0, zy0, zx1, zy1))| {
+                    zn != net.id
+                        && vx > zx0 - punch
+                        && vx < zx1 + punch
+                        && vy > zy0 - punch
+                        && vy < zy1 + punch
+                        && !(vx > zx0 + punch
+                            && vx < zx1 - punch
+                            && vy > zy0 + punch
+                            && vy < zy1 - punch)
+                }) {
+                    continue;
+                }
 
                 if let Some(allowed) = &net.allowed_layers {
                     if !allowed.contains(&nbr.layer) {
@@ -1058,6 +1099,7 @@ pub(crate) fn routed_plane_drop(
         &[],
         clear_ring,
         None,
+        &[],
     )?;
     let (mut segs, _vias) = path_to_segments(grid, &path, share);
     let (sx, sy) = grid.cell_center(start);
@@ -1545,6 +1587,7 @@ pub(crate) fn extend_route(
             banned_sites,
             clear_ring,
             attract,
+            &plane_no_via_zones(board),
         );
         match result {
             Some((path, reached)) => {
