@@ -215,7 +215,7 @@ pub fn legalize(board: &mut Board, snap_grid_mm: f64) {
 /// Full placement legality of component `i` at hypothetical (x, y):
 /// inside the board (polygon-aware), clear of every other component's
 /// envelope (+0.5mm), keepouts, and mounting holes.
-fn position_legal(board: &Board, i: usize, x: f64, y: f64) -> bool {
+pub(crate) fn position_legal(board: &Board, i: usize, x: f64, y: f64) -> bool {
     let comp = &board.components[i];
     let (ecx0, ecy0, hw, hh) = comp.envelope();
     let (ecx, ecy) = (ecx0 + (x - comp.x), ecy0 + (y - comp.y));

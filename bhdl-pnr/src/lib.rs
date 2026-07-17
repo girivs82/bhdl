@@ -978,6 +978,15 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         }
     }
 
+    // 5.99. PART NUDGE — placement relief with routing feedback for
+    // whatever the exact ladder still can't reach.
+    {
+        let nudged = part_nudge_pass(&mut board, &mut final_routes);
+        if nudged > 0 {
+            info!("part nudge: {nudged} sink(s) recovered by moving neighbors");
+        }
+    }
+
     let connected_sinks = pathfinder::count_connected_sinks(&board, &final_routes);
 
     // ── Constraint sign-off (constraint synthesis v1) ──
@@ -2302,6 +2311,248 @@ fn claim_via_site(
 
 /// Connect each unreached pad of net `i` to its nearest tree copper
 /// with geom::route_escape. Returns sinks gained.
+/// Total unreached sinks over non-plane nets (the accept metric for
+/// feedback-driven repair passes).
+fn total_unreached(board: &Board, final_routes: &[Route]) -> usize {
+    board
+        .nets
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| n.plane_layer.is_none())
+        .map(|(i, n)| pathfinder::unreached_sink_count(n, board, &final_routes[i]))
+        .sum()
+}
+
+/// 5.99 PART NUDGE — placement-side relief with routing feedback.
+/// A pad still unreached after the whole exact ladder is usually
+/// walled in by a NEIGHBOR PART's pin field (via room is the binding
+/// constraint on dense boards). Static placement halos measured
+/// WORSE (basin lottery); this is the targeted version: move one
+/// small free neighbor a step away from the stuck pad, rip only the
+/// nets that touch it (plane pads lose their drop spans; the drop
+/// pass re-sites them), re-route greedily under the exact commit
+/// gate, re-run the ladder — and accept ONLY a strict drop in total
+/// unreached sinks. Everything else reverts wholesale.
+fn part_nudge_pass(board: &mut Board, final_routes: &mut Vec<Route>) -> usize {
+    let mut before = total_unreached(board, final_routes);
+    if before == 0 {
+        return 0;
+    }
+    let start = before;
+    // Stuck pads: same detection as the escape ladder's target scan.
+    let comp_idx: std::collections::HashMap<ComponentId, usize> = board
+        .components
+        .iter()
+        .enumerate()
+        .map(|(k, c)| (c.id, k))
+        .collect();
+    let mut stuck: Vec<(usize, (f64, f64))> = Vec::new();
+    for (ni, net) in board.nets.iter().enumerate() {
+        if net.plane_layer.is_some() || stuck.len() >= 4 {
+            continue;
+        }
+        if pathfinder::unreached_sink_count(net, board, &final_routes[ni]) == 0 {
+            continue;
+        }
+        use crate::routing::pathfinder::route_components;
+        let route = &final_routes[ni];
+        if route.is_empty() {
+            continue;
+        }
+        let comps = route_components(route);
+        let tree = {
+            let mut pop: std::collections::HashMap<usize, usize> =
+                std::collections::HashMap::new();
+            for &c in &comps {
+                *pop.entry(c).or_insert(0) += 1;
+            }
+            pop.into_iter()
+                .max_by_key(|&(c, n)| (n, std::cmp::Reverse(c)))
+                .map(|(c, _)| c)
+        };
+        for &(cid, pid) in &net.pins {
+            let Some(&ci) = comp_idx.get(&cid) else { continue };
+            let comp = &board.components[ci];
+            let Some(pin) = comp.pins.iter().find(|p| p.pin_id == pid) else { continue };
+            if pin.unplaced {
+                continue;
+            }
+            let cos_t = comp.theta.cos();
+            let sin_t = comp.theta.sin();
+            let px = comp.x + pin.dx * cos_t - pin.dy * sin_t;
+            let py = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+            let half = pin
+                .pad
+                .as_ref()
+                .map(|p| p.width_mm.min(p.height_mm) / 2.0)
+                .unwrap_or(0.25);
+            let touched = route.segments.iter().enumerate().any(|(si, sg)| {
+                Some(comps[si]) == tree
+                    && geom::point_segment_dist((px, py), sg.start, sg.end)
+                        < sg.width_mm / 2.0 + half - 0.001
+            });
+            if !touched {
+                stuck.push((ni, (px, py)));
+                break;
+            }
+        }
+    }
+    let mut gained = 0usize;
+    for (ni, (px, py)) in stuck {
+        // Small, free neighbors nearest the stuck pad.
+        let mut cands: Vec<(usize, f64)> = board
+            .components
+            .iter()
+            .enumerate()
+            .filter(|(k, c)| {
+                c.placement.is_free()
+                    && c.pins.len() <= 10
+                    && !c.pins.iter().any(|p| {
+                        p.net == Some(board.nets[ni].id)
+                            && {
+                                let cos_t = c.theta.cos();
+                                let sin_t = c.theta.sin();
+                                let gx = c.x + p.dx * cos_t - p.dy * sin_t;
+                                let gy = c.y + p.dx * sin_t + p.dy * cos_t;
+                                (gx - px).hypot(gy - py) < 1e-6
+                            }
+                    })
+                    && {
+                        let (cx, cy, hw, hh) = board.components[*k].envelope();
+                        let nx = px.clamp(cx - hw, cx + hw);
+                        let ny = py.clamp(cy - hh, cy + hh);
+                        (px - nx).hypot(py - ny) < 3.0
+                    }
+            })
+            .map(|(k, c)| (k, (c.x - px).hypot(c.y - py)))
+            .collect();
+        cands.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        cands.truncate(2);
+        'cand: for (k, _) in cands {
+            let away = {
+                let c = &board.components[k];
+                let (dx, dy) = (c.x - px, c.y - py);
+                let l = dx.hypot(dy).max(1e-6);
+                (dx / l, dy / l)
+            };
+            for step in [0.6f64, 1.2] {
+                let (ox, oy) = (board.components[k].x, board.components[k].y);
+                let (nx, ny) = (ox + away.0 * step, oy + away.1 * step);
+                if !crate::legalization::position_legal(board, k, nx, ny) {
+                    continue;
+                }
+                // Snapshot everything the trial can touch.
+                let snap_routes = final_routes.clone();
+                board.components[k].x = nx;
+                board.components[k].y = ny;
+                // Old pad positions (for plane drop-span stripping).
+                let old_pads: Vec<(f64, f64)> = {
+                    let c = &board.components[k];
+                    let cos_t = c.theta.cos();
+                    let sin_t = c.theta.sin();
+                    c.pins
+                        .iter()
+                        .map(|p| {
+                            (
+                                ox + p.dx * cos_t - p.dy * sin_t,
+                                oy + p.dx * sin_t + p.dy * cos_t,
+                            )
+                        })
+                        .collect()
+                };
+                let cid = board.components[k].id;
+                let mut affected: Vec<usize> = Vec::new();
+                for (mi, net) in board.nets.iter().enumerate() {
+                    if !net.pins.iter().any(|&(c, _)| c == cid) {
+                        continue;
+                    }
+                    if net.plane_layer.is_some() {
+                        // Strip only the moved pads' drop spans; the
+                        // drop pass re-sites them at the new spot.
+                        let r = &final_routes[mi];
+                        let mut doomed = vec![false; r.path_spans.len()];
+                        for (si, &(ps, pl)) in r.path_spans.iter().enumerate() {
+                            let hit = r.segments[ps..ps + pl].iter().any(|sg| {
+                                old_pads.iter().any(|&(gx, gy)| {
+                                    (sg.start.0 - gx).hypot(sg.start.1 - gy) < 0.8
+                                        || (sg.end.0 - gx).hypot(sg.end.1 - gy) < 0.8
+                                })
+                            });
+                            if hit {
+                                doomed[si] = true;
+                            }
+                        }
+                        if doomed.iter().any(|d| *d) {
+                            strip_route_spans(&mut final_routes[mi], &doomed);
+                        }
+                    } else {
+                        final_routes[mi] = Route::empty(net.id);
+                        affected.push(mi);
+                    }
+                }
+                // Greedy reroute of the moved part's signal nets under
+                // the exact commit gate, fat-first.
+                affected.sort_by(|&a, &b| {
+                    board.nets[b]
+                        .required_trace_width_mm
+                        .partial_cmp(&board.nets[a].required_trace_width_mm)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                for &mi in &affected {
+                    let mut grid = RoutingGrid::build(board);
+                    for (j, r) in final_routes.iter().enumerate() {
+                        if j != mi && !r.is_empty() {
+                            pathfinder::block_route_geometry(&mut grid, r, board);
+                        }
+                    }
+                    let mut fresh = Route::empty(board.nets[mi].id);
+                    let got = pathfinder::extend_route(
+                        &mut grid, &board.nets[mi], board, &mut fresh, 1.0, 1.0, &[], &[],
+                        false, None,
+                    );
+                    if got > 0 {
+                        let mut bans = Vec::new();
+                        if exact_commit_strip(board, final_routes, mi, &mut fresh, 0, &mut bans)
+                            > 0
+                        {
+                            final_routes[mi] = fresh;
+                        }
+                    }
+                }
+                // Ladder for the stuck net + anything still short, then
+                // re-drop moved plane pads.
+                for &mi in affected.iter().chain(std::iter::once(&ni)) {
+                    if pathfinder::unreached_sink_count(&board.nets[mi], board, &final_routes[mi])
+                        > 0
+                    {
+                        offgrid_escape(board, final_routes, mi);
+                    }
+                }
+                plane_drop_pass(board, final_routes);
+                let after = total_unreached(board, final_routes);
+                if after < before {
+                    info!(
+                        "part nudge: moved '{}' {step:.1}mm off the '{}' corridor (unreached {before} -> {after})",
+                        board.components[k].refdes, board.nets[ni].name
+                    );
+                    gained += before - after;
+                    before = after;
+                    break 'cand;
+                }
+                // Strict-win only: revert wholesale.
+                board.components[k].x = ox;
+                board.components[k].y = oy;
+                *final_routes = snap_routes;
+            }
+        }
+        if before == 0 {
+            break;
+        }
+    }
+    let _ = start;
+    gained
+}
+
 /// Bootstrap a WHOLE-NET failure: an empty route has no tree copper
 /// for the escape ladder to attach to, so connect the net's first
 /// pad pair directly — same-layer exact route, then shove-assisted,
