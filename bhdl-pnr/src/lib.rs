@@ -3726,7 +3726,11 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
                         None
                     };
                     let tunnel = if stub.is_some() && leg.is_some() {
-                        geom::route_escape(&idx, v1, v2, width, l2, net.id)
+                        geom::route_escape(&idx, v1, v2, width, l2, net.id).or_else(|| {
+                            // Maze-shaped last rung: fixed shapes can't
+                            // thread long detours (measured 21.7mm).
+                            geom::route_tunnel(&idx, v1, v2, width, l2, net.id)
+                        })
                     } else {
                         None
                     };
@@ -3850,6 +3854,25 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
                             }
                         }
                     }
+                }
+            }
+        }
+        // MAZE TUNNEL (same layer): the shapes + shoves above are
+        // fast; when they all miss, one exact A* attempt at the
+        // nearest attach point threads whatever corridor exists.
+        if !connected {
+            if let Some(&(q, _)) = attach.first() {
+                let cidx4 = geom::ClearanceIndex::build(board, final_routes, Some(net.id));
+                if let Some(path) =
+                    geom::route_tunnel(&cidx4, (px, py), q, width, layer, net.id)
+                {
+                    commit_escape(&mut final_routes[i], &path, layer, width, None, &net.name);
+                    info!(
+                        "completion: OFF-GRID maze tunnel connected a '{}' pad at ({px:.2},{py:.2})",
+                        net.name
+                    );
+                    gained += 1;
+                    connected = true;
                 }
             }
         }

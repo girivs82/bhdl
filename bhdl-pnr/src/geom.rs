@@ -544,6 +544,152 @@ pub fn escape_blocker(
     None
 }
 
+/// EXACT TUNNEL ROUTER — the maze-shaped last rung of the escape
+/// ladder. route_escape's fixed shapes (direct/L/Z/dogleg/U) cannot
+/// thread long detours (measured: a 21.7mm cross-board tunnel); this
+/// searches a fine lattice with A*, but LEGALITY IS EXACT — every
+/// lattice edge, and every segment of the final string-pulled
+/// polyline, passes first_conflict. The lattice is only a search
+/// scaffold; the shipped copper is gate-checked geometry.
+///
+/// Deterministic: the open-set orders on (f, g, node) so equal-cost
+/// ties break identically every run.
+pub fn route_tunnel(
+    idx: &ClearanceIndex,
+    from: (f64, f64),
+    to: (f64, f64),
+    width: f64,
+    layer: usize,
+    net: NetId,
+) -> Option<Vec<(f64, f64)>> {
+    use std::cmp::Reverse;
+    use std::collections::{BinaryHeap, HashMap};
+    let step = (width + idx.spacing).max(0.25);
+    let margin = 4.0;
+    let x0 = from.0.min(to.0) - margin;
+    let y0 = from.1.min(to.1) - margin;
+    let x1 = from.0.max(to.0) + margin;
+    let y1 = from.1.max(to.1) + margin;
+    let cols = (((x1 - x0) / step).ceil() as i32).max(1) + 1;
+    let rows = (((y1 - y0) / step).ceil() as i32).max(1) + 1;
+    if cols as i64 * rows as i64 > 60_000 {
+        return None; // scope guard: absurdly large search region
+    }
+    let pt = |n: (i32, i32)| -> (f64, f64) {
+        (x0 + n.0 as f64 * step, y0 + n.1 as f64 * step)
+    };
+    let clear = |a: (f64, f64), b: (f64, f64)| -> bool {
+        idx.first_conflict(a, b, width, layer, net).is_none()
+    };
+    let goal: (i32, i32) = (
+        ((to.0 - x0) / step).round() as i32,
+        ((to.1 - y0) / step).round() as i32,
+    );
+    let start: (i32, i32) = (
+        ((from.0 - x0) / step).round() as i32,
+        ((from.1 - y0) / step).round() as i32,
+    );
+    let h = |n: (i32, i32)| -> f64 {
+        let p = pt(n);
+        (p.0 - to.0).hypot(p.1 - to.1)
+    };
+    // (Reverse(f-bits), Reverse(g-bits), node) — min-heap on f then g,
+    // node id as the final deterministic tie-break.
+    let key = |c: f64| Reverse(c.to_bits());
+    let mut open: BinaryHeap<(Reverse<u64>, Reverse<u64>, (i32, i32))> = BinaryHeap::new();
+    let mut gscore: HashMap<(i32, i32), f64> = HashMap::new();
+    let mut prev: HashMap<(i32, i32), (i32, i32)> = HashMap::new();
+    gscore.insert(start, 0.0);
+    open.push((key(h(start)), key(0.0), start));
+    let dirs: [(i32, i32); 8] = [
+        (1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1),
+    ];
+    let mut expanded = 0usize;
+    let mut reached = false;
+    while let Some((_, _, cur)) = open.pop() {
+        if cur == goal {
+            reached = true;
+            break;
+        }
+        expanded += 1;
+        if expanded > 25_000 {
+            break;
+        }
+        let g_cur = gscore[&cur];
+        for &(dx, dy) in &dirs {
+            let nb = (cur.0 + dx, cur.1 + dy);
+            if nb.0 < 0 || nb.1 < 0 || nb.0 >= cols || nb.1 >= rows {
+                continue;
+            }
+            let cost = if dx != 0 && dy != 0 {
+                std::f64::consts::SQRT_2 * step
+            } else {
+                step
+            };
+            let g_nb = g_cur + cost;
+            if gscore.get(&nb).map_or(false, |&g| g <= g_nb) {
+                continue;
+            }
+            // Exact edge legality — use the true endpoint coordinates
+            // for the start/goal nodes so the search enters/leaves at
+            // the real pad/via points.
+            let pa = if cur == start { from } else { pt(cur) };
+            let pb = if nb == goal { to } else { pt(nb) };
+            if !clear(pa, pb) {
+                continue;
+            }
+            gscore.insert(nb, g_nb);
+            prev.insert(nb, cur);
+            open.push((key(g_nb + h(nb)), key(g_nb), nb));
+        }
+    }
+    if !reached {
+        return None;
+    }
+    // Reconstruct as points (true endpoints at the ends).
+    let mut nodes: Vec<(i32, i32)> = vec![goal];
+    let mut c = goal;
+    while c != start {
+        c = prev[&c];
+        nodes.push(c);
+    }
+    nodes.reverse();
+    let mut path: Vec<(f64, f64)> = nodes
+        .iter()
+        .enumerate()
+        .map(|(k, &n)| {
+            if k == 0 {
+                from
+            } else if k == nodes.len() - 1 {
+                to
+            } else {
+                pt(n)
+            }
+        })
+        .collect();
+    // STRING-PULL: greedy skip-ahead while the direct segment stays
+    // exactly legal — collapses lattice staircases to minimal bends.
+    let mut pulled: Vec<(f64, f64)> = vec![path[0]];
+    let mut i = 0usize;
+    while i + 1 < path.len() {
+        let mut j = path.len() - 1;
+        while j > i + 1 && !clear(path[i], path[j]) {
+            j -= 1;
+        }
+        pulled.push(path[j]);
+        i = j;
+    }
+    // Belt-and-braces: every emitted segment re-checked.
+    if pulled
+        .windows(2)
+        .any(|w| (w[0].0 - w[1].0).hypot(w[0].1 - w[1].1) > 1e-9 && !clear(w[0], w[1]))
+    {
+        return None;
+    }
+    path = pulled;
+    Some(path)
+}
+
 impl ClearanceIndex {
     /// Exact legality of a NEW via barrel at (x, y) with pad radius
     /// `r` for `net`: the barrel is copper on EVERY layer (any
