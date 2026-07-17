@@ -111,6 +111,38 @@ pub fn place_and_route_best_of(
 /// Input: a fully constructed `Board` (from semantic preprocessing).
 /// Output: `PnrResult` with final placement, routes, metrics, and DRC.
 pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result<PnrResult> {
+    // INVARIANT REPAIR: every pin stamped `pin.net = Some(n)` must
+    // appear in that net's pins list. The exporter writes pad nets
+    // from pin.net, so a pad missing from net.pins is INVISIBLE to
+    // every pin-driven pass (drops, rescue, unreached counts) while
+    // KiCad still expects it connected — U4's AVCC shipped stranded
+    // with zero pipeline log lines because nothing ever iterated it.
+    {
+        let mut repaired = 0usize;
+        for comp in &board.components {
+            for pin in &comp.pins {
+                let Some(nid) = pin.net else { continue };
+                if pin.unplaced {
+                    continue;
+                }
+                if let Some(net) = board.nets.iter_mut().find(|n| n.id == nid) {
+                    if !net
+                        .pins
+                        .iter()
+                        .any(|&(c, p)| c == comp.id && p == pin.pin_id)
+                    {
+                        net.pins.push((comp.id, pin.pin_id));
+                        repaired += 1;
+                    }
+                }
+            }
+        }
+        if repaired > 0 {
+            info!(
+                "net-pin reconcile: {repaired} pad(s) stamped on a net but missing from its pin list"
+            );
+        }
+    }
     if log::log_enabled!(log::Level::Debug) {
         let mut fp: u64 = 0xcbf29ce484222325;
         let mut mix = |b: &[u8]| {
@@ -1007,7 +1039,11 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
     {
         let mut pruned = 0usize;
         for i in 0..board.nets.len() {
-            if board.nets[i].plane_layer.is_some() || final_routes[i].is_empty() {
+            // Plane nets INCLUDED: their fragments dangle the same
+            // way (a 0.10mm VIN_12V orphan shipped as
+            // track_dangling), and the anchor rules — own pad, via,
+            // junction — are the same physics for them.
+            if final_routes[i].is_empty() {
                 continue;
             }
             let mut own_pads: Vec<(f64, f64, f64, f64)> = Vec::new();
@@ -1028,6 +1064,157 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                     };
                     let (pw, ph) = if quarter == 1 { (ph, pw) } else { (pw, ph) };
                     own_pads.push((gx, gy, pw / 2.0, ph / 2.0));
+                }
+            }
+            if std::env::var("BHDL_PNR_DEBUG_NETS")
+                .map(|v| board.nets[i].name.contains(&v))
+                .unwrap_or(false)
+            {
+                let r = &final_routes[i];
+                for (si, &(ps, pl)) in r.path_spans.iter().enumerate() {
+                    log::info!("[sweep] '{}' span {si} pl={pl}", board.nets[i].name);
+                    for sg in &r.segments[ps..ps + pl] {
+                        log::info!(
+                            "[sweep]   l{} ({:.3},{:.3})->({:.3},{:.3})",
+                            sg.layer, sg.start.0, sg.start.1, sg.end.0, sg.end.1
+                        );
+                    }
+                    if let Some(&(vs, vl)) = r.via_spans.get(si) {
+                        for v in r.vias.iter().skip(vs).take(vl) {
+                            log::info!("[sweep]   via ({:.3},{:.3})", v.x, v.y);
+                        }
+                    }
+                }
+            }
+            // ENDPOINT WELD: sub-micron drift between consecutive
+            // polyline endpoints (measured 0.0003mm) breaks KiCad's
+            // endpoint graph — the segments LOOK joined at any print
+            // precision but dangle. Snap near-coincident neighbors to
+            // exact equality before judging anchors.
+            {
+                let r = &mut final_routes[i];
+                for &(ps, pl) in &r.path_spans {
+                    for k in ps + 1..ps + pl {
+                        let prev_end = r.segments[k - 1].end;
+                        let d = (r.segments[k].start.0 - prev_end.0)
+                            .hypot(r.segments[k].start.1 - prev_end.1);
+                        if d > 0.0 && d < 1e-3 {
+                            r.segments[k].start = prev_end;
+                        }
+                    }
+                }
+                // Cross-span: endpoints within 1e-3 of another span's
+                // endpoint weld onto it; endpoints within 1e-3 of
+                // another segment's CENTERLINE weld onto the exact
+                // projection — an attach point computed against a
+                // segment later reshaped (collinear collapse within
+                // tolerance) sits ~1e-5 off the new line, and KiCad's
+                // endpoint graph is nm-exact (measured: a 0.103mm
+                // escape leg dangling at a point visually ON the
+                // tree's diagonal).
+                let snapshot: Vec<((f64, f64), (f64, f64))> =
+                    r.segments.iter().map(|sg| (sg.start, sg.end)).collect();
+                for sg in r.segments.iter_mut() {
+                    for &(a, b) in &snapshot {
+                        for target in [a, b] {
+                            for pt in [&mut sg.start, &mut sg.end] {
+                                let d = (pt.0 - target.0).hypot(pt.1 - target.1);
+                                if d > 0.0 && d < 1e-3 {
+                                    *pt = target;
+                                }
+                            }
+                        }
+                    }
+                }
+                for sk in 0..r.segments.len() {
+                    for end in [0usize, 1] {
+                        let pt = if end == 0 {
+                            r.segments[sk].start
+                        } else {
+                            r.segments[sk].end
+                        };
+                        let mut best: Option<((f64, f64), f64)> = None;
+                        for (oj, &(a, b)) in snapshot.iter().enumerate() {
+                            if oj == sk {
+                                continue;
+                            }
+                            let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+                            let l2 = dx * dx + dy * dy;
+                            if l2 <= 1e-12 {
+                                continue;
+                            }
+                            let t = (((pt.0 - a.0) * dx + (pt.1 - a.1) * dy) / l2)
+                                .clamp(0.0, 1.0);
+                            let q = (a.0 + t * dx, a.1 + t * dy);
+                            let d = (pt.0 - q.0).hypot(pt.1 - q.1);
+                            if d > 0.0
+                                && d < 1e-3
+                                && best.map_or(true, |(_, bd)| d < bd)
+                            {
+                                best = Some((q, d));
+                            }
+                        }
+                        if let Some((q, _)) = best {
+                            if end == 0 {
+                                r.segments[sk].start = q;
+                            } else {
+                                r.segments[sk].end = q;
+                            }
+                        }
+                    }
+                }
+            }
+            // T-SPLIT: KiCad's endpoint graph does NOT connect an
+            // endpoint landing in the INTERIOR of another track — a
+            // mathematically exact on-centerline landing (measured
+            // dist 0.0e0) still dangles. Split the host segment at
+            // every such landing so the T becomes a real junction.
+            loop {
+                let r = &final_routes[i];
+                let mut split: Option<(usize, (f64, f64))> = None;
+                'find_t: for sg in &r.segments {
+                    for pt in [sg.start, sg.end] {
+                        for (sk, host) in r.segments.iter().enumerate() {
+                            let (dx, dy) = (host.end.0 - host.start.0, host.end.1 - host.start.1);
+                            let l2 = dx * dx + dy * dy;
+                            if l2 <= 1e-12 {
+                                continue;
+                            }
+                            let t = ((pt.0 - host.start.0) * dx + (pt.1 - host.start.1) * dy) / l2;
+                            if t <= 1e-6 || t >= 1.0 - 1e-6 {
+                                continue; // at host's endpoint already
+                            }
+                            let q = (host.start.0 + t * dx, host.start.1 + t * dy);
+                            if (pt.0 - q.0).hypot(pt.1 - q.1) < 1e-6
+                                && (pt.0 - host.start.0).hypot(pt.1 - host.start.1) > 1e-6
+                                && (pt.0 - host.end.0).hypot(pt.1 - host.end.1) > 1e-6
+                            {
+                                split = Some((sk, pt));
+                                break 'find_t;
+                            }
+                        }
+                    }
+                }
+                let Some((sk, pt)) = split else { break };
+                let r = &mut final_routes[i];
+                let host = r.segments[sk].clone();
+                r.segments[sk].end = pt;
+                r.segments.insert(
+                    sk + 1,
+                    RouteSegment {
+                        layer: host.layer,
+                        start: pt,
+                        end: host.end,
+                        width_mm: host.width_mm,
+                    },
+                );
+                for (si, (qs, ql)) in r.path_spans.iter_mut().enumerate() {
+                    let _ = si;
+                    if *qs <= sk && sk < *qs + *ql {
+                        *ql += 1;
+                    } else if *qs > sk {
+                        *qs += 1;
+                    }
                 }
             }
             loop {
@@ -2621,6 +2808,10 @@ fn claim_via_site(
 /// pad's drop stub or via) with the exact router. The plane carries
 /// it from there.
 fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
+    debug!(
+        "surface rescue pass: {} plane net(s)",
+        board.nets.iter().filter(|n| n.plane_layer.is_some()).count()
+    );
     let comp_idx: std::collections::HashMap<ComponentId, usize> = board
         .components
         .iter()
@@ -2634,7 +2825,15 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
             continue;
         }
         let net_id = board.nets[i].id;
-        let width = board.nets[i].required_trace_width_mm.min(0.6);
+        // A rescue stub carries ONE pin's draw — neck it down like the
+        // drop machinery's leaf share. A rail-width (0.6mm) stub
+        // physically cannot leave a 0.5-pitch TQFP pad row (AVCC sat
+        // stranded while 14 maze rescues connected roomier pads).
+        let width = board
+            .config
+            .min_trace_width_mm
+            .max(0.15)
+            .min(board.nets[i].required_trace_width_mm);
         // Pads not touching ANY same-net copper.
         let mut todo: Vec<((f64, f64), usize, Option<usize>)> = Vec::new();
         for &(cid, pid) in &board.nets[i].pins {
@@ -2664,7 +2863,7 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
             // copper component must contain a VIA.
             use crate::routing::pathfinder::route_components;
             let comps = route_components(r);
-            let via_r = board.layer_stack.via.pad_mm / 2.0;
+            let via_r_pl = board.layer_stack.via.pad_mm / 2.0;
             let pin_layer = match comp.side {
                 BoardSide::Top => 0,
                 BoardSide::Bottom => n_layers - 1,
@@ -2679,13 +2878,24 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
                             < sg.width_mm / 2.0 + half - 0.001
                 })
                 .map(|(si, _)| comps[si]);
+            // A via only counts when it actually REACHES the plane:
+            // one swallowed by a fill punch (or outside the rail's
+            // region) is bare barrel in a hole — AVCC sat "connected"
+            // behind exactly such a via while KiCad saw nothing.
+            let merged = output::kicad::merge_holes(output::kicad::plane_foreign_holes(
+                board,
+                final_routes,
+                net_id,
+            ));
+            let region = board.nets[i].plane_region;
             let island_has_via = pad_comp.map_or(false, |pc| {
                 r.vias.iter().any(|v| {
-                    r.segments.iter().enumerate().any(|(si, sg)| {
-                        comps[si] == pc
-                            && geom::point_segment_dist((v.x, v.y), sg.start, sg.end)
-                                < sg.width_mm / 2.0 + via_r
-                    })
+                    !output::kicad::plane_swallows(board, &merged, v.x, v.y, via_r_pl, region)
+                        && r.segments.iter().enumerate().any(|(si, sg)| {
+                            comps[si] == pc
+                                && geom::point_segment_dist((v.x, v.y), sg.start, sg.end)
+                                    < sg.width_mm / 2.0 + via_r_pl
+                        })
                 })
             });
             if pad_comp.is_none() || !island_has_via {
@@ -2893,6 +3103,98 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
                         connected = true;
                         break 'site;
                     }
+                }
+            }
+            // Stage 3 — MULTI-LAYER MAZE: dense pin fields can fence
+            // both the surface paths AND every nearby via site; the
+            // (x, y, layer) search wanders to wherever a via fits and
+            // reaches same-net copper on ANY signal layer.
+            if !connected {
+                let via_r = board.layer_stack.via.pad_mm / 2.0;
+                let signal_layers = board.layer_stack.signal_layer_indices();
+                let r = &final_routes[i];
+                use crate::routing::pathfinder::route_components;
+                let comps3 = route_components(r);
+                let mut targets: Vec<((f64, f64), usize, f64)> = r
+                    .segments
+                    .iter()
+                    .enumerate()
+                    .filter(|(si, sg)| {
+                        Some(comps3[*si]) != pad_comp && signal_layers.contains(&sg.layer)
+                    })
+                    .map(|(_, sg)| {
+                        let (dx, dy) = (sg.end.0 - sg.start.0, sg.end.1 - sg.start.1);
+                        let l2n = dx * dx + dy * dy;
+                        let t = if l2n <= 1e-12 {
+                            0.0
+                        } else {
+                            (((px - sg.start.0) * dx + (py - sg.start.1) * dy) / l2n)
+                                .clamp(0.0, 1.0)
+                        };
+                        let q = (sg.start.0 + t * dx, sg.start.1 + t * dy);
+                        (q, sg.layer, (px - q.0).hypot(py - q.1))
+                    })
+                    .collect();
+                targets.sort_by(|a, b| {
+                    a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal)
+                });
+                targets.truncate(3);
+                let idx = geom::ClearanceIndex::build(board, final_routes, Some(net_id));
+                for &(q, ql, _) in &targets {
+                    let Some(way) = geom::route_tunnel_ml(
+                        &idx, (px, py), layer, q, ql, width, via_r, &signal_layers, net_id,
+                    ) else {
+                        continue;
+                    };
+                    let hole_gap = board.layer_stack.via.drill_mm + 0.25;
+                    let own_conflict = way.windows(2).any(|w| {
+                        w[0].2 != w[1].2
+                            && final_routes[i].vias.iter().any(|v| {
+                                let d = (v.x - w[0].0).hypot(v.y - w[0].1);
+                                d > 1e-6 && d < hole_gap
+                            })
+                    });
+                    if own_conflict {
+                        continue;
+                    }
+                    let route = &mut final_routes[i];
+                    let seg_start = route.segments.len();
+                    let via_start = route.vias.len();
+                    let n_l = board.layer_stack.layers.len() - 1;
+                    for w in way.windows(2) {
+                        let (a, b) = (w[0], w[1]);
+                        if a.2 == b.2 {
+                            if (a.0 - b.0).hypot(a.1 - b.1) > 1e-9 {
+                                route.segments.push(RouteSegment {
+                                    layer: a.2,
+                                    start: (a.0, a.1),
+                                    end: (b.0, b.1),
+                                    width_mm: width,
+                                });
+                            }
+                        } else if !route
+                            .vias
+                            .iter()
+                            .any(|v| (v.x - a.0).hypot(v.y - a.1) < 1e-6)
+                        {
+                            route.vias.push(RouteVia {
+                                x: a.0,
+                                y: a.1,
+                                from_layer: 0,
+                                to_layer: n_l,
+                            });
+                        }
+                    }
+                    let n_vias = route.vias.len() - via_start;
+                    route.path_spans.push((seg_start, route.segments.len() - seg_start));
+                    route.path_parents.push(None);
+                    route.via_spans.push((via_start, n_vias));
+                    info!(
+                        "plane surface rescue: '{}' pad at ({px:.2},{py:.2}) joined by multi-layer maze ({n_vias} via(s))",
+                        board.nets[i].name
+                    );
+                    connected = true;
+                    break;
                 }
             }
             if connected {
@@ -3167,7 +3469,16 @@ fn part_nudge_pass(board: &mut Board, final_routes: &mut Vec<Route>) -> usize {
 /// fence). Returns true when a first span was committed.
 pub fn bootstrap_empty_route(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> bool {
     let net = &board.nets[i];
-    let width = net.required_trace_width_mm;
+    // Same leaf-share taper as the main ladder (see offgrid_escape):
+    // one pin's approach carries one pin's current.
+    let width = match net.net_class {
+        PnrNetClass::Power { .. } | PnrNetClass::Ground => {
+            (net.required_trace_width_mm / (net.pins.len().max(1) as f64))
+                .max(board.config.min_trace_width_mm)
+                .min(net.required_trace_width_mm)
+        }
+        _ => net.required_trace_width_mm,
+    };
     let n_layers = board.layer_stack.layers.len();
     let comp_idx: std::collections::HashMap<ComponentId, usize> = board
         .components
@@ -3360,7 +3671,19 @@ pub fn bootstrap_empty_route(board: &Board, final_routes: &mut Vec<Route>, i: us
 fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usize {
     use crate::routing::pathfinder::route_components;
     let net = &board.nets[i];
-    let width = net.required_trace_width_mm;
+    // Power/Ground rails taper to LEAF SHARES everywhere else in the
+    // pipeline; the ladder must too — a whole-rail IPC width (2.03mm
+    // for uno's VCC_5V) can never leave a 0.5-pitch pad row, so AVCC
+    // sat stranded while every escape stage failed at rail width.
+    // One pin's approach carries one pin's current.
+    let width = match net.net_class {
+        PnrNetClass::Power { .. } | PnrNetClass::Ground => {
+            (net.required_trace_width_mm / (net.pins.len().max(1) as f64))
+                .max(board.config.min_trace_width_mm)
+                .min(net.required_trace_width_mm)
+        }
+        _ => net.required_trace_width_mm,
+    };
     let comp_idx: std::collections::HashMap<ComponentId, usize> = board
         .components
         .iter()
@@ -4709,7 +5032,19 @@ fn plane_via_drops(
                 }
             });
             if has_live_drop {
+                if std::env::var("BHDL_PNR_PROBE").is_ok() && pin.name == "AVCC" {
+                    log::info!(
+                        "[probe] drop pass: pad AVCC ({px:.2},{py:.2}) net '{}' has_live_drop=true",
+                        net.name
+                    );
+                }
                 continue;
+            }
+            if std::env::var("BHDL_PNR_PROBE").is_ok() && pin.name == "AVCC" {
+                log::info!(
+                    "[probe] drop pass: pad AVCC ({px:.2},{py:.2}) net '{}' NEEDS drop",
+                    net.name
+                );
             }
             let region = net.plane_region;
             let site_ok = |x: f64, y: f64| -> bool {
@@ -5362,40 +5697,45 @@ fn validate_and_rip(
                             }
                         }
                     }
-                    // via_dangling: the via must land on copper on BOTH
-                    // layers it spans — a segment endpoint at its center
-                    // on that layer, or a THT pad of its own net.
-                    // Plane-assigned nets are exempt: their via pierces
-                    // the emitted zone fill (copper the oracle sees but
-                    // this validator doesn't model).
+                    // via_dangling — KiCad's rule: a via is dangling
+                    // when connected on AT MOST ONE layer. The old
+                    // check demanded copper specifically on the via's
+                    // from/to layers, which amputated KiCad-legal
+                    // full-stack vias carrying an l0<->l2 transition
+                    // (cross-under / multi-layer maze) in an endless
+                    // re-commit ping-pong. Count DISTINCT touched
+                    // layers across everything the barrel spans; a
+                    // same-net THT pad touches every layer at once.
+                    // Plane-assigned nets are exempt: their via
+                    // pierces the emitted zone fill (copper the
+                    // oracle sees but this validator doesn't model).
                     if !bad && board.nets[i].plane_layer.is_none() {
-                        for check_layer in [v.from_layer, v.to_layer] {
-                            // Width-aware copper overlap (a via inside
-                            // a wide trunk's width is connected even off
-                            // the centerline), incl. mid-segment T-joints
-                            // (collinear runs merge at emission).
-                            let mut touched = final_routes[i].segments.iter().any(|sg| {
-                                sg.layer == check_layer
-                                    && segment_point_too_close(
-                                        sg.start,
-                                        sg.end,
-                                        (v.x, v.y),
-                                        sg.width_mm / 2.0 + via_r - 0.001,
-                                    )
-                            });
-                            if !touched {
-                                touched = pad_rects.iter().any(|p| {
-                                    p.net == Some(net_id)
-                                        && p.drill_r > 0.0
-                                        && (v.x - p.cx).abs() < p.hx
-                                        && (v.y - p.cy).abs() < p.hy
-                                });
+                        let lo = v.from_layer.min(v.to_layer);
+                        let hi = v.from_layer.max(v.to_layer);
+                        let mut touched_layers: std::collections::BTreeSet<usize> =
+                            std::collections::BTreeSet::new();
+                        for sg in &final_routes[i].segments {
+                            if sg.layer >= lo
+                                && sg.layer <= hi
+                                && segment_point_too_close(
+                                    sg.start,
+                                    sg.end,
+                                    (v.x, v.y),
+                                    sg.width_mm / 2.0 + via_r - 0.001,
+                                )
+                            {
+                                touched_layers.insert(sg.layer);
                             }
-                            if !touched {
-                                bad = true;
-                                why = "via-dangling";
-                                break;
-                            }
+                        }
+                        let tht_pad = pad_rects.iter().any(|p| {
+                            p.net == Some(net_id)
+                                && p.drill_r > 0.0
+                                && (v.x - p.cx).abs() < p.hx
+                                && (v.y - p.cy).abs() < p.hy
+                        });
+                        if !tht_pad && touched_layers.len() < 2 {
+                            bad = true;
+                            why = "via-dangling";
                         }
                     }
                     if bad {
