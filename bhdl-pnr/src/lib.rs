@@ -1029,33 +1029,6 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                     own_pads.push((gx, gy, pw / 2.0, ph / 2.0));
                 }
             }
-            if std::env::var("BHDL_PNR_DEBUG_NETS")
-                .map(|v| board.nets[i].name.contains(&v))
-                .unwrap_or(false)
-            {
-                let r = &final_routes[i];
-                for (si, &(ps, pl)) in r.path_spans.iter().enumerate() {
-                    let len: f64 = r.segments[ps..ps + pl]
-                        .iter()
-                        .map(|sg| (sg.end.0 - sg.start.0).hypot(sg.end.1 - sg.start.1))
-                        .sum();
-                    log::info!(
-                        "[sweep] '{}' span {si}: pl={pl} len={len:.2}",
-                        board.nets[i].name
-                    );
-                    for sg in &r.segments[ps..ps + pl] {
-                        log::info!(
-                            "[sweep]    seg l{} ({:.3},{:.3})->({:.3},{:.3}) w{:.2}",
-                            sg.layer, sg.start.0, sg.start.1, sg.end.0, sg.end.1, sg.width_mm
-                        );
-                    }
-                    if let Some(&(vs, vl)) = r.via_spans.get(si) {
-                        for v in r.vias.iter().skip(vs).take(vl) {
-                            log::info!("[sweep]    via ({:.3},{:.3})", v.x, v.y);
-                        }
-                    }
-                }
-            }
             loop {
                 let r = &final_routes[i];
                 let mut drop_span: Option<usize> = None;
@@ -3709,6 +3682,10 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
                         board, final_routes, i, (px, py), via_r, None, &mut snaps,
                         &mut budget,
                     ) else {
+                        debug!(
+                            "cross-under: '{}' pad ({px:.2},{py:.2}): no v1 site",
+                            net.name
+                        );
                         for (jj, old) in snaps.into_iter().rev() {
                             final_routes[jj] = old;
                         }
@@ -3718,6 +3695,10 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
                         board, final_routes, i, q, via_r, Some(v1), &mut snaps,
                         &mut budget,
                     ) else {
+                        debug!(
+                            "cross-under: '{}' attach ({:.2},{:.2}): no v2 site",
+                            net.name, q.0, q.1
+                        );
                         for (jj, old) in snaps.into_iter().rev() {
                             final_routes[jj] = old;
                         }
@@ -3733,20 +3714,27 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
                     }
                     let idx =
                         geom::ClearanceIndex::build(board, final_routes, Some(net.id));
-                    // stub pad->v1 and leg v2->q on the pad's layer,
-                    // tunnel v1->v2 on the far layer — all exact.
-                    let stub_ok = idx
-                        .first_conflict((px, py), v1, width, layer, net.id)
-                        .is_none();
-                    let leg_ok = idx
-                        .first_conflict(v2, q, width, layer, net.id)
-                        .is_none();
-                    let tunnel = if stub_ok && leg_ok {
+                    // Stub pad->v1 and leg v2->q run through the FULL
+                    // escape router (bends allowed — the straight-line
+                    // check killed reachable sites: measured
+                    // stub_ok=false with an L-shaped stub available);
+                    // tunnel v1->v2 on the far layer. All exact.
+                    let stub = geom::route_escape(&idx, (px, py), v1, width, layer, net.id);
+                    let leg = if stub.is_some() {
+                        geom::route_escape(&idx, v2, q, width, layer, net.id)
+                    } else {
+                        None
+                    };
+                    let tunnel = if stub.is_some() && leg.is_some() {
                         geom::route_escape(&idx, v1, v2, width, l2, net.id)
                     } else {
                         None
                     };
-                    let Some(path) = tunnel else {
+                    let (Some(stub), Some(leg), Some(path)) = (stub, leg, tunnel) else {
+                        debug!(
+                            "cross-under: '{}' v1 ({:.2},{:.2}) v2 ({:.2},{:.2}): stub/leg/tunnel FAILED",
+                            net.name, v1.0, v1.1, v2.0, v2.1
+                        );
                         for (jj, old) in snaps.into_iter().rev() {
                             final_routes[jj] = old;
                         }
@@ -3755,12 +3743,16 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
                     let route = &mut final_routes[i];
                     let seg_start = route.segments.len();
                     let via_start = route.vias.len();
-                    route.segments.push(RouteSegment {
-                        layer,
-                        start: (px, py),
-                        end: v1,
-                        width_mm: width,
-                    });
+                    for w in stub.windows(2) {
+                        if (w[0].0 - w[1].0).hypot(w[0].1 - w[1].1) > 1e-9 {
+                            route.segments.push(RouteSegment {
+                                layer,
+                                start: w[0],
+                                end: w[1],
+                                width_mm: width,
+                            });
+                        }
+                    }
                     for w in path.windows(2) {
                         if (w[0].0 - w[1].0).hypot(w[0].1 - w[1].1) > 1e-9 {
                             route.segments.push(RouteSegment {
@@ -3771,12 +3763,16 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
                             });
                         }
                     }
-                    route.segments.push(RouteSegment {
-                        layer,
-                        start: v2,
-                        end: q,
-                        width_mm: width,
-                    });
+                    for w in leg.windows(2) {
+                        if (w[0].0 - w[1].0).hypot(w[0].1 - w[1].1) > 1e-9 {
+                            route.segments.push(RouteSegment {
+                                layer,
+                                start: w[0],
+                                end: w[1],
+                                width_mm: width,
+                            });
+                        }
+                    }
                     let n_l = board.layer_stack.layers.len() - 1;
                     route.vias.push(RouteVia { x: v1.0, y: v1.1, from_layer: 0, to_layer: n_l });
                     route.vias.push(RouteVia { x: v2.0, y: v2.1, from_layer: 0, to_layer: n_l });
