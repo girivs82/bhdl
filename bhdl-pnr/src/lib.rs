@@ -2794,8 +2794,194 @@ fn completion_pass(board: &Board, final_routes: &mut Vec<Route>) -> usize {
         if pathfinder::unreached_sink_count(&board.nets[i], board, &final_routes[i]) > 0 {
             total += offgrid_escape(board, final_routes, i);
         }
+        // VICTIM RIP + EXACT-LADDER RETRY: shove_one_blocker's grid
+        // extend cannot thread sub-grid corridors, and the exact
+        // ladder cannot cross a fence a single foreign net pins in
+        // place (uno s5: D_P behind one crossing jog). Rip the
+        // blocker wholesale, rerun the full exact ladder through the
+        // freed corridor, rebuild the victim, strict-total-win or
+        // revert both.
+        if pathfinder::unreached_sink_count(&board.nets[i], board, &final_routes[i]) > 0 {
+            total += rip_and_exact_retry(board, final_routes, i);
+        }
     }
     total
+}
+
+/// See the call site: single-victim rip with EXACT-ladder retry for
+/// sinks the grid-based shove_one_blocker cannot free.
+fn rip_and_exact_retry(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usize {
+    let comp_idx: std::collections::HashMap<ComponentId, usize> = board
+        .components
+        .iter()
+        .enumerate()
+        .map(|(k, c)| (c.id, k))
+        .collect();
+    let n_layers = board.layer_stack.layers.len();
+    use crate::routing::pathfinder::route_components;
+    // Unreached pad positions: no touching copper on the pad's
+    // surface layer, or stranded on an island holding no second pad.
+    let mut pads: Vec<((f64, f64), usize, Option<usize>)> = Vec::new();
+    let mut comp_pads: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    {
+        let r = &final_routes[i];
+        let comps = route_components(r);
+        for &(cid, pid) in &board.nets[i].pins {
+            let Some(&ci) = comp_idx.get(&cid) else { continue };
+            let comp = &board.components[ci];
+            let Some(pin) = comp.pins.iter().find(|p| p.pin_id == pid) else { continue };
+            if pin.unplaced {
+                continue;
+            }
+            let cos_t = comp.theta.cos();
+            let sin_t = comp.theta.sin();
+            let px = comp.x + pin.dx * cos_t - pin.dy * sin_t;
+            let py = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+            let half = pin
+                .pad
+                .as_ref()
+                .map(|p| p.width_mm.min(p.height_mm) / 2.0)
+                .unwrap_or(0.25);
+            let layer = match comp.side {
+                BoardSide::Top => 0,
+                BoardSide::Bottom => n_layers - 1,
+            };
+            let pad_comp: Option<usize> = r
+                .segments
+                .iter()
+                .enumerate()
+                .find(|(_, sg)| {
+                    sg.layer == layer
+                        && geom::point_segment_dist((px, py), sg.start, sg.end)
+                            < sg.width_mm / 2.0 + half - 0.001
+                })
+                .map(|(si, _)| comps[si]);
+            if let Some(pc) = pad_comp {
+                *comp_pads.entry(pc).or_insert(0) += 1;
+            }
+            pads.push(((px, py), layer, pad_comp));
+        }
+    }
+    let targets: Vec<((f64, f64), usize, Option<usize>)> = pads
+        .into_iter()
+        .filter(|(_, _, pc)| match pc {
+            None => true,
+            Some(c) => comp_pads.get(c).copied().unwrap_or(0) < 2,
+        })
+        .collect();
+    if targets.is_empty() {
+        return 0;
+    }
+    let mut before_i =
+        pathfinder::unreached_sink_count(&board.nets[i], board, &final_routes[i]);
+    let mut gained = 0usize;
+    let net_id = board.nets[i].id;
+    let width = board
+        .config
+        .min_trace_width_mm
+        .max(0.15)
+        .min(board.nets[i].required_trace_width_mm);
+    for ((px, py), layer, pad_comp) in targets.into_iter().take(4) {
+        if before_i == 0 {
+            break;
+        }
+        // Attach candidates on OTHER components' same-layer copper.
+        let mut attach: Vec<((f64, f64), f64)> = {
+            let r = &final_routes[i];
+            let comps = route_components(r);
+            r.segments
+                .iter()
+                .enumerate()
+                .filter(|(si, sg)| sg.layer == layer && Some(comps[*si]) != pad_comp)
+                .map(|(_, sg)| {
+                    let (dx, dy) = (sg.end.0 - sg.start.0, sg.end.1 - sg.start.1);
+                    let l2 = dx * dx + dy * dy;
+                    let t = if l2 <= 1e-12 {
+                        0.0
+                    } else {
+                        (((px - sg.start.0) * dx + (py - sg.start.1) * dy) / l2)
+                            .clamp(0.0, 1.0)
+                    };
+                    let q = (sg.start.0 + t * dx, sg.start.1 + t * dy);
+                    (q, (px - q.0).hypot(py - q.1))
+                })
+                .collect()
+        };
+        attach.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        attach.truncate(4);
+        let mut victims: Vec<usize> = Vec::new();
+        {
+            let idx = geom::ClearanceIndex::build(board, final_routes, Some(net_id));
+            for &(q, _) in &attach {
+                if let Some(geom::Conflict::Track { net: vn, .. }) =
+                    geom::escape_blocker(&idx, (px, py), q, width, layer, net_id)
+                {
+                    if let Some(vj) = board.nets.iter().position(|n| n.id == vn) {
+                        if vj != i
+                            && board.nets[vj].plane_layer.is_none()
+                            && !final_routes[vj].is_empty()
+                            && !victims.contains(&vj)
+                        {
+                            victims.push(vj);
+                        }
+                    }
+                }
+            }
+        }
+        for &vj in victims.iter().take(2) {
+            let snap_v = final_routes[vj].clone();
+            let snap_i = final_routes[i].clone();
+            final_routes[vj] = Route::empty(snap_v.net_id);
+            offgrid_escape(board, final_routes, i);
+            let i_after =
+                pathfinder::unreached_sink_count(&board.nets[i], board, &final_routes[i]);
+            if i_after >= before_i {
+                final_routes[vj] = snap_v;
+                final_routes[i] = snap_i;
+                continue;
+            }
+            // Rebuild the victim on the board that carries the join.
+            let mut jgrid = RoutingGrid::build(board);
+            for (k, r) in final_routes.iter().enumerate() {
+                if k != vj && !r.is_empty() {
+                    pathfinder::block_route_geometry(&mut jgrid, r, board);
+                }
+            }
+            let mut fresh = Route::empty(snap_v.net_id);
+            pathfinder::extend_route(
+                &mut jgrid, &board.nets[vj], board, &mut fresh, 1.0, 1.0, &[], &[], false,
+                None,
+            );
+            {
+                let mut bans = Vec::new();
+                let mut trial_board: Vec<Route> = final_routes.clone();
+                trial_board[vj] = Route::empty(snap_v.net_id);
+                exact_commit_strip(board, &trial_board, vj, &mut fresh, 0, &mut bans);
+            }
+            final_routes[vj] = fresh;
+            if pathfinder::unreached_sink_count(&board.nets[vj], board, &final_routes[vj])
+                > 0
+            {
+                offgrid_escape(board, final_routes, vj);
+            }
+            let v_before = pathfinder::unreached_sink_count(&board.nets[vj], board, &snap_v);
+            let v_after = pathfinder::unreached_sink_count(
+                &board.nets[vj], board, &final_routes[vj],
+            );
+            if i_after + v_after < before_i + v_before {
+                info!(
+                    "completion: exact-ladder retry connected '{}' after ripping '{}' (victim unreached {v_before} -> {v_after})",
+                    board.nets[i].name, board.nets[vj].name
+                );
+                gained += before_i - i_after;
+                before_i = i_after;
+                break;
+            }
+            final_routes[vj] = snap_v;
+            final_routes[i] = snap_i;
+        }
+    }
+    gained
 }
 
 /// M4: true push-and-shove, v1. Geometrically DEFORM a blocking
@@ -3207,7 +3393,7 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
                 attach.push((((v.x, v.y)), (px - v.x).hypot(py - v.y)));
             }
             attach.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-            attach.truncate(5);
+            attach.truncate(12);
             // Sources: the pad center, plus the dead island's segment
             // endpoints (the stub's far end often has open space the
             // pad itself lacks; overlap-connectivity carries the pad).
@@ -3221,7 +3407,7 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
                 }
             }
             sources.dedup_by(|a, b| (a.0 - b.0).hypot(a.1 - b.1) < 1e-6);
-            sources.truncate(6);
+            sources.truncate(10);
             let mut connected = false;
             // Exact route, then shove-assisted retry.
             let mut snaps: Vec<(usize, Route)> = Vec::new();
@@ -3260,6 +3446,114 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
                 }
                 }
             }
+            // Stage 1.5 — VICTIM RIP: the blocker crosses the pad
+            // column and every shape/shove fails (uno s5: a 0.3mm
+            // foreign jog crossing exactly between two same-net USB
+            // pads fenced the whole gap). Rip the blocking net
+            // wholesale, make the exact join through the freed
+            // corridor, rebuild the victim on the updated board
+            // (grid extend + exact strip + ladder top-up), and accept
+            // only a strict total win — the join lands AND the victim
+            // ends no worse than it started. Plane pads never get the
+            // completion pass's shove_one_blocker, so this is their
+            // only rip path.
+            if !connected {
+                for (jj, old) in snaps.drain(..).rev() {
+                    final_routes[jj] = old;
+                }
+                let mut victims: Vec<usize> = Vec::new();
+                {
+                    let idx = geom::ClearanceIndex::build(board, final_routes, Some(net_id));
+                    for &(q, _) in attach.iter().take(6) {
+                        if let Some(geom::Conflict::Track { net: vn, .. }) =
+                            geom::escape_blocker(&idx, (px, py), q, width, layer, net_id)
+                        {
+                            if let Some(vj) = board.nets.iter().position(|n| n.id == vn) {
+                                if board.nets[vj].plane_layer.is_none()
+                                    && !final_routes[vj].is_empty()
+                                    && !victims.contains(&vj)
+                                {
+                                    victims.push(vj);
+                                }
+                            }
+                        }
+                    }
+                }
+                'victim: for &vj in victims.iter().take(3) {
+                    let snap_v = final_routes[vj].clone();
+                    let snap_g = final_routes[i].clone();
+                    final_routes[vj] = Route::empty(snap_v.net_id);
+                    let mut joined = false;
+                    'join: for &src in &sources {
+                        for &(q, _) in &attach {
+                            let idx = geom::ClearanceIndex::build(
+                                board,
+                                final_routes,
+                                Some(net_id),
+                            );
+                            if let Some(path) =
+                                geom::route_escape(&idx, src, q, width, layer, net_id)
+                            {
+                                commit_escape(
+                                    &mut final_routes[i],
+                                    &path,
+                                    layer,
+                                    width,
+                                    None,
+                                    &board.nets[i].name,
+                                );
+                                joined = true;
+                                break 'join;
+                            }
+                        }
+                    }
+                    if !joined {
+                        final_routes[vj] = snap_v;
+                        continue;
+                    }
+                    // Rebuild the victim from scratch on the board
+                    // that now carries the join.
+                    let mut jgrid = RoutingGrid::build(board);
+                    for (k, r) in final_routes.iter().enumerate() {
+                        if k != vj && !r.is_empty() {
+                            pathfinder::block_route_geometry(&mut jgrid, r, board);
+                        }
+                    }
+                    let mut fresh = Route::empty(snap_v.net_id);
+                    pathfinder::extend_route(
+                        &mut jgrid, &board.nets[vj], board, &mut fresh, 1.0, 1.0, &[], &[],
+                        false, None,
+                    );
+                    {
+                        let mut bans = Vec::new();
+                        let mut trial_board: Vec<Route> = final_routes.clone();
+                        trial_board[vj] = Route::empty(snap_v.net_id);
+                        exact_commit_strip(board, &trial_board, vj, &mut fresh, 0, &mut bans);
+                    }
+                    final_routes[vj] = fresh;
+                    if pathfinder::unreached_sink_count(
+                        &board.nets[vj], board, &final_routes[vj],
+                    ) > 0
+                    {
+                        offgrid_escape(board, final_routes, vj);
+                    }
+                    let v_before =
+                        pathfinder::unreached_sink_count(&board.nets[vj], board, &snap_v);
+                    let v_after = pathfinder::unreached_sink_count(
+                        &board.nets[vj], board, &final_routes[vj],
+                    );
+                    if v_after <= v_before {
+                        info!(
+                            "plane surface rescue: '{}' pad at ({px:.2},{py:.2}) joined after ripping '{}' (victim unreached {v_before} -> {v_after})",
+                            board.nets[i].name, board.nets[vj].name
+                        );
+                        connected = true;
+                        break 'victim;
+                    }
+                    final_routes[vj] = snap_v;
+                    final_routes[i] = snap_g;
+                }
+            }
             // Stage 2 — EXACT ROUTED DROP: every surface path to
             // existing copper is fenced; make NEW plane contact
             // instead. Ring-search a legal via site (exact barrel +
@@ -3280,7 +3574,7 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
                     board, final_routes, net_id,
                 ));
                 let mut budget = 4usize;
-                'site: for ring in 0..16 {
+                'site: for ring in 0..24 {
                     let rr = 0.6 + ring as f64 * 0.35;
                     for k in 0..12 {
                         let ang = k as f64 * 2.0 * std::f64::consts::PI / 12.0;
@@ -3406,7 +3700,7 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
                 targets.sort_by(|a, b| {
                     a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal)
                 });
-                targets.truncate(3);
+                targets.truncate(8);
                 let idx = geom::ClearanceIndex::build(board, final_routes, Some(net_id));
                 for &(q, ql, _) in &targets {
                     let Some(way) = geom::route_tunnel_ml(
@@ -3480,6 +3774,24 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
                     board.nets[i].name,
                     attach.len()
                 );
+                if log::log_enabled!(log::Level::Debug) {
+                    let idx = geom::ClearanceIndex::build(board, final_routes, Some(net_id));
+                    for &(q, d) in attach.iter().take(4) {
+                        let bl = geom::escape_blocker(&idx, (px, py), q, width, layer, net_id);
+                        debug!(
+                            "  attach ({:.2},{:.2}) d={d:.2}: blocker {:?}",
+                            q.0, q.1, bl
+                        );
+                    }
+                    let merged = output::kicad::merge_holes(output::kicad::plane_foreign_holes(
+                        board, final_routes, net_id,
+                    ));
+                    for &(hx, hy, hr) in &merged {
+                        if (hx - px).hypot(hy - py) < hr + 9.0 && hr > 1.0 {
+                            debug!("  big merged hole: ({hx:.2},{hy:.2}) r={hr:.2}");
+                        }
+                    }
+                }
                 for (jj, old) in snaps.into_iter().rev() {
                     final_routes[jj] = old;
                 }
