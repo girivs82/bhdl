@@ -3940,13 +3940,38 @@ fn part_nudge_pass(board: &mut Board, final_routes: &mut Vec<Route>) -> usize {
             .collect();
         cands.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         cands.truncate(2);
-        'cand: for (k, _) in cands {
-            let away = {
+        // SELF-NUDGE: when the fence is the stuck pad's own
+        // neighborhood of PADS (a crystal against a TQFP pin row), no
+        // neighbor move opens the corridor — move the stuck component
+        // itself. Tried AFTER neighbor moves so existing outcomes are
+        // preserved; the identical rip/rebuild/strict-win trial
+        // machinery polices the move. (Landed only after drop siting
+        // moved onto the exact kernel — the first landing shipped
+        // vias through the PadObs snapshot's blind spots.)
+        let mut cand_dirs: Vec<(usize, Vec<(f64, f64)>)> = cands
+            .iter()
+            .map(|&(k, _)| {
                 let c = &board.components[k];
                 let (dx, dy) = (c.x - px, c.y - py);
                 let l = dx.hypot(dy).max(1e-6);
-                (dx / l, dy / l)
-            };
+                (k, vec![(dx / l, dy / l)])
+            })
+            .collect();
+        if let Some(sk) = board.components.iter().position(|c| {
+            c.placement.is_free()
+                && c.pins.len() <= 10
+                && c.pins.iter().any(|p| {
+                    let cos_t = c.theta.cos();
+                    let sin_t = c.theta.sin();
+                    let gx = c.x + p.dx * cos_t - p.dy * sin_t;
+                    let gy = c.y + p.dx * sin_t + p.dy * cos_t;
+                    (gx - px).hypot(gy - py) < 1e-6
+                })
+        }) {
+            cand_dirs.push((sk, vec![(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)]));
+        }
+        'cand: for (k, dirs) in cand_dirs {
+            for away in dirs {
             for step in [0.6f64, 1.2] {
                 let (ox, oy) = (board.components[k].x, board.components[k].y);
                 let (nx, ny) = (ox + away.0 * step, oy + away.1 * step);
@@ -4124,6 +4149,7 @@ fn part_nudge_pass(board: &mut Board, final_routes: &mut Vec<Route>) -> usize {
                 board.components[k].x = ox;
                 board.components[k].y = oy;
                 *final_routes = snap_routes;
+            }
             }
         }
         if before == 0 {
@@ -5790,6 +5816,16 @@ fn plane_via_drops(
                 if banned_sites.iter().any(|&(bx, by)| (x - bx).hypot(y - by) < 0.26) {
                     return false;
                 }
+                // ONE-TRUTH barrel gate: the PadObs box test below is
+                // a snapshot approximation that shipped a via 0.375mm
+                // from a foreign pad (uno s42 during nudge trials) —
+                // the exact kernel's via_conflict (roundrect pads,
+                // current copper) is authoritative. The index is
+                // bucketed, so this is a local query, cheap even in
+                // the routed fallback's sink enumeration.
+                if cidx.via_conflict(x, y, via_r, net.id).is_some() {
+                    return false;
+                }
                 for p in &pads {
                     let same = p.net == Some(net.id);
                     if !same {
@@ -5943,6 +5979,15 @@ fn plane_via_drops(
                     idx.first_conflict(sg.start, sg.end, sg.width_mm, sg.layer, net.id)
                         .is_some()
                 }) {
+                    continue;
+                }
+                // The VIA BARREL too — a siting path handed this
+                // commit a coordinate site_ok never saw (measured: a
+                // via 0.375mm from a foreign pad shipped through the
+                // routed fallback while the same call's site_ok
+                // rejected that exact spot). The commit gate is the
+                // one chokepoint every drop passes.
+                if idx.via_conflict(vx, vy, via_r, net.id).is_some() {
                     continue;
                 }
             }
