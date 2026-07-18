@@ -1011,6 +1011,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         }
     }
 
+    via_anchor_check(&board, &final_routes, "post-5.97");
     // 5.99. PART NUDGE — placement relief with routing feedback for
     // whatever the exact ladder still can't reach.
     {
@@ -1020,6 +1021,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         }
     }
 
+    via_anchor_check(&board, &final_routes, "post-nudge");
     // 5.995. PLANE SURFACE RESCUE — drop-less plane pads join their
     // net over surface copper (the ladder skips plane nets; a pad
     // outside its split-region band had no mechanism at all).
@@ -1030,6 +1032,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         }
     }
 
+    via_anchor_check(&board, &final_routes, "post-rescue");
     // 5.996. FINAL ORPHAN SWEEP (after every copper-moving pass): copper-moving passes (shove, miter,
     // strip) can strand short parentless fragments after the last
     // validate — the oracle reads them as track_dangling. KiCad
@@ -1083,6 +1086,111 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                         for v in r.vias.iter().skip(vs).take(vl) {
                             log::info!("[sweep]   via ({:.3},{:.3})", v.x, v.y);
                         }
+                    }
+                }
+            }
+            // NEAR-DUPLICATE VIA REPAIR: two same-net vias closer
+            // than the drill rule (seed-7: 0.10mm apart, placed by
+            // different passes that cannot see each other's commits)
+            // — remove the later one; segments anchored at its center
+            // stay connected through the survivor's barrel (0.3mm
+            // radius covers the 0.1mm offset). via_spans bookkeeping
+            // shifts with the removal.
+            {
+                // Removal is only safe when the survivor's BARREL
+                // covers the removed center (segments anchored there
+                // stay connected): d well inside via_r. Wider pairs
+                // (0.25..hole_gap) have no safe ship-time repair —
+                // removing one strands its segments (measured:
+                // track/via_dangling regressions).
+                let safe_merge = (board.layer_stack.via.pad_mm / 2.0 - 0.05).max(0.1);
+                loop {
+                    let r = &final_routes[i];
+                    let mut dup: Option<usize> = None;
+                    'find_dup: for a in 0..r.vias.len() {
+                        for b in (a + 1)..r.vias.len() {
+                            let d = (r.vias[a].x - r.vias[b].x)
+                                .hypot(r.vias[a].y - r.vias[b].y);
+                            if d < safe_merge {
+                                dup = Some(b);
+                                break 'find_dup;
+                            }
+                        }
+                    }
+                    let Some(b) = dup else { break };
+                    let r = &mut final_routes[i];
+                    r.vias.remove(b);
+                    for (vs, vl) in r.via_spans.iter_mut() {
+                        if *vs <= b && b < *vs + *vl {
+                            *vl -= 1;
+                        } else if *vs > b {
+                            *vs -= 1;
+                        }
+                    }
+                }
+                // WIDE PAIR + BRIDGE: pairs past the barrel-cover
+                // bound but still inside the drill rule (uno s13:
+                // 0.525mm, hole_to_hole) — removing one strands its
+                // copper, so bridge each of its layers to the
+                // survivor. A bridge along the center line whose
+                // half-width h satisfies sqrt((d/2)^2 + h^2) <= via_r
+                // stays inside the union of the two already-legal via
+                // pads, so it cannot create a new clearance conflict.
+                let via_r = board.layer_stack.via.pad_mm / 2.0;
+                let wide_thresh = board.layer_stack.via.drill_mm + 0.27;
+                loop {
+                    let r = &final_routes[i];
+                    let mut dup: Option<(usize, usize)> = None;
+                    'find_wide: for a in 0..r.vias.len() {
+                        for b in (a + 1)..r.vias.len() {
+                            let d = (r.vias[a].x - r.vias[b].x)
+                                .hypot(r.vias[a].y - r.vias[b].y);
+                            let allowed_w =
+                                2.0 * (via_r * via_r - (d / 2.0) * (d / 2.0)).max(0.0).sqrt()
+                                    - 0.01;
+                            if d >= safe_merge && d < wide_thresh && allowed_w >= 0.15 {
+                                dup = Some((a, b));
+                                break 'find_wide;
+                            }
+                        }
+                    }
+                    let Some((a, b)) = dup else { break };
+                    let r = &mut final_routes[i];
+                    let (ax, ay) = (r.vias[a].x, r.vias[a].y);
+                    let (bx, by) = (r.vias[b].x, r.vias[b].y);
+                    let d = (ax - bx).hypot(ay - by);
+                    let allowed_w = (2.0
+                        * (via_r * via_r - (d / 2.0) * (d / 2.0)).max(0.0).sqrt()
+                        - 0.01)
+                        .min(0.25);
+                    let mut layers: Vec<usize> = Vec::new();
+                    for sg in &r.segments {
+                        for e in [sg.start, sg.end] {
+                            if (e.0 - bx).hypot(e.1 - by) <= via_r
+                                && !layers.contains(&sg.layer)
+                            {
+                                layers.push(sg.layer);
+                            }
+                        }
+                    }
+                    r.vias.remove(b);
+                    for (vs, vl) in r.via_spans.iter_mut() {
+                        if *vs <= b && b < *vs + *vl {
+                            *vl -= 1;
+                        } else if *vs > b {
+                            *vs -= 1;
+                        }
+                    }
+                    for layer in layers {
+                        let ps = r.segments.len();
+                        r.segments.push(RouteSegment {
+                            start: (bx, by),
+                            end: (ax, ay),
+                            layer,
+                            width_mm: allowed_w,
+                        });
+                        r.path_spans.push((ps, 1));
+                        r.via_spans.push((r.vias.len(), 0));
                     }
                 }
             }
@@ -1297,7 +1405,13 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                         if d1.0.hypot(d1.1) < 1e-9 {
                             continue;
                         }
-                        let covered = r.segments.iter().enumerate().any(|(sk, o)| {
+                        let via_r = board.layer_stack.via.pad_mm / 2.0;
+                        let carries_via = r.vias.iter().any(|v| {
+                            (v.x - sg.start.0).hypot(v.y - sg.start.1) <= via_r
+                                || (v.x - sg.end.0).hypot(v.y - sg.end.1) <= via_r
+                        });
+                        let covered = !carries_via
+                            && r.segments.iter().enumerate().any(|(sk, o)| {
                             if sk == at || o.layer != sg.layer {
                                 return false;
                             }
@@ -1361,6 +1475,18 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                         let cross = da.0 * db.1 - da.1 * db.0;
                         let dot = da.0 * db.0 + da.1 * db.1;
                         if cross.abs() < 1e-6 && dot < 0.0 {
+                            // A via AT the retrace tip rides that
+                            // copper — collapsing orphans it (final
+                            // sweep was the pass stranding maze vias:
+                            // via-check clean post-rescue, dangling
+                            // at final).
+                            let tip = a.end;
+                            let via_r = board.layer_stack.via.pad_mm / 2.0;
+                            if r.vias.iter().any(|v| {
+                                (v.x - tip.0).hypot(v.y - tip.1) <= via_r
+                            }) {
+                                continue;
+                            }
                             hit = Some((si, k));
                             break 'outback;
                         }
@@ -1397,6 +1523,8 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
             // one segment at a time until a junction/anchor, exactly
             // the validator's dangle-trim semantics.
             let via_r = board.layer_stack.via.pad_mm / 2.0;
+            for _outer in 0..8 {
+            let mut via_removed = false;
             for _ in 0..64 {
                 let r = &final_routes[i];
                 // LAYER-AWARE + COLLINEAR-AWARE: a segment crossing
@@ -1469,6 +1597,113 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                 }
                 pruned += 1;
             }
+            // USELESS-VIA CLEANUP: the trim can strip a via's only
+            // segment on some layer. If every remaining copper
+            // contact sits on ONE layer, the via performs no layer
+            // change — KiCad grades it via_dangling. Deleting it is
+            // connectivity-neutral (coincident same-layer endpoints
+            // stay joined by the endpoint graph), so delete it and
+            // re-run the trim for any stub it was holding up. Plane
+            // nets exempt (their vias bond to fills this segment scan
+            // can't see); vias inside an own pad exempt (a THT barrel
+            // spans layers on its own). Layer credit uses full
+            // track-body distance, not just endpoints — a via sitting
+            // mid-segment is still connected there.
+            if board.nets[i].plane_layer.is_none() {
+                loop {
+                    let r = &final_routes[i];
+                    let mut doomed: Option<usize> = None;
+                    'find_useless: for (vi, v) in r.vias.iter().enumerate() {
+                        if own_pads.iter().any(|&(cx, cy, hx, hy)| {
+                            (v.x - cx).abs() <= hx && (v.y - cy).abs() <= hy
+                        }) {
+                            continue;
+                        }
+                        let mut first: Option<usize> = None;
+                        let mut multi = false;
+                        for sg in &r.segments {
+                            if geom::point_segment_dist((v.x, v.y), sg.start, sg.end)
+                                <= via_r + sg.width_mm / 2.0
+                            {
+                                match first {
+                                    None => first = Some(sg.layer),
+                                    Some(l) if l != sg.layer => multi = true,
+                                    _ => {}
+                                }
+                            }
+                        }
+                        if !multi {
+                            doomed = Some(vi);
+                            break 'find_useless;
+                        }
+                    }
+                    let Some(vi) = doomed else { break };
+                    let r = &mut final_routes[i];
+                    r.vias.remove(vi);
+                    for (vs, vl) in r.via_spans.iter_mut() {
+                        if *vs <= vi && vi < *vs + *vl {
+                            *vl -= 1;
+                        } else if *vs > vi {
+                            *vs -= 1;
+                        }
+                    }
+                    via_removed = true;
+                    pruned += 1;
+                }
+            }
+            // EXACT-TWIN DEDUP: two spans that traversed the same
+            // column (one up, one down) leave segment-for-segment
+            // duplicates. The covered-dup primitive skipped them while
+            // a via anchored the shared tip; once the via cleanup
+            // deletes that via, the twins are pure copper noise and
+            // KiCad grades one of each pair track_dangling. Remove the
+            // later twin; the trim then walks the surviving chain back
+            // to its junction.
+            {
+                let r = &mut final_routes[i];
+                let mut doomed: Vec<usize> = Vec::new();
+                for a in 0..r.segments.len() {
+                    if doomed.contains(&a) {
+                        continue;
+                    }
+                    for b in (a + 1)..r.segments.len() {
+                        if doomed.contains(&b) {
+                            continue;
+                        }
+                        let (sa, sb) = (&r.segments[a], &r.segments[b]);
+                        if sa.layer != sb.layer {
+                            continue;
+                        }
+                        let same = |p: (f64, f64), q: (f64, f64)| {
+                            (p.0 - q.0).abs() < 1e-6 && (p.1 - q.1).abs() < 1e-6
+                        };
+                        if (same(sa.start, sb.start) && same(sa.end, sb.end))
+                            || (same(sa.start, sb.end) && same(sa.end, sb.start))
+                        {
+                            doomed.push(b);
+                        }
+                    }
+                }
+                if !doomed.is_empty() {
+                    doomed.sort_by_key(|&x| std::cmp::Reverse(x));
+                    for &b in &doomed {
+                        r.segments.remove(b);
+                        for (ps, pl) in r.path_spans.iter_mut() {
+                            if *ps <= b && b < *ps + *pl {
+                                *pl -= 1;
+                            } else if *ps > b {
+                                *ps -= 1;
+                            }
+                        }
+                        pruned += 1;
+                    }
+                    via_removed = true; // rerun the trim on the survivors
+                }
+            }
+            if !via_removed {
+                break;
+            }
+            }
         }
         if pruned > 0 {
             info!("final orphan sweep: {pruned} stranded fragment(s) pruned");
@@ -1476,6 +1711,8 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
     }
 
 
+
+    via_anchor_check(&board, &final_routes, "final");
 
     let connected_sinks = pathfinder::count_connected_sinks(&board, &final_routes);
 
@@ -2230,6 +2467,37 @@ fn pair_attract(
 /// Remove the `doomed` spans from a route: drain their segments and
 /// vias, shift the survivors' span starts, remap parent indices.
 /// (Same surgery the validator's subtree amputation performs.)
+/// Debug (BHDL_PNR_VIA_CHECK): KiCad's via rule — segment endpoints
+/// on >=2 distinct layers within the barrel, else dangling.
+fn via_anchor_check(board: &Board, routes: &[Route], tag: &str) {
+    if std::env::var("BHDL_PNR_VIA_CHECK").is_err() {
+        return;
+    }
+    let via_r = board.layer_stack.via.pad_mm / 2.0;
+    for (ri, r) in routes.iter().enumerate() {
+        if board.nets[ri].plane_layer.is_some() {
+            continue;
+        }
+        for (vi, v) in r.vias.iter().enumerate() {
+            let mut layers: std::collections::BTreeSet<usize> =
+                std::collections::BTreeSet::new();
+            for sg in &r.segments {
+                for e in [sg.start, sg.end] {
+                    if (e.0 - v.x).hypot(e.1 - v.y) <= via_r {
+                        layers.insert(sg.layer);
+                    }
+                }
+            }
+            if layers.len() < 2 {
+                log::warn!(
+                    "[via-check {tag}] net '{}' via {vi} ({:.2},{:.2}) layers={:?}",
+                    board.nets[ri].name, v.x, v.y, layers
+                );
+            }
+        }
+    }
+}
+
 fn strip_route_spans(r: &mut Route, doomed: &[bool]) {
     let n = r.path_spans.len();
     let mut order: Vec<usize> = (0..n).filter(|&i| doomed[i]).collect();
@@ -3357,6 +3625,75 @@ fn part_nudge_pass(board: &mut Board, final_routes: &mut Vec<Route>) -> usize {
                 if !crate::legalization::position_legal(board, k, nx, ny) {
                     continue;
                 }
+                // position_legal checks component ENVELOPES only — the
+                // moved part's pads can land ON another net's existing
+                // copper (seed-13: a nudged 1206's GND pad shorted
+                // SCK's tracks, 10 shorting_items). Check every pad at
+                // the trial position against foreign segments/vias.
+                {
+                    let c = &board.components[k];
+                    let cos_t = c.theta.cos();
+                    let sin_t = c.theta.sin();
+                    let quarter = ((c.theta / std::f64::consts::FRAC_PI_2).round() as i64)
+                        .rem_euclid(2);
+                    let clearance = board.config.min_spacing_mm;
+                    let via_r = board.layer_stack.via.pad_mm / 2.0;
+                    let mut pad_hits_copper = false;
+                    'pads: for pin in &c.pins {
+                        if pin.unplaced {
+                            continue;
+                        }
+                        let gx = nx + pin.dx * cos_t - pin.dy * sin_t;
+                        let gy = ny + pin.dx * sin_t + pin.dy * cos_t;
+                        let (pw, ph) = match &pin.pad {
+                            Some(p) => (p.width_mm, p.height_mm),
+                            None => (0.5, 0.5),
+                        };
+                        let (pw, ph) = if quarter == 1 { (ph, pw) } else { (pw, ph) };
+                        let (hx, hy) = (pw / 2.0, ph / 2.0);
+                        let thru =
+                            pin.pad.as_ref().map(|p| p.drill_mm.is_some()).unwrap_or(false);
+                        let pad_layer = match c.side {
+                            BoardSide::Top => 0,
+                            BoardSide::Bottom => board.layer_stack.layers.len() - 1,
+                        };
+                        for (rj, r) in final_routes.iter().enumerate() {
+                            if pin.net == Some(board.nets[rj].id) {
+                                continue;
+                            }
+                            for sg in &r.segments {
+                                if !thru && sg.layer != pad_layer {
+                                    continue;
+                                }
+                                if geom::segment_rect_dist(
+                                    sg.start,
+                                    sg.end,
+                                    gx - hx,
+                                    gy - hy,
+                                    gx + hx,
+                                    gy + hy,
+                                ) < sg.width_mm / 2.0 + clearance - 1e-6
+                                {
+                                    pad_hits_copper = true;
+                                    break 'pads;
+                                }
+                            }
+                            for v in &r.vias {
+                                let cx = v.x.clamp(gx - hx, gx + hx);
+                                let cy = v.y.clamp(gy - hy, gy + hy);
+                                if (v.x - cx).hypot(v.y - cy)
+                                    < via_r + clearance - 1e-6
+                                {
+                                    pad_hits_copper = true;
+                                    break 'pads;
+                                }
+                            }
+                        }
+                    }
+                    if pad_hits_copper {
+                        continue;
+                    }
+                }
                 // Snapshot everything the trial can touch.
                 let snap_routes = final_routes.clone();
                 board.components[k].x = nx;
@@ -4112,6 +4449,10 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
                     // Coincident own via = reuse (a re-cross-under of
                     // the same pad lands the same site: oracle
                     // holes_co_located); push only new barrels.
+                    // Near-coincident same-net pairs are repaired at
+                    // ship time by the final sweep (commit-time
+                    // rejection here perturbed the whole seed-42
+                    // evolution — via_dangling regression).
                     let mut pushed = 0usize;
                     for v in [v1, v2] {
                         if !route.vias.iter().any(|e| (e.x - v.0).hypot(e.y - v.1) < 1e-6) {

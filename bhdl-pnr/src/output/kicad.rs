@@ -979,19 +979,8 @@ fn fracture_fill(
             notches_left.push((((cy - r).max(y0)), (cy + r).min(y1), (cx + r).min(x1)));
         }
     }
-    let mut poly_rings: Vec<Vec<(f64, f64)>> = interior
-        .iter()
-        .map(|&(cx, cy, r)| {
-            let rr = r / (std::f64::consts::PI / 8.0).cos();
-            (0..8)
-                .map(|q| {
-                    let ang = -(q as f64) * std::f64::consts::FRAC_PI_4;
-                    (cx + rr * ang.cos(), cy + rr * ang.sin())
-                })
-                .collect()
-        })
-        .collect();
-    hull_merge_close_rings(&mut poly_rings, 0.30);
+    // Merge overlapping notch intervals per side; min keeps the
+    // deeper cut for bottom/right, and span unions.
     let merge_iv = |mut v: Vec<(f64, f64, f64)>| -> Vec<(f64, f64, f64)> {
         v.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
         let mut out: Vec<(f64, f64, f64)> = Vec::new();
@@ -1026,10 +1015,215 @@ fn fracture_fill(
             interior_rects.push((rx0, ry0, rx1, ry1));
         }
     }
-    let notches_bottom = merge_iv(notches_bottom);
-    let notches_top = merge_iv(notches_top);
-    let notches_right = merge_iv(notches_right);
-    let notches_left = merge_iv(notches_left);
+    let mut notches_bottom = merge_iv(notches_bottom);
+    let mut notches_top = merge_iv(notches_top);
+    let mut notches_right = merge_iv(notches_right);
+    let mut notches_left = merge_iv(notches_left);
+    // ABSORB-OR-BAY: an interior ring overlapping a notch box starts
+    // its slit walk inside VOID (measured: lost holes / no slit
+    // target). The old cure absorbed every such ring by GROWING the
+    // box — but a grown box reaches further rings and the fixpoint
+    // chained across a via field into a ~10mm void that stranded
+    // healthy plane vias (uno s7, 6x via_dangling). The right
+    // primitive for a ring brushing ONE notch wall is a BAY: splice
+    // the circle into the wall as an arc — copper cost is one hole,
+    // and the box never grows. Absorption (box growth) remains only
+    // for rings a bay can't express: center already in void, corner
+    // contact, or a chord that doesn't fit the wall.
+    // bay: (axis 0=vertical wall/1=horizontal, w, cx, cy, r)
+    let mut bays: Vec<(u8, f64, f64, f64, f64)> = Vec::new();
+    for _round in 0..64 {
+        let mut grew = false;
+        let mut k = 0;
+        'next_circle: while k < interior.len() {
+            let (cx, cy, r) = interior[k];
+            let rr = r / (std::f64::consts::PI / 8.0).cos();
+            for (list, side) in [
+                (&mut notches_bottom, 0),
+                (&mut notches_top, 1),
+                (&mut notches_right, 2),
+                (&mut notches_left, 3),
+            ] {
+                for n in list.iter_mut() {
+                    let (bx0, by0, bx1, by1) = match side {
+                        0 => (n.0, n.2, n.1, y1),
+                        1 => (n.0, y0, n.1, n.2),
+                        2 => (n.2, n.0, x1, n.1),
+                        _ => (x0, n.0, n.2, n.1),
+                    };
+                    let nx = cx.clamp(bx0, bx1);
+                    let ny = cy.clamp(by0, by1);
+                    if (cx - nx).hypot(cy - ny) >= rr {
+                        continue;
+                    }
+                    let in_x = cx >= bx0 && cx <= bx1;
+                    let in_y = cy >= by0 && cy <= by1;
+                    let bay = if in_y && !in_x {
+                        let w = if cx < bx0 { bx0 } else { bx1 };
+                        let dy = (rr * rr - (w - cx) * (w - cx)).max(0.0).sqrt();
+                        if cy - dy > by0 + 0.01 && cy + dy < by1 - 0.01 {
+                            Some((0u8, w))
+                        } else {
+                            None
+                        }
+                    } else if in_x && !in_y {
+                        let w = if cy < by0 { by0 } else { by1 };
+                        let dx = (rr * rr - (w - cy) * (w - cy)).max(0.0).sqrt();
+                        if cx - dx > bx0 + 0.01 && cx + dx < bx1 - 0.01 {
+                            Some((1u8, w))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    match bay {
+                        Some((axis, w)) => bays.push((axis, w, cx, cy, r)),
+                        None => {
+                            match side {
+                                0 => {
+                                    n.0 = n.0.min(cx - rr);
+                                    n.1 = n.1.max(cx + rr);
+                                    n.2 = n.2.min(cy - rr);
+                                }
+                                1 => {
+                                    n.0 = n.0.min(cx - rr);
+                                    n.1 = n.1.max(cx + rr);
+                                    n.2 = n.2.max(cy + rr);
+                                }
+                                2 => {
+                                    n.0 = n.0.min(cy - rr);
+                                    n.1 = n.1.max(cy + rr);
+                                    n.2 = n.2.min(cx - rr);
+                                }
+                                _ => {
+                                    n.0 = n.0.min(cy - rr);
+                                    n.1 = n.1.max(cy + rr);
+                                    n.2 = n.2.max(cx + rr);
+                                }
+                            }
+                            grew = true;
+                        }
+                    }
+                    interior.remove(k);
+                    continue 'next_circle;
+                }
+            }
+            k += 1;
+        }
+        // Two bays whose chords overlap on the same wall can't both
+        // splice — grow the nearest notch over both instead (rare;
+        // merge_holes keeps circles apart). Conservative: return them
+        // to interior; next round the changed boxes re-classify them.
+        let mut conflict: Option<(usize, usize)> = None;
+        'conf: for a in 0..bays.len() {
+            for b in (a + 1)..bays.len() {
+                let (aa, aw, acx, acy, ar) = bays[a];
+                let (ba, bw, bcx, bcy, br) = bays[b];
+                if aa != ba || (aw - bw).abs() > 1e-9 {
+                    continue;
+                }
+                let arr = ar / (std::f64::consts::PI / 8.0).cos();
+                let brr = br / (std::f64::consts::PI / 8.0).cos();
+                let (ac, bc) = if aa == 0 { (acy, bcy) } else { (acx, bcx) };
+                let (ad, bd) = if aa == 0 {
+                    ((arr * arr - (aw - acx) * (aw - acx)).max(0.0).sqrt(),
+                     (brr * brr - (bw - bcx) * (bw - bcx)).max(0.0).sqrt())
+                } else {
+                    ((arr * arr - (aw - acy) * (aw - acy)).max(0.0).sqrt(),
+                     (brr * brr - (bw - bcy) * (bw - bcy)).max(0.0).sqrt())
+                };
+                if (ac - bc).abs() < ad + bd + 0.02 {
+                    conflict = Some((a, b));
+                    break 'conf;
+                }
+            }
+        }
+        if let Some((a, b)) = conflict {
+            // return both circles; forcing absorption is done by
+            // nudging them to fail the bay test next round via a
+            // direct box grow on whichever notch owns the wall.
+            let later = bays.remove(b);
+            let earlier = bays.remove(a);
+            for (_, _, cx, cy, r) in [earlier, later] {
+                let rr = r / (std::f64::consts::PI / 8.0).cos();
+                for (list, side) in [
+                    (&mut notches_bottom, 0),
+                    (&mut notches_top, 1),
+                    (&mut notches_right, 2),
+                    (&mut notches_left, 3),
+                ] {
+                    let mut hit = false;
+                    for n in list.iter_mut() {
+                        let (bx0, by0, bx1, by1) = match side {
+                            0 => (n.0, n.2, n.1, y1),
+                            1 => (n.0, y0, n.1, n.2),
+                            2 => (n.2, n.0, x1, n.1),
+                            _ => (x0, n.0, n.2, n.1),
+                        };
+                        let nx = cx.clamp(bx0, bx1);
+                        let ny = cy.clamp(by0, by1);
+                        if (cx - nx).hypot(cy - ny) < rr {
+                            match side {
+                                0 => {
+                                    n.0 = n.0.min(cx - rr);
+                                    n.1 = n.1.max(cx + rr);
+                                    n.2 = n.2.min(cy - rr);
+                                }
+                                1 => {
+                                    n.0 = n.0.min(cx - rr);
+                                    n.1 = n.1.max(cx + rr);
+                                    n.2 = n.2.max(cy + rr);
+                                }
+                                2 => {
+                                    n.0 = n.0.min(cy - rr);
+                                    n.1 = n.1.max(cy + rr);
+                                    n.2 = n.2.min(cx - rr);
+                                }
+                                _ => {
+                                    n.0 = n.0.min(cy - rr);
+                                    n.1 = n.1.max(cy + rr);
+                                    n.2 = n.2.max(cx + rr);
+                                }
+                            }
+                            hit = true;
+                            break;
+                        }
+                    }
+                    if hit {
+                        break;
+                    }
+                }
+            }
+            grew = true;
+        }
+        if !grew {
+            break;
+        }
+        // Boxes grew: earlier bays may now be swallowed or their wall
+        // moved — dump them back and re-classify against the new
+        // geometry (growth is monotone, so this terminates).
+        for (_, _, cx, cy, r) in bays.drain(..) {
+            interior.push((cx, cy, r));
+        }
+        notches_bottom = merge_iv(std::mem::take(&mut notches_bottom));
+        notches_top = merge_iv(std::mem::take(&mut notches_top));
+        notches_right = merge_iv(std::mem::take(&mut notches_right));
+        notches_left = merge_iv(std::mem::take(&mut notches_left));
+    }
+    let mut poly_rings: Vec<Vec<(f64, f64)>> = interior
+        .iter()
+        .map(|&(cx, cy, r)| {
+            let rr = r / (std::f64::consts::PI / 8.0).cos();
+            (0..8)
+                .map(|q| {
+                    let ang = -(q as f64) * std::f64::consts::FRAC_PI_4;
+                    (cx + rr * ang.cos(), cy + rr * ang.sin())
+                })
+                .collect()
+        })
+        .collect();
+    hull_merge_close_rings(&mut poly_rings, 0.30);
     // Outline with edge notches: bottom edge traversed x1→x0 (in the
     // ring (x0,y0)→(x1,y0)→(x1,y1)→(x0,y1)), top edge x0→x1.
     let mut poly: Vec<(f64, f64)> = vec![(x0, y0)];
@@ -1059,6 +1253,98 @@ fn fracture_fill(
         poly.push((xd, yb));
         poly.push((xd, ya));
         poly.push((x0, ya));
+    }
+    // BAY SPLICE: each bay's copper-side arc detours the matching
+    // notch wall edge around the hole. Arc direction follows the edge
+    // traversal; bulge side is the circle-center side (copper).
+    if !bays.is_empty() {
+        let mut new_poly: Vec<(f64, f64)> = Vec::with_capacity(poly.len() + bays.len() * 14);
+        let mut placed = vec![false; bays.len()];
+        for e in 0..poly.len() {
+            let a = poly[e];
+            let b = poly[(e + 1) % poly.len()];
+            new_poly.push(a);
+            let vertical = (a.0 - b.0).abs() < 1e-9 && (a.1 - b.1).abs() > 1e-9;
+            let horizontal = (a.1 - b.1).abs() < 1e-9 && (a.0 - b.0).abs() > 1e-9;
+            let mut ins: Vec<(f64, Vec<(f64, f64)>)> = Vec::new();
+            for (bi, &(axis, w, cx, cy, r)) in bays.iter().enumerate() {
+                if placed[bi] {
+                    continue;
+                }
+                let rr = r / (std::f64::consts::PI / 8.0).cos();
+                let (matches, lo, hi, c1, c2) = if axis == 0 && vertical && (a.0 - w).abs() < 1e-6 {
+                    let dy = (rr * rr - (w - cx) * (w - cx)).max(0.0).sqrt();
+                    let (lo, hi) = (a.1.min(b.1), a.1.max(b.1));
+                    (cy - dy >= lo - 1e-9 && cy + dy <= hi + 1e-9, lo, hi, cy - dy, cy + dy)
+                } else if axis == 1 && horizontal && (a.1 - w).abs() < 1e-6 {
+                    let dx = (rr * rr - (w - cy) * (w - cy)).max(0.0).sqrt();
+                    let (lo, hi) = (a.0.min(b.0), a.0.max(b.0));
+                    (cx - dx >= lo - 1e-9 && cx + dx <= hi + 1e-9, lo, hi, cx - dx, cx + dx)
+                } else {
+                    (false, 0.0, 0.0, 0.0, 0.0)
+                };
+                let _ = (lo, hi);
+                if !matches {
+                    continue;
+                }
+                // crossing points and their angles from the center
+                let (p1, p2) = if axis == 0 {
+                    ((w, c1), (w, c2))
+                } else {
+                    ((c1, w), (c2, w))
+                };
+                let a1 = (p1.1 - cy).atan2(p1.0 - cx);
+                let a2 = (p2.1 - cy).atan2(p2.0 - cx);
+                let mut sweep = a2 - a1;
+                while sweep <= 0.0 {
+                    sweep += 2.0 * std::f64::consts::PI;
+                }
+                // two candidate arcs P1->P2: +sweep and sweep-2pi;
+                // pick the one whose midpoint bulges to the copper
+                // (circle-center) side of the wall.
+                let n_steps = 12usize;
+                let build = |sw: f64| -> Vec<(f64, f64)> {
+                    (0..=n_steps)
+                        .map(|q| {
+                            let th = a1 + sw * (q as f64) / (n_steps as f64);
+                            (cx + rr * th.cos(), cy + rr * th.sin())
+                        })
+                        .collect()
+                };
+                let cand_a = build(sweep);
+                let cand_b = build(sweep - 2.0 * std::f64::consts::PI);
+                let copper_side = |pts: &Vec<(f64, f64)>| -> bool {
+                    let m = pts[n_steps / 2];
+                    if axis == 0 {
+                        (m.0 - w).signum() == (cx - w).signum()
+                    } else {
+                        (m.1 - w).signum() == (cy - w).signum()
+                    }
+                };
+                let mut arc = if copper_side(&cand_a) { cand_a } else { cand_b };
+                // orient along edge traversal a->b
+                let along = |p: (f64, f64)| if vertical { p.1 } else { p.0 };
+                let dir = (along(b) - along(a)).signum();
+                if (along(*arc.last().unwrap()) - along(arc[0])).signum() != dir {
+                    arc.reverse();
+                }
+                let key = (along(arc[0]) - along(a)) * dir;
+                ins.push((key, arc));
+                placed[bi] = true;
+            }
+            ins.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap_or(std::cmp::Ordering::Equal));
+            for (_, arc) in ins {
+                new_poly.extend(arc);
+            }
+        }
+        for (bi, &(_, w, cx, cy, _)) in bays.iter().enumerate() {
+            if !placed[bi] {
+                log::warn!(
+                    "plane fill: bay at ({cx:.2},{cy:.2}) wall {w:.2} found no edge — hole NOT punched"
+                );
+            }
+        }
+        poly = new_poly;
     }
     let mut rings: Vec<RingKind> =
         poly_rings.into_iter().map(RingKind::Poly).collect();
