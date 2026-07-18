@@ -2470,6 +2470,22 @@ fn pair_attract(
 /// Debug (BHDL_PNR_VIA_CHECK): KiCad's via rule — segment endpoints
 /// on >=2 distinct layers within the barrel, else dangling.
 fn via_anchor_check(board: &Board, routes: &[Route], tag: &str) {
+    if let Ok(t) = std::env::var("BHDL_PNR_VIA_NEAR") {
+        if let Some((tx, ty)) = t.split_once(',').and_then(|(a, b)| {
+            Some((a.trim().parse::<f64>().ok()?, b.trim().parse::<f64>().ok()?))
+        }) {
+            for (ri, r) in routes.iter().enumerate() {
+                for v in &r.vias {
+                    if (v.x - tx).hypot(v.y - ty) < 1.0 {
+                        log::warn!(
+                            "[via-near {tag}] net '{}' via ({:.3},{:.3})",
+                            board.nets[ri].name, v.x, v.y
+                        );
+                    }
+                }
+            }
+        }
+    }
     if std::env::var("BHDL_PNR_VIA_CHECK").is_err() {
         return;
     }

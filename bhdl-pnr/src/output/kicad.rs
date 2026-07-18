@@ -895,50 +895,30 @@ fn fracture_fill_poly(
     poly
 }
 
-fn fracture_fill(
+
+/// ONE-TRUTH void classification for a plane fill: split merged holes
+/// into edge NOTCHES (with absorb-or-bay fixpoint), BAYS, INTERIOR
+/// circles and interior cutout RECTS. Shared by fracture_fill (which
+/// emits exactly these voids) and plane_swallows (which verifies drop
+/// vias against them) — the two MUST agree or drops verified as
+/// connected ship inside carved copper.
+#[allow(clippy::type_complexity)]
+pub(crate) fn classify_voids(
     x0: f64,
     y0: f64,
     x1: f64,
     y1: f64,
-    holes_in: &[(f64, f64, f64)],
-    rects_in: &[(f64, f64, f64, f64)],
-) -> Vec<(f64, f64)> {
-    // Cutout RECTS: absorb any circle hole overlapping a rect into an
-    // expanded rect (two overlapping interior rings would self-
-    // intersect through their slits), clamp to the fill, classify
-    // boundary-crossing rects as notches below.
-    let mut rects: Vec<(f64, f64, f64, f64)> = rects_in
-        .iter()
-        .filter(|&&(rx0, ry0, rx1, ry1)| rx1 > x0 && rx0 < x1 && ry1 > y0 && ry0 < y1)
-        .copied()
-        .collect();
-    // Merge overlapping holes into enclosing circles (a slit through a
-    // neighboring hole would self-intersect).
-    let mut circle_holes: Vec<(f64, f64, f64)> = Vec::new();
-    'circles: for &(cx, cy, r) in holes_in {
-        if !(cx + r > x0 && cx - r < x1 && cy + r > y0 && cy - r < y1) {
-            continue;
-        }
-        for rect in rects.iter_mut() {
-            let (rx0, ry0, rx1, ry1) = *rect;
-            let nx = cx.clamp(rx0, rx1);
-            let ny = cy.clamp(ry0, ry1);
-            if (cx - nx).hypot(cy - ny) < r {
-                // Overlaps a cutout rect: grow the rect to cover the
-                // circle (conservative, but far less copper than the
-                // old enclosing-circle punch of the whole cutout).
-                *rect = (
-                    rx0.min(cx - r),
-                    ry0.min(cy - r),
-                    rx1.max(cx + r),
-                    ry1.max(cy + r),
-                );
-                continue 'circles;
-            }
-        }
-        circle_holes.push((cx, cy, r));
-    }
-    let holes: Vec<(f64, f64, f64)> = merge_holes(circle_holes);
+    holes: &[(f64, f64, f64)],
+    rects: &[(f64, f64, f64, f64)],
+) -> (
+    Vec<(f64, f64, f64)>,
+    Vec<(f64, f64, f64)>,
+    Vec<(f64, f64, f64)>,
+    Vec<(f64, f64, f64)>,
+    Vec<(u8, f64, f64, f64, f64)>,
+    Vec<(f64, f64, f64)>,
+    Vec<(f64, f64, f64, f64)>,
+) {
     // Split holes: interior ones become slit-fractured octagons; ones
     // whose punch crosses the fill boundary become EDGE NOTCHES —
     // rectangular detours cut into the outline (clamping an interior
@@ -956,27 +936,48 @@ fn fracture_fill(
     // both punch discs, so the pair punches as one ring and the
     // sub-clearance web between them never exists.
     let mut interior: Vec<(f64, f64, f64)> = Vec::new();
-    for &(cx, cy, r) in &holes {
-        let crosses = cx - r < x0 + slack
-            || cx + r > x1 - slack
-            || cy - r < y0 + slack
-            || cy + r > y1 - slack;
+    for &(cx, cy, r) in holes {
+        let rc0 = r / (std::f64::consts::PI / 8.0).cos();
+        // A hole entirely OUTSIDE the fill rect punches nothing here —
+        // and classifying it "crossing" builds an INVERTED notch box
+        // (region-clamped fills see the whole board's hole list;
+        // measured: clamp(min>max) panic with a hole at x=65 against a
+        // rail band ending at x=27.85).
+        if cx + rc0 < x0 + slack
+            || cx - rc0 > x1 - slack
+            || cy + rc0 < y0 + slack
+            || cy - rc0 > y1 - slack
+        {
+            continue;
+        }
+        // Crossing is judged by the EMITTED octagon's circumradius
+        // (r/cos22.5°, 8.2% past the circle) — a ring classified
+        // interior by r can still poke its octagon vertex past the
+        // fill edge, where its rightward slit ray finds no target
+        // and every ring parented through it loses its hole
+        // (measured: 72 unpunched-via violations from ONE such ring
+        // at x=78.19 on a 78mm board).
+        let rc = r / (std::f64::consts::PI / 8.0).cos();
+        let crosses = cx - rc < x0 + slack
+            || cx + rc > x1 - slack
+            || cy - rc < y0 + slack
+            || cy + rc > y1 - slack;
         if !crosses {
             interior.push((cx, cy, r));
             continue;
         }
-        let crosses_left = cx - r < x0 + slack;
-        let crosses_right = cx + r > x1 - slack;
-        let crosses_top = cy - r < y0 + slack;
-        let crosses_bottom = cy + r > y1 - slack;
+        let crosses_left = cx - rc < x0 + slack;
+        let crosses_right = cx + rc > x1 - slack;
+        let crosses_top = cy - rc < y0 + slack;
+        let crosses_bottom = cy + rc > y1 - slack;
         if crosses_bottom {
-            notches_bottom.push(((cx - r).max(x0), (cx + r).min(x1), (cy - r).max(y0)));
+            notches_bottom.push(((cx - r).max(x0), (cx + r).min(x1), (cy - r).clamp(y0, y1)));
         } else if crosses_top {
-            notches_top.push(((cx - r).max(x0), (cx + r).min(x1), (cy + r).min(y1)));
+            notches_top.push(((cx - r).max(x0), (cx + r).min(x1), (cy + r).clamp(y0, y1)));
         } else if crosses_right {
-            notches_right.push((((cy - r).max(y0)), (cy + r).min(y1), (cx - r).max(x0)));
+            notches_right.push((((cy - r).max(y0)), (cy + r).min(y1), (cx - r).clamp(x0, x1)));
         } else if crosses_left {
-            notches_left.push((((cy - r).max(y0)), (cy + r).min(y1), (cx + r).min(x1)));
+            notches_left.push((((cy - r).max(y0)), (cy + r).min(y1), (cx + r).clamp(x0, x1)));
         }
     }
     // Merge overlapping notch intervals per side; min keeps the
@@ -998,19 +999,19 @@ fn fracture_fill(
     // Cutout rects near a fill side become EXACT rectangular notches;
     // fully interior rects become RingKind::Rect punches.
     let mut interior_rects: Vec<(f64, f64, f64, f64)> = Vec::new();
-    for &(rx0, ry0, rx1, ry1) in &rects {
+    for &(rx0, ry0, rx1, ry1) in rects {
         let crosses_left = rx0 < x0 + slack;
         let crosses_right = rx1 > x1 - slack;
         let crosses_top = ry0 < y0 + slack;
         let crosses_bottom = ry1 > y1 - slack;
         if crosses_bottom {
-            notches_bottom.push((rx0.max(x0), rx1.min(x1), ry0.max(y0)));
+            notches_bottom.push((rx0.max(x0), rx1.min(x1), ry0.clamp(y0, y1)));
         } else if crosses_top {
-            notches_top.push((rx0.max(x0), rx1.min(x1), ry1.min(y1)));
+            notches_top.push((rx0.max(x0), rx1.min(x1), ry1.clamp(y0, y1)));
         } else if crosses_right {
-            notches_right.push((ry0.max(y0), ry1.min(y1), rx0.max(x0)));
+            notches_right.push((ry0.max(y0), ry1.min(y1), rx0.clamp(x0, x1)));
         } else if crosses_left {
-            notches_left.push((ry0.max(y0), ry1.min(y1), rx1.min(x1)));
+            notches_left.push((ry0.max(y0), ry1.min(y1), rx1.clamp(x0, x1)));
         } else {
             interior_rects.push((rx0, ry0, rx1, ry1));
         }
@@ -1211,6 +1212,60 @@ fn fracture_fill(
         notches_right = merge_iv(std::mem::take(&mut notches_right));
         notches_left = merge_iv(std::mem::take(&mut notches_left));
     }
+    (notches_bottom, notches_top, notches_right, notches_left, bays, interior, interior_rects)
+}
+
+fn fracture_fill(
+    x0: f64,
+    y0: f64,
+    x1: f64,
+    y1: f64,
+    holes_in: &[(f64, f64, f64)],
+    rects_in: &[(f64, f64, f64, f64)],
+) -> Vec<(f64, f64)> {
+    // Cutout RECTS: absorb any circle hole overlapping a rect into an
+    // expanded rect (two overlapping interior rings would self-
+    // intersect through their slits), clamp to the fill, classify
+    // boundary-crossing rects as notches below.
+    let mut rects: Vec<(f64, f64, f64, f64)> = rects_in
+        .iter()
+        .filter(|&&(rx0, ry0, rx1, ry1)| rx1 > x0 && rx0 < x1 && ry1 > y0 && ry0 < y1)
+        .copied()
+        .collect();
+    // Merge overlapping holes into enclosing circles (a slit through a
+    // neighboring hole would self-intersect).
+    let mut circle_holes: Vec<(f64, f64, f64)> = Vec::new();
+    'circles: for &(cx, cy, r) in holes_in {
+        if !(cx + r > x0 && cx - r < x1 && cy + r > y0 && cy - r < y1) {
+            continue;
+        }
+        for rect in rects.iter_mut() {
+            let (rx0, ry0, rx1, ry1) = *rect;
+            let nx = cx.clamp(rx0, rx1);
+            let ny = cy.clamp(ry0, ry1);
+            if (cx - nx).hypot(cy - ny) < r {
+                // Overlaps a cutout rect: grow the rect to cover the
+                // circle (conservative, but far less copper than the
+                // old enclosing-circle punch of the whole cutout).
+                *rect = (
+                    rx0.min(cx - r),
+                    ry0.min(cy - r),
+                    rx1.max(cx + r),
+                    ry1.max(cy + r),
+                );
+                continue 'circles;
+            }
+        }
+        circle_holes.push((cx, cy, r));
+    }
+    let holes: Vec<(f64, f64, f64)> = merge_holes(circle_holes);
+    // Void classification (notches / bays / interior / rects) is
+    // SHARED with plane_swallows — the drop verifier must see the
+    // exact boxes the fracture builds (a 15mm absorption-grown notch
+    // was invisible to the old per-circle model; oracle: via_dangling
+    // inside it).
+    let (notches_bottom, notches_top, notches_right, notches_left, bays, interior, interior_rects) =
+        classify_voids(x0, y0, x1, y1, &holes, &rects);
     let mut poly_rings: Vec<Vec<(f64, f64)>> = interior
         .iter()
         .map(|&(cx, cy, r)| {
@@ -1924,42 +1979,101 @@ pub(crate) fn plane_swallows(
             None => return true, // non-rectilinear: no fill exists
         }
     }
-    for &(cx, cy, r) in merged_holes {
-        let crosses_bottom = cy + r > y1 - slack;
-        let crosses_top = cy - r < y0 + slack;
-        let crosses_right = cx + r > x1 - slack;
-        let crosses_left = cx - r < x0 + slack;
-        let overlaps_box = |bx0: f64, by0: f64, bx1: f64, by1: f64| -> bool {
-            x + via_r > bx0 && x - via_r < bx1 && y + via_r > by0 && y - via_r < by1
-        };
-        if crosses_bottom {
-            if overlaps_box((cx - r).max(x0), (cy - r).max(y0), (cx + r).min(x1), y1) {
+    // ONE-TRUTH: test against the exact voids the fracture will
+    // build (grown/merged notch boxes, bays, interior rings, rects) —
+    // the old per-circle notch approximation missed absorption-grown
+    // boxes entirely (via_dangling inside a 15mm notch).
+    let rects = plane_cutout_rects(board);
+    // classify_voids runs an absorb-or-bay fixpoint — far too heavy
+    // per site query (drop/rescue loops probe hundreds of sites
+    // against ONE hole set; uncached it timed out uno s13). One-entry
+    // memo keyed on the exact inputs.
+    type Voids = (
+        Vec<(f64, f64, f64)>,
+        Vec<(f64, f64, f64)>,
+        Vec<(f64, f64, f64)>,
+        Vec<(f64, f64, f64)>,
+        Vec<(u8, f64, f64, f64, f64)>,
+        Vec<(f64, f64, f64)>,
+        Vec<(f64, f64, f64, f64)>,
+    );
+    thread_local! {
+        static VOIDS_MEMO: std::cell::RefCell<Option<(u64, Voids)>> =
+            const { std::cell::RefCell::new(None) };
+    }
+    let key = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for v in [x0, y0, x1, y1] {
+            v.to_bits().hash(&mut h);
+        }
+        for &(a, b, c) in merged_holes {
+            (a.to_bits(), b.to_bits(), c.to_bits()).hash(&mut h);
+        }
+        for &(a, b, c, d) in &rects {
+            (a.to_bits(), b.to_bits(), c.to_bits(), d.to_bits()).hash(&mut h);
+        }
+        h.finish()
+    };
+    let (nb, nt, nr, nl, bays, interior, interior_rects) = VOIDS_MEMO.with(|m| {
+        let mut m = m.borrow_mut();
+        match m.as_ref() {
+            Some((k, v)) if *k == key => v.clone(),
+            _ => {
+                let v = classify_voids(x0, y0, x1, y1, merged_holes, &rects);
+                *m = Some((key, v.clone()));
+                v
+            }
+        }
+    });
+    for (list, side) in [(&nb, 0), (&nt, 1), (&nr, 2), (&nl, 3)] {
+        for n in list {
+            let (bx0, by0, bx1, by1) = match side {
+                0 => (n.0, n.2, n.1, y1),
+                1 => (n.0, y0, n.1, n.2),
+                2 => (n.2, n.0, x1, n.1),
+                _ => (x0, n.0, n.2, n.1),
+            };
+            if x + via_r > bx0 && x - via_r < bx1 && y + via_r > by0 && y - via_r < by1 {
                 return true;
             }
-        } else if crosses_top {
-            if overlaps_box((cx - r).max(x0), y0, (cx + r).min(x1), (cy + r).min(y1)) {
-                return true;
-            }
-        } else if crosses_right {
-            if overlaps_box((cx - r).max(x0), (cy - r).max(y0), x1, (cy + r).min(y1)) {
-                return true;
-            }
-        } else if crosses_left {
-            if overlaps_box(x0, (cy - r).max(y0), (cx + r).min(x1), (cy + r).min(y1)) {
-                return true;
-            }
-        } else if (x - cx).hypot(y - cy)
-            < r / (std::f64::consts::PI / 8.0).cos() + via_r + 0.05
-        {
-            // OVERLAP counts as swallowed, not just full containment:
-            // fracture normalization near crowded cutouts can lose more
-            // copper than the ideal model says (two oracle-confirmed
-            // danglers sat half-overlapped). Conservative = a few more
-            // honest unconnecteds, never dangling copper. The radius is
-            // the octagon VERTEX reach (r/cos22.5°) — the emitted hole,
-            // not the ideal circle (fills v2 merged rings are big
-            // enough that the 8.2% band strands drops).
+        }
+    }
+    let c225 = (std::f64::consts::PI / 8.0).cos();
+    for &(_, _, cx, cy, r) in &bays {
+        if (x - cx).hypot(y - cy) < r / c225 + via_r + 0.05 {
             return true;
+        }
+    }
+    for &(rx0, ry0, rx1, ry1) in &interior_rects {
+        if x + via_r > rx0 && x - via_r < rx1 && y + via_r > ry0 && y - via_r < ry1 {
+            return true;
+        }
+    }
+    for &(cx, cy, r) in &interior {
+        // Octagon VERTEX reach — the emitted hole, not the ideal
+        // circle; OVERLAP counts as swallowed (conservative: honest
+        // unconnected beats dangling copper).
+        if (x - cx).hypot(y - cy) < r / c225 + via_r + 0.05 {
+            return true;
+        }
+    }
+    // HULL PAIRS: the fracture hull-merges interior rings whose
+    // octagons come within the 0.30 web — the void between such a
+    // pair is a CAPSULE the per-circle test can't see. Model each
+    // close pair as a capsule of the larger octagon radius.
+    for i in 0..interior.len() {
+        let (ax, ay, ar) = interior[i];
+        let arc = ar / c225;
+        for &(bx, by, br) in interior.iter().skip(i + 1) {
+            let brc = br / c225;
+            let d = (ax - bx).hypot(ay - by);
+            if d - arc - brc < 0.30
+                && crate::geom::point_segment_dist((x, y), (ax, ay), (bx, by))
+                    < arc.max(brc) + via_r + 0.05
+            {
+                return true;
+            }
         }
     }
     false
