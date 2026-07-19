@@ -258,11 +258,12 @@ board ArduinoUnoR3 {
     ICSP1.6 -> @GND;
 }
 
-// WIP (next arc — "real mechanical identity"): pinning the real
-// 68.58x53.34 outline + edge connectors currently trips THT-field
-// routing (hole_to_hole vs header pins, drop-via siting) — the
-// infra landed (PinHeader THT footprints, net-agnostic drill rules);
-// re-enable this block to resume the campaign.
+// WIP (THT-field campaign, resume by uncommenting with the stdlib
+// stamps): real mechanical identity. State at park: v=9 (8 clearance
+// + 1 isolated_copper), unc=53 — hole field fully modeled (0
+// hole_to_hole / 0 via_dangling); NEXT MECHANISM = THT pads accept
+// attachment on ANY layer (no via needed at the pin), the ladder
+// still routes side-only.
 // layout ArduinoUnoR3 {
 //     // REAL Uno R3 mechanical identity: the official 68.58 x 53.34
 //     // outline with every connector pinned where the real board puts

@@ -288,7 +288,16 @@ impl ClearanceIndex {
                 if pin.unplaced {
                     continue;
                 }
-                if pin.net.is_some() && pin.net == skip_net {
+                // Same-net SMD pads are legal contact — nothing to
+                // model. Same-net THT pads STAY: their plated hole
+                // binds the net-agnostic hole-to-hole drill rule (a
+                // via beside its own header pin still breaks the
+                // drill), and the per-arm same-net skips keep copper
+                // contact legal.
+                let same_net = pin.net.is_some() && pin.net == skip_net;
+                if same_net
+                    && pin.pad.as_ref().and_then(|p| p.drill_mm).is_none()
+                {
                     continue;
                 }
                 let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;

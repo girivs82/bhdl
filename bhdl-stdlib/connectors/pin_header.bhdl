@@ -215,9 +215,7 @@ entity Pin_Header_02x18() {
     attribute kicad_symbol    = "Connector_Generic:Conn_02x18_Odd_Even";
 }
 
-// WIP ("real mechanical identity" campaign): real THT header
-// footprints expose hole_to_hole/THT-field routing work still in
-// flight — uncomment WITH the uno layout block to resume.
+// WIP (THT-field campaign): re-enable WITH the uno layout block.
 // ── Real footprints: 0.1" THT headers (KiCad PinHeader geometry:
 // 1.0mm drill, 1.7mm pad). Without these the pin-count class default
 // dressed a 1x10 header as an IC package.
