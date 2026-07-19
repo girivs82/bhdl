@@ -259,11 +259,10 @@ board ArduinoUnoR3 {
 }
 
 // WIP (THT-field campaign, resume by uncommenting with the stdlib
-// stamps): real mechanical identity. State at park: v=9 (8 clearance
-// + 1 isolated_copper), unc=53 — hole field fully modeled (0
-// hole_to_hole / 0 via_dangling); NEXT MECHANISM = THT pads accept
-// attachment on ANY layer (no via needed at the pin), the ladder
-// still routes side-only.
+// stamps): real mechanical identity. State: v=9 (clearance 8 +
+// isolated_copper 1), unc=52 — THT any-layer attach live (61 fires);
+// remaining unc = PLANE-net pads of passives (GND/VCC drop siting
+// under THT-field congestion) + a couple of header-pair nets.
 // layout ArduinoUnoR3 {
 //     // REAL Uno R3 mechanical identity: the official 68.58 x 53.34
 //     // outline with every connector pinned where the real board puts

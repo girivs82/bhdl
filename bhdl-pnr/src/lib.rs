@@ -4453,7 +4453,7 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
                 .map(|(c, _)| c)
         };
         // First unreached pad.
-        let mut target: Option<((f64, f64), usize)> = None; // (pad, layer)
+        let mut target: Option<((f64, f64), usize, bool)> = None; // (pad, layer, thru)
         for &(cid, pid) in &net.pins {
             let Some(&ci) = comp_idx.get(&cid) else { continue };
             let comp = &board.components[ci];
@@ -4489,11 +4489,11 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
                     .iter()
                     .any(|f| (f.0 - px).hypot(f.1 - py) < 1e-6)
             {
-                target = Some(((px, py), pin_layer));
+                target = Some(((px, py), pin_layer, thru));
                 break;
             }
         }
-        let Some(((px, py), layer)) = target else { return gained };
+        let Some(((px, py), layer, thru)) = target else { return gained };
         // Candidate attach points: projections onto same-layer tree
         // segments, nearest first, top 5.
         let mut attach: Vec<((f64, f64), f64)> = route
@@ -4546,6 +4546,60 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
                 gained += 1;
                 connected = true;
                 break;
+            }
+        }
+        // THT ANY-LAYER ATTACH: a drilled pad pierces every layer —
+        // route to it directly on ANY signal layer, no via at the pin
+        // (the drill rule correctly refuses via sites inside the hole
+        // ring, so a via-hop cannot serve a header pin). Real boards
+        // reach edge headers from the back side exactly like this.
+        if !connected && thru {
+            let signal_layers = board.layer_stack.signal_layer_indices();
+            'tht: for &l2 in signal_layers.iter().filter(|&&l| l != layer) {
+                let route = &final_routes[i];
+                let mut attach2: Vec<((f64, f64), f64)> = route
+                    .segments
+                    .iter()
+                    .enumerate()
+                    .filter(|(si, sg)| Some(comps[*si]) == tree && sg.layer == l2)
+                    .map(|(_, sg)| {
+                        let (dx, dy) = (sg.end.0 - sg.start.0, sg.end.1 - sg.start.1);
+                        let l2n = dx * dx + dy * dy;
+                        let t = if l2n <= 1e-12 {
+                            0.0
+                        } else {
+                            (((px - sg.start.0) * dx + (py - sg.start.1) * dy) / l2n)
+                                .clamp(0.0, 1.0)
+                        };
+                        let q = (sg.start.0 + t * dx, sg.start.1 + t * dy);
+                        (q, (px - q.0).hypot(py - q.1))
+                    })
+                    .collect();
+                attach2.sort_by(|a, b| {
+                    a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+                });
+                attach2.truncate(4);
+                for &(q, _) in &attach2 {
+                    if let Some(path) =
+                        geom::route_escape(&cidx, (px, py), q, width, l2, net.id)
+                    {
+                        commit_escape(
+                            &mut final_routes[i],
+                            &path,
+                            l2,
+                            width,
+                            None,
+                            &net.name,
+                        );
+                        info!(
+                            "completion: THT any-layer attach '{}' pad ({px:.2},{py:.2}) on layer {l2}",
+                            net.name
+                        );
+                        gained += 1;
+                        connected = true;
+                        break 'tht;
+                    }
+                }
             }
         }
         // M2b VIA HOP: the pad's own layer may be fenced while the
