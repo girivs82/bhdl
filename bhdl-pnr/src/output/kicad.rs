@@ -1279,6 +1279,41 @@ pub(crate) fn classify_voids(
         }
         log::warn!("[dump-bounds] {x0} {y0} {x1} {y1}");
     }
+    if let Ok(t) = std::env::var("BHDL_PNR_VIA_NEAR") {
+        if let Some((tx, ty)) = t.split_once(',').and_then(|(a, b)| {
+            Some((a.trim().parse::<f64>().ok()?, b.trim().parse::<f64>().ok()?))
+        }) {
+            for &(cx, cy, r) in &interior {
+                if (cx - tx).hypot(cy - ty) < 2.0 {
+                    log::warn!("[cv] interior ({cx:.2},{cy:.2},{r:.2})");
+                }
+            }
+            for &(_, w, cx, cy, r) in &bays {
+                if (cx - tx).hypot(cy - ty) < 2.0 {
+                    log::warn!("[cv] BAY ({cx:.2},{cy:.2},{r:.2}) wall {w:.2}");
+                }
+            }
+            for (list, side) in [
+                (&notches_bottom, "bottom"),
+                (&notches_top, "top"),
+                (&notches_right, "right"),
+                (&notches_left, "left"),
+            ] {
+                for &(a, b, d) in list.iter() {
+                    let near = if side == "bottom" || side == "top" {
+                        tx > a - 2.0 && tx < b + 2.0
+                    } else {
+                        ty > a - 2.0 && ty < b + 2.0
+                    };
+                    if near {
+                        log::warn!(
+                            "[cv] NOTCH {side} span ({a:.2},{b:.2}) depth {d:.2} [bounds {x0:.2},{y0:.2},{x1:.2},{y1:.2}]"
+                        );
+                    }
+                }
+            }
+        }
+    }
     let hulls = union_rings(&interior, 0.15, x0, y0, x1, y1);
     (notches_bottom, notches_top, notches_right, notches_left, bays, interior, interior_rects, hulls)
 }

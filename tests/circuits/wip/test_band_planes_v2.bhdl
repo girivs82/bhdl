@@ -1,0 +1,87 @@
+// BAND-REGION fixture v2: v1 plus the aggression the s7 punch-core
+// needs — FOREIGN via fields inside both bands (cross-board signal
+// nets forced through vias) and a foreign THT header INSIDE a band
+// (rail-A header physically in rail B's territory). The region
+// fills must punch foreign holes deep inside the bands and near
+// their boundaries.
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Pin_Header_01x06, Pin_Header_01x04 } from "bhdl-stdlib/connectors/pin_header.bhdl";
+
+board BandPlanes {
+    power VCC_A = 5V @ 200mA;
+    power VCC_B = 3.3V @ 200mA;
+    ground GND;
+
+    // Left cluster: rail A loads + its header.
+    ja: Pin_Header_01x06();
+    ja.1 -> @VCC_A;
+    ja.2 -> @GND;
+    ja.3 -> ra1: Res(1k).1;
+    ra1.2 -> @GND;
+    ja.4 -> ra2: Res(2.2k).1;
+    ra2.2 -> @GND;
+    @VCC_A -> ra3: Res(4.7k).1;
+    ra3.2 -> @GND;
+    @VCC_A -> ca1: Cap(100nF).1;
+    ca1.2 -> @GND;
+    @VCC_A -> ca2: Cap(1uF).1;
+    ca2.2 -> @GND;
+
+    // Right cluster: rail B loads + its header.
+    jb: Pin_Header_01x06();
+    jb.1 -> @VCC_B;
+    jb.2 -> @GND;
+    jb.3 -> rb1: Res(1k).1;
+    rb1.2 -> @GND;
+    jb.4 -> rb2: Res(2.2k).1;
+    rb2.2 -> @GND;
+    @VCC_B -> rb3: Res(4.7k).1;
+    rb3.2 -> @GND;
+    @VCC_B -> cb1: Cap(100nF).1;
+    cb1.2 -> @GND;
+    @VCC_B -> cb2: Cap(1uF).1;
+    cb2.2 -> @GND;
+
+    // Middle header straddling the boundary: both rails + signals.
+    jm: Pin_Header_01x06();
+    jm.1 -> @VCC_A;
+    jm.2 -> @VCC_B;
+    jm.3 -> @GND;
+    jm.4 -> ja.5;
+    jm.5 -> jb.5;
+    jm.6 -> @GND;
+
+    // v2: FOREIGN THT header inside rail B's band, wired to rail A —
+    // its holes are foreign punches deep in B's region, and its
+    // VCC_A pin is an out-of-region THT pad.
+    jc: Pin_Header_01x04();
+    jc.1 -> @VCC_A;
+    jc.2 -> @GND;
+    jc.3 -> rx1: Res(10k).1;
+    rx1.2 -> @VCC_A;
+    jc.4 -> rx2: Res(10k).1;
+    rx2.2 -> @GND;
+
+    // v2: cross-board signal mesh — long nets that must via through
+    // the band interiors (foreign via fields for BOTH region fills).
+    ja.6 -> rb4: Res(1k).1;
+    rb4.2 -> @GND;
+    jb.6 -> ra4: Res(1k).1;
+    ra4.2 -> @GND;
+    ra1.1 -> rb5: Res(3.3k).1;
+    rb5.2 -> @GND;
+    rb1.1 -> ra5: Res(3.3k).1;
+    ra5.2 -> @GND;
+}
+
+layout BandPlanes {
+    layer_stackup 4;
+    outline rect 50 30;
+    place ja at (6.0, 15.0);
+    place jb at (44.0, 15.0);
+    place jm at (25.0, 15.0);
+    // Foreign header INSIDE rail B's band, near its left boundary.
+    place jc at (35.0, 8.0);
+}
