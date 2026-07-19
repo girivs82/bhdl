@@ -1009,7 +1009,15 @@ pub(crate) fn classify_voids(
         let crosses_right = cx + rc > x1 - slack;
         let crosses_top = cy - rc < y0 + slack;
         let crosses_bottom = cy + rc > y1 - slack;
-        if crosses_bottom {
+        if crosses_top && crosses_bottom {
+            // The punch spans the WHOLE band (split-plane regions are
+            // short strips; a header hole is taller than the band):
+            // a one-sided notch leaves an unpunched sliver on the far
+            // edge. Full-height cut — the band is severed here.
+            notches_bottom.push(((cx - r).max(x0), (cx + r).min(x1), y0));
+        } else if crosses_left && crosses_right {
+            notches_right.push(((cy - r).max(y0), (cy + r).min(y1), x0));
+        } else if crosses_bottom {
             notches_bottom.push(((cx - r).max(x0), (cx + r).min(x1), (cy - r).clamp(y0, y1)));
         } else if crosses_top {
             notches_top.push(((cx - r).max(x0), (cx + r).min(x1), (cy + r).clamp(y0, y1)));
@@ -1043,7 +1051,11 @@ pub(crate) fn classify_voids(
         let crosses_right = rx1 > x1 - slack;
         let crosses_top = ry0 < y0 + slack;
         let crosses_bottom = ry1 > y1 - slack;
-        if crosses_bottom {
+        if crosses_top && crosses_bottom {
+            notches_bottom.push((rx0.max(x0), rx1.min(x1), y0));
+        } else if crosses_left && crosses_right {
+            notches_right.push((ry0.max(y0), ry1.min(y1), x0));
+        } else if crosses_bottom {
             notches_bottom.push((rx0.max(x0), rx1.min(x1), ry0.clamp(y0, y1)));
         } else if crosses_top {
             notches_top.push((rx0.max(x0), rx1.min(x1), ry1.clamp(y0, y1)));
