@@ -465,7 +465,7 @@ fn place_reference_labels(board: &Board, routes: &[Route]) -> Vec<(f64, f64, f64
         // crowded neighborhood earns a smaller label a few mm away
         // before it ever earns an overlap.
         let mut best: Option<(f64, (f64, f64), f64)> = None;
-        'fonts: for (font, rings, dirs) in [(1.0f64, 4usize, 8usize), (0.8, 16, 16)] {
+        'fonts: for (font, rings, dirs) in [(1.0f64, 4usize, 8usize), (0.8, 24, 16)] {
             let tw = (0.95 * c.refdes.len() as f64 + 0.4) * font;
             let th = 1.3 * font;
             for ring in 0..rings {
@@ -1251,37 +1251,21 @@ pub(crate) fn classify_voids(
         notches_right = merge_iv(std::mem::take(&mut notches_right));
         notches_left = merge_iv(std::mem::take(&mut notches_left));
     }
-    // ONE-TRUTH hulls: the same octagon + hull-merge the fracture
-    // emits — plane_swallows must test EXACTLY these rings. (A
-    // capsule-pair approximation over-rejected the whole mid-board
-    // on a via-dense layout: pairs chain everywhere, but the emitted
-    // fill keeps copper between clusters.)
-    let mut hulls: Vec<Vec<(f64, f64)>> = interior
-        .iter()
-        .map(|&(cx, cy, r)| {
-            let rr = r / (std::f64::consts::PI / 8.0).cos();
-            (0..8)
-                .map(|q| {
-                    let ang = -(q as f64) * std::f64::consts::FRAC_PI_4;
-                    (cx + rr * ang.cos(), cy + rr * ang.sin())
-                })
-                .collect()
-        })
-        .collect();
-    hull_merge_close_rings(&mut hulls, 0.30);
+    // ONE-TRUTH rings: the CONCAVE UNION of the interior punch
+    // discs, inflated by half the 0.30 web rule so sub-web gaps
+    // merge — the same polygons the fracture punches, shared with
+    // plane_swallows. Replaces chained convex hulls (a via-field
+    // chain collapsed into one mega-hull that carved the mid-board).
+    if std::env::var("BHDL_PNR_DUMP_CIRCLES").is_ok() {
+        for &(cx, cy, r) in &interior {
+            log::warn!("[dump-circle] {cx} {cy} {r}");
+        }
+        log::warn!("[dump-bounds] {x0} {y0} {x1} {y1}");
+    }
+    let hulls = union_rings(&interior, 0.15, x0, y0, x1, y1);
     (notches_bottom, notches_top, notches_right, notches_left, bays, interior, interior_rects, hulls)
 }
 
-// DORMANT (round-4 WIP): the concave union below is CORRECT in
-// isolation (see union_tests) and is the designed replacement for
-// chained convex hulls, but wiring it into classify_voids exposed a
-// ring-weave interaction on test_power_domain_scalability (two of
-// ~500 rings ship unpunched — copper at two via centers; the same
-// three rings punch clean alone). Resume: wire classify_voids to
-// union_rings + merge_holes to containment-only, then debug the
-// weave interaction (slit-row jitter / parent-chain with equal
-// rightmost-x staircase rings are the suspects).
-#[allow(dead_code)]
 /// CONCAVE UNION of interior punch circles: stamp each disc
 /// (octagon circumradius + `inflate`) onto a fine boolean grid,
 /// label connected components, and trace each component's OUTER
@@ -1385,7 +1369,10 @@ pub(crate) fn union_rings(
         // lattice, oriented so the FILLED side is on the left —
         // loops then chain consistently CCW around the component.
         use std::collections::BTreeMap;
-        let mut edges: BTreeMap<(u32, u32), (u32, u32)> = BTreeMap::new();
+        // Vec, NOT a map keyed by from-vertex: a diagonal pinch has
+        // TWO edges leaving one vertex, and map insert silently
+        // overwrote one — the multimap downstream never saw it.
+        let mut edges: Vec<((u32, u32), (u32, u32))> = Vec::new();
         let at = |r: usize, c: usize, lab: &Vec<u32>| -> bool {
             lab[r * cols + c] == comp
         };
@@ -1397,19 +1384,19 @@ pub(crate) fn union_rings(
                 let (r32, c32) = (r as u32, c as u32);
                 // top edge: outside above → edge left-to-right
                 if r == 0 || !at(r - 1, c, &label) {
-                    edges.insert((c32, r32), (c32 + 1, r32));
+                    edges.push(((c32, r32), (c32 + 1, r32)));
                 }
                 // bottom edge: right-to-left
                 if r + 1 >= rows || !at(r + 1, c, &label) {
-                    edges.insert((c32 + 1, r32 + 1), (c32, r32 + 1));
+                    edges.push(((c32 + 1, r32 + 1), (c32, r32 + 1)));
                 }
                 // left edge: bottom-to-top
                 if c == 0 || !at(r, c - 1, &label) {
-                    edges.insert((c32, r32 + 1), (c32, r32));
+                    edges.push(((c32, r32 + 1), (c32, r32)));
                 }
                 // right edge: top-to-bottom
                 if c + 1 >= cols || !at(r, c + 1, &label) {
-                    edges.insert((c32 + 1, r32), (c32 + 1, r32 + 1));
+                    edges.push(((c32 + 1, r32), (c32 + 1, r32 + 1)));
                 }
             }
         }
@@ -1445,12 +1432,18 @@ pub(crate) fn union_rings(
                     cands.remove(0)
                 } else {
                     let d = dir.unwrap_or((1, 0));
-                    // left, straight, right, back (y-down lattice:
-                    // left turn = (dy, -dx)).
+                    // Lobe-closing turn first. Worked through both
+                    // diagonal-pinch configurations by hand (filled-
+                    // left edge orientation, y-down lattice): the
+                    // turn that keeps the walk on its OWN lobe is
+                    // (-dy, dx); the other rotation jumps to the
+                    // twin lobe and weaves a mixed loop (measured:
+                    // lobe fragments truncated mid-disc, circle
+                    // centers uncovered).
                     let prefs = [
-                        (d.1, -d.0),
-                        d,
                         (-d.1, d.0),
+                        d,
+                        (d.1, -d.0),
                         (-d.0, -d.1),
                     ];
                     let pick = prefs.iter().find_map(|&(pdx, pdy)| {
@@ -1479,49 +1472,63 @@ pub(crate) fn union_rings(
                 edges_left.get_mut(&start).map(|v| v.clear());
             }
         }
-        // Outer loop = max |shoelace|.
-        let area = |lp: &Vec<(u32, u32)>| -> f64 {
+        // Keep EVERY outer-orientation loop, not just the biggest:
+        // left-turn tracing splits a PINCHED component (dumbbell of
+        // two discs sharing one lattice vertex) into two lobe loops —
+        // max-area kept one and silently DROPPED the twin, shipping
+        // its via unpunched (the pds 2-ring loss). Outer loops share
+        // the tracing orientation's shoelace SIGN; inner contours
+        // (enclosed copper islands) come out with the opposite sign
+        // and are dropped by design.
+        let signed_area = |lp: &Vec<(u32, u32)>| -> f64 {
             let mut a = 0.0;
             for k in 0..lp.len() {
                 let p = lp[k];
                 let q = lp[(k + 1) % lp.len()];
                 a += p.0 as f64 * q.1 as f64 - q.0 as f64 * p.1 as f64;
             }
-            a.abs()
+            a / 2.0
         };
-        let Some(outer) = loops
-            .into_iter()
+        let outer_sign = loops
+            .iter()
+            .map(|lp| signed_area(lp))
             .max_by(|a1, b1| {
-                area(a1)
-                    .partial_cmp(&area(b1))
+                a1.abs()
+                    .partial_cmp(&b1.abs())
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
-        else {
-            continue;
-        };
-        // Lattice → mm, collinear runs simplified.
-        let mut pts: Vec<(f64, f64)> = outer
-            .into_iter()
-            .map(|(vc, vr)| (x0 + vc as f64 * CELL, y0 + vr as f64 * CELL))
-            .collect();
-        let mut simp: Vec<(f64, f64)> = Vec::with_capacity(pts.len());
-        let n = pts.len();
-        for k in 0..n {
-            let prev = pts[(k + n - 1) % n];
-            let cur = pts[k];
-            let nxt = pts[(k + 1) % n];
-            let collinear = ((cur.0 - prev.0) * (nxt.1 - cur.1)
-                - (cur.1 - prev.1) * (nxt.0 - cur.0))
-                .abs()
-                < 1e-9;
-            if !collinear {
-                simp.push(cur);
+            .map(|a| a.signum())
+            .unwrap_or(1.0);
+        for lp in loops {
+            let a = signed_area(&lp);
+            // Same orientation as the (definitely outer) biggest
+            // loop, and at least a few cells of area.
+            if a.signum() != outer_sign || a.abs() < 4.0 {
+                continue;
+            }
+            // Lattice → mm, collinear runs simplified.
+            let pts: Vec<(f64, f64)> = lp
+                .into_iter()
+                .map(|(vc, vr)| (x0 + vc as f64 * CELL, y0 + vr as f64 * CELL))
+                .collect();
+            let mut simp: Vec<(f64, f64)> = Vec::with_capacity(pts.len());
+            let n = pts.len();
+            for k in 0..n {
+                let prev = pts[(k + n - 1) % n];
+                let cur = pts[k];
+                let nxt = pts[(k + 1) % n];
+                let collinear = ((cur.0 - prev.0) * (nxt.1 - cur.1)
+                    - (cur.1 - prev.1) * (nxt.0 - cur.0))
+                    .abs()
+                    < 1e-9;
+                if !collinear {
+                    simp.push(cur);
+                }
+            }
+            if simp.len() >= 4 {
+                out.push(simp);
             }
         }
-        if simp.len() >= 4 {
-            out.push(simp);
-        }
-        pts.clear();
     }
     out
 }
@@ -1708,7 +1715,30 @@ fn fracture_fill(
             .into_iter()
             .map(|(rx0, ry0, rx1, ry1)| RingKind::Rect { x0: rx0, y0: ry0, x1: rx1, y1: ry1 }),
     );
+    let probe = std::env::var("BHDL_PNR_VIA_NEAR").ok().and_then(|t| {
+        let (a, b) = t.split_once(',')?;
+        Some((a.trim().parse::<f64>().ok()?, b.trim().parse::<f64>().ok()?))
+    });
+    if let Some((tx, ty)) = probe {
+        let cover = rings
+            .iter()
+            .filter(|rk| match rk {
+                RingKind::Poly(pts) => point_in_poly(pts, tx, ty),
+                RingKind::Circle { cx, cy, r } => (tx - cx).hypot(ty - cy) < *r,
+                RingKind::Rect { x0: a, y0: b, x1: c, y1: d } => {
+                    tx > *a && tx < *c && ty > *b && ty < *d
+                }
+            })
+            .count();
+        log::warn!("[fr-probe] rings covering ({tx},{ty}): {cover} of {}", rings.len());
+    }
     punch_interior_rings(&mut poly, rings);
+    if let Some((tx, ty)) = probe {
+        log::warn!(
+            "[fr-probe] after punch: copper at ({tx},{ty}) = {}",
+            point_in_poly(&poly, tx, ty)
+        );
+    }
     poly
 }
 
@@ -1927,7 +1957,31 @@ fn punch_interior_rings(poly: &mut Vec<(f64, f64)>, rings: Vec<RingKind>) {
         ring_pts.push(pts);
     }
     // Unique slit rows (a shared row would collide two landings).
+    // SEEDED with every HORIZONTAL edge row of every ring and the
+    // outline: a ray grazing ALONG a horizontal run skips it
+    // (cross_at ignores horizontal edges) and lands on a mid-ring
+    // staircase vertical INSIDE the ring instead of the true
+    // boundary — the keyhole then tunnels into the ring, the weave
+    // self-intersects, and KiCad's normalization re-fills both holes
+    // (measured: 2 of ~500 union rings shipped unpunched, a slit
+    // landing mid-lost-ring on the via row).
     let mut used_y: Vec<f64> = Vec::new();
+    for pts in ring_pts.iter() {
+        for k in 0..pts.len() {
+            let a = pts[k];
+            let b = pts[(k + 1) % pts.len()];
+            if (a.1 - b.1).abs() < 1e-9 {
+                used_y.push(a.1);
+            }
+        }
+    }
+    for k in 0..poly.len() {
+        let a = poly[k];
+        let b = poly[(k + 1) % poly.len()];
+        if (a.1 - b.1).abs() < 1e-9 {
+            used_y.push(a.1);
+        }
+    }
     for pts in ring_pts.iter_mut() {
         let mut ry = pts[0].1;
         while used_y.iter().any(|&u| (u - ry).abs() < 1e-4) {
@@ -2145,7 +2199,17 @@ pub(crate) fn plane_foreign_holes(
             }
             let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
             let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
-            let barrel = pad.width_mm.max(pad.height_mm) / 2.0;
+            // Shape-aware reach: a RECT pad's corner extends to the
+            // half-diagonal (a pin-1 marker square reaches 1.202mm
+            // where the circle model said 0.85 — 12 zone-clearance
+            // shortfalls of exactly that corner on the real-uno
+            // headers). Oval/circle pads keep the tight radius.
+            let barrel = match pad.shape {
+                crate::types::PadShapeKind::Rect => {
+                    (pad.width_mm / 2.0).hypot(pad.height_mm / 2.0)
+                }
+                _ => pad.width_mm.max(pad.height_mm) / 2.0,
+            };
             holes.push((gx, gy, barrel + zc + 0.05));
         }
     }
@@ -2179,62 +2243,36 @@ pub(crate) fn plane_cutout_rects(board: &Board) -> Vec<(f64, f64, f64, f64)> {
 /// fracture applies, exposed so lib.rs can verify drop-via plane
 /// contact against the geometry that will actually be emitted.
 pub(crate) fn merge_holes(mut holes: Vec<(f64, f64, f64)>) -> Vec<(f64, f64, f64)> {
-    // Interleaved to fixpoint (fills v2):
-    // 1. OVERLAP MERGE — overlapping circles must punch as ONE ring
-    //    (self-intersecting slit-woven rings re-fill their overlap
-    //    under KiCad's polygon normalization).
-    // 2. OCTAGON-VERTEX BAND — a circumscribed octagon's vertex
-    //    overshoots its circle by 1/cos(22.5°) ≈ 8.2%: a ring
-    //    disjoint by microns can poke its vertex inside a neighbor's
-    //    punch disc (measured 0.5266mm vs 0.65 needed). Inflate the
-    //    smaller of a band pair until rule 1 merges them.
-    // Band pairs can APPEAR when a merge grows a ring, so the rules
-    // interleave. Any-size results are safe downstream: fills v2
-    // clips rings to the fill exactly (no notch reclassification).
-    let c = (std::f64::consts::PI / 8.0).cos();
-    loop {
-        loop {
-            let mut merged = false;
-            'outer: for i in 0..holes.len() {
-                for j in (i + 1)..holes.len() {
-                    let (ax, ay, ar) = holes[i];
-                    let (bx, by, br) = holes[j];
-                    let d = (ax - bx).hypot(ay - by);
-                    if d < ar + br {
-                        // CONTAINMENT: the enclosing formula
-                        // (d+ar+br)/2 yields a circle SMALLER than
-                        // the big member when one contains the other
-                        // — merging SHRANK coverage and swallowed
-                        // vias resurfaced as copper-at-via (latent;
-                        // first triggered by the multi-layer maze's
-                        // big via-cluster rings).
-                        holes[i] = if d + br <= ar {
-                            (ax, ay, ar)
-                        } else if d + ar <= br {
-                            (bx, by, br)
-                        } else {
-                            let r = (d + ar + br) / 2.0;
-                            let t = if d > 1e-9 { (r - ar) / d } else { 0.0 };
-                            (ax + (bx - ax) * t, ay + (by - ay) * t, r)
-                        };
-                        holes.remove(j);
-                        merged = true;
-                        break 'outer;
-                    }
-                }
+    // CONTAINMENT-ONLY dedupe: a circle fully inside another adds
+    // nothing. The old rules (overlap → enclosing circle, octagon-
+    // band inflation, interleaved to fixpoint) CASCADED — chains of
+    // via punches merged into giant circles that swallowed healthy
+    // drops. Overlapping and near-touching circles now stay separate:
+    // the concave UNION downstream (union_rings) merges their voids
+    // exactly, self-intersection-free by construction.
+    let mut k = 0;
+    while k < holes.len() {
+        let (ax, ay, ar) = holes[k];
+        let mut contained = false;
+        for (j2, &(bx, by, br)) in holes.iter().enumerate() {
+            if j2 == k {
+                continue;
             }
-            if !merged {
+            let d = (ax - bx).hypot(ay - by);
+            if d + ar < br + 1e-9 || (d < 1e-9 && (ar - br).abs() < 1e-9 && j2 < k) {
+                contained = true;
                 break;
             }
         }
-        return holes;
+        if contained {
+            holes.remove(k);
+        } else {
+            k += 1;
+        }
     }
+    holes
 }
 
-
-/// Does the plane fill's cutout geometry (merged interior holes OR
-/// edge notch boxes) fully swallow a via at (x, y)? Mirrors the
-/// fracture's classification exactly — used by the drop verifier.
 pub(crate) fn plane_swallows(
     board: &Board,
     merged_holes: &[(f64, f64, f64)],
@@ -2420,6 +2458,68 @@ mod union_tests {
                 "copper at ({cx},{cy}) after punch ({} verts)",
                 poly.len()
             );
+        }
+    }
+
+    #[test]
+    fn union_covers_pds_gnd_fill() {
+        // The FULL 48-circle GND fill from test_power_domain_
+        // scalability seed 42 — the two vias at x=41.675 lost their
+        // punches in vivo while a 3-circle repro passed.
+        let circles: Vec<(f64, f64, f64)> = vec![
+    (10.499264068711929, 36.92926406871193, 0.65),
+    (31.975, 51.905, 0.65),
+    (12.895000000000001, 27.575000000000003, 0.65),
+    (20.795, 25.775000000000006, 0.65),
+    (42.87500000000001, 47.07000000000001, 0.65),
+    (41.675000000000004, 45.800000000000004, 0.65),
+    (42.87500000000001, 44.53, 0.65),
+    (41.675000000000004, 43.260000000000005, 0.65),
+    (42.87500000000001, 41.99, 0.65),
+    (37.925000000000004, 41.99, 0.65),
+    (37.74926406871193, 43.68426406871193, 0.65),
+    (36.375, 44.53, 0.65),
+    (42.69926406871193, 48.76426406871193, 0.65),
+    (22.076677913517834, 32.01663111474067, 0.65),
+    (21.973251105397598, 51.57532459959199, 0.65),
+    (15.774999999999999, 30.024316285030586, 0.65),
+    (12.575, 51.900000000000006, 0.65),
+    (28.475000000000005, 44.1, 0.65),
+    (12.700000000000001, 47.825, 0.65),
+    (20.775000000000006, 27.670994720872336, 0.65),
+    (17.475000000000005, 43.9232613103874, 0.65),
+    (27.08102512873765, 35.2, 0.65),
+    (15.075, 36.12033422170346, 0.65),
+    (13.684723682324961, 33.730480206189135, 0.65),
+    (19.6280149855371, 34.380650165031746, 0.65),
+    (17.075000000000003, 46.23924124125064, 0.65),
+    (17.337515174109527, 51.39958866830391, 0.65),
+    (24.186920163247464, 49.87200632635338, 0.65),
+    (18.507641438194575, 50.08002995674088, 0.65),
+    (29.400000000000002, 40.475, 0.65),
+    (23.474767381602778, 42.35387245640458, 0.65),
+    (22.825000000000003, 46.07705003551164, 0.65),
+    (22.632623929330922, 44.20306173877364, 0.65),
+    (20.43985405012435, 49.30239544986791, 0.65),
+    (11.998404592370129, 42.7, 0.65),
+    (15.491603150016921, 41.80841036923347, 0.65),
+    (24.0393199100249, 47.96580384571045, 0.65),
+    (20.825000000000003, 29.904464727524314, 0.65),
+    (24.528014985537098, 37.9, 0.65),
+    (14.933334385808863, 49.18685134291886, 0.65),
+    (16.3, 40.03508242720355, 0.65),
+    (25.589767381602776, 40.300000000000004, 0.65),
+    (20.225, 36.55192892451, 0.65),
+    (26.700000000000003, 44.87500000000001, 0.65),
+    (19.21675928262476, 41.81688256163278, 0.65),
+    (18.571798424147342, 32.204527660707384, 0.65),
+    (20.300000000000004, 40.15655268851514, 0.65),
+    (10.425, 42.300000000000004, 0.65),
+];
+        let rings = union_rings(&circles, 0.15, 0.5, 0.5, 52.874588668303915, 52.874588668303915);
+        for &(cx, cy, _) in &circles {
+            let covered = rings.iter().any(|ring| point_in_poly(ring, cx, cy));
+            assert!(covered, "circle at ({cx},{cy}) not covered; {} rings", rings.len());
         }
     }
 }

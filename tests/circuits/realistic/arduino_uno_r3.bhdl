@@ -258,40 +258,33 @@ board ArduinoUnoR3 {
     ICSP1.6 -> @GND;
 }
 
-// WIP (THT-field campaign): real mechanical identity. State: v=9,
-// unc=52. ROUND-3 FINDING: the GND fill's mid-board is carved away —
-// hull_merge_close_rings CHAINS convex hulls transitively (via-field
-// rings merge into a mega-hull; 'capsule, no cascade' fails for
-// chains). NEXT MECHANISM = concave UNION of near/overlapping rings
-// (scanline boolean or outline tracing), not convex hulls; the
-// swallow model already shares the exact rings via classify_voids.
-// layout ArduinoUnoR3 {
-//     // REAL Uno R3 mechanical identity: the official 68.58 x 53.34
-//     // outline with every connector pinned where the real board puts
-//     // it (y-down, origin at the top-left corner). This is the
-//     // realism contract: the router must reach edge-pinned connectors
-//     // exactly like on the shipping product — free placement of
-//     // connectors was hiding the hard part of the problem.
-//     outline rect 68.58 53.34;
-//     // Left edge: USB receptacle (top) and barrel jack (bottom).
-//     place J_USB at (5.6, 11.4) rot 270;
-//     place X1 at (7.0, 45.5) rot 270;
-//     // Top edge: the two digital shield headers (rows horizontal).
-//     place J_D2 at (28.9, 2.6) rot 90;
-//     place J_D1 at (53.3, 2.6) rot 90;
-//     // Bottom edge: power and analog shield headers.
-//     place J_PWR at (26.7, 50.7) rot 90;
-//     place J_AD at (49.5, 50.7) rot 90;
-//     // Right edge: main ICSP (vertical); the 16U2's ICSP lies flat by
-//     // the USB bridge.
-//     place ICSP1 at (64.9, 27.9);
-//     place ICSP2 at (27.5, 9.0) rot 90;
-//     // DEV SCAFFOLD, not the realism contract: only MECHANICALS
-//     // (connectors, mounting holes, fiducials) are pinned on a real
-//     // board — the placer is free to put MCUs anywhere that meets
-//     // the rules. Pinning them TEMPORARILY constrains the problem
-//     // while the THT-field routing machinery is developed; remove
-//     // these two lines once the router closes the campaign.
-//     place U3 at (17.0, 15.5);
-//     place U4 at (45.0, 26.0);
-// }
+layout ArduinoUnoR3 {
+    // REAL Uno R3 mechanical identity: the official 68.58 x 53.34
+    // outline with every connector pinned where the real board puts
+    // it (y-down, origin at the top-left corner). This is the
+    // realism contract: the router must reach edge-pinned connectors
+    // exactly like on the shipping product — free placement of
+    // connectors was hiding the hard part of the problem.
+    outline rect 68.58 53.34;
+    // Left edge: USB receptacle (top) and barrel jack (bottom).
+    place J_USB at (5.6, 11.4) rot 270;
+    place X1 at (7.0, 45.5) rot 270;
+    // Top edge: the two digital shield headers (rows horizontal).
+    place J_D2 at (28.9, 2.6) rot 90;
+    place J_D1 at (53.3, 2.6) rot 90;
+    // Bottom edge: power and analog shield headers.
+    place J_PWR at (26.7, 50.7) rot 90;
+    place J_AD at (49.5, 50.7) rot 90;
+    // Right edge: main ICSP (vertical); the 16U2's ICSP lies flat by
+    // the USB bridge.
+    place ICSP1 at (64.9, 27.9);
+    place ICSP2 at (27.5, 9.0) rot 90;
+    // DEV SCAFFOLD, not the realism contract: only MECHANICALS
+    // (connectors, mounting holes, fiducials) are pinned on a real
+    // board — the placer is free to put MCUs anywhere that meets
+    // the rules. Pinning them TEMPORARILY constrains the problem
+    // while the THT-field routing machinery is developed; remove
+    // these two lines once the router closes the campaign.
+    place U3 at (19.5, 15.5);
+    place U4 at (45.0, 26.0);
+}
