@@ -258,11 +258,13 @@ board ArduinoUnoR3 {
     ICSP1.6 -> @GND;
 }
 
-// WIP (THT-field campaign, resume by uncommenting with the stdlib
-// stamps): real mechanical identity. State: v=9 (clearance 8 +
-// isolated_copper 1), unc=52 — THT any-layer attach live (61 fires);
-// remaining unc = PLANE-net pads of passives (GND/VCC drop siting
-// under THT-field congestion) + a couple of header-pair nets.
+// WIP (THT-field campaign): real mechanical identity. State: v=9,
+// unc=52. ROUND-3 FINDING: the GND fill's mid-board is carved away —
+// hull_merge_close_rings CHAINS convex hulls transitively (via-field
+// rings merge into a mega-hull; 'capsule, no cascade' fails for
+// chains). NEXT MECHANISM = concave UNION of near/overlapping rings
+// (scanline boolean or outline tracing), not convex hulls; the
+// swallow model already shares the exact rings via classify_voids.
 // layout ArduinoUnoR3 {
 //     // REAL Uno R3 mechanical identity: the official 68.58 x 53.34
 //     // outline with every connector pinned where the real board puts

@@ -956,6 +956,7 @@ pub(crate) fn classify_voids(
     Vec<(u8, f64, f64, f64, f64)>,
     Vec<(f64, f64, f64)>,
     Vec<(f64, f64, f64, f64)>,
+    Vec<Vec<(f64, f64)>>,
 ) {
     // Split holes: interior ones become slit-fractured octagons; ones
     // whose punch crosses the fill boundary become EDGE NOTCHES —
@@ -1250,7 +1251,25 @@ pub(crate) fn classify_voids(
         notches_right = merge_iv(std::mem::take(&mut notches_right));
         notches_left = merge_iv(std::mem::take(&mut notches_left));
     }
-    (notches_bottom, notches_top, notches_right, notches_left, bays, interior, interior_rects)
+    // ONE-TRUTH hulls: the same octagon + hull-merge the fracture
+    // emits — plane_swallows must test EXACTLY these rings. (A
+    // capsule-pair approximation over-rejected the whole mid-board
+    // on a via-dense layout: pairs chain everywhere, but the emitted
+    // fill keeps copper between clusters.)
+    let mut hulls: Vec<Vec<(f64, f64)>> = interior
+        .iter()
+        .map(|&(cx, cy, r)| {
+            let rr = r / (std::f64::consts::PI / 8.0).cos();
+            (0..8)
+                .map(|q| {
+                    let ang = -(q as f64) * std::f64::consts::FRAC_PI_4;
+                    (cx + rr * ang.cos(), cy + rr * ang.sin())
+                })
+                .collect()
+        })
+        .collect();
+    hull_merge_close_rings(&mut hulls, 0.30);
+    (notches_bottom, notches_top, notches_right, notches_left, bays, interior, interior_rects, hulls)
 }
 
 fn fracture_fill(
@@ -1302,21 +1321,10 @@ fn fracture_fill(
     // exact boxes the fracture builds (a 15mm absorption-grown notch
     // was invisible to the old per-circle model; oracle: via_dangling
     // inside it).
-    let (notches_bottom, notches_top, notches_right, notches_left, bays, interior, interior_rects) =
+    let (notches_bottom, notches_top, notches_right, notches_left, bays, interior, interior_rects, hulls) =
         classify_voids(x0, y0, x1, y1, &holes, &rects);
-    let mut poly_rings: Vec<Vec<(f64, f64)>> = interior
-        .iter()
-        .map(|&(cx, cy, r)| {
-            let rr = r / (std::f64::consts::PI / 8.0).cos();
-            (0..8)
-                .map(|q| {
-                    let ang = -(q as f64) * std::f64::consts::FRAC_PI_4;
-                    (cx + rr * ang.cos(), cy + rr * ang.sin())
-                })
-                .collect()
-        })
-        .collect();
-    hull_merge_close_rings(&mut poly_rings, 0.30);
+    let _ = &interior;
+    let poly_rings: Vec<Vec<(f64, f64)>> = hulls;
     // Outline with edge notches: bottom edge traversed x1→x0 (in the
     // ring (x0,y0)→(x1,y0)→(x1,y1)→(x0,y1)), top edge x0→x1.
     let mut poly: Vec<(f64, f64)> = vec![(x0, y0)];
@@ -2056,6 +2064,7 @@ pub(crate) fn plane_swallows(
         Vec<(u8, f64, f64, f64, f64)>,
         Vec<(f64, f64, f64)>,
         Vec<(f64, f64, f64, f64)>,
+        Vec<Vec<(f64, f64)>>,
     );
     // Memo keyed by DIRECT input comparison (no hashing: SipHash over
     // hundreds of holes per query showed up in profiles, and a weak
@@ -2071,7 +2080,7 @@ pub(crate) fn plane_swallows(
             const { std::cell::RefCell::new(None) };
     }
     let bounds = [x0.to_bits(), y0.to_bits(), x1.to_bits(), y1.to_bits()];
-    let (nb, nt, nr, nl, bays, interior, interior_rects) = VOIDS_MEMO.with(|m| {
+    let (nb, nt, nr, nl, bays, _interior, interior_rects, hulls) = VOIDS_MEMO.with(|m| {
         let mut m = m.borrow_mut();
         match m.as_ref() {
             Some(((kb, kh, kr), v))
@@ -2110,30 +2119,15 @@ pub(crate) fn plane_swallows(
             return true;
         }
     }
-    for &(cx, cy, r) in &interior {
-        // Octagon VERTEX reach — the emitted hole, not the ideal
-        // circle; OVERLAP counts as swallowed (conservative: honest
-        // unconnected beats dangling copper).
-        if (x - cx).hypot(y - cy) < r / c225 + via_r + 0.05 {
+    // EXACT hulled rings (the same polygons the fracture punches):
+    // inside one, or within (via_r + 0.05) of its boundary =
+    // swallowed. No capsule approximation — parity with emission.
+    let _ = c225;
+    for hull in &hulls {
+        if point_in_poly(hull, x, y)
+            || crate::routing::grid::polygon_edge_distance(hull, x, y) < via_r + 0.05
+        {
             return true;
-        }
-    }
-    // HULL PAIRS: the fracture hull-merges interior rings whose
-    // octagons come within the 0.30 web — the void between such a
-    // pair is a CAPSULE the per-circle test can't see. Model each
-    // close pair as a capsule of the larger octagon radius.
-    for i in 0..interior.len() {
-        let (ax, ay, ar) = interior[i];
-        let arc = ar / c225;
-        for &(bx, by, br) in interior.iter().skip(i + 1) {
-            let brc = br / c225;
-            let d = (ax - bx).hypot(ay - by);
-            if d - arc - brc < 0.30
-                && crate::geom::point_segment_dist((x, y), (ax, ay), (bx, by))
-                    < arc.max(brc) + via_r + 0.05
-            {
-                return true;
-            }
         }
     }
     false
