@@ -284,11 +284,12 @@ board ArduinoUnoR3 {
 //     // the USB bridge.
 //     place ICSP1 at (64.9, 27.9);
 //     place ICSP2 at (27.5, 9.0) rot 90;
-//     // The two MCUs sit where the real board puts them: the 16U2 USB
-//     // bridge beside the receptacle, the 328P DIP mid-right with its
-//     // rows horizontal — pinning them is part of the same mechanical
-//     // identity, and it keeps the placer from wedging the DIP against
-//     // the pinned connector ring.
+//     // DEV SCAFFOLD, not the realism contract: only MECHANICALS
+//     // (connectors, mounting holes, fiducials) are pinned on a real
+//     // board — the placer is free to put MCUs anywhere that meets
+//     // the rules. Pinning them TEMPORARILY constrains the problem
+//     // while the THT-field routing machinery is developed; remove
+//     // these two lines once the router closes the campaign.
 //     place U3 at (17.0, 15.5);
 //     place U4 at (45.0, 26.0);
 // }
