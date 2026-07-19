@@ -342,7 +342,12 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
             "  (zone (net {}) (net_name \"{}\") (layer \"{}\") (hatch edge 0.5)\n",
             n, net.name, layer_name
         ));
-        out.push_str("    (connect_pads (clearance 0.3))\n");
+        // SOLID pad connections: we emit the saved fill geometry
+        // ourselves and it touches same-net THT pads solidly — the
+        // default (thermal-relief) setting makes KiCad's DRC demand
+        // spokes our geometry doesn't have (starved_thermal on every
+        // same-net header pin of a band fixture).
+        out.push_str("    (connect_pads yes (clearance 0.3))\n");
         out.push_str("    (min_thickness 0.25) (filled_areas_thickness no)\n");
         out.push_str("    (fill yes (thermal_gap 0.3) (thermal_bridge_width 0.4))\n");
         let m = 0.5;

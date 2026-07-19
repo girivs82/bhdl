@@ -3313,14 +3313,26 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
             if pin.unplaced {
                 continue;
             }
-            // THT pads pierce the plane directly.
-            if pin.pad.as_ref().map(|p| p.drill_mm.is_some()).unwrap_or(false) {
-                continue;
-            }
             let cos_t = comp.theta.cos();
             let sin_t = comp.theta.sin();
             let px = comp.x + pin.dx * cos_t - pin.dy * sin_t;
             let py = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+            // THT pads pierce the plane directly — but only INSIDE
+            // their rail's region (see plane_via_drops).
+            if pin.pad.as_ref().map(|p| p.drill_mm.is_some()).unwrap_or(false) {
+                let in_region = match board.nets[i].plane_region {
+                    None => true,
+                    Some((rx0, ry0, rx1, ry1)) => {
+                        px > rx0 + 0.05
+                            && px < rx1 - 0.05
+                            && py > ry0 + 0.05
+                            && py < ry1 - 0.05
+                    }
+                };
+                if in_region {
+                    continue;
+                }
+            }
             let half = pin
                 .pad
                 .as_ref()
@@ -5801,13 +5813,31 @@ fn plane_via_drops(
             if pin.unplaced {
                 continue;
             }
-            if pin.pad.as_ref().and_then(|p| p.drill_mm).is_some() {
-                continue; // through-hole barrel pierces the plane
-            }
             let cos_t = comp.theta.cos();
             let sin_t = comp.theta.sin();
             let px = comp.x + pin.dx * cos_t - pin.dy * sin_t;
             let py = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+            if pin.pad.as_ref().and_then(|p| p.drill_mm).is_some() {
+                // A through-hole barrel pierces the plane — but only
+                // where its rail actually HAS copper. With a split-
+                // plane REGION, a THT pad outside its rail's band
+                // pierces bare dielectric (band fixture: a mixed-rail
+                // header pin in the neighbor band shipped as zone-
+                // unconnected); out-of-region THT pads take the
+                // stub+via path like SMD pads.
+                let in_region = match net.plane_region {
+                    None => true,
+                    Some((rx0, ry0, rx1, ry1)) => {
+                        px > rx0 + 0.05
+                            && px < rx1 - 0.05
+                            && py > ry0 + 0.05
+                            && py < ry1 - 0.05
+                    }
+                };
+                if in_region {
+                    continue;
+                }
+            }
             let stub_layer = match comp.side {
                 BoardSide::Top => 0,
                 BoardSide::Bottom => n_layers - 1,

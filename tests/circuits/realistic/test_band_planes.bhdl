@@ -1,0 +1,66 @@
+// BAND-REGION + THT fixture: two power rails clustered left/right so
+// the split-plane separability gate passes and the Power layer
+// carries BAND REGIONS — with THT header rows crossing the band
+// boundaries. Reproduces the region-fill hole machinery outside the
+// full uno (s7's 22v family: unpunched holes in band fills).
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Pin_Header_01x06 } from "bhdl-stdlib/connectors/pin_header.bhdl";
+
+board BandPlanes {
+    power VCC_A = 5V @ 200mA;
+    power VCC_B = 3.3V @ 200mA;
+    ground GND;
+
+    // Left cluster: rail A loads + its header.
+    ja: Pin_Header_01x06();
+    ja.1 -> @VCC_A;
+    ja.2 -> @GND;
+    ja.3 -> ra1: Res(1k).1;
+    ra1.2 -> @GND;
+    ja.4 -> ra2: Res(2.2k).1;
+    ra2.2 -> @GND;
+    @VCC_A -> ra3: Res(4.7k).1;
+    ra3.2 -> @GND;
+    @VCC_A -> ca1: Cap(100nF).1;
+    ca1.2 -> @GND;
+    @VCC_A -> ca2: Cap(1uF).1;
+    ca2.2 -> @GND;
+
+    // Right cluster: rail B loads + its header.
+    jb: Pin_Header_01x06();
+    jb.1 -> @VCC_B;
+    jb.2 -> @GND;
+    jb.3 -> rb1: Res(1k).1;
+    rb1.2 -> @GND;
+    jb.4 -> rb2: Res(2.2k).1;
+    rb2.2 -> @GND;
+    @VCC_B -> rb3: Res(4.7k).1;
+    rb3.2 -> @GND;
+    @VCC_B -> cb1: Cap(100nF).1;
+    cb1.2 -> @GND;
+    @VCC_B -> cb2: Cap(1uF).1;
+    cb2.2 -> @GND;
+
+    // Middle header: pins on BOTH rails + cross-board signals — its
+    // THT holes sit at/near the band boundary so both region fills
+    // must punch near their edges.
+    jm: Pin_Header_01x06();
+    jm.1 -> @VCC_A;
+    jm.2 -> @VCC_B;
+    jm.3 -> @GND;
+    jm.4 -> ja.5;
+    jm.5 -> jb.5;
+    jm.6 -> @GND;
+}
+
+layout BandPlanes {
+    layer_stackup 4;
+    outline rect 50 30;
+    // Headers pinned: left/right vertical at the cluster hearts, the
+    // middle one straddling the future band boundary.
+    place ja at (6.0, 15.0);
+    place jb at (44.0, 15.0);
+    place jm at (25.0, 15.0);
+}
