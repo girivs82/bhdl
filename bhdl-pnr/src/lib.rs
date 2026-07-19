@@ -3647,6 +3647,45 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
                 }
                 }
             }
+            // Stage 1.2 — MAZE TUNNEL (same layer): the shapes and
+            // shoves above cannot thread a QFP interior — a 0.5mm-
+            // pitch pad row is impassable sideways, but the footprint
+            // body behind it is open copper and the corner gaps lead
+            // out (uno free-MCU: UGND walled in by its own pin row
+            // while GND copper sat 1.5mm away). One exact A* per
+            // attach candidate, nearest first.
+            if !connected {
+                for (jj, old) in snaps.drain(..).rev() {
+                    final_routes[jj] = old;
+                }
+                let cidx = geom::ClearanceIndex::build(board, final_routes, Some(net_id));
+                'tunnel: for &src in &sources {
+                    for &(q, _) in attach.iter().take(4) {
+                        if let Some(path) =
+                            geom::route_tunnel(&cidx, src, q, width, layer, net_id)
+                        {
+                            commit_escape(
+                                &mut final_routes[i],
+                                &path,
+                                layer,
+                                width,
+                                None,
+                                &board.nets[i].name,
+                            );
+                            info!(
+                                "plane surface rescue: '{}' pad at ({px:.2},{py:.2}) joined by maze tunnel",
+                                board.nets[i].name
+                            );
+                            connected = true;
+                            rescued += 1;
+                            break 'tunnel;
+                        }
+                    }
+                }
+                if connected {
+                    continue;
+                }
+            }
             // Stage 1.5 — VICTIM RIP: the blocker crosses the pad
             // column and every shape/shove fails (uno s5: a 0.3mm
             // foreign jog crossing exactly between two same-net USB
@@ -6253,6 +6292,26 @@ fn plane_via_drops(
                     (segs, vx, vy)
                 }
                 (None, None) => {
+                    // Terminal rung — DROP-SITE VICTIM RIP: every site
+                    // in reach is blocked, but some only by SIGNAL
+                    // tracks (uno free-MCU: UGND boxed in by its own
+                    // VCC ring on F.Cu while two inner-layer signals
+                    // crossed under the box and killed every barrel
+                    // site). Rip the signal(s), place the drop, rebuild
+                    // them on the updated board; accept only when no
+                    // victim ends worse.
+                    if drop_site_victim_rip(
+                        board,
+                        final_routes,
+                        i,
+                        (px, py),
+                        stub_layer,
+                        share,
+                        &mut new_vias,
+                    ) {
+                        dropped += 1;
+                        continue;
+                    }
                     log::warn!(
                         "plane via drop: no legal site near pad '{}' of '{}' (net '{}') — pad stays unconnected",
                         pin.name, comp.refdes, net.name
@@ -6304,6 +6363,243 @@ fn plane_via_drops(
         }
     }
     dropped
+}
+
+/// Terminal rung of the drop ladder (see the call site in
+/// plane_via_drops): scan ring sites again, classifying blockers —
+/// a site blocked ONLY by 1-2 signal nets' tracks is a rip
+/// candidate. Rip them, verify the site on the exact kernel, commit
+/// the drop, rebuild the victims on the updated board; revert
+/// everything unless no victim ends with more unreached sinks than
+/// it started with.
+fn drop_site_victim_rip(
+    board: &Board,
+    final_routes: &mut [Route],
+    i: usize,
+    (px, py): (f64, f64),
+    stub_layer: usize,
+    share: f64,
+    new_vias: &mut Vec<(f64, f64)>,
+) -> bool {
+    let net_id = board.nets[i].id;
+    let via_r = board.layer_stack.via.pad_mm / 2.0;
+    let drill = board.layer_stack.via.drill_mm;
+    let clearance = board.config.min_spacing_mm;
+    let region = board.nets[i].plane_region;
+    let n_layers = board.layer_stack.layers.len();
+    let punch_gap = 2.0 * (via_r + 0.35) + 0.15;
+    let bw = board.config.outline.width();
+    let bh = board.config.outline.height();
+    let edge = board.config.edge_clearance_mm + via_r;
+    struct PadObs {
+        net: Option<NetId>,
+        cx: f64,
+        cy: f64,
+        hx: f64,
+        hy: f64,
+        drill_r: f64,
+    }
+    let mut pads: Vec<PadObs> = Vec::new();
+    for comp in &board.components {
+        let cos_t = comp.theta.cos();
+        let sin_t = comp.theta.sin();
+        let quarter =
+            ((comp.theta / std::f64::consts::FRAC_PI_2).round() as i64).rem_euclid(2);
+        for pin in &comp.pins {
+            if pin.unplaced {
+                continue;
+            }
+            let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
+            let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+            let (pw, ph, dr) = match &pin.pad {
+                Some(p) => (p.width_mm, p.height_mm, p.drill_mm.unwrap_or(0.0) / 2.0),
+                None => (0.5, 0.5, 0.0),
+            };
+            let (pw, ph) = if quarter == 1 { (ph, pw) } else { (pw, ph) };
+            pads.push(PadObs {
+                net: pin.net,
+                cx: gx,
+                cy: gy,
+                hx: pw / 2.0,
+                hy: ph / 2.0,
+                drill_r: dr,
+            });
+        }
+    }
+    let merged = output::kicad::merge_holes(output::kicad::plane_foreign_holes(
+        board,
+        final_routes,
+        net_id,
+    ));
+    // (site, soft victims, ring radius) — soft = every conflict is a
+    // non-plane track; anything touching pads, vias, plane copper, or
+    // our own net stays hard.
+    let mut cands: Vec<((f64, f64), Vec<usize>, f64)> = Vec::new();
+    for ring in 0..10 {
+        let r = 0.6 + ring as f64 * 0.35;
+        for k in 0..8 {
+            let ang = k as f64 * std::f64::consts::FRAC_PI_4;
+            let (x, y) = (px + r * ang.cos(), py + r * ang.sin());
+            if x < edge || y < edge || x > bw - edge || y > bh - edge {
+                continue;
+            }
+            if let Some((rx0, ry0, rx1, ry1)) = region {
+                if x < rx0 + via_r + 0.1
+                    || x > rx1 - via_r - 0.1
+                    || y < ry0 + via_r + 0.1
+                    || y > ry1 - via_r - 0.1
+                {
+                    continue;
+                }
+            }
+            if output::kicad::plane_swallows(board, &merged, x, y, via_r, region) {
+                continue;
+            }
+            let mut hard = false;
+            for p in &pads {
+                let same = p.net == Some(net_id);
+                if !same {
+                    let m = (via_r + clearance).max(drill / 2.0 + 0.25);
+                    if (x - p.cx).abs() < p.hx + m && (y - p.cy).abs() < p.hy + m {
+                        hard = true;
+                        break;
+                    }
+                }
+                if p.drill_r > 0.0
+                    && (x - p.cx).hypot(y - p.cy)
+                        < (p.drill_r + drill / 2.0 + 0.25).max(if same {
+                            0.0
+                        } else {
+                            (p.hx.max(p.hy) + 0.35) + (via_r + 0.35) + 0.1
+                        })
+                {
+                    hard = true;
+                    break;
+                }
+            }
+            if hard {
+                continue;
+            }
+            let mut soft: Vec<usize> = Vec::new();
+            'routes: for (j, r_) in final_routes.iter().enumerate() {
+                for v in &r_.vias {
+                    if (x - v.x).hypot(y - v.y) < punch_gap {
+                        hard = true;
+                        break 'routes;
+                    }
+                }
+                for sg in &r_.segments {
+                    let m = via_r + sg.width_mm / 2.0 + clearance;
+                    if geom::segment_point_too_close(sg.start, sg.end, (x, y), m) {
+                        if j == i || board.nets[j].plane_layer.is_some() {
+                            hard = true;
+                            break 'routes;
+                        }
+                        if !soft.contains(&j) {
+                            soft.push(j);
+                        }
+                    }
+                }
+            }
+            if hard || soft.is_empty() || soft.len() > 2 {
+                continue;
+            }
+            cands.push(((x, y), soft, r));
+        }
+    }
+    cands.sort_by(|a, b| {
+        (a.1.len(), a.2)
+            .partial_cmp(&(b.1.len(), b.2))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    'site: for (site, victims, _) in cands.into_iter().take(4) {
+        let (vx, vy) = site;
+        let snaps: Vec<(usize, Route)> = victims
+            .iter()
+            .map(|&vj| (vj, final_routes[vj].clone()))
+            .collect();
+        for &vj in &victims {
+            final_routes[vj] = Route::empty(final_routes[vj].net_id);
+        }
+        let drop_snap = final_routes[i].clone();
+        {
+            let idx = geom::ClearanceIndex::build(board, final_routes, Some(net_id));
+            if idx.via_conflict(vx, vy, via_r, net_id).is_some()
+                || idx
+                    .first_conflict((px, py), (vx, vy), share, stub_layer, net_id)
+                    .is_some()
+            {
+                for (vj, old) in snaps {
+                    final_routes[vj] = old;
+                }
+                continue 'site;
+            }
+        }
+        {
+            let route = &mut final_routes[i];
+            let seg_start = route.segments.len();
+            let via_start = route.vias.len();
+            route.segments.push(RouteSegment {
+                layer: stub_layer,
+                start: (px, py),
+                end: (vx, vy),
+                width_mm: share,
+            });
+            route.path_spans.push((seg_start, 1));
+            route.path_parents.push(None);
+            route.vias.push(RouteVia {
+                x: vx,
+                y: vy,
+                from_layer: 0,
+                to_layer: n_layers - 1,
+            });
+            route.via_spans.push((via_start, 1));
+        }
+        let mut all_ok = true;
+        for (k, &vj) in victims.iter().enumerate() {
+            let before =
+                pathfinder::unreached_sink_count(&board.nets[vj], board, &snaps[k].1);
+            let mut jgrid = RoutingGrid::build(board);
+            for (m, r_) in final_routes.iter().enumerate() {
+                if m != vj && !r_.is_empty() {
+                    pathfinder::block_route_geometry(&mut jgrid, r_, board);
+                }
+            }
+            let mut fresh = Route::empty(board.nets[vj].id);
+            pathfinder::extend_route(
+                &mut jgrid, &board.nets[vj], board, &mut fresh, 1.0, 1.0, &[], &[],
+                false, None,
+            );
+            {
+                let mut bans = Vec::new();
+                exact_commit_strip(board, final_routes, vj, &mut fresh, 0, &mut bans);
+            }
+            final_routes[vj] = fresh;
+            let after = pathfinder::unreached_sink_count(
+                &board.nets[vj],
+                board,
+                &final_routes[vj],
+            );
+            if after > before {
+                all_ok = false;
+                break;
+            }
+        }
+        if all_ok {
+            new_vias.push((vx, vy));
+            log::info!(
+                "plane via drop: victim-rip sited a '{}' drop at ({vx:.2},{vy:.2}) after ripping {} signal net(s)",
+                board.nets[i].name,
+                victims.len()
+            );
+            return true;
+        }
+        final_routes[i] = drop_snap;
+        for (vj, old) in snaps {
+            final_routes[vj] = old;
+        }
+    }
+    false
 }
 
 fn validate_and_rip(
