@@ -3948,13 +3948,17 @@ fn part_nudge_pass(board: &mut Board, final_routes: &mut Vec<Route>) -> usize {
         // machinery polices the move. (Landed only after drop siting
         // moved onto the exact kernel — the first landing shipped
         // vias through the PadObs snapshot's blind spots.)
-        let mut cand_dirs: Vec<(usize, Vec<(f64, f64)>)> = cands
+        // Trial = (dx, dy, dtheta): neighbors translate away; the
+        // self candidate also tries quarter ROTATIONS in place (a
+        // crystal's stuck pad often needs to FACE the TQFP row —
+        // translation alone cannot reorient it).
+        let mut cand_dirs: Vec<(usize, Vec<(f64, f64, f64)>)> = cands
             .iter()
             .map(|&(k, _)| {
                 let c = &board.components[k];
                 let (dx, dy) = (c.x - px, c.y - py);
                 let l = dx.hypot(dy).max(1e-6);
-                (k, vec![(dx / l, dy / l)])
+                (k, vec![(dx / l, dy / l, 0.0)])
             })
             .collect();
         if let Some(sk) = board.components.iter().position(|c| {
@@ -3968,14 +3972,34 @@ fn part_nudge_pass(board: &mut Board, final_routes: &mut Vec<Route>) -> usize {
                     (gx - px).hypot(gy - py) < 1e-6
                 })
         }) {
-            cand_dirs.push((sk, vec![(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)]));
+            cand_dirs.push((
+                sk,
+                vec![
+                    (1.0, 0.0, 0.0),
+                    (-1.0, 0.0, 0.0),
+                    (0.0, 1.0, 0.0),
+                    (0.0, -1.0, 0.0),
+                    (0.0, 0.0, std::f64::consts::FRAC_PI_2),
+                    (0.0, 0.0, -std::f64::consts::FRAC_PI_2),
+                ],
+            ));
         }
         'cand: for (k, dirs) in cand_dirs {
             for away in dirs {
             for step in [0.6f64, 1.2] {
+                // A rotation trial is position-invariant — one step
+                // suffices.
+                if away.2 != 0.0 && step > 0.6 {
+                    continue;
+                }
                 let (ox, oy) = (board.components[k].x, board.components[k].y);
+                let otheta = board.components[k].theta;
                 let (nx, ny) = (ox + away.0 * step, oy + away.1 * step);
+                if away.2 != 0.0 {
+                    board.components[k].theta = otheta + away.2;
+                }
                 if !crate::legalization::position_legal(board, k, nx, ny) {
+                    board.components[k].theta = otheta;
                     continue;
                 }
                 // position_legal checks component ENVELOPES only — the
@@ -4044,6 +4068,7 @@ fn part_nudge_pass(board: &mut Board, final_routes: &mut Vec<Route>) -> usize {
                         }
                     }
                     if pad_hits_copper {
+                        board.components[k].theta = otheta;
                         continue;
                     }
                 }
@@ -4146,8 +4171,13 @@ fn part_nudge_pass(board: &mut Board, final_routes: &mut Vec<Route>) -> usize {
                     break 'cand;
                 }
                 // Strict-win only: revert wholesale.
+                debug!(
+                    "nudge trial FAILED: '{}' dir ({:.1},{:.1},{:.2}) step {step:.1} for '{}': unreached {before} -> {after}",
+                    board.components[k].refdes, away.0, away.1, away.2, board.nets[ni].name
+                );
                 board.components[k].x = ox;
                 board.components[k].y = oy;
+                board.components[k].theta = otheta;
                 *final_routes = snap_routes;
             }
             }
