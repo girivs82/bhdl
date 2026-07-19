@@ -257,3 +257,38 @@ board ArduinoUnoR3 {
     RESET -> ICSP1.5;
     ICSP1.6 -> @GND;
 }
+
+// WIP (next arc — "real mechanical identity"): pinning the real
+// 68.58x53.34 outline + edge connectors currently trips THT-field
+// routing (hole_to_hole vs header pins, drop-via siting) — the
+// infra landed (PinHeader THT footprints, net-agnostic drill rules);
+// re-enable this block to resume the campaign.
+// layout ArduinoUnoR3 {
+//     // REAL Uno R3 mechanical identity: the official 68.58 x 53.34
+//     // outline with every connector pinned where the real board puts
+//     // it (y-down, origin at the top-left corner). This is the
+//     // realism contract: the router must reach edge-pinned connectors
+//     // exactly like on the shipping product — free placement of
+//     // connectors was hiding the hard part of the problem.
+//     outline rect 68.58 53.34;
+//     // Left edge: USB receptacle (top) and barrel jack (bottom).
+//     place J_USB at (5.6, 11.4) rot 270;
+//     place X1 at (7.0, 45.5) rot 270;
+//     // Top edge: the two digital shield headers (rows horizontal).
+//     place J_D2 at (28.9, 2.6) rot 90;
+//     place J_D1 at (53.3, 2.6) rot 90;
+//     // Bottom edge: power and analog shield headers.
+//     place J_PWR at (26.7, 50.7) rot 90;
+//     place J_AD at (49.5, 50.7) rot 90;
+//     // Right edge: main ICSP (vertical); the 16U2's ICSP lies flat by
+//     // the USB bridge.
+//     place ICSP1 at (64.9, 27.9);
+//     place ICSP2 at (27.5, 9.0) rot 90;
+//     // The two MCUs sit where the real board puts them: the 16U2 USB
+//     // bridge beside the receptacle, the 328P DIP mid-right with its
+//     // rows horizontal — pinning them is part of the same mechanical
+//     // identity, and it keeps the placer from wedging the DIP against
+//     // the pinned connector ring.
+//     place U3 at (17.0, 15.5);
+//     place U4 at (45.0, 26.0);
+// }

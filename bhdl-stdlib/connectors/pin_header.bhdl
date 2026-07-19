@@ -214,3 +214,53 @@ entity Pin_Header_02x18() {
     attribute connector_type  = "pin_header_dual";
     attribute kicad_symbol    = "Connector_Generic:Conn_02x18_Odd_Even";
 }
+
+// WIP ("real mechanical identity" campaign): real THT header
+// footprints expose hole_to_hole/THT-field routing work still in
+// flight — uncomment WITH the uno layout block to resume.
+// ── Real footprints: 0.1" THT headers (KiCad PinHeader geometry:
+// 1.0mm drill, 1.7mm pad). Without these the pin-count class default
+// dressed a 1x10 header as an IC package.
+// layout Pin_Header_01x02 {
+//     package PinHeader-1x02;
+// }
+
+// layout Pin_Header_01x03 {
+//     package PinHeader-1x03;
+// }
+
+// layout Pin_Header_01x04 {
+//     package PinHeader-1x04;
+// }
+
+// layout Pin_Header_01x06 {
+//     package PinHeader-1x06;
+// }
+
+// layout Pin_Header_01x08 {
+//     package PinHeader-1x08;
+// }
+
+// layout Pin_Header_01x10 {
+//     package PinHeader-1x10;
+// }
+
+// layout Pin_Header_02x02 {
+//     package PinHeader-2x02;
+// }
+
+// layout Pin_Header_02x03 {
+//     package PinHeader-2x03;
+// }
+
+// layout Pin_Header_01x15 {
+//     package PinHeader-1x15;
+// }
+
+// layout Pin_Header_01x17 {
+//     package PinHeader-1x17;
+// }
+
+// layout Pin_Header_02x18 {
+//     package PinHeader-2x18;
+// }

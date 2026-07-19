@@ -175,6 +175,9 @@ enum Item {
         /// claims the corner by r·(1−1/√2) — up to ~0.12mm on big
         /// pads, which rejected copper KiCad accepts.
         corner_r: f64,
+        /// Plated-hole radius (0 = SMD): hole-to-hole is a DRILL
+        /// rule and applies regardless of net.
+        drill_r: f64,
     },
 }
 
@@ -304,6 +307,12 @@ impl ClearanceIndex {
                     }
                     None => (0.5, 0.5, false, 0.0), // exporter fallback = rect
                 };
+                let drill_r = pin
+                    .pad
+                    .as_ref()
+                    .and_then(|p| p.drill_mm)
+                    .map(|d| d / 2.0)
+                    .unwrap_or(0.0);
                 let (pw, ph) = if quarter == 1 { (ph, pw) } else { (pw, ph) };
                 idx.insert_bbox(gx - pw, gy - ph, gx + pw, gy + ph);
                 idx.items.push(Item::Pad {
@@ -315,6 +324,7 @@ impl ClearanceIndex {
                     hx: pw / 2.0,
                     hy: ph / 2.0,
                     corner_r,
+                    drill_r,
                 });
             }
         }
@@ -414,7 +424,7 @@ impl ClearanceIndex {
                                 return Some(Conflict::Via { net: *n });
                             }
                         }
-                        Item::Pad { net: n, layer_top, layer_bot, cx, cy, hx, hy, corner_r } => {
+                        Item::Pad { net: n, layer_top, layer_bot, cx, cy, hx, hy, corner_r, .. } => {
                             if n.is_some() && *n == Some(net) {
                                 continue;
                             }
@@ -997,7 +1007,17 @@ impl ClearanceIndex {
                                 return Some(Conflict::Via { net: *n });
                             }
                         }
-                        Item::Pad { net: n, cx, cy, hx, hy, corner_r, .. } => {
+                        Item::Pad { net: n, cx, cy, hx, hy, corner_r, drill_r, .. } => {
+                            // Hole-to-hole is a DRILL rule — it binds
+                            // SAME-NET pairs too (a GND drop via beside
+                            // a GND header pin: 46 oracle items on the
+                            // real-outline uno's THT connector ring).
+                            if *drill_r > 0.0
+                                && (x - cx).hypot(y - cy)
+                                    < self.via_drill / 2.0 + drill_r + 0.25 - EPS
+                            {
+                                return Some(Conflict::Pad { net: *n, at: (*cx, *cy) });
+                            }
                             if n.is_some() && *n == Some(net) {
                                 continue;
                             }

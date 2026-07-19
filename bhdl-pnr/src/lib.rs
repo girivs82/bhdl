@@ -4424,7 +4424,13 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
     // keep trying the rest (an early return abandoned every pad after
     // the first stuck one).
     let mut failed: Vec<(f64, f64)> = Vec::new();
-    loop {
+    // Bounded: every legitimate pass either connects a pad (max
+    // pins) or marks one failed (max pins). Anything beyond that is
+    // a connect/break CYCLE — a later commit re-orphaning an earlier
+    // pad re-queues it forever (measured: the real-outline uno wedged
+    // a whole trial inside this loop, one ClearanceIndex build per
+    // spin). Deterministic cap; normal boards never approach it.
+    for _pass in 0..net.pins.len() * 2 + 4 {
         let route = &final_routes[i];
         if route.is_empty() {
             // Whole-net failure: seed a first pad-to-pad span, then
@@ -5116,6 +5122,7 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
             failed.push((px, py));
         }
     }
+    gained
 }
 
 /// Append an exact-routed escape polyline as one span.
@@ -6406,6 +6413,18 @@ fn validate_and_rip(
                         }
                     }
                     for p in &pad_rects {
+                        // hole_to_hole is a DRILL rule and binds
+                        // SAME-NET pairs too (a GND drop via beside a
+                        // GND header pin hole) — check before the
+                        // same-net skip.
+                        if p.drill_r > 0.0
+                            && (v.x - p.cx).hypot(v.y - p.cy)
+                                < p.drill_r + board.layer_stack.via.drill_mm / 2.0 + 0.25
+                        {
+                            bad = true;
+                            why = "tht-hole";
+                            break;
+                        }
                         if p.net == Some(net_id) {
                             continue;
                         }

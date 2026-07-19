@@ -111,6 +111,18 @@ pub enum PackageFamily {
         lead_span: f64,    // lead tip to tab back, mm
         pins: usize,       // lead pins (excluding tab)
     },
+    /// Through-hole pin header (Conn_01xN / Conn_02xN, 0.1" grid).
+    /// `wide` = pins per position (1 or 2 columns), `positions` = row
+    /// count. 01xN: one column, pin 1 at top. 02xN: two columns
+    /// 2.54mm apart, odd-even numbering per position (1,2 in the
+    /// first row, 3,4 in the second — the ICSP convention).
+    PinHeader {
+        wide: usize,
+        positions: usize,
+        pitch: f64,
+        drill: f64,
+        pad_dia: f64,
+    },
     /// Dual in-line through-hole (DIP / PDIP, JEDEC MS-001). Two rows of
     /// plated through-holes; pin 1 top-left, numbered down the left side
     /// then up the right (counter-clockwise, datasheet convention).
@@ -249,6 +261,43 @@ fn generate_chip(l: f64, w: f64, t: f64, tol: f64, level: DensityLevel) -> Compo
         body_width: l,
         body_height: w,
         pitch: None,
+        pads,
+    }
+}
+
+/// Through-hole pin header on the 0.1" grid (KiCad
+/// PinHeader_0NxMM_P2.54mm_Vertical geometry: 1.0mm drill, 1.7mm pad).
+fn generate_pin_header(
+    wide: usize,
+    positions: usize,
+    pitch: f64,
+    drill: f64,
+    pad_dia: f64,
+) -> ComponentFootprint {
+    let span = (positions as f64 - 1.0) * pitch;
+    let top = -span / 2.0;
+    let xoff = (wide as f64 - 1.0) * pitch / 2.0;
+    let mut pads = Vec::with_capacity(wide * positions);
+    for p in 0..positions {
+        for c in 0..wide {
+            let n = p * wide + c + 1;
+            pads.push(make_th_pad(
+                &n.to_string(),
+                -xoff + c as f64 * pitch,
+                top + p as f64 * pitch,
+                pad_dia,
+                drill,
+                n == 1,
+            ));
+        }
+    }
+    ComponentFootprint {
+        footprint_name: format!("PinHeader-{}x{:02}_P{:.2}mm", wide, positions, pitch),
+        svg_data: String::new(),
+        pad_count: (wide * positions) as u32,
+        body_width: wide as f64 * pitch,
+        body_height: span + pitch,
+        pitch: Some(pitch),
         pads,
     }
 }
@@ -632,6 +681,9 @@ fn generate_dpak(
 /// Generate an IPC-7351B compliant footprint for the given package family.
 pub fn generate_footprint(family: &PackageFamily, level: DensityLevel) -> ComponentFootprint {
     match family {
+        PackageFamily::PinHeader { wide, positions, pitch, drill, pad_dia } => {
+            generate_pin_header(*wide, *positions, *pitch, *drill, *pad_dia)
+        }
         PackageFamily::Chip { l, w, t, tol } => {
             generate_chip(*l, *w, *t, *tol, level)
         }
@@ -658,6 +710,23 @@ pub fn generate_footprint(family: &PackageFamily, level: DensityLevel) -> Compon
 /// Package names follow common industry conventions (imperial chip sizes,
 /// JEDEC outline designations).
 pub fn standard_package(name: &str) -> Option<PackageFamily> {
+    // PinHeader-1x06 / PinHeader-2x03 (any 1..=2 x 2..=40): 0.1" THT.
+    if let Some(rest) = name.strip_prefix("PinHeader-") {
+        let rest = rest.split('_').next().unwrap_or(rest);
+        if let Some((w, p)) = rest.split_once('x') {
+            if let (Ok(wide), Ok(positions)) = (w.parse::<usize>(), p.parse::<usize>()) {
+                if (1..=2).contains(&wide) && (2..=40).contains(&positions) {
+                    return Some(PackageFamily::PinHeader {
+                        wide,
+                        positions,
+                        pitch: 2.54,
+                        drill: 1.0,
+                        pad_dia: 1.7,
+                    });
+                }
+            }
+        }
+    }
     Some(match name {
         // ── EIA chip passives (imperial size codes) ──────────────────
         "0201" => PackageFamily::Chip { l: 0.60, w: 0.30, t: 0.15, tol: 0.05 },
