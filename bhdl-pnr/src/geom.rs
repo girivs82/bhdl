@@ -31,6 +31,14 @@ pub fn point_segment_dist(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
 
 /// True when point `p` is closer than `gap` (rule-exact) to segment `ab`.
 pub fn segment_point_too_close(a: (f64, f64), b: (f64, f64), p: (f64, f64), gap: f64) -> bool {
+    // Bbox early-out (exact-equivalent; see segments_too_close).
+    if p.0 < a.0.min(b.0) - gap
+        || p.0 > a.0.max(b.0) + gap
+        || p.1 < a.1.min(b.1) - gap
+        || p.1 > a.1.max(b.1) + gap
+    {
+        return false;
+    }
     point_segment_dist(p, a, b) < gap - EPS
 }
 
@@ -63,6 +71,17 @@ pub fn segments_too_close(
     d: (f64, f64),
     gap: f64,
 ) -> bool {
+    // Bbox early-out: if the boxes are separated by more than the gap
+    // on either axis, the exact distance can only be larger — exact-
+    // equivalent, and it skips the orient/hypot math for the vast
+    // majority of pairs (the validator sweeps all-vs-all).
+    if a.0.max(b.0) < c.0.min(d.0) - gap
+        || c.0.max(d.0) < a.0.min(b.0) - gap
+        || a.1.max(b.1) < c.1.min(d.1) - gap
+        || c.1.max(d.1) < a.1.min(b.1) - gap
+    {
+        return false;
+    }
     segment_segment_dist(a, b, c, d) < gap - EPS
 }
 
@@ -361,13 +380,17 @@ impl ClearanceIndex {
         let c1 = ((x1 / self.cell).ceil().max(0.0) as usize).min(self.cols - 1);
         let r0 = ((y0 / self.cell).floor().max(0.0) as usize).min(self.rows - 1);
         let r1 = ((y1 / self.cell).ceil().max(0.0) as usize).min(self.rows - 1);
-        let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        // Small linear dedupe: the ±2mm window touches a handful of
+        // buckets (dozens of ids) — a Vec scan beats a SipHash set at
+        // this size, and skips the per-query allocation churn.
+        let mut seen: Vec<u32> = Vec::with_capacity(64);
         for r in r0..=r1 {
             for c in c0..=c1 {
                 for &id in &self.buckets[r * self.cols + c] {
-                    if !seen.insert(id) {
+                    if seen.contains(&id) {
                         continue;
                     }
+                    seen.push(id);
                     match &self.items[id as usize] {
                         Item::Seg { net: n, layer: l, a: sa, b: sb, half: sh } => {
                             if *n == net || *l != layer {
@@ -938,13 +961,17 @@ impl ClearanceIndex {
         let c1 = (((x + 2.0) / self.cell).ceil().max(0.0) as usize).min(self.cols - 1);
         let r0 = (((y - 2.0) / self.cell).floor().max(0.0) as usize).min(self.rows - 1);
         let r1 = (((y + 2.0) / self.cell).ceil().max(0.0) as usize).min(self.rows - 1);
-        let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        // Small linear dedupe: the ±2mm window touches a handful of
+        // buckets (dozens of ids) — a Vec scan beats a SipHash set at
+        // this size, and skips the per-query allocation churn.
+        let mut seen: Vec<u32> = Vec::with_capacity(64);
         for row in r0..=r1 {
             for col in c0..=c1 {
                 for &id in &self.buckets[row * self.cols + col] {
-                    if !seen.insert(id) {
+                    if seen.contains(&id) {
                         continue;
                     }
+                    seen.push(id);
                     match &self.items[id as usize] {
                         Item::Seg { net: n, layer: l, a, b, half } => {
                             if *n == net {

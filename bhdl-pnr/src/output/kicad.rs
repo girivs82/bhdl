@@ -1997,31 +1997,31 @@ pub(crate) fn plane_swallows(
         Vec<(f64, f64, f64)>,
         Vec<(f64, f64, f64, f64)>,
     );
+    // Memo keyed by DIRECT input comparison (no hashing: SipHash over
+    // hundreds of holes per query showed up in profiles, and a weak
+    // fast hash risks silent geometry collisions — memcmp is exact
+    // AND cheaper).
+    type VoidsKey = (
+        [u64; 4],
+        Vec<(f64, f64, f64)>,
+        Vec<(f64, f64, f64, f64)>,
+    );
     thread_local! {
-        static VOIDS_MEMO: std::cell::RefCell<Option<(u64, Voids)>> =
+        static VOIDS_MEMO: std::cell::RefCell<Option<(VoidsKey, Voids)>> =
             const { std::cell::RefCell::new(None) };
     }
-    let key = {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        for v in [x0, y0, x1, y1] {
-            v.to_bits().hash(&mut h);
-        }
-        for &(a, b, c) in merged_holes {
-            (a.to_bits(), b.to_bits(), c.to_bits()).hash(&mut h);
-        }
-        for &(a, b, c, d) in &rects {
-            (a.to_bits(), b.to_bits(), c.to_bits(), d.to_bits()).hash(&mut h);
-        }
-        h.finish()
-    };
+    let bounds = [x0.to_bits(), y0.to_bits(), x1.to_bits(), y1.to_bits()];
     let (nb, nt, nr, nl, bays, interior, interior_rects) = VOIDS_MEMO.with(|m| {
         let mut m = m.borrow_mut();
         match m.as_ref() {
-            Some((k, v)) if *k == key => v.clone(),
+            Some(((kb, kh, kr), v))
+                if *kb == bounds && kh == merged_holes && kr == &rects =>
+            {
+                v.clone()
+            }
             _ => {
                 let v = classify_voids(x0, y0, x1, y1, merged_holes, &rects);
-                *m = Some((key, v.clone()));
+                *m = Some(((bounds, merged_holes.to_vec(), rects.clone()), v.clone()));
                 v
             }
         }
