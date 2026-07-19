@@ -1069,6 +1069,44 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                     own_pads.push((gx, gy, pw / 2.0, ph / 2.0));
                 }
             }
+            // LAYER-AWARE pad list: a THT barrel (layer None) anchors
+            // on any copper layer, an SMD pad only on its surface —
+            // KiCad's actual pad-connect semantics. own_pads above is
+            // layer-blind and stays that way for the passes tuned on
+            // it; passes judging KiCad dangle-ness use this one (uno
+            // s7: an In3 track tip inside an F.Cu SMD pad's XY rect
+            // was called "anchored" and shipped as track_dangling).
+            let last_cu = board.layer_stack.layers.len().saturating_sub(1);
+            let mut pads_l: Vec<(f64, f64, f64, f64, Option<usize>)> = Vec::new();
+            for comp in &board.components {
+                let cos_t = comp.theta.cos();
+                let sin_t = comp.theta.sin();
+                let quarter = ((comp.theta / std::f64::consts::FRAC_PI_2).round() as i64)
+                    .rem_euclid(2);
+                let surf = match comp.side {
+                    BoardSide::Top => 0usize,
+                    BoardSide::Bottom => last_cu,
+                };
+                for pin in &comp.pins {
+                    if pin.net != Some(board.nets[i].id) || pin.unplaced {
+                        continue;
+                    }
+                    let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
+                    let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+                    let (pw, ph, tht) = match &pin.pad {
+                        Some(p) => (p.width_mm, p.height_mm, p.drill_mm.is_some()),
+                        None => (0.5, 0.5, false),
+                    };
+                    let (pw, ph) = if quarter == 1 { (ph, pw) } else { (pw, ph) };
+                    pads_l.push((
+                        gx,
+                        gy,
+                        pw / 2.0,
+                        ph / 2.0,
+                        if tht { None } else { Some(surf) },
+                    ));
+                }
+            }
             if std::env::var("BHDL_PNR_DEBUG_NETS")
                 .map(|v| board.nets[i].name.contains(&v))
                 .unwrap_or(false)
@@ -1547,8 +1585,12 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                         let _ = dir;
                         true
                     }) || r.vias.iter().any(|v| (v.x - e.0).hypot(v.y - e.1) <= via_r)
-                        || own_pads.iter().any(|&(cx, cy, hx, hy)| {
-                            (e.0 - cx).abs() <= hx && (e.1 - cy).abs() <= hy
+                        // Layer-aware: an SMD pad only anchors a track
+                        // ON its surface layer (THT = any layer).
+                        || pads_l.iter().any(|&(cx, cy, hx, hy, pl_)| {
+                            pl_.map_or(true, |l| l == layer)
+                                && (e.0 - cx).abs() <= hx
+                                && (e.1 - cy).abs() <= hy
                         })
                 };
                 let mut cut: Option<(usize, bool)> = None; // (span, from_back)
@@ -1569,11 +1611,22 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                     }
                     let fdir = (front.end.0 - front.start.0, front.end.1 - front.start.1);
                     let bdir = (back.end.0 - back.start.0, back.end.1 - back.start.1);
-                    if seg_len(&front) <= 1.5 && !anchored(front.start, front.layer, fdir, ps) {
+                    // Length cap only for PLANE nets, whose track ends
+                    // may terminate inside a fill this segment scan
+                    // cannot see. Signal-net dangles have no such
+                    // rescue — a 1.76mm stranded spur leg (uno s7,
+                    // free MCU placement) sat just past the old
+                    // universal 1.5 cap and shipped as track_dangling.
+                    let cap = if board.nets[i].plane_layer.is_some() {
+                        1.5
+                    } else {
+                        f64::INFINITY
+                    };
+                    if seg_len(&front) <= cap && !anchored(front.start, front.layer, fdir, ps) {
                         cut = Some((si, false));
                         break 'scan;
                     }
-                    if seg_len(&back) <= 1.5 && !anchored(back.end, back.layer, bdir, ps + pl - 1) {
+                    if seg_len(&back) <= cap && !anchored(back.end, back.layer, bdir, ps + pl - 1) {
                         cut = Some((si, true));
                         break 'scan;
                     }
@@ -1704,9 +1757,129 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                 break;
             }
             }
+            // ORPHAN ISLANDS: fragments that anchor EACH OTHER pass
+            // every per-end test yet the group as a whole touches no
+            // pad — copper attached to nothing (uno s7 free-MCU: a
+            // 0.2375mm + 0.30mm RESET pair 0.04mm apart). Judge
+            // connectivity at the COMPONENT level: spans connect via
+            // same-layer endpoint/body contact or a shared via;
+            // components with no own-pad contact are deleted whole.
+            // Plane nets exempt — their components bond to fills this
+            // scan cannot see.
+            if board.nets[i].plane_layer.is_none() {
+                let r = &final_routes[i];
+                let ns = r.path_spans.len();
+                if ns > 0 {
+                    let mut comp: Vec<usize> = (0..ns).collect();
+                    fn find(c: &mut Vec<usize>, x: usize) -> usize {
+                        let mut x = x;
+                        while c[x] != x {
+                            c[x] = c[c[x]];
+                            x = c[x];
+                        }
+                        x
+                    }
+                    // EXACT contact, matching KiCad's nm-exact
+                    // endpoint graph: the weld + T-split passes have
+                    // already normalized every true junction to exact
+                    // coordinates, so anything still 0.001-0.05 apart
+                    // is NOT connected on the shipped board — a
+                    // tolerant test here would bridge near-miss
+                    // fragments onto the padded tree and hide them.
+                    let touches = |&(ps, pl): &(usize, usize),
+                                   &(qs, ql): &(usize, usize)|
+                     -> bool {
+                        for a in &r.segments[ps..ps + pl] {
+                            for b in &r.segments[qs..qs + ql] {
+                                if a.layer != b.layer {
+                                    continue;
+                                }
+                                for e in [a.start, a.end] {
+                                    if geom::point_segment_dist(e, b.start, b.end) <= 1e-6 {
+                                        return true;
+                                    }
+                                }
+                                for e in [b.start, b.end] {
+                                    if geom::point_segment_dist(e, a.start, a.end) <= 1e-6 {
+                                        return true;
+                                    }
+                                }
+                            }
+                        }
+                        false
+                    };
+                    let via_touches = |&(ps, pl): &(usize, usize), v: &RouteVia| -> bool {
+                        r.segments[ps..ps + pl].iter().any(|sg| {
+                            geom::point_segment_dist((v.x, v.y), sg.start, sg.end)
+                                <= via_r + sg.width_mm / 2.0
+                        })
+                    };
+                    for a in 0..ns {
+                        for b in (a + 1)..ns {
+                            if find(&mut comp, a) != find(&mut comp, b)
+                                && (touches(&r.path_spans[a], &r.path_spans[b])
+                                    || r.vias.iter().any(|v| {
+                                        via_touches(&r.path_spans[a], v)
+                                            && via_touches(&r.path_spans[b], v)
+                                    }))
+                            {
+                                let (ra, rb) = (find(&mut comp, a), find(&mut comp, b));
+                                comp[ra] = rb;
+                            }
+                        }
+                    }
+                    let mut root_has_pad = vec![false; ns];
+                    for a in 0..ns {
+                        let (ps, pl) = r.path_spans[a];
+                        let hit = r.segments[ps..ps + pl].iter().any(|sg| {
+                            [sg.start, sg.end].iter().any(|e| {
+                                pads_l.iter().any(|&(cx, cy, hx, hy, layer)| {
+                                    layer.map_or(true, |l| l == sg.layer)
+                                        && (e.0 - cx).abs() <= hx
+                                        && (e.1 - cy).abs() <= hy
+                                })
+                            })
+                        });
+                        if hit {
+                            let ra = find(&mut comp, a);
+                            root_has_pad[ra] = true;
+                        }
+                    }
+                    let doomed: Vec<bool> = (0..ns)
+                        .map(|a| {
+                            let ra = find(&mut comp, a);
+                            !root_has_pad[ra] && r.path_spans[a].1 > 0
+                        })
+                        .collect();
+                    if doomed.iter().any(|&d| d) {
+                        pruned += doomed.iter().filter(|&&d| d).count();
+                        strip_route_spans(&mut final_routes[i], &doomed);
+                    }
+                }
+            }
         }
         if pruned > 0 {
             info!("final orphan sweep: {pruned} stranded fragment(s) pruned");
+        }
+        for i in 0..board.nets.len() {
+            if std::env::var("BHDL_PNR_DEBUG_NETS")
+                .map(|v| board.nets[i].name.contains(&v))
+                .unwrap_or(false)
+            {
+                let r = &final_routes[i];
+                for (si, &(ps, pl)) in r.path_spans.iter().enumerate() {
+                    log::info!("[sweep2] '{}' span {si} pl={pl}", board.nets[i].name);
+                    for sg in &r.segments[ps..ps + pl] {
+                        log::info!(
+                            "[sweep2]   l{} ({:.4},{:.4})->({:.4},{:.4})",
+                            sg.layer, sg.start.0, sg.start.1, sg.end.0, sg.end.1
+                        );
+                    }
+                }
+                for v in &r.vias {
+                    log::info!("[sweep2]   via ({:.4},{:.4})", v.x, v.y);
+                }
+            }
         }
     }
 
