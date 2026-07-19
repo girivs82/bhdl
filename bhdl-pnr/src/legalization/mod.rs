@@ -56,6 +56,36 @@ pub fn legalize(board: &mut Board, snap_grid_mm: f64) {
             }
         }
 
+        // Cutouts are Edge.Cuts: copper must clear them by the full
+        // edge-clearance rule, so envelopes must too (the bare keepout
+        // rect let pads sit 0.12mm from the routed slot — measured on
+        // the dense poly fixture as copper_edge_clearance).
+        {
+            let ec = board.config.edge_clearance_mm;
+            let cuts: Vec<(f64, f64, f64, f64)> = board
+                .config
+                .cutouts
+                .iter()
+                .map(|&(x0, y0, x1, y1)| (x0 - ec, y0 - ec, x1 + ec, y1 + ec))
+                .collect();
+            for comp in board.components.iter_mut() {
+                if comp.placement.is_fixed() {
+                    continue;
+                }
+                for &(x0, y0, x1, y1) in &cuts {
+                    let shape = ZoneShape::Rectangle {
+                        x: x0,
+                        y: y0,
+                        w: x1 - x0,
+                        h: y1 - y0,
+                    };
+                    if envelope_overlaps_shape(comp, &shape) {
+                        push_out_of_shape(comp, &shape);
+                    }
+                }
+            }
+        }
+
         // Enforce mounting hole clearance
         for comp in board.components.iter_mut() {
             if comp.placement.is_fixed() { continue; }
@@ -133,7 +163,7 @@ pub fn legalize(board: &mut Board, snap_grid_mm: f64) {
                     let ok = corners.iter().all(|&(x, y)| {
                         board.config.outline.contains(x, y)
                             && crate::routing::grid::polygon_edge_distance(&pts, x, y)
-                                >= ec * 0.5
+                                >= ec
                     });
                     if ok {
                         break;
@@ -234,7 +264,7 @@ pub(crate) fn position_legal(board: &Board, i: usize, x: f64, y: f64) -> bool {
         ];
         if !corners.iter().all(|&(px, py)| {
             board.config.outline.contains(px, py)
-                && crate::routing::grid::polygon_edge_distance(pts, px, py) >= ec * 0.5
+                && crate::routing::grid::polygon_edge_distance(pts, px, py) >= ec
         }) {
             return false;
         }
@@ -245,6 +275,14 @@ pub(crate) fn position_legal(board: &Board, i: usize, x: f64, y: f64) -> bool {
         }
         let (ocx, ocy, ohw, ohh) = other.envelope();
         if (ocx - ecx).abs() < hw + ohw + 0.5 && (ocy - ecy).abs() < hh + ohh + 0.5 {
+            return false;
+        }
+    }
+    // Cutouts are Edge.Cuts: the envelope must clear them by the full
+    // edge-clearance rule (pads live at the envelope boundary).
+    for &(cx0, cy0, cx1, cy1) in &board.config.cutouts {
+        if ecx + hw > cx0 - ec && ecx - hw < cx1 + ec && ecy + hh > cy0 - ec && ecy - hh < cy1 + ec
+        {
             return false;
         }
     }

@@ -1,0 +1,75 @@
+// DENSE polygon-outline fixture: an LQFP-48 placed near the inner
+// corner of an L-shaped 4-layer board, with resistor loads fanning
+// out of the pin rows. The sparse poly fixture (test_poly_planes)
+// never exercises the poly fill path's hole classification under a
+// real via field — this board pushes drop vias and signal vias
+// against the outline notch edges where the v1 path's hazards live
+// (octagon-vertex crossing, sub-clearance webs, notch-overlap
+// slit walks).
+
+import { STM32F103Cx } from "bhdl-stdlib/actives/stm32f103cx.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+board PolyDense {
+    power VDD = 3.3V @ 100mA;
+    ground GND;
+
+    mcu: STM32F103Cx();
+
+    @VDD -> mcu.VDD_1;
+    @VDD -> mcu.VDD_2;
+    @VDD -> mcu.VDD_3;
+    @VDD -> mcu.VDDA;
+    mcu.VSS_1 -> @GND;
+    mcu.VSS_2 -> @GND;
+    mcu.VSS_3 -> @GND;
+    mcu.VSSA  -> @GND;
+    mcu.VBAT  -> @VDD;
+
+    // I2C bus (pullups fire).
+    mcu.PB6 -> @SCL_BUS;
+    mcu.PB7 -> @SDA_BUS;
+
+    // Decoupling row.
+    @VDD -> c1: Cap(100nF).1;
+    c1.2 -> @GND;
+    @VDD -> c2: Cap(100nF).1;
+    c2.2 -> @GND;
+    @VDD -> c3: Cap(100nF).1;
+    c3.2 -> @GND;
+    @VDD -> c4: Cap(4.7uF).1;
+    c4.2 -> @GND;
+
+    // Resistor loads off the pin rows — force signal routing + vias
+    // in the region between the LQFP and the outline notch.
+    mcu.PA0 -> r0: Res(1k).1;
+    r0.2 -> @GND;
+    mcu.PA1 -> r1: Res(1k).1;
+    r1.2 -> @GND;
+    mcu.PA2 -> r2: Res(2.2k).1;
+    r2.2 -> @GND;
+    mcu.PA3 -> r3: Res(2.2k).1;
+    r3.2 -> @GND;
+    mcu.PB0 -> r4: Res(4.7k).1;
+    r4.2 -> @GND;
+    mcu.PB1 -> r5: Res(4.7k).1;
+    r5.2 -> @GND;
+    mcu.PA8 -> r6: Res(10k).1;
+    r6.2 -> @VDD;
+    mcu.PA9 -> r7: Res(10k).1;
+    r7.2 -> @VDD;
+}
+
+layout PolyDense {
+    layer_stackup 4;
+    // L-shape: 50x50 with the (34..50, 32..50) corner cut away — the
+    // MCU sits just inside the inner corner so its escape/via field
+    // presses against both notch edges.
+    outline polygon (0,0) (50,0) (50,32) (34,32) (34,50) (0,50);
+    place mcu at (28, 25);
+    // Slot near the fill interior plus a near-edge aperture: both
+    // fill-punch classes active on the same board.
+    cutout rect (8, 30) (18, 32);
+    mounting_hole (44, 6) drill 3.2 keepout 2.0;
+}

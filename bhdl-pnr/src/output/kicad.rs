@@ -749,27 +749,51 @@ fn fracture_fill_poly(
         }
         // ins == 0: entirely outside the fill — nothing to punch.
     }
-    let rects = interior_cut_rects;
-    let holes = merge_holes(
-        holes_in
-            .iter()
-            .copied()
-            .filter(|&(cx, cy, r)| {
-                point_in_poly(boundary, cx, cy)
-                    || poly_edge_distance(boundary, cx, cy) < r + 0.05
-            })
-            .collect(),
-    );
+    let mut rects = interior_cut_rects;
+    // Circles overlapping an interior cutout rect ABSORB into a grown
+    // rect (rect-path parity): emitting them as separate rings makes
+    // the slit weave self-intersect and KiCad's normalization
+    // re-fills the overlap — measured on the dense poly fixture as a
+    // via at 0.17mm from the fill (zone clearance 0.3).
+    let mut circle_holes: Vec<(f64, f64, f64)> = Vec::new();
+    'circles: for &(cx, cy, r) in holes_in {
+        if !(point_in_poly(boundary, cx, cy)
+            || poly_edge_distance(boundary, cx, cy) < r + 0.05)
+        {
+            continue;
+        }
+        for rect in rects.iter_mut() {
+            let (rx0, ry0, rx1, ry1) = *rect;
+            let nx = cx.clamp(rx0, rx1);
+            let ny = cy.clamp(ry0, ry1);
+            if (cx - nx).hypot(cy - ny) < r {
+                *rect = (
+                    rx0.min(cx - r),
+                    ry0.min(cy - r),
+                    rx1.max(cx + r),
+                    ry1.max(cy + r),
+                );
+                continue 'circles;
+            }
+        }
+        circle_holes.push((cx, cy, r));
+    }
+    let holes = merge_holes(circle_holes);
     let slack = 0.05;
     let nb = boundary.len();
     // Per-edge notches: (t_enter, t_exit, depth) in edge-travel order.
     let mut edge_notches: Vec<Vec<(f64, f64, f64)>> = vec![Vec::new(); nb];
     let mut interior: Vec<(f64, f64, f64)> = Vec::new();
     'holes: for &(cx, cy, r) in &holes {
+        // Crossing judged by the EMITTED octagon circumradius
+        // (r/cos22.5) — rect-path parity: a ring interior by r can
+        // still poke its octagon vertex past the boundary, lose its
+        // slit ray, and take its parent chain of holes with it.
+        let rc = r / (std::f64::consts::PI / 8.0).cos();
         for e in 0..nb {
             let a = boundary[e];
             let b = boundary[(e + 1) % nb];
-            if dist_point_segment((cx, cy), a, b) < r + slack {
+            if dist_point_segment((cx, cy), a, b) < rc + slack {
                 // Clamp hole span to the edge segment, depth = far side
                 // of the hole measured along the inward normal.
                 let (dx, dy) = (b.0 - a.0, b.1 - a.1);
@@ -882,10 +906,24 @@ fn fracture_fill_poly(
             poly.push(pb);
         }
     }
-    let mut rings: Vec<RingKind> = interior
-        .into_iter()
-        .map(|(cx, cy, r)| RingKind::Circle { cx, cy, r })
+    // Interior circles become octagons hull-merged at the 0.30 web
+    // (rect-path parity): near-touching rings punched separately
+    // leave a sub-clearance copper web between them.
+    let mut poly_rings: Vec<Vec<(f64, f64)>> = interior
+        .iter()
+        .map(|&(cx, cy, r)| {
+            let rr = r / (std::f64::consts::PI / 8.0).cos();
+            (0..8)
+                .map(|q| {
+                    let ang = -(q as f64) * std::f64::consts::FRAC_PI_4;
+                    (cx + rr * ang.cos(), cy + rr * ang.sin())
+                })
+                .collect()
+        })
         .collect();
+    hull_merge_close_rings(&mut poly_rings, 0.30);
+    let mut rings: Vec<RingKind> =
+        poly_rings.into_iter().map(RingKind::Poly).collect();
     rings.extend(
         rects
             .into_iter()
@@ -1957,9 +1995,30 @@ pub(crate) fn plane_swallows(
     if x - via_r < x0 || x + via_r > x1 || y - via_r < y0 || y + via_r > y1 {
         return true;
     }
-    // Interior cutout rects: a via whose disc overlaps the inflated
-    // aperture has no plane copper there.
-    for &(cx0, cy0, cx1, cy1) in &plane_cutout_rects(board) {
+    // Interior cutout rects — GROWN by circle absorption exactly as
+    // the fracture grows them (a hole overlapping a cutout rect
+    // absorbs into it; the emitted void is the grown rect, and a via
+    // verified against the ungrown rect dangles inside the growth).
+    let mut grown_rects = plane_cutout_rects(board);
+    let mut free_holes: Vec<(f64, f64, f64)> = Vec::new();
+    'gh: for &(cx, cy, r) in merged_holes {
+        for rect in grown_rects.iter_mut() {
+            let (rx0, ry0, rx1, ry1) = *rect;
+            let nx = cx.clamp(rx0, rx1);
+            let ny = cy.clamp(ry0, ry1);
+            if (cx - nx).hypot(cy - ny) < r {
+                *rect = (
+                    rx0.min(cx - r),
+                    ry0.min(cy - r),
+                    rx1.max(cx + r),
+                    ry1.max(cy + r),
+                );
+                continue 'gh;
+            }
+        }
+        free_holes.push((cx, cy, r));
+    }
+    for &(cx0, cy0, cx1, cy1) in &grown_rects {
         if x + via_r > cx0 && x - via_r < cx1 && y + via_r > cy0 && y - via_r < cy1 {
             return true;
         }
@@ -1983,7 +2042,8 @@ pub(crate) fn plane_swallows(
     // build (grown/merged notch boxes, bays, interior rings, rects) —
     // the old per-circle notch approximation missed absorption-grown
     // boxes entirely (via_dangling inside a 15mm notch).
-    let rects = plane_cutout_rects(board);
+    let rects = grown_rects;
+    let merged_holes: &[(f64, f64, f64)] = &free_holes;
     // classify_voids runs an absorb-or-bay fixpoint — far too heavy
     // per site query (drop/rescue loops probe hundreds of sites
     // against ONE hole set; uncached it timed out uno s13). One-entry

@@ -102,8 +102,20 @@ fn is_legal(board: &Board, k: usize) -> bool {
         ];
         if corners.iter().any(|&(x, y)| {
             !board.config.outline.contains(x, y)
-                || crate::routing::grid::polygon_edge_distance(pts, x, y) < ec * 0.5
+                || crate::routing::grid::polygon_edge_distance(pts, x, y) < ec
         }) {
+            return false;
+        }
+    }
+    // Cutouts are Edge.Cuts: the envelope must clear them by the full
+    // edge-clearance rule (refinement moved a resistor's pad to
+    // 0.27mm from a routed slot — every mover needs this check).
+    for &(cx0, cy0, cx1, cy1) in &board.config.cutouts {
+        if cxk + hwk > cx0 - ec
+            && cxk - hwk < cx1 + ec
+            && cyk + hhk > cy0 - ec
+            && cyk - hhk < cy1 + ec
+        {
             return false;
         }
     }
