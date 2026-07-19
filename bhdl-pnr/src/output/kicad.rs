@@ -397,15 +397,43 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
             None => (m, m, w - m, h - m),
         };
         let cutout_rects = plane_cutout_rects(board);
-        let pts = match &poly_boundary {
-            Some(b) => fracture_fill_poly(b, &holes, &cutout_rects),
-            None => fracture_fill(fx0, fy0, fx1, fy1, &holes, &cutout_rects),
-        };
-        out.push_str(&format!("    (filled_polygon (layer \"{}\") (pts\n", layer_name));
-        for (x, y) in &pts {
-            out.push_str(&format!("      (xy {x} {y})\n"));
+        // The void engine may sever a fill into several copper
+        // components (a full-height cut, a via wall) — emit one
+        // filled_polygon per component; KiCad zones accept many. A
+        // component with NO same-net barrel (drop via or THT pad)
+        // would be an isolated island: dropped, like KiCad's own
+        // island removal.
+        let mut anchors: Vec<(f64, f64)> = Vec::new();
+        if let Some(r) = routes.get(ni) {
+            for v in &r.vias {
+                anchors.push((v.x, v.y));
+            }
         }
-        out.push_str("    ))\n");
+        for comp in &board.components {
+            let cos_t = comp.theta.cos();
+            let sin_t = comp.theta.sin();
+            for pin in &comp.pins {
+                if pin.net == Some(net.id)
+                    && pin.pad.as_ref().and_then(|p| p.drill_mm).is_some()
+                {
+                    anchors.push((
+                        comp.x + pin.dx * cos_t - pin.dy * sin_t,
+                        comp.y + pin.dx * sin_t + pin.dy * cos_t,
+                    ));
+                }
+            }
+        }
+        let polys = match &poly_boundary {
+            Some(b) => vec![fracture_fill_poly(b, &holes, &cutout_rects)],
+            None => fracture_fill(fx0, fy0, fx1, fy1, &holes, &cutout_rects, &anchors),
+        };
+        for pts in &polys {
+            out.push_str(&format!("    (filled_polygon (layer \"{}\") (pts\n", layer_name));
+            for (x, y) in pts {
+                out.push_str(&format!("      (xy {x} {y})\n"));
+            }
+            out.push_str("    ))\n");
+        }
         out.push_str("  )\n");
     }
 
@@ -1585,224 +1613,340 @@ pub(crate) fn union_rings(
     out
 }
 
+
+/// ONE VOID ENGINE (rect fills): rasterize COPPER = fill rect minus
+/// every void (punch circles at octagon+web reach, cutout rects), no
+/// boundary clamping — voids may erase copper right through the fill
+/// edge, which is what notches and bays used to approximate. A
+/// morphological OPEN removes copper slivers thinner than the web.
+/// Each connected copper component traces to one OUTER loop (the
+/// outline with every boundary detour built in) plus INNER loops
+/// (the holes), which keyhole-punch into the outline. Emission is
+/// one polygon per copper component.
+///
+/// This deletes the notch/bay/absorb/ring interplay whose pairwise
+/// interactions produced every fill defect of the THT campaign; the
+/// swallow model shares the SAME raster (fill_copper_grid), so model
+/// and emission cannot diverge.
+const VOID_CELL: f64 = 0.05;
+
+/// The shared copper raster. Returns (cells, cols, rows) where a
+/// true cell is copper. Deterministic; row-major.
+pub(crate) fn fill_copper_grid(
+    x0: f64,
+    y0: f64,
+    x1: f64,
+    y1: f64,
+    holes: &[(f64, f64, f64)],
+    rects: &[(f64, f64, f64, f64)],
+) -> (Vec<bool>, usize, usize) {
+    let c225 = (std::f64::consts::PI / 8.0).cos();
+    let cols = (((x1 - x0) / VOID_CELL).ceil() as usize).max(1);
+    let rows = (((y1 - y0) / VOID_CELL).ceil() as usize).max(1);
+    let idx = |r: usize, c: usize| r * cols + c;
+    let cx_of = |c: usize| x0 + (c as f64 + 0.5) * VOID_CELL;
+    let cy_of = |r: usize| y0 + (r as f64 + 0.5) * VOID_CELL;
+    let mut copper = vec![true; rows * cols];
+    // Void circles: octagon circumradius + half the 0.30 web rule, so
+    // sub-web gaps between neighboring punches merge; + raster cover.
+    for &(hx, hy, hr) in holes {
+        let rr = hr / c225 + 0.15 + VOID_CELL * 0.75;
+        if hx + rr < x0 || hx - rr > x1 || hy + rr < y0 || hy - rr > y1 {
+            continue;
+        }
+        let ca = (((hx - rr - x0) / VOID_CELL).floor().max(0.0) as usize).min(cols - 1);
+        let cb = (((hx + rr - x0) / VOID_CELL).ceil().max(0.0) as usize).min(cols - 1);
+        let ra = (((hy - rr - y0) / VOID_CELL).floor().max(0.0) as usize).min(rows - 1);
+        let rb = (((hy + rr - y0) / VOID_CELL).ceil().max(0.0) as usize).min(rows - 1);
+        for r in ra..=rb {
+            for c in ca..=cb {
+                if (cx_of(c) - hx).hypot(cy_of(r) - hy) <= rr {
+                    copper[idx(r, c)] = false;
+                }
+            }
+        }
+    }
+    // Void rects (cutout apertures, pre-inflated by the caller).
+    for &(rx0, ry0, rx1, ry1) in rects {
+        if rx1 < x0 || rx0 > x1 || ry1 < y0 || ry0 > y1 {
+            continue;
+        }
+        let ca = (((rx0 - x0) / VOID_CELL).floor().max(0.0) as usize).min(cols - 1);
+        let cb = (((rx1 - x0) / VOID_CELL).ceil().max(0.0) as usize).min(cols - 1);
+        let ra = (((ry0 - y0) / VOID_CELL).floor().max(0.0) as usize).min(rows - 1);
+        let rb = (((ry1 - y0) / VOID_CELL).ceil().max(0.0) as usize).min(rows - 1);
+        for r in ra..=rb {
+            for c in ca..=cb {
+                let (px, py) = (cx_of(c), cy_of(r));
+                if px >= rx0 && px <= rx1 && py >= ry0 && py <= ry1 {
+                    copper[idx(r, c)] = false;
+                }
+            }
+        }
+    }
+    // Morphological OPEN (erode then dilate, radius 3 cells =
+    // 0.15mm): removes copper slivers thinner than ~0.3mm — matching
+    // the zone's 0.25 min_thickness rule with margin (k=2 left a
+    // 0.22mm sliver standing on the real-uno) — without moving bulk
+    // copper edges more than one cell.
+    let k = 3i64;
+    let mut eroded = vec![false; rows * cols];
+    for r in 0..rows {
+        'cell: for c in 0..cols {
+            if !copper[idx(r, c)] {
+                continue;
+            }
+            for dr in -k..=k {
+                for dc in -k..=k {
+                    let (nr, nc) = (r as i64 + dr, c as i64 + dc);
+                    if nr < 0 || nc < 0 || nr >= rows as i64 || nc >= cols as i64 {
+                        continue 'cell; // touching the rect edge is fine
+                    }
+                    if !copper[idx(nr as usize, nc as usize)] {
+                        continue 'cell;
+                    }
+                }
+            }
+            eroded[idx(r, c)] = true;
+        }
+    }
+    let mut opened = vec![false; rows * cols];
+    for r in 0..rows {
+        for c in 0..cols {
+            if !eroded[idx(r, c)] {
+                continue;
+            }
+            for dr in -k..=k {
+                for dc in -k..=k {
+                    let (nr, nc) = (r as i64 + dr, c as i64 + dc);
+                    if nr >= 0 && nc >= 0 && (nr as usize) < rows && (nc as usize) < cols
+                    {
+                        opened[idx(nr as usize, nc as usize)] = true;
+                    }
+                }
+            }
+        }
+    }
+    // Never re-create copper inside a void: intersect with original.
+    for i in 0..rows * cols {
+        opened[i] = opened[i] && copper[i];
+    }
+    (opened, cols, rows)
+}
+
+/// Trace every boundary loop of one labeled component (edges between
+/// the component and anything else), direction-aware at pinches.
+fn trace_loops(
+    label: &[u32],
+    comp: u32,
+    cols: usize,
+    rows: usize,
+) -> Vec<Vec<(u32, u32)>> {
+    use std::collections::BTreeMap;
+    let at = |r: usize, c: usize| label[r * cols + c] == comp;
+    let mut edges: Vec<((u32, u32), (u32, u32))> = Vec::new();
+    for r in 0..rows {
+        for c in 0..cols {
+            if !at(r, c) {
+                continue;
+            }
+            let (r32, c32) = (r as u32, c as u32);
+            if r == 0 || !at(r - 1, c) {
+                edges.push(((c32, r32), (c32 + 1, r32)));
+            }
+            if r + 1 >= rows || !at(r + 1, c) {
+                edges.push(((c32 + 1, r32 + 1), (c32, r32 + 1)));
+            }
+            if c == 0 || !at(r, c - 1) {
+                edges.push(((c32, r32 + 1), (c32, r32)));
+            }
+            if c + 1 >= cols || !at(r, c + 1) {
+                edges.push(((c32 + 1, r32), (c32 + 1, r32 + 1)));
+            }
+        }
+    }
+    let mut edges_left: BTreeMap<(u32, u32), Vec<(u32, u32)>> = BTreeMap::new();
+    for (f, t) in edges {
+        edges_left.entry(f).or_default().push(t);
+    }
+    for v in edges_left.values_mut() {
+        v.sort();
+    }
+    let mut loops: Vec<Vec<(u32, u32)>> = Vec::new();
+    loop {
+        let Some((&start, _)) = edges_left.iter().find(|(_, v)| !v.is_empty()) else {
+            break;
+        };
+        let mut walk = vec![start];
+        let mut cur = start;
+        let mut dir: Option<(i64, i64)> = None;
+        loop {
+            let Some(cands) = edges_left.get_mut(&cur) else { break };
+            if cands.is_empty() {
+                break;
+            }
+            let nxt = if cands.len() == 1 {
+                cands.remove(0)
+            } else {
+                let d = dir.unwrap_or((1, 0));
+                let prefs = [(-d.1, d.0), d, (d.1, -d.0), (-d.0, -d.1)];
+                let pick = prefs.iter().find_map(|&(pdx, pdy)| {
+                    cands.iter().position(|&t| {
+                        (t.0 as i64 - cur.0 as i64, t.1 as i64 - cur.1 as i64)
+                            == (pdx, pdy)
+                    })
+                });
+                match pick {
+                    Some(k2) => cands.remove(k2),
+                    None => cands.remove(0),
+                }
+            };
+            dir = Some((nxt.0 as i64 - cur.0 as i64, nxt.1 as i64 - cur.1 as i64));
+            if nxt == start {
+                break;
+            }
+            walk.push(nxt);
+            cur = nxt;
+        }
+        if walk.len() >= 4 {
+            loops.push(walk);
+        } else if let Some(v) = edges_left.get_mut(&start) {
+            v.clear();
+        }
+    }
+    loops
+}
+
+fn lattice_to_mm(
+    lp: Vec<(u32, u32)>,
+    x0: f64,
+    y0: f64,
+) -> Vec<(f64, f64)> {
+    let pts: Vec<(f64, f64)> = lp
+        .into_iter()
+        .map(|(vc, vr)| (x0 + vc as f64 * VOID_CELL, y0 + vr as f64 * VOID_CELL))
+        .collect();
+    let n = pts.len();
+    let mut simp: Vec<(f64, f64)> = Vec::with_capacity(n);
+    for k in 0..n {
+        let prev = pts[(k + n - 1) % n];
+        let cur = pts[k];
+        let nxt = pts[(k + 1) % n];
+        let collinear = ((cur.0 - prev.0) * (nxt.1 - cur.1)
+            - (cur.1 - prev.1) * (nxt.0 - cur.0))
+            .abs()
+            < 1e-9;
+        if !collinear {
+            simp.push(cur);
+        }
+    }
+    simp
+}
+
 fn fracture_fill(
     x0: f64,
     y0: f64,
     x1: f64,
     y1: f64,
-    holes_in: &[(f64, f64, f64)],
-    rects_in: &[(f64, f64, f64, f64)],
-) -> Vec<(f64, f64)> {
-    // Cutout RECTS: absorb any circle hole overlapping a rect into an
-    // expanded rect (two overlapping interior rings would self-
-    // intersect through their slits), clamp to the fill, classify
-    // boundary-crossing rects as notches below.
-    let mut rects: Vec<(f64, f64, f64, f64)> = rects_in
-        .iter()
-        .filter(|&&(rx0, ry0, rx1, ry1)| rx1 > x0 && rx0 < x1 && ry1 > y0 && ry0 < y1)
-        .copied()
-        .collect();
-    // Merge overlapping holes into enclosing circles (a slit through a
-    // neighboring hole would self-intersect).
-    let mut circle_holes: Vec<(f64, f64, f64)> = Vec::new();
-    'circles: for &(cx, cy, r) in holes_in {
-        if !(cx + r > x0 && cx - r < x1 && cy + r > y0 && cy - r < y1) {
-            continue;
-        }
-        for rect in rects.iter_mut() {
-            let (rx0, ry0, rx1, ry1) = *rect;
-            let nx = cx.clamp(rx0, rx1);
-            let ny = cy.clamp(ry0, ry1);
-            if (cx - nx).hypot(cy - ny) < r {
-                // Overlaps a cutout rect: grow the rect to cover the
-                // circle (conservative, but far less copper than the
-                // old enclosing-circle punch of the whole cutout).
-                *rect = (
-                    rx0.min(cx - r),
-                    ry0.min(cy - r),
-                    rx1.max(cx + r),
-                    ry1.max(cy + r),
-                );
-                continue 'circles;
+    holes: &[(f64, f64, f64)],
+    rects: &[(f64, f64, f64, f64)],
+    anchors: &[(f64, f64)],
+) -> Vec<Vec<(f64, f64)>> {
+    // ONE VOID ENGINE: raster copper, trace copper components, punch
+    // hole loops via the keyhole forest. See fill_copper_grid.
+    let (copper, cols, rows) = fill_copper_grid(x0, y0, x1, y1, holes, rects);
+    // Label copper components (4-connectivity), row-major BFS.
+    let mut label = vec![0u32; rows * cols];
+    let mut next = 0u32;
+    let mut queue: Vec<(usize, usize)> = Vec::new();
+    let idx = |r: usize, c: usize| r * cols + c;
+    for r in 0..rows {
+        for c in 0..cols {
+            if !copper[idx(r, c)] || label[idx(r, c)] != 0 {
+                continue;
             }
-        }
-        circle_holes.push((cx, cy, r));
-    }
-    let holes: Vec<(f64, f64, f64)> = merge_holes(circle_holes);
-    // Void classification (notches / bays / interior / rects) is
-    // SHARED with plane_swallows — the drop verifier must see the
-    // exact boxes the fracture builds (a 15mm absorption-grown notch
-    // was invisible to the old per-circle model; oracle: via_dangling
-    // inside it).
-    let (notches_bottom, notches_top, notches_right, notches_left, bays, interior, interior_rects, hulls) =
-        classify_voids(x0, y0, x1, y1, &holes, &rects);
-    let _ = &interior;
-    let poly_rings: Vec<Vec<(f64, f64)>> = hulls;
-    // Outline with edge notches: bottom edge traversed x1→x0 (in the
-    // ring (x0,y0)→(x1,y0)→(x1,y1)→(x0,y1)), top edge x0→x1.
-    let mut poly: Vec<(f64, f64)> = vec![(x0, y0)];
-    for &(xa, xb, yd) in notches_top.iter() {
-        poly.push((xa, y0));
-        poly.push((xa, yd));
-        poly.push((xb, yd));
-        poly.push((xb, y0));
-    }
-    poly.push((x1, y0));
-    for &(ya, yb, xd) in notches_right.iter() {
-        poly.push((x1, ya));
-        poly.push((xd, ya));
-        poly.push((xd, yb));
-        poly.push((x1, yb));
-    }
-    poly.push((x1, y1));
-    for &(xa, xb, yd) in notches_bottom.iter().rev() {
-        poly.push((xb, y1));
-        poly.push((xb, yd));
-        poly.push((xa, yd));
-        poly.push((xa, y1));
-    }
-    poly.push((x0, y1));
-    for &(ya, yb, xd) in notches_left.iter().rev() {
-        poly.push((x0, yb));
-        poly.push((xd, yb));
-        poly.push((xd, ya));
-        poly.push((x0, ya));
-    }
-    // BAY SPLICE: each bay's copper-side arc detours the matching
-    // notch wall edge around the hole. Arc direction follows the edge
-    // traversal; bulge side is the circle-center side (copper).
-    if !bays.is_empty() {
-        let mut new_poly: Vec<(f64, f64)> = Vec::with_capacity(poly.len() + bays.len() * 14);
-        let mut placed = vec![false; bays.len()];
-        for e in 0..poly.len() {
-            let a = poly[e];
-            let b = poly[(e + 1) % poly.len()];
-            new_poly.push(a);
-            let vertical = (a.0 - b.0).abs() < 1e-9 && (a.1 - b.1).abs() > 1e-9;
-            let horizontal = (a.1 - b.1).abs() < 1e-9 && (a.0 - b.0).abs() > 1e-9;
-            let mut ins: Vec<(f64, Vec<(f64, f64)>)> = Vec::new();
-            for (bi, &(axis, w, cx, cy, r)) in bays.iter().enumerate() {
-                if placed[bi] {
-                    continue;
-                }
-                let rr = r / (std::f64::consts::PI / 8.0).cos();
-                let (matches, lo, hi, c1, c2) = if axis == 0 && vertical && (a.0 - w).abs() < 1e-6 {
-                    let dy = (rr * rr - (w - cx) * (w - cx)).max(0.0).sqrt();
-                    let (lo, hi) = (a.1.min(b.1), a.1.max(b.1));
-                    (cy - dy >= lo - 1e-9 && cy + dy <= hi + 1e-9, lo, hi, cy - dy, cy + dy)
-                } else if axis == 1 && horizontal && (a.1 - w).abs() < 1e-6 {
-                    let dx = (rr * rr - (w - cy) * (w - cy)).max(0.0).sqrt();
-                    let (lo, hi) = (a.0.min(b.0), a.0.max(b.0));
-                    (cx - dx >= lo - 1e-9 && cx + dx <= hi + 1e-9, lo, hi, cx - dx, cx + dx)
-                } else {
-                    (false, 0.0, 0.0, 0.0, 0.0)
-                };
-                let _ = (lo, hi);
-                if !matches {
-                    continue;
-                }
-                // crossing points and their angles from the center
-                let (p1, p2) = if axis == 0 {
-                    ((w, c1), (w, c2))
-                } else {
-                    ((c1, w), (c2, w))
-                };
-                let a1 = (p1.1 - cy).atan2(p1.0 - cx);
-                let a2 = (p2.1 - cy).atan2(p2.0 - cx);
-                let mut sweep = a2 - a1;
-                while sweep <= 0.0 {
-                    sweep += 2.0 * std::f64::consts::PI;
-                }
-                // two candidate arcs P1->P2: +sweep and sweep-2pi;
-                // pick the one whose midpoint bulges to the copper
-                // (circle-center) side of the wall.
-                let n_steps = 12usize;
-                let build = |sw: f64| -> Vec<(f64, f64)> {
-                    (0..=n_steps)
-                        .map(|q| {
-                            let th = a1 + sw * (q as f64) / (n_steps as f64);
-                            (cx + rr * th.cos(), cy + rr * th.sin())
-                        })
-                        .collect()
-                };
-                let cand_a = build(sweep);
-                let cand_b = build(sweep - 2.0 * std::f64::consts::PI);
-                let copper_side = |pts: &Vec<(f64, f64)>| -> bool {
-                    let m = pts[n_steps / 2];
-                    if axis == 0 {
-                        (m.0 - w).signum() == (cx - w).signum()
-                    } else {
-                        (m.1 - w).signum() == (cy - w).signum()
+            next += 1;
+            label[idx(r, c)] = next;
+            queue.clear();
+            queue.push((r, c));
+            while let Some((qr, qc)) = queue.pop() {
+                let mut push = |nr: usize, nc: usize, q: &mut Vec<(usize, usize)>,
+                                lab: &mut Vec<u32>| {
+                    if copper[nr * cols + nc] && lab[nr * cols + nc] == 0 {
+                        lab[nr * cols + nc] = next;
+                        q.push((nr, nc));
                     }
                 };
-                let mut arc = if copper_side(&cand_a) { cand_a } else { cand_b };
-                // orient along edge traversal a->b
-                let along = |p: (f64, f64)| if vertical { p.1 } else { p.0 };
-                let dir = (along(b) - along(a)).signum();
-                if (along(*arc.last().unwrap()) - along(arc[0])).signum() != dir {
-                    arc.reverse();
+                if qr > 0 {
+                    push(qr - 1, qc, &mut queue, &mut label);
                 }
-                let key = (along(arc[0]) - along(a)) * dir;
-                ins.push((key, arc));
-                placed[bi] = true;
-            }
-            ins.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap_or(std::cmp::Ordering::Equal));
-            for (_, arc) in ins {
-                new_poly.extend(arc);
-            }
-        }
-        for (bi, &(_, w, cx, cy, _)) in bays.iter().enumerate() {
-            if !placed[bi] {
-                log::warn!(
-                    "plane fill: bay at ({cx:.2},{cy:.2}) wall {w:.2} found no edge — hole NOT punched"
-                );
+                if qr + 1 < rows {
+                    push(qr + 1, qc, &mut queue, &mut label);
+                }
+                if qc > 0 {
+                    push(qr, qc - 1, &mut queue, &mut label);
+                }
+                if qc + 1 < cols {
+                    push(qr, qc + 1, &mut queue, &mut label);
+                }
             }
         }
-        poly = new_poly;
     }
-    let mut rings: Vec<RingKind> =
-        poly_rings.into_iter().map(RingKind::Poly).collect();
-    rings.extend(
-        interior_rects
-            .into_iter()
-            .map(|(rx0, ry0, rx1, ry1)| RingKind::Rect { x0: rx0, y0: ry0, x1: rx1, y1: ry1 }),
-    );
-    let probe = std::env::var("BHDL_PNR_VIA_NEAR").ok().and_then(|t| {
-        let (a, b) = t.split_once(',')?;
-        Some((a.trim().parse::<f64>().ok()?, b.trim().parse::<f64>().ok()?))
-    });
-    if let Some((tx, ty)) = probe {
-        let cover = rings
-            .iter()
-            .filter(|rk| match rk {
-                RingKind::Poly(pts) => point_in_poly(pts, tx, ty),
-                RingKind::Circle { cx, cy, r } => (tx - cx).hypot(ty - cy) < *r,
-                RingKind::Rect { x0: a, y0: b, x1: c, y1: d } => {
-                    tx > *a && tx < *c && ty > *b && ty < *d
-                }
+    let mut out: Vec<Vec<(f64, f64)>> = Vec::new();
+    for comp in 1..=next {
+        let mut loops = trace_loops(&label, comp, cols, rows);
+        if loops.is_empty() {
+            continue;
+        }
+        // Outer loop = max |area|; the rest are hole loops.
+        let area = |lp: &Vec<(u32, u32)>| -> f64 {
+            let mut a = 0.0;
+            for k in 0..lp.len() {
+                let p = lp[k];
+                let q = lp[(k + 1) % lp.len()];
+                a += p.0 as f64 * q.1 as f64 - q.0 as f64 * p.1 as f64;
+            }
+            (a / 2.0).abs()
+        };
+        let outer_i = (0..loops.len())
+            .max_by(|&a1, &b1| {
+                area(&loops[a1])
+                    .partial_cmp(&area(&loops[b1]))
+                    .unwrap_or(std::cmp::Ordering::Equal)
             })
-            .count();
-        log::warn!("[fr-probe] rings covering ({tx},{ty}): {cover} of {}", rings.len());
+            .unwrap();
+        // Tiny components (a few cells) are raster dust, not copper.
+        if area(&loops[outer_i]) < 16.0 {
+            continue;
+        }
+        // Island removal: a component holding NO same-net barrel is
+        // electrically dead copper.
+        let anchored = anchors.iter().any(|&(ax, ay)| {
+            let c = ((ax - x0) / VOID_CELL) as i64;
+            let r = ((ay - y0) / VOID_CELL) as i64;
+            c >= 0
+                && r >= 0
+                && (c as usize) < cols
+                && (r as usize) < rows
+                && label[r as usize * cols + c as usize] == comp
+        });
+        if !anchored {
+            continue;
+        }
+        let mut rings: Vec<RingKind> = Vec::new();
+        for (li, lp) in loops.iter().enumerate() {
+            if li == outer_i || area(lp) < 4.0 {
+                continue;
+            }
+            rings.push(RingKind::Poly(lattice_to_mm(lp.clone(), x0, y0)));
+        }
+        let mut poly = lattice_to_mm(loops.swap_remove(outer_i), x0, y0);
+        punch_interior_rings(&mut poly, rings);
+        out.push(poly);
     }
-    punch_interior_rings(&mut poly, rings);
-    if let Some((tx, ty)) = probe {
-        log::warn!(
-            "[fr-probe] after punch: copper at ({tx},{ty}) = {}",
-            point_in_poly(&poly, tx, ty)
-        );
-    }
-    poly
+    out
 }
 
-/// Interior-hole fracture shared by the rect and polygon fills: each
-/// hole becomes a circumscribed octagon wound opposite the outline,
-/// joined to the boundary by a zero-width rightward slit (jittered
-/// rows so a ray never runs along an existing slit). The ray casts
-/// against the CURRENT vertex chain, so notch detours and previously
-/// inserted slits are all valid targets.
-/// Interior fracture ring kinds: circles (foreign barrels) and rects
-/// (cutout apertures / slots).
-#[derive(Clone, Debug)]
 pub(crate) enum RingKind {
     Circle { cx: f64, cy: f64, r: f64 },
     Rect { x0: f64, y0: f64, x1: f64, y1: f64 },
@@ -2347,131 +2491,48 @@ pub(crate) fn plane_swallows(
     if x - via_r < x0 || x + via_r > x1 || y - via_r < y0 || y + via_r > y1 {
         return true;
     }
-    // Interior cutout rects — GROWN by circle absorption exactly as
-    // the fracture grows them (a hole overlapping a cutout rect
-    // absorbs into it; the emitted void is the grown rect, and a via
-    // verified against the ungrown rect dangles inside the growth).
-    let mut grown_rects = plane_cutout_rects(board);
-    let mut free_holes: Vec<(f64, f64, f64)> = Vec::new();
-    'gh: for &(cx, cy, r) in merged_holes {
-        for rect in grown_rects.iter_mut() {
-            let (rx0, ry0, rx1, ry1) = *rect;
-            let nx = cx.clamp(rx0, rx1);
-            let ny = cy.clamp(ry0, ry1);
-            if (cx - nx).hypot(cy - ny) < r {
-                *rect = (
-                    rx0.min(cx - r),
-                    ry0.min(cy - r),
-                    rx1.max(cx + r),
-                    ry1.max(cy + r),
-                );
-                continue 'gh;
-            }
-        }
-        free_holes.push((cx, cy, r));
-    }
-    for &(cx0, cy0, cx1, cy1) in &grown_rects {
-        if x + via_r > cx0 && x - via_r < cx1 && y + via_r > cy0 && y - via_r < cy1 {
-            return true;
-        }
-    }
-    // Polygon outlines: the fill is clipped to the inset outline — a
-    // via whose disc pokes outside it (e.g. into a cutout notch) has
-    // no plane contact there. Rect boards skip this (bbox == outline).
-    if let crate::types::BoardOutline::Polygon(opts) = &board.config.outline {
-        match inset_rectilinear(opts, m) {
-            Some(ins) => {
-                if !point_in_poly(&ins, x, y)
-                    || poly_edge_distance(&ins, x, y) < via_r - 1e-9
-                {
-                    return true;
-                }
-            }
-            None => return true, // non-rectilinear: no fill exists
-        }
-    }
-    // ONE-TRUTH: test against the exact voids the fracture will
-    // build (grown/merged notch boxes, bays, interior rings, rects) —
-    // the old per-circle notch approximation missed absorption-grown
-    // boxes entirely (via_dangling inside a 15mm notch).
-    let rects = grown_rects;
-    let merged_holes: &[(f64, f64, f64)] = &free_holes;
-    // classify_voids runs an absorb-or-bay fixpoint — far too heavy
-    // per site query (drop/rescue loops probe hundreds of sites
-    // against ONE hole set; uncached it timed out uno s13). One-entry
-    // memo keyed on the exact inputs.
-    type Voids = (
-        Vec<(f64, f64, f64)>,
-        Vec<(f64, f64, f64)>,
-        Vec<(f64, f64, f64)>,
-        Vec<(f64, f64, f64)>,
-        Vec<(u8, f64, f64, f64, f64)>,
-        Vec<(f64, f64, f64)>,
-        Vec<(f64, f64, f64, f64)>,
-        Vec<Vec<(f64, f64)>>,
-    );
-    // Memo keyed by DIRECT input comparison (no hashing: SipHash over
-    // hundreds of holes per query showed up in profiles, and a weak
-    // fast hash risks silent geometry collisions — memcmp is exact
-    // AND cheaper).
-    type VoidsKey = (
-        [u64; 4],
-        Vec<(f64, f64, f64)>,
-        Vec<(f64, f64, f64, f64)>,
-    );
+    // ONE-TRUTH raster: the SAME copper grid the fracture emits
+    // (fill_copper_grid) — swallowed means ANY cell the via disc
+    // (+0.05 margin) touches is void or outside. Model and emission
+    // cannot diverge because they share the raster. Memoized by
+    // direct input comparison (the grid build is too heavy per site
+    // query).
+    let rects = plane_cutout_rects(board);
+    type GridMemo = ([u64; 4], Vec<(f64, f64, f64)>, Vec<(f64, f64, f64, f64)>);
     thread_local! {
-        static VOIDS_MEMO: std::cell::RefCell<Option<(VoidsKey, Voids)>> =
+        static GRID_MEMO: std::cell::RefCell<Option<(GridMemo, (Vec<bool>, usize, usize))>> =
             const { std::cell::RefCell::new(None) };
     }
     let bounds = [x0.to_bits(), y0.to_bits(), x1.to_bits(), y1.to_bits()];
-    let (nb, nt, nr, nl, bays, _interior, interior_rects, hulls) = VOIDS_MEMO.with(|m| {
+    let (copper, cols, rows) = GRID_MEMO.with(|m| {
         let mut m = m.borrow_mut();
         match m.as_ref() {
-            Some(((kb, kh, kr), v))
-                if *kb == bounds && kh == merged_holes && kr == &rects =>
-            {
-                v.clone()
+            Some(((kb, kh, kr), g)) if *kb == bounds && kh == merged_holes && kr == &rects => {
+                g.clone()
             }
             _ => {
-                let v = classify_voids(x0, y0, x1, y1, merged_holes, &rects);
-                *m = Some(((bounds, merged_holes.to_vec(), rects.clone()), v.clone()));
-                v
+                let g = fill_copper_grid(x0, y0, x1, y1, merged_holes, &rects);
+                *m = Some(((bounds, merged_holes.to_vec(), rects.clone()), g.clone()));
+                g
             }
         }
     });
-    for (list, side) in [(&nb, 0), (&nt, 1), (&nr, 2), (&nl, 3)] {
-        for n in list {
-            let (bx0, by0, bx1, by1) = match side {
-                0 => (n.0, n.2, n.1, y1),
-                1 => (n.0, y0, n.1, n.2),
-                2 => (n.2, n.0, x1, n.1),
-                _ => (x0, n.0, n.2, n.1),
-            };
-            if x + via_r > bx0 && x - via_r < bx1 && y + via_r > by0 && y - via_r < by1 {
+    let reach = via_r + 0.05;
+    let ca = ((x - reach - x0) / VOID_CELL).floor() as i64;
+    let cb = ((x + reach - x0) / VOID_CELL).ceil() as i64;
+    let ra = ((y - reach - y0) / VOID_CELL).floor() as i64;
+    let rb = ((y + reach - y0) / VOID_CELL).ceil() as i64;
+    for r in ra..=rb {
+        for c in ca..=cb {
+            if r < 0 || c < 0 || r as usize >= rows || c as usize >= cols {
+                return true; // disc leaves the fill rect
+            }
+            let px = x0 + (c as f64 + 0.5) * VOID_CELL;
+            let py = y0 + (r as f64 + 0.5) * VOID_CELL;
+            if (px - x).hypot(py - y) <= reach && !copper[r as usize * cols + c as usize]
+            {
                 return true;
             }
-        }
-    }
-    let c225 = (std::f64::consts::PI / 8.0).cos();
-    for &(_, _, cx, cy, r) in &bays {
-        if (x - cx).hypot(y - cy) < r / c225 + via_r + 0.05 {
-            return true;
-        }
-    }
-    for &(rx0, ry0, rx1, ry1) in &interior_rects {
-        if x + via_r > rx0 && x - via_r < rx1 && y + via_r > ry0 && y - via_r < ry1 {
-            return true;
-        }
-    }
-    // EXACT hulled rings (the same polygons the fracture punches):
-    // inside one, or within (via_r + 0.05) of its boundary =
-    // swallowed. No capsule approximation — parity with emission.
-    let _ = c225;
-    for hull in &hulls {
-        if point_in_poly(hull, x, y)
-            || crate::routing::grid::polygon_edge_distance(hull, x, y) < via_r + 0.05
-        {
-            return true;
         }
     }
     false
