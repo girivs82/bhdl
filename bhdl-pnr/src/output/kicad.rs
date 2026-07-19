@@ -1272,6 +1272,260 @@ pub(crate) fn classify_voids(
     (notches_bottom, notches_top, notches_right, notches_left, bays, interior, interior_rects, hulls)
 }
 
+// DORMANT (round-4 WIP): the concave union below is CORRECT in
+// isolation (see union_tests) and is the designed replacement for
+// chained convex hulls, but wiring it into classify_voids exposed a
+// ring-weave interaction on test_power_domain_scalability (two of
+// ~500 rings ship unpunched — copper at two via centers; the same
+// three rings punch clean alone). Resume: wire classify_voids to
+// union_rings + merge_holes to containment-only, then debug the
+// weave interaction (slit-row jitter / parent-chain with equal
+// rightmost-x staircase rings are the suspects).
+#[allow(dead_code)]
+/// CONCAVE UNION of interior punch circles: stamp each disc
+/// (octagon circumradius + `inflate`) onto a fine boolean grid,
+/// label connected components, and trace each component's OUTER
+/// contour as a rectilinear polygon (collinear runs simplified).
+///
+/// This replaces chained CONVEX hulls: a hull merge cascades
+/// transitively — a connected via-field chain collapsed into one
+/// mega-hull that carved the whole mid-board out of the fill. The
+/// union removes exactly the discs plus the sub-web gaps the
+/// `inflate` band closes, nothing more. Inner contours (enclosed
+/// copper islands) are deliberately dropped — an island inside a
+/// punched void is isolated copper.
+///
+/// Deterministic: grid raster + row-major scans only.
+pub(crate) fn union_rings(
+    circles: &[(f64, f64, f64)],
+    inflate: f64,
+    x0: f64,
+    y0: f64,
+    x1: f64,
+    y1: f64,
+) -> Vec<Vec<(f64, f64)>> {
+    if circles.is_empty() {
+        return Vec::new();
+    }
+    const CELL: f64 = 0.05;
+    let c225 = (std::f64::consts::PI / 8.0).cos();
+    let cols = (((x1 - x0) / CELL).ceil() as usize).max(1) + 2;
+    let rows = (((y1 - y0) / CELL).ceil() as usize).max(1) + 2;
+    let idx = |r: usize, c: usize| r * cols + c;
+    let mut grid = vec![false; rows * cols];
+    for &(cx, cy, r) in circles {
+        let rr = r / c225 + inflate;
+        // Stamp cells whose CENTER lies within rr + half-diagonal —
+        // conservative cover of the disc, clamped strictly inside
+        // the fill rect (a union edge may near the boundary but the
+        // ring must stay interior).
+        let cover = rr + CELL * 0.75;
+        let ca = (((cx - cover - x0) / CELL).floor().max(0.0) as usize).min(cols - 1);
+        let cb = (((cx + cover - x0) / CELL).ceil().max(0.0) as usize).min(cols - 1);
+        let ra = (((cy - cover - y0) / CELL).floor().max(0.0) as usize).min(rows - 1);
+        let rb = (((cy + cover - y0) / CELL).ceil().max(0.0) as usize).min(rows - 1);
+        for row in ra..=rb {
+            let py = y0 + row as f64 * CELL + CELL / 2.0;
+            for col in ca..=cb {
+                let px = x0 + col as f64 * CELL + CELL / 2.0;
+                if (px - cx).hypot(py - cy) <= cover
+                    && px > x0 + 0.05
+                    && px < x1 - 0.05
+                    && py > y0 + 0.05
+                    && py < y1 - 0.05
+                {
+                    grid[idx(row, col)] = true;
+                }
+            }
+        }
+    }
+    // Component labels (4-connectivity), row-major BFS: deterministic.
+    let mut label = vec![0u32; rows * cols];
+    let mut next = 0u32;
+    let mut queue: Vec<(usize, usize)> = Vec::new();
+    for r in 0..rows {
+        for c in 0..cols {
+            if !grid[idx(r, c)] || label[idx(r, c)] != 0 {
+                continue;
+            }
+            next += 1;
+            label[idx(r, c)] = next;
+            queue.clear();
+            queue.push((r, c));
+            while let Some((qr, qc)) = queue.pop() {
+                let mut push = |nr: usize, nc: usize, q: &mut Vec<(usize, usize)>,
+                                label: &mut Vec<u32>| {
+                    if grid[idx(nr, nc)] && label[idx(nr, nc)] == 0 {
+                        label[idx(nr, nc)] = next;
+                        q.push((nr, nc));
+                    }
+                };
+                if qr > 0 {
+                    push(qr - 1, qc, &mut queue, &mut label);
+                }
+                if qr + 1 < rows {
+                    push(qr + 1, qc, &mut queue, &mut label);
+                }
+                if qc > 0 {
+                    push(qr, qc - 1, &mut queue, &mut label);
+                }
+                if qc + 1 < cols {
+                    push(qr, qc + 1, &mut queue, &mut label);
+                }
+            }
+        }
+    }
+    // Outer contour per component: collect boundary edges (grid-line
+    // unit segments with the component on exactly one side), chain
+    // them into loops, keep the loop enclosing the LARGEST area
+    // (outer), drop inner loops (island removal).
+    let mut out: Vec<Vec<(f64, f64)>> = Vec::new();
+    for comp in 1..=next {
+        // Edges as (from_vertex, to_vertex) on the grid-corner
+        // lattice, oriented so the FILLED side is on the left —
+        // loops then chain consistently CCW around the component.
+        use std::collections::BTreeMap;
+        let mut edges: BTreeMap<(u32, u32), (u32, u32)> = BTreeMap::new();
+        let at = |r: usize, c: usize, lab: &Vec<u32>| -> bool {
+            lab[r * cols + c] == comp
+        };
+        for r in 0..rows {
+            for c in 0..cols {
+                if !at(r, c, &label) {
+                    continue;
+                }
+                let (r32, c32) = (r as u32, c as u32);
+                // top edge: outside above → edge left-to-right
+                if r == 0 || !at(r - 1, c, &label) {
+                    edges.insert((c32, r32), (c32 + 1, r32));
+                }
+                // bottom edge: right-to-left
+                if r + 1 >= rows || !at(r + 1, c, &label) {
+                    edges.insert((c32 + 1, r32 + 1), (c32, r32 + 1));
+                }
+                // left edge: bottom-to-top
+                if c == 0 || !at(r, c - 1, &label) {
+                    edges.insert((c32, r32 + 1), (c32, r32));
+                }
+                // right edge: top-to-bottom
+                if c + 1 >= cols || !at(r, c + 1, &label) {
+                    edges.insert((c32 + 1, r32), (c32 + 1, r32 + 1));
+                }
+            }
+        }
+        // A lattice vertex carries TWO outgoing edges at a diagonal
+        // pinch — a flat map OVERWROTE one and the walk short-
+        // circuited across the pinch, dropping whole lobes from the
+        // traced loop (measured: a via cluster's lobe stayed copper,
+        // two unpunched holes). Direction-aware boundary following:
+        // at a fork, prefer the LEFT turn (filled side is on the
+        // left), so each lobe closes on itself.
+        let mut loops: Vec<Vec<(u32, u32)>> = Vec::new();
+        let mut edges_left: BTreeMap<(u32, u32), Vec<(u32, u32)>> = BTreeMap::new();
+        for (f, t) in edges {
+            edges_left.entry(f).or_default().push(t);
+        }
+        for v in edges_left.values_mut() {
+            v.sort();
+        }
+        loop {
+            let Some((&start, _)) = edges_left.iter().find(|(_, v)| !v.is_empty())
+            else {
+                break;
+            };
+            let mut walk = vec![start];
+            let mut cur = start;
+            let mut dir: Option<(i64, i64)> = None;
+            loop {
+                let Some(cands) = edges_left.get_mut(&cur) else { break };
+                if cands.is_empty() {
+                    break;
+                }
+                let nxt = if cands.len() == 1 {
+                    cands.remove(0)
+                } else {
+                    let d = dir.unwrap_or((1, 0));
+                    // left, straight, right, back (y-down lattice:
+                    // left turn = (dy, -dx)).
+                    let prefs = [
+                        (d.1, -d.0),
+                        d,
+                        (-d.1, d.0),
+                        (-d.0, -d.1),
+                    ];
+                    let pick = prefs.iter().find_map(|&(pdx, pdy)| {
+                        cands.iter().position(|&t| {
+                            (t.0 as i64 - cur.0 as i64, t.1 as i64 - cur.1 as i64)
+                                == (pdx, pdy)
+                        })
+                    });
+                    match pick {
+                        Some(k) => cands.remove(k),
+                        None => cands.remove(0),
+                    }
+                };
+                dir = Some((nxt.0 as i64 - cur.0 as i64, nxt.1 as i64 - cur.1 as i64));
+                if nxt == start {
+                    break;
+                }
+                walk.push(nxt);
+                cur = nxt;
+            }
+            if walk.len() >= 4 {
+                loops.push(walk);
+            } else if walk.len() == 1 {
+                // Degenerate start with no continuation: drop it so
+                // the outer scan terminates.
+                edges_left.get_mut(&start).map(|v| v.clear());
+            }
+        }
+        // Outer loop = max |shoelace|.
+        let area = |lp: &Vec<(u32, u32)>| -> f64 {
+            let mut a = 0.0;
+            for k in 0..lp.len() {
+                let p = lp[k];
+                let q = lp[(k + 1) % lp.len()];
+                a += p.0 as f64 * q.1 as f64 - q.0 as f64 * p.1 as f64;
+            }
+            a.abs()
+        };
+        let Some(outer) = loops
+            .into_iter()
+            .max_by(|a1, b1| {
+                area(a1)
+                    .partial_cmp(&area(b1))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+        else {
+            continue;
+        };
+        // Lattice → mm, collinear runs simplified.
+        let mut pts: Vec<(f64, f64)> = outer
+            .into_iter()
+            .map(|(vc, vr)| (x0 + vc as f64 * CELL, y0 + vr as f64 * CELL))
+            .collect();
+        let mut simp: Vec<(f64, f64)> = Vec::with_capacity(pts.len());
+        let n = pts.len();
+        for k in 0..n {
+            let prev = pts[(k + n - 1) % n];
+            let cur = pts[k];
+            let nxt = pts[(k + 1) % n];
+            let collinear = ((cur.0 - prev.0) * (nxt.1 - cur.1)
+                - (cur.1 - prev.1) * (nxt.0 - cur.0))
+                .abs()
+                < 1e-9;
+            if !collinear {
+                simp.push(cur);
+            }
+        }
+        if simp.len() >= 4 {
+            out.push(simp);
+        }
+        pts.clear();
+    }
+    out
+}
+
 fn fracture_fill(
     x0: f64,
     y0: f64,
@@ -2131,4 +2385,41 @@ pub(crate) fn plane_swallows(
         }
     }
     false
+}
+
+#[cfg(test)]
+mod union_tests {
+    use super::*;
+
+    #[test]
+    fn union_covers_all_input_circles() {
+        // The pds cluster that lost two punches: three r=0.65 circles.
+        let circles = vec![
+            (41.68, 43.26, 0.65),
+            (41.68, 45.80, 0.65),
+            (42.88, 44.53, 0.65),
+        ];
+        let rings = union_rings(&circles, 0.15, 0.5, 0.5, 52.9, 52.9);
+        // Every circle center must be inside SOME ring.
+        for &(cx, cy, _) in &circles {
+            let covered = rings.iter().any(|ring| point_in_poly(ring, cx, cy));
+            assert!(covered, "circle at ({cx},{cy}) not covered; rings={}", rings.len());
+        }
+        // And the PUNCHED fill must have no copper at any center —
+        // the keyhole weave must survive with staircase union rings
+        // (pds regression: two of these three shipped unpunched).
+        let mut poly: Vec<(f64, f64)> =
+            vec![(0.5, 0.5), (52.9, 0.5), (52.9, 52.9), (0.5, 52.9)];
+        punch_interior_rings(
+            &mut poly,
+            rings.into_iter().map(RingKind::Poly).collect(),
+        );
+        for &(cx, cy, _) in &circles {
+            assert!(
+                !point_in_poly(&poly, cx, cy),
+                "copper at ({cx},{cy}) after punch ({} verts)",
+                poly.len()
+            );
+        }
+    }
 }
