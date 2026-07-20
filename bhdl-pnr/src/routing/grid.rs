@@ -393,7 +393,8 @@ impl RoutingGrid {
         // is unavoidable for cross-board routes on the uno). The term
         // needs a tuning session with the fill/clearance flushes fixed
         // first; the plumbing stays so that session is a knob-turn.
-        let has_planes = std::env::var("BHDL_PNR_SI_COST").is_ok()
+        let has_planes = (board.config.si_return_cost
+            || std::env::var("BHDL_PNR_SI_COST").is_ok())
             && board
                 .layer_stack
                 .layers

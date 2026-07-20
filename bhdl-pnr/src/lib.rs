@@ -115,6 +115,65 @@ pub fn place_and_route_best_of(
         }
     }
 
+    // KNOB-AWARE TIER: when the best off-tier trial is imperfect, try
+    // the same seeds with the P4 return-path cost ON — measured on the
+    // uno it lifts whole seeds to perfect (s13/s99 0v/3unc -> 0/0)
+    // while costing others their perfection; running it only as a
+    // FALLBACK keeps every already-perfect board byte-identical and
+    // lets dominance pick per board. (The clean A/B behind this:
+    // knob-on 4 seeds 0v unc 1/1/0/0 vs knob-off 0/0/3/3.)
+    let best_imperfect = best.as_ref().map_or(true, |b| {
+        let total_sinks: usize = b
+            .board
+            .nets
+            .iter()
+            .filter(|n| n.pins.len() >= 2)
+            .map(|n| n.pins.len())
+            .sum();
+        b.metrics.connected_sinks < total_sinks
+            || !b.drc_violations.is_empty()
+            || legalization::residual_pad_overlaps(&b.board) > 0
+    });
+    if best_imperfect {
+        for trial in 0..trials {
+            info!("=== SI-cost trial {}/{} ===", trial + 1, trials);
+            let mut trial_board = board.clone();
+            trial_board.config.si_return_cost = true;
+            let result =
+                place_and_route(trial_board, config.clone(), base_seed.wrapping_add(trial as u64))?;
+            let r_over = legalization::residual_pad_overlaps(&result.board);
+            let dominated = best.as_ref().map_or(false, |b| {
+                let b_over = legalization::residual_pad_overlaps(&b.board);
+                let b_conn = b.metrics.connected_sinks;
+                let r_conn = result.metrics.connected_sinks;
+                r_over > b_over
+                    || (r_over == b_over
+                        && (r_conn < b_conn
+                            || (r_conn == b_conn
+                                && result.metrics.hpwl_mm >= b.metrics.hpwl_mm)))
+            });
+            if !dominated {
+                info!(
+                    "SI-cost trial {} is new best: {} connected sink(s), HPWL={:.1}mm",
+                    trial + 1, result.metrics.connected_sinks, result.metrics.hpwl_mm
+                );
+                let total_sinks: usize = result
+                    .board
+                    .nets
+                    .iter()
+                    .filter(|n| n.pins.len() >= 2)
+                    .map(|n| n.pins.len())
+                    .sum();
+                let perfect = result.metrics.connected_sinks >= total_sinks
+                    && result.drc_violations.is_empty()
+                    && r_over == 0;
+                best = Some(result);
+                if perfect {
+                    break;
+                }
+            }
+        }
+    }
     best.ok_or_else(|| anyhow::anyhow!("No trials completed"))
 }
 

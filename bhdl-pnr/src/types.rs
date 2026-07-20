@@ -47,6 +47,11 @@ pub struct BoardConfig {
     pub outline: BoardOutline,
     pub stackup: StackupSource,
     pub min_trace_width_mm: f64,
+    /// P4 return-path routing cost (grid si_cost stamp) for THIS
+    /// run — the knob-aware trial tier sets it per trial; the
+    /// BHDL_PNR_SI_COST env still forces it globally.
+    #[serde(default)]
+    pub si_return_cost: bool,
     pub min_spacing_mm: f64,
     pub edge_clearance_mm: f64,
     pub fixed_placements: Vec<FixedPlacement>,
@@ -77,6 +82,7 @@ impl Default for BoardConfig {
             outline: BoardOutline::AutoSize,
             stackup: StackupSource::Auto,
             min_trace_width_mm: 0.15,
+            si_return_cost: false,
             min_spacing_mm: 0.15,
             edge_clearance_mm: 0.5,
             fixed_placements: Vec::new(),

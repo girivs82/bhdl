@@ -823,6 +823,7 @@ pub fn build_board(
 
     let board_config = BoardConfig {
         outline,
+        si_return_cost: false,
         // Courtyard keepout (per side) follows the density level the
         // footprints were generated at.
         courtyard_excess_mm: config.density_level.courtyard_excess_mm(),
