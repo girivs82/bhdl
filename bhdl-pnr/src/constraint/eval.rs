@@ -110,6 +110,8 @@ impl Constraint {
     /// Evaluate this constraint against a snapshot.
     pub fn eval(&self, snap: &dyn LayoutSnapshot) -> Eval {
         match self {
+            // Router/report-side gates — no placement-time evaluation.
+            Constraint::NoiseBudget { .. } | Constraint::RailDrop { .. } => Eval::Unknown,
             Constraint::Proximity { a, b, max_mm, hardness, .. } => {
                 let (pa, pb) = match (snap.entity_pos(*a), snap.entity_pos(*b)) {
                     (Some(pa), Some(pb)) => (pa, pb),

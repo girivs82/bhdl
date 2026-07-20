@@ -193,6 +193,20 @@ pub enum Constraint {
         source: ConstraintSource,
     },
     /// Differential pair. (Router-side.)
+    /// P4 stage 4: declared crosstalk noise budget — the sign-off
+    /// gates the MEASURED coupled noise (k_b x measured swing).
+    NoiseBudget {
+        net: NetId,
+        max_mv: f32,
+        source: ConstraintSource,
+    },
+    /// P4 stage 4: declared IR-drop budget — the sign-off gates
+    /// R x solved current on the routed rail.
+    RailDrop {
+        net: NetId,
+        max_mv: f32,
+        source: ConstraintSource,
+    },
     DiffPair {
         p_net: NetId,
         n_net: NetId,
@@ -295,6 +309,8 @@ impl Constraint {
             | Constraint::LoopArea { source, .. }
             | Constraint::TraceLength { source, .. }
             | Constraint::DiffPair { source, .. }
+            | Constraint::NoiseBudget { source, .. }
+            | Constraint::RailDrop { source, .. }
             | Constraint::LengthMatchGroup { source, .. }
             | Constraint::Impedance { source, .. }
             | Constraint::Topology { source, .. }
@@ -316,6 +332,8 @@ impl Constraint {
             Constraint::DiffPair { .. }
             | Constraint::Impedance { .. }
             | Constraint::Topology { .. }
+            | Constraint::NoiseBudget { .. }
+            | Constraint::RailDrop { .. }
             | Constraint::LayerRule { .. } => Hardness::Hard,
             // Freedom grant + classification tag carry no hardness.
             Constraint::SwizzleGroup { .. } | Constraint::SignalClass { .. } => {
@@ -339,6 +357,8 @@ impl Constraint {
             Constraint::SwizzleGroup { .. } => "SwizzleGroup",
             Constraint::SignalClass { .. } => "SignalClass",
             Constraint::LayerRule { .. } => "LayerRule",
+            Constraint::NoiseBudget { .. } => "NoiseBudget",
+            Constraint::RailDrop { .. } => "RailDrop",
         }
     }
 }

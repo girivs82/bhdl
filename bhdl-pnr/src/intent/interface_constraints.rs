@@ -72,6 +72,10 @@ pub enum IfaceProp {
     LengthMatchPs { ps: f32 },
     /// Pairwise skew bound (picoseconds).
     SkewMaxPs { ps: f32 },
+    /// P4 stage 4: declared crosstalk noise budget (millivolts).
+    NoiseBudgetMv { mv: f32 },
+    /// P4 stage 4: declared IR-drop budget on a power pin's net (mV).
+    IrDropMaxMv { mv: f32 },
     SwizzleWithinByte,
     SwizzleAcrossBytes,
     /// Property name we don't interpret — warn-and-degrade (§2).
@@ -159,6 +163,14 @@ fn parse_prop(name: &str, value: &str) -> IfaceProp {
             None => unknown(name, value),
         },
         "signal_class" => IfaceProp::SignalClass { class: value.to_string() },
+        "noise_budget" => match parse_mv(value) {
+            Some(mv) => IfaceProp::NoiseBudgetMv { mv },
+            None => unknown(name, value),
+        },
+        "ir_drop_max" => match parse_mv(value) {
+            Some(mv) => IfaceProp::IrDropMaxMv { mv },
+            None => unknown(name, value),
+        },
         "stub_max" => match parse_len_mm(value) {
             Some(mm) => IfaceProp::StubMax { mm },
             None => unknown(name, value),
@@ -197,6 +209,17 @@ fn unknown(name: &str, value: &str) -> IfaceProp {
 }
 
 // ── value parsers ────────────────────────────────────────────────────
+
+fn parse_mv(v: &str) -> Option<f32> {
+    let v = v.trim();
+    if let Some(n) = v.strip_suffix("mV").or_else(|| v.strip_suffix("mv")) {
+        n.trim().parse().ok()
+    } else if let Some(n) = v.strip_suffix('V') {
+        n.trim().parse::<f32>().ok().map(|x| x * 1000.0)
+    } else {
+        v.parse().ok()
+    }
+}
 
 fn parse_ohms(v: &str) -> Option<f32> {
     v.trim().trim_end_matches("ohm").trim_end_matches('Ω').trim().parse().ok()
@@ -316,6 +339,24 @@ pub fn lower_interface_constraints(
                         target_ohms: *ohms,
                         tolerance_pct: 10.0,
                         source: src(&c.key, "single_ended"),
+                    });
+                }
+            }
+            (IfaceTarget::PerSignal(path), IfaceProp::NoiseBudgetMv { mv }) => {
+                if let Some(net) = resolve_or_warn(path, "noise_budget", &mut diags) {
+                    out.push(Constraint::NoiseBudget {
+                        net,
+                        max_mv: *mv,
+                        source: src(&c.key, "noise_budget"),
+                    });
+                }
+            }
+            (IfaceTarget::PerSignal(path), IfaceProp::IrDropMaxMv { mv }) => {
+                if let Some(net) = resolve_or_warn(path, "ir_drop_max", &mut diags) {
+                    out.push(Constraint::RailDrop {
+                        net,
+                        max_mv: *mv,
+                        source: src(&c.key, "ir_drop_max"),
                     });
                 }
             }

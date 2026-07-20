@@ -11,6 +11,7 @@ interface Lvds {
     signal N: inout;
     constraints {
         *:      differential 100ohm;
+        *:      noise_budget 40mV;
         P -> N: length_match 6.5ps;
     }
 }

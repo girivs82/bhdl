@@ -484,6 +484,22 @@ mod tests {
     }
 
     #[test]
+    fn rise_time_measures_solved_edges() {
+        // Clean 0->3.3V edge over 1ns sampled at 100ps: 10-90% spans
+        // 0.8ns of the ramp.
+        let times: Vec<f64> = (0..=20).map(|k| k as f64 * 100e-12).collect();
+        let volts: Vec<f64> = times
+            .iter()
+            .map(|&t| 3.3 * (t / 1e-9).min(1.0))
+            .collect();
+        let tr = rise_time_ps(&times, &volts).unwrap();
+        assert!((tr - 800.0).abs() < 60.0, "tr = {tr}");
+        // Flat trace: no swing, honestly None.
+        let flat = vec![1.0; 21];
+        assert!(rise_time_ps(&times, &flat).is_none());
+    }
+
+    #[test]
     fn layer_z0_dispatches_and_stays_sane() {
         // 4L preset: outer microstrip over the thin prepreg ~50Ω at
         // 0.15mm; inner stripline between planes separated by the

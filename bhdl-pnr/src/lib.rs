@@ -2274,6 +2274,41 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                         ));
                     }
                 }
+                Constraint::NoiseBudget { net, max_mv, .. } => {
+                    let Some(i) = idx_of(*net) else { continue };
+                    match routing::extract::crosstalk_worst_mv(&board, &final_routes, i) {
+                        Some((mv, ai, mm)) => {
+                            let ok = mv <= *max_mv as f64;
+                            rows.push(format!(
+                                "noise budget {}: measured worst {mv:.1}mV (vs {}, {mm:.1}mm coupled) budget {max_mv}mV — {}",
+                                board.nets[i].name,
+                                board.nets[ai].name,
+                                if ok { "PASS" } else { "FAIL" }
+                            ));
+                        }
+                        None => rows.push(format!(
+                            "noise budget {}: declared {max_mv}mV but no measured aggressor edge — ungradable, see absence ledger",
+                            board.nets[i].name
+                        )),
+                    }
+                }
+                Constraint::RailDrop { net, max_mv, .. } => {
+                    let Some(i) = idx_of(*net) else { continue };
+                    match routing::extract::ir_drop_mv_of(&board, &final_routes, i) {
+                        Some(mv) => {
+                            let ok = mv <= *max_mv as f64;
+                            rows.push(format!(
+                                "rail drop {}: measured {mv:.1}mV budget {max_mv}mV — {}",
+                                board.nets[i].name,
+                                if ok { "PASS" } else { "FAIL" }
+                            ));
+                        }
+                        None => rows.push(format!(
+                            "rail drop {}: declared {max_mv}mV but no solved current (or plane rail) — ungradable, see absence ledger",
+                            board.nets[i].name
+                        )),
+                    }
+                }
                 Constraint::Impedance { net, target_ohms, tolerance_pct, .. } => {
                     let Some(i) = idx_of(*net) else { continue };
                     let min_w = final_routes[i]

@@ -165,6 +165,120 @@ pub(crate) fn crosstalk_rows(
         .collect()
 }
 
+/// Worst MEASURED crosstalk noise into `vi` (mV): max over aggressors
+/// of k_b x measured swing — Some only when a solved IBIS edge exists
+/// on either side of the worst couple (Real-Data: no trace, no gate).
+pub(crate) fn crosstalk_worst_mv(
+    board: &Board,
+    routes: &[Route],
+    vi: usize,
+) -> Option<(f64, usize, f64)> {
+    let mut worst: Option<(f64, usize, f64)> = None;
+    for (ai, an) in board.nets.iter().enumerate() {
+        if ai == vi
+            || !matches!(an.net_class, PnrNetClass::Signal)
+            || an.plane_layer.is_some()
+        {
+            continue;
+        }
+        let Some(sw) = an.edge_swing_v.or(board.nets[vi].edge_swing_v) else {
+            continue;
+        };
+        let mut coupled = 0.0;
+        let mut gap_sum = 0.0;
+        let mut h_ref: Option<f64> = None;
+        for sv in &routes[vi].segments {
+            let lv = (sv.end.0 - sv.start.0).hypot(sv.end.1 - sv.start.1);
+            if lv < 0.3 {
+                continue;
+            }
+            let mut hits = 0usize;
+            let mut gacc = 0.0;
+            for k in 0..5 {
+                let t = (k as f64 + 0.5) / 5.0;
+                let p = (
+                    sv.start.0 + t * (sv.end.0 - sv.start.0),
+                    sv.start.1 + t * (sv.end.1 - sv.start.1),
+                );
+                let mut gmin = f64::INFINITY;
+                for sa in &routes[ai].segments {
+                    if sa.layer != sv.layer {
+                        continue;
+                    }
+                    let (dx, dy) = (sa.end.0 - sa.start.0, sa.end.1 - sa.start.1);
+                    let l2 = dx * dx + dy * dy;
+                    let u = if l2 <= 1e-12 {
+                        0.0
+                    } else {
+                        (((p.0 - sa.start.0) * dx + (p.1 - sa.start.1) * dy) / l2)
+                            .clamp(0.0, 1.0)
+                    };
+                    let d = (p.0 - (sa.start.0 + u * dx))
+                        .hypot(p.1 - (sa.start.1 + u * dy))
+                        - sv.width_mm / 2.0
+                        - sa.width_mm / 2.0;
+                    gmin = gmin.min(d.max(0.0));
+                }
+                if gmin <= XT_REACH_MM {
+                    hits += 1;
+                    gacc += gmin;
+                    if h_ref.is_none() {
+                        h_ref = layer_h(&board.layer_stack, sv.layer);
+                    }
+                }
+            }
+            if hits > 0 {
+                coupled += lv * hits as f64 / 5.0;
+                gap_sum += gacc / hits as f64 * (lv * hits as f64 / 5.0);
+            }
+        }
+        if coupled < 0.5 {
+            continue;
+        }
+        let gap = gap_sum / coupled;
+        let h = h_ref.unwrap_or(0.1);
+        let kb = 0.25 / (1.0 + (gap / h).powi(2));
+        let mv = kb * sw * 1000.0;
+        if worst.map_or(true, |(wm, _, _)| mv > wm) {
+            worst = Some((mv, ai, coupled));
+        }
+    }
+    worst
+}
+
+/// Routed-trace IR drop of net `i` (mV): R x max solved instance
+/// current. None when nothing was solved or the net is a plane.
+pub(crate) fn ir_drop_mv_of(board: &Board, routes: &[Route], i: usize) -> Option<f64> {
+    let net = &board.nets[i];
+    if net.plane_layer.is_some() || routes[i].is_empty() {
+        return None;
+    }
+    let mut r_ohm = 0.0;
+    for sg in &routes[i].segments {
+        let l = (sg.end.0 - sg.start.0).hypot(sg.end.1 - sg.start.1);
+        let t = board
+            .layer_stack
+            .layers
+            .get(sg.layer)
+            .map(|ly| ly.thickness_mm)
+            .unwrap_or(0.035);
+        r_ohm += RHO_CU_OHM_MM * l / (sg.width_mm * t);
+    }
+    let comp_ids: std::collections::HashSet<ComponentId> =
+        net.pins.iter().map(|&(cid, _)| cid).collect();
+    let i_a = board
+        .components
+        .iter()
+        .filter(|c| comp_ids.contains(&c.id))
+        .filter_map(|c| c.solved_current_a)
+        .map(f64::abs)
+        .fold(0.0_f64, f64::max);
+    if i_a <= 0.0 {
+        return None;
+    }
+    Some(r_ohm * i_a * 1000.0)
+}
+
 /// IR-drop rows for POWER/GROUND nets routed as traces (plane nets'
 /// copper is the fill — a different, far smaller resistance). R from
 /// per-segment ρL/(w·t) with the layer's copper thickness; I = the
