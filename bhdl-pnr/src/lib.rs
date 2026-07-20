@@ -1912,7 +1912,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         let mut rows: Vec<String> = Vec::new();
         for c in &board.constraints {
             match c {
-                Constraint::DiffPair { p_net, n_net, length_match_mm, spacing_mm, .. } => {
+                Constraint::DiffPair { p_net, n_net, length_match_mm, length_match_ps, spacing_mm, .. } => {
                     let (Some(pi), Some(ni)) = (idx_of(*p_net), idx_of(*n_net)) else {
                         continue;
                     };
@@ -1940,8 +1940,14 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                         }
                         _ => None,
                     });
-                    match covering {
-                        Some((_, Some(limit_ps))) => {
+                    // A DERIVED time budget on the pair itself (IBIS
+                    // measured edge → t_rise/10) grades delay too,
+                    // unless a declared LengthMatchGroup covers it.
+                    let effective_ps = covering
+                        .and_then(|(_, ps)| ps)
+                        .or(*length_match_ps);
+                    match (covering, effective_ps) {
+                        (_, Some(limit_ps)) => {
                             let dp = routing::measure::net_routed_delay_ps(
                                 &final_routes[pi],
                                 &board.layer_stack,
@@ -2078,6 +2084,36 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                                 "impedance {}: target {target_ohms}Ω, routed worst {kind} {z:.1}Ω on layer {l} ({dev_pct:.1}% dev, tol {tolerance_pct}%) min width {min_w:.2}mm — {}",
                                 board.nets[i].name,
                                 if ok { "PASS" } else { "FAIL" }
+                            ));
+                            // P3 derived-rules table: the width this
+                            // stackup demands for the target on EVERY
+                            // signal layer (microstrip / stripline per
+                            // dispatch) — the provenance a reviewer
+                            // checks the routed geometry against.
+                            let z_w = if pair_gap.is_some() {
+                                z_target / 2.0
+                            } else {
+                                z_target
+                            };
+                            let cells: Vec<String> = board
+                                .layer_stack
+                                .signal_layer_indices()
+                                .into_iter()
+                                .map(|sl| {
+                                    match routing::measure::layer_width_for(
+                                        &board.layer_stack,
+                                        sl,
+                                        z_w,
+                                    ) {
+                                        Some(w) => format!("L{sl}={w:.2}mm"),
+                                        None => format!("L{sl}=unreachable"),
+                                    }
+                                })
+                                .collect();
+                            rows.push(format!(
+                                "impedance {} width table (Z0 {z_w:.0}Ω): {}",
+                                board.nets[i].name,
+                                cells.join(" ")
                             ));
                         }
                         None => rows.push(format!(

@@ -969,6 +969,46 @@ pub fn build_board(
                 }
             }
         }
+        // P3 — DERIVED SKEW BUDGET: where a pair member's driver has a
+        // MEASURED IBIS edge (a solved transient trace), the skew
+        // budget the physics demands is a fraction of that edge —
+        // t_rise/10 in time, graded as routed DELAY. Real-Data policy:
+        // no trace, no time budget (the mm default stands). Only the
+        // lowering default is replaced; declared budgets win.
+        if let Some(sim) = simulation {
+            let name_of: std::collections::HashMap<NetId, &str> = nets
+                .iter()
+                .map(|n| (n.id, n.name.as_str()))
+                .collect();
+            for c in iface_constraints.iter_mut() {
+                if let Constraint::DiffPair { p_net, n_net, length_match_ps, source, .. } = c
+                {
+                    if length_match_ps.is_some() || !source.intent_kind.contains("differential")
+                    {
+                        continue;
+                    }
+                    let trace = [p_net, n_net].iter().find_map(|nid| {
+                        let name = name_of.get(nid)?;
+                        sim.transients
+                            .iter()
+                            .filter(|t| t.net == *name)
+                            .min_by_key(|t| if t.corner == "typ" { 0 } else { 1 })
+                    });
+                    let Some(tr) = trace else { continue };
+                    let Some(t_rise) =
+                        crate::routing::measure::rise_time_ps(&tr.times, &tr.volts)
+                    else {
+                        continue;
+                    };
+                    let budget = (t_rise / 10.0).max(1.0);
+                    log::info!(
+                        "derived skew budget: pair edge measured {t_rise:.0}ps ({} corner {}) → length_match {budget:.0}ps (t_rise/10)",
+                        tr.net, tr.corner
+                    );
+                    *length_match_ps = Some(budget as f32);
+                }
+            }
+        }
     }
 
     // Layer rules → allowed-layer masks. Pad layers are physics: a

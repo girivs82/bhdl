@@ -373,6 +373,59 @@ pub(crate) fn layer_zdiff(
     Some(2.0 * z0 * (1.0 - k * (-c * s_mm / h).exp()))
 }
 
+/// Invert layer_z0: the width hitting `z0` on this LAYER (microstrip
+/// or stripline per the stackup dispatch). Monotone decreasing in w.
+pub(crate) fn layer_width_for(stack: &LayerStack, layer: usize, z0: f64) -> Option<f64> {
+    let f = |w: f64| layer_z0(stack, layer, w).map(|z| z - z0);
+    let (mut lo, mut hi) = (0.05_f64, 10.0_f64);
+    if f(lo)? < 0.0 || f(hi)? > 0.0 {
+        return None;
+    }
+    for _ in 0..60 {
+        let mid = (lo + hi) / 2.0;
+        if f(mid)? > 0.0 {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    Some((lo + hi) / 2.0)
+}
+
+/// 10%→90% rise time (ps) MEASURED from a solved transient trace —
+/// the edge the skew budget derives from is silicon behavior, not a
+/// datasheet nominal. None when the trace has no monotone-ish swing
+/// worth measuring (< 0.1V) or the thresholds never cross.
+pub(crate) fn rise_time_ps(times: &[f64], volts: &[f64]) -> Option<f64> {
+    if times.len() < 4 || times.len() != volts.len() {
+        return None;
+    }
+    let v0 = *volts.first().unwrap();
+    let v1 = *volts.last().unwrap();
+    if (v1 - v0).abs() < 0.1 {
+        return None;
+    }
+    let (v_lo, v_hi) = (v0 + 0.1 * (v1 - v0), v0 + 0.9 * (v1 - v0));
+    let rising = v1 > v0;
+    let cross = |thr: f64| -> Option<f64> {
+        for k in 1..times.len() {
+            let (a, b) = (volts[k - 1], volts[k]);
+            let hit = if rising { a < thr && b >= thr } else { a > thr && b <= thr };
+            if hit {
+                let t = (thr - a) / (b - a);
+                return Some(times[k - 1] + t * (times[k] - times[k - 1]));
+            }
+        }
+        None
+    };
+    let (t_lo, t_hi) = (cross(v_lo)?, cross(v_hi)?);
+    let dt = (t_hi - t_lo).abs();
+    if dt <= 0.0 {
+        return None;
+    }
+    Some(dt * 1e12)
+}
+
 /// Joint COUPLED diff-pair design point on the given geometry: fix
 /// the conventional gap ratio s = 1.5·w and bisect w on
 /// Zdiff = 2·Z0(w)·(1 − k·e^(−c·s/h)). Solving w from Zdiff/2
