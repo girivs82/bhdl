@@ -2018,18 +2018,72 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                         ));
                     }
                 }
-                Constraint::Impedance { net, target_ohms, .. } => {
+                Constraint::Impedance { net, target_ohms, tolerance_pct, .. } => {
                     let Some(i) = idx_of(*net) else { continue };
                     let min_w = final_routes[i]
                         .segments
                         .iter()
                         .map(|sg| sg.width_mm)
                         .fold(f64::INFINITY, f64::min);
-                    if min_w.is_finite() {
-                        rows.push(format!(
-                            "impedance {}: target {target_ohms}Ω, routed min width {min_w:.2}mm (floor {:.2}mm)",
+                    if !min_w.is_finite() {
+                        continue;
+                    }
+                    // P3: grade the ROUTED copper's impedance — every
+                    // segment's Z0 from its own layer's stackup model
+                    // (microstrip outer / stripline inner), worst
+                    // deviation vs target. A diff-net member's
+                    // single-ended target is Zdiff/2, matching the
+                    // width-floor convention.
+                    // A DIFF member grades on the COUPLED model at the
+                    // pair's designed gap (grading Zdiff/2 single-ended
+                    // flags the coupled design point as a false FAIL).
+                    let pair_gap = board.constraints.iter().find_map(|c2| match c2 {
+                        Constraint::DiffPair { p_net, n_net, spacing_mm, .. }
+                            if p_net == net || n_net == net =>
+                        {
+                            Some(*spacing_mm as f64)
+                        }
+                        _ => None,
+                    });
+                    let z_target = *target_ohms as f64;
+                    let mut worst: Option<(f64, usize)> = None; // (z, layer)
+                    for sg in &final_routes[i].segments {
+                        let z = match pair_gap {
+                            Some(gap) => routing::measure::layer_zdiff(
+                                &board.layer_stack,
+                                sg.layer,
+                                sg.width_mm,
+                                gap,
+                            ),
+                            None => routing::measure::layer_z0(
+                                &board.layer_stack,
+                                sg.layer,
+                                sg.width_mm,
+                            ),
+                        };
+                        if let Some(z) = z {
+                            if worst
+                                .map_or(true, |(wz, _)| (z - z_target).abs() > (wz - z_target).abs())
+                            {
+                                worst = Some((z, sg.layer));
+                            }
+                        }
+                    }
+                    match worst {
+                        Some((z, l)) => {
+                            let dev_pct = (z - z_target).abs() / z_target * 100.0;
+                            let ok = dev_pct <= *tolerance_pct as f64;
+                            let kind = if pair_gap.is_some() { "Zdiff" } else { "Z0" };
+                            rows.push(format!(
+                                "impedance {}: target {target_ohms}Ω, routed worst {kind} {z:.1}Ω on layer {l} ({dev_pct:.1}% dev, tol {tolerance_pct}%) min width {min_w:.2}mm — {}",
+                                board.nets[i].name,
+                                if ok { "PASS" } else { "FAIL" }
+                            ));
+                        }
+                        None => rows.push(format!(
+                            "impedance {}: target {target_ohms}Ω, routed min width {min_w:.2}mm (floor {:.2}mm) — no stackup dielectrics, Z0 ungraded",
                             board.nets[i].name, board.nets[i].required_trace_width_mm
-                        ));
+                        )),
                     }
                 }
                 Constraint::Topology { net, kind, stub_max_mm, .. } => {

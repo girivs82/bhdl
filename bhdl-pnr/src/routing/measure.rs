@@ -273,9 +273,190 @@ pub(crate) fn microstrip_width_for(z0: f64, h_mm: f64, t_mm: f64, er: f64) -> Op
     Some((lo + hi) / 2.0)
 }
 
+/// IPC-2141 symmetric-stripline impedance: trace width `w`, thickness
+/// `t`, planes separated by `b` (all mm), permittivity `er`.
+pub(crate) fn stripline_z0(w_mm: f64, b_mm: f64, t_mm: f64, er: f64) -> f64 {
+    60.0 / er.sqrt() * (1.9 * b_mm / (0.8 * w_mm + t_mm)).ln()
+}
+
+/// Z0 of a trace of width `w` on `layer`, dispatched by the STACKUP:
+/// microstrip on the outers (over the adjacent dielectric), stripline
+/// on inners (planes bounding the adjacent dielectric pair). None
+/// when the stackup declares no dielectrics — no fabricated numbers.
+pub(crate) fn layer_z0(stack: &LayerStack, layer: usize, w_mm: f64) -> Option<f64> {
+    if stack.dielectrics.is_empty() {
+        return None;
+    }
+    let n = stack.layers.len();
+    let t = stack.layers.get(layer).map(|l| l.thickness_mm).unwrap_or(0.035);
+    if layer == 0 || layer + 1 == n {
+        let d = if layer == 0 {
+            &stack.dielectrics[0]
+        } else {
+            stack.dielectrics.last().unwrap()
+        };
+        return Some(microstrip_z0(w_mm, d.thickness_mm, t, d.er));
+    }
+    let above = stack.dielectrics.get(layer.saturating_sub(1));
+    let below = stack.dielectrics.get(layer.min(stack.dielectrics.len() - 1));
+    let (ha, hb, er) = match (above, below) {
+        (Some(a), Some(b)) => (a.thickness_mm, b.thickness_mm, (a.er + b.er) / 2.0),
+        (Some(a), None) => (a.thickness_mm, a.thickness_mm, a.er),
+        (None, Some(b)) => (b.thickness_mm, b.thickness_mm, b.er),
+        (None, None) => return None,
+    };
+    Some(stripline_z0(w_mm, ha + hb + t, t, er))
+}
+
+/// Edge-coupled differential GAP for a target Zdiff at trace width
+/// `w` on the given geometry — the classic IPC-2141 coupling
+/// approximations Zdiff = 2·Z0·(1 − k·e^(−c·s/h)), microstrip
+/// (k=0.48, c=0.96) / stripline (k=0.374, c=2.9), inverted for s.
+/// None when the target is at or above 2·Z0 (the pair decouples —
+/// no gap achieves it) or requires s <= 0.
+pub(crate) fn diff_gap_for(
+    zdiff: f64,
+    w_mm: f64,
+    h_mm: f64,
+    t_mm: f64,
+    er: f64,
+    outer: bool,
+) -> Option<f64> {
+    let z0 = if outer {
+        microstrip_z0(w_mm, h_mm, t_mm, er)
+    } else {
+        stripline_z0(w_mm, h_mm, t_mm, er)
+    };
+    let (k, c) = if outer { (0.48, 0.96) } else { (0.374, 2.9) };
+    let q = (1.0 - zdiff / (2.0 * z0)) / k;
+    if q <= 0.0 || q >= 1.0 {
+        return None;
+    }
+    Some(-(q.ln()) * h_mm / c)
+}
+
+/// COUPLED differential impedance of a pair routed at width `w` and
+/// gap `s` on `layer` — layer_z0's dispatch with the edge-coupling
+/// factor. The coupling length scale is the same dielectric height
+/// the Z0 model uses.
+pub(crate) fn layer_zdiff(
+    stack: &LayerStack,
+    layer: usize,
+    w_mm: f64,
+    s_mm: f64,
+) -> Option<f64> {
+    if stack.dielectrics.is_empty() {
+        return None;
+    }
+    let n = stack.layers.len();
+    let z0 = layer_z0(stack, layer, w_mm)?;
+    let outer = layer == 0 || layer + 1 == n;
+    let h = if outer {
+        let d = if layer == 0 {
+            &stack.dielectrics[0]
+        } else {
+            stack.dielectrics.last().unwrap()
+        };
+        d.thickness_mm
+    } else {
+        let t = stack.layers.get(layer).map(|l| l.thickness_mm).unwrap_or(0.035);
+        let above = stack.dielectrics.get(layer.saturating_sub(1));
+        let below = stack.dielectrics.get(layer.min(stack.dielectrics.len() - 1));
+        match (above, below) {
+            (Some(a), Some(b)) => a.thickness_mm + b.thickness_mm + t,
+            (Some(a), None) => 2.0 * a.thickness_mm + t,
+            (None, Some(b)) => 2.0 * b.thickness_mm + t,
+            (None, None) => return None,
+        }
+    };
+    let (k, c) = if outer { (0.48, 0.96) } else { (0.374, 2.9) };
+    Some(2.0 * z0 * (1.0 - k * (-c * s_mm / h).exp()))
+}
+
+/// Joint COUPLED diff-pair design point on the given geometry: fix
+/// the conventional gap ratio s = 1.5·w and bisect w on
+/// Zdiff = 2·Z0(w)·(1 − k·e^(−c·s/h)). Solving w from Zdiff/2
+/// uncoupled and then asking for a gap is degenerate (the coupled
+/// equation lands exactly at s = ∞); the pair is only a PAIR when
+/// (w, s) are chosen together. Returns (w_mm, s_mm).
+pub(crate) fn diff_pair_geometry(
+    zdiff: f64,
+    h_mm: f64,
+    t_mm: f64,
+    er: f64,
+    outer: bool,
+) -> Option<(f64, f64)> {
+    let (k, c) = if outer { (0.48, 0.96) } else { (0.374, 2.9) };
+    let zd = |w: f64| -> f64 {
+        let z0 = if outer {
+            microstrip_z0(w, h_mm, t_mm, er)
+        } else {
+            stripline_z0(w, h_mm, t_mm, er)
+        };
+        2.0 * z0 * (1.0 - k * (-c * 1.5 * w / h_mm).exp())
+    };
+    let (mut lo, mut hi) = (0.05_f64, 10.0_f64);
+    if zd(lo) < zdiff || zd(hi) > zdiff {
+        return None; // outside what this geometry can do
+    }
+    for _ in 0..60 {
+        let mid = (lo + hi) / 2.0;
+        if zd(mid) > zdiff {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let w = (lo + hi) / 2.0;
+    Some((w, 1.5 * w))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn coupled_pair_geometry_narrower_than_uncoupled() {
+        // Coupling LOWERS Zdiff at a given w, so hitting the target
+        // coupled needs a NARROWER trace than the uncoupled Zdiff/2
+        // solve — and the gap is finite.
+        let (w, s) = diff_pair_geometry(100.0, 0.10, 0.035, 3.48, true).unwrap();
+        let w_unc = microstrip_width_for(50.0, 0.10, 0.035, 3.48).unwrap();
+        assert!(w < w_unc, "coupled {w} vs uncoupled {w_unc}");
+        assert!((s - 1.5 * w).abs() < 1e-9 && s > 0.05 && s < 2.0);
+        // The design point really hits the target through the model.
+        let z0 = microstrip_z0(w, 0.10, 0.035, 3.48);
+        let zd = 2.0 * z0 * (1.0 - 0.48 * (-0.96 * s / 0.10_f64).exp());
+        assert!((zd - 100.0).abs() < 1.0, "zdiff = {zd}");
+    }
+
+    #[test]
+    fn layer_z0_dispatches_and_stays_sane() {
+        // 4L preset: outer microstrip over the thin prepreg ~50Ω at
+        // 0.15mm; inner stripline between planes separated by the
+        // THICK core runs HIGHER Z0 at the same width (b dominates).
+        let stack = crate::stackup::stackup_preset(crate::types::StackupPreset::FourLayer);
+        let z_out = layer_z0(&stack, 0, 0.15).unwrap();
+        let z_in = layer_z0(&stack, 1, 0.15).unwrap();
+        assert!((40.0..60.0).contains(&z_out), "microstrip {z_out}");
+        assert!((60.0..120.0).contains(&z_in), "stripline {z_in}");
+    }
+
+    #[test]
+    fn diff_gap_monotone_in_target() {
+        // Tighter Zdiff (more coupling) needs a SMALLER gap. On this
+        // geometry Z0(0.15mm) ~ 49.6, so 80/90Ω are coupled-reachable
+        // while 100Ω exceeds 2·Z0 — honestly None (uncoupled).
+        let s80 = diff_gap_for(80.0, 0.15, 0.10, 0.035, 4.2, true);
+        let s90 = diff_gap_for(90.0, 0.15, 0.10, 0.035, 4.2, true);
+        if let (Some(a), Some(b)) = (s80, s90) {
+            assert!(a < b, "gap(80)={a} gap(90)={b}");
+            assert!(a > 0.0 && b < 5.0);
+        } else {
+            panic!("expected reachable gaps: {s80:?} {s90:?}");
+        }
+        assert!(diff_gap_for(100.0, 0.15, 0.10, 0.035, 4.2, true).is_none());
+    }
 
     #[test]
     fn stripline_delay_tracks_material() {

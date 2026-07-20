@@ -819,7 +819,7 @@ pub fn build_board(
     // attributes (shipped v0.8) into typed net/signal constraints, with
     // live pin-path→NetId resolution. The expansion-intent half is added
     // later by `intent::lower_board_intents` (it appends to this vec).
-    let (iface_constraints, iface_diags) =
+    let (mut iface_constraints, iface_diags) =
         extract_interface_constraints(netlist, &id_map, &inst_pin_to_net);
     for d in &iface_diags {
         log::warn!("interface constraints: {d}");
@@ -853,6 +853,28 @@ pub fn build_board(
                 .collect();
             for c in &iface_constraints {
                 if let Constraint::Impedance { net, target_ohms, .. } = c {
+                    // P3: a DIFF member's width comes from the JOINT
+                    // coupled design point (w, s=1.5w) — solving the
+                    // uncoupled Zdiff/2 then asking for a gap is
+                    // degenerate (lands at s = infinity).
+                    if diff_nets.contains(net) {
+                        if let Some((w, _s)) = crate::routing::measure::diff_pair_geometry(
+                            *target_ohms as f64, h_mm, t, er, true,
+                        ) {
+                            if w <= 2.0 {
+                                if let Some(n) = nets.iter_mut().find(|n| n.id == *net) {
+                                    if w > n.required_trace_width_mm {
+                                        log::info!(
+                                            "impedance floor (coupled): '{}' Zdiff {:.0}Ω → {:.2}mm trace (h={h_mm}mm er={er})",
+                                            n.name, *target_ohms as f64, w
+                                        );
+                                        n.required_trace_width_mm = w;
+                                    }
+                                }
+                                continue;
+                            }
+                        }
+                    }
                     let z0 = if diff_nets.contains(net) {
                         *target_ohms as f64 / 2.0
                     } else {
@@ -881,6 +903,68 @@ pub fn build_board(
                                 );
                             }
                         }
+                    }
+                }
+            }
+        }
+        // P3 — DERIVED PAIR GAP: the interface lowering stamps a
+        // conventional 0.15mm spacing; where the pair carries a
+        // differential-impedance target, the stackup DEMANDS a
+        // specific edge-coupling gap (Real-Data policy: the rule
+        // exists because the physics does). User-declared spacings
+        // arrive through other constraint forms and are not touched.
+        if let Some((h_mm, er)) = h {
+            let zdiff_of: std::collections::HashMap<NetId, f64> = iface_constraints
+                .iter()
+                .filter_map(|c| match c {
+                    Constraint::Impedance { net, target_ohms, .. } => {
+                        Some((*net, *target_ohms as f64))
+                    }
+                    _ => None,
+                })
+                .collect();
+            let width_of: std::collections::HashMap<NetId, f64> = nets
+                .iter()
+                .map(|n| (n.id, n.required_trace_width_mm))
+                .collect();
+            for c in iface_constraints.iter_mut() {
+                if let Constraint::DiffPair { p_net, n_net, spacing_mm, source, .. } = c {
+                    if (*spacing_mm as f64 - 0.15).abs() > 1e-6
+                        || !source.intent_kind.contains("differential")
+                    {
+                        continue; // not the lowering default — designer's word wins
+                    }
+                    let Some(&zdiff) = zdiff_of.get(p_net).or_else(|| zdiff_of.get(n_net))
+                    else {
+                        continue; // no impedance target — nothing demands a gap
+                    };
+                    let _ = width_of;
+                    let min_w = config.board_config.min_trace_width_mm;
+                    if let Some((w, s)) = crate::routing::measure::diff_pair_geometry(
+                        zdiff, h_mm, t, er, true,
+                    ) {
+                        // The design point must be FABBABLE: below the
+                        // min trace width, clamp w and re-solve the
+                        // gap at the real width. When the target sits
+                        // at/above 2·Z0(min_w) no finite gap reaches
+                        // it — decouple (wide gap) and let the
+                        // sign-off grade the honest asymptote.
+                        let (w_eff, s_eff) = if w < min_w {
+                            match crate::routing::measure::diff_gap_for(
+                                zdiff, min_w, h_mm, t, er, true,
+                            ) {
+                                Some(s2) => (min_w, s2),
+                                None => (min_w, 1.0),
+                            }
+                        } else {
+                            (w, s)
+                        };
+                        let s_eff = s_eff.clamp(0.09, 1.0);
+                        log::info!(
+                            "derived pair gap: Zdiff {zdiff:.0}Ω coupled design point \
+                             w={w_eff:.2}mm s={s_eff:.2}mm on outer (h={h_mm}mm er={er}) — was default 0.15",
+                        );
+                        *spacing_mm = s_eff as f32;
                     }
                 }
             }
