@@ -2213,6 +2213,13 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                 _ => {}
             }
         }
+        // P4 — POST-ROUTE EXTRACTION: what the routed copper DOES,
+        // measured from its geometry. Crosstalk couples, IR drop on
+        // routed power traces, return-path void crossings — the
+        // re-simulation inputs and the reviewer's noise ledger.
+        rows.extend(routing::extract::crosstalk_rows(&board, &final_routes, 5));
+        rows.extend(routing::extract::ir_rows(&board, &final_routes));
+        rows.extend(routing::extract::return_path_rows(&board, &final_routes, 5));
         // Both ends of a link can carry the same constraint (each
         // instance's module holds its side's attrs, resolving to the
         // same nets) — one row per distinct fact.
