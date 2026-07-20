@@ -44,6 +44,12 @@ pub struct GridCell {
     /// Absolutely unroutable (edge band, keepouts, mounting holes,
     /// committed route footprints in later passes) — owners irrelevant.
     pub hard: bool,
+    /// P4 return-path feedback: soft extra cost on signal cells whose
+    /// reference planes are PUNCHED here (THT barrel voids) — return
+    /// current detours around voids, so routes should prefer to as
+    /// well. Cost, never a block: crossing stays legal when the
+    /// detour is worse.
+    pub si_cost: f64,
 }
 
 impl Default for GridCell {
@@ -57,6 +63,7 @@ impl Default for GridCell {
             owners: Vec::new(),
             nc_blocked: false,
             hard: false,
+            si_cost: 0.0,
         }
     }
 }
@@ -364,6 +371,72 @@ impl RoutingGrid {
                                     {
                                         cell.owners.push(n);
                                     }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // P4 STAGE 3 — RETURN-PATH COST: every THT barrel punches every
+        // plane it pierces; a signal crossing over the punch forces its
+        // return current around the void (the extraction pass counts
+        // exactly these). Stamp a soft cost on signal-layer cells over
+        // barrel punches so the router prefers un-punched corridors —
+        // boards without plane layers are exempt (no return plane to
+        // protect).
+        // DEFAULT OFF (BHDL_PNR_SI_COST=1 enables): the first A/B was
+        // MIXED — s7/s13 reached perfect 0/0 but s42 flushed 2 fill
+        // slivers + s99 1 clearance (latent bugs under new routing),
+        // and worst-case crossing counts did not drop (the THT field
+        // is unavoidable for cross-board routes on the uno). The term
+        // needs a tuning session with the fill/clearance flushes fixed
+        // first; the plumbing stays so that session is a knob-turn.
+        let has_planes = std::env::var("BHDL_PNR_SI_COST").is_ok()
+            && board
+                .layer_stack
+                .layers
+                .iter()
+                .any(|l| l.capacity_factor <= 0.0);
+        if has_planes {
+            const SI_RETURN_COST: f64 = 0.5;
+            let signal_layers: Vec<usize> = board
+                .layer_stack
+                .layers
+                .iter()
+                .enumerate()
+                .filter(|(_, l)| l.capacity_factor > 0.0)
+                .map(|(i, _)| i)
+                .collect();
+            for comp in &board.components {
+                let cos_t = comp.theta.cos();
+                let sin_t = comp.theta.sin();
+                for pin in &comp.pins {
+                    if pin.unplaced {
+                        continue;
+                    }
+                    let Some(pad) = &pin.pad else { continue };
+                    if pad.drill_mm.is_none() {
+                        continue;
+                    }
+                    let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
+                    let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+                    let pr = pad.width_mm.max(pad.height_mm) / 2.0 + 0.35;
+                    for r in 0..grid.y_coords.len().saturating_sub(1) {
+                        let cy = (grid.y_coords[r] + grid.y_coords[r + 1]) / 2.0;
+                        if (cy - gy).abs() > pr {
+                            continue;
+                        }
+                        for c in 0..grid.x_coords.len().saturating_sub(1) {
+                            let cx = (grid.x_coords[c] + grid.x_coords[c + 1]) / 2.0;
+                            if (cx - gx).hypot(cy - gy) > pr {
+                                continue;
+                            }
+                            for &l in &signal_layers {
+                                let cell = &mut grid.cells[l][r][c];
+                                if cell.si_cost < SI_RETURN_COST {
+                                    cell.si_cost = SI_RETURN_COST;
                                 }
                             }
                         }

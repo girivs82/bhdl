@@ -1054,7 +1054,7 @@ fn cell_cost(cell: &crate::routing::grid::GridCell, history_factor: f64, present
     } else {
         0.0
     };
-    base + history + present
+    base + history + present + cell.si_cost
 }
 
 /// Convert a cell path to physical route segments and vias.
