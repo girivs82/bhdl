@@ -1611,6 +1611,154 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                 }
                 pruned += 1;
             }
+            // CROSS-SPAN HAIRPIN STITCH: two same-net arms sharing a
+            // tip ACROSS span boundaries (an attach branch doubling
+            // back beside the through route at < ~25°) taper their
+            // copper union to a sub-min-feature spike where the
+            // capsules separate — KiCad's copper_sliver (the s42
+            // si_cost latent: a 10.5° V at (42.83,29.80)). The
+            // consecutive-pair collapse above cannot see these. The
+            // repair ADDS copper: one exact-gated chord across the
+            // arms at 1.2mm from the tip blunts the union outline;
+            // nothing is removed, connectivity only gains.
+            {
+                let mut stitches: Vec<(RouteSegment, usize)> = Vec::new(); // (chord, layer unused)
+                {
+                    let r = &final_routes[i];
+                    let nseg = r.segments.len();
+                    let span_of = |k: usize| -> usize {
+                        r.path_spans
+                            .iter()
+                            .position(|&(ps, pl)| k >= ps && k < ps + pl)
+                            .unwrap_or(usize::MAX)
+                    };
+                    for k1 in 0..nseg {
+                        for k2 in (k1 + 1)..nseg {
+                            let (s1, s2) = (&r.segments[k1], &r.segments[k2]);
+                            if s1.layer != s2.layer {
+                                continue;
+                            }
+                            // consecutive-in-span pairs were handled above
+                            if span_of(k1) == span_of(k2) && k2 == k1 + 1 {
+                                continue;
+                            }
+                            let mut tip: Option<(f64, f64)> = None;
+                            for pa in [s1.start, s1.end] {
+                                for pb in [s2.start, s2.end] {
+                                    if (pa.0 - pb.0).hypot(pa.1 - pb.1) < 1e-6 {
+                                        tip = Some(pa);
+                                    }
+                                }
+                            }
+                            let Some(tip) = tip else { continue };
+                            let away = |sg: &RouteSegment| -> ((f64, f64), f64) {
+                                let (o, e) = if (sg.start.0 - tip.0).hypot(sg.start.1 - tip.1)
+                                    < 1e-6
+                                {
+                                    (sg.start, sg.end)
+                                } else {
+                                    (sg.end, sg.start)
+                                };
+                                let v = (e.0 - o.0, e.1 - o.1);
+                                let l = v.0.hypot(v.1);
+                                ((v.0 / l.max(1e-12), v.1 / l.max(1e-12)), l)
+                            };
+                            let (u1, l1) = away(s1);
+                            let (u2, l2) = away(s2);
+                            if l1 < 1.4 || l2 < 1.4 {
+                                continue;
+                            }
+                            let cosang = u1.0 * u2.0 + u1.1 * u2.1;
+                            if cosang < (25.0_f64).to_radians().cos() || cosang > 1.0 - 1e-9
+                            {
+                                continue; // not a shallow V (or same direction overlap)
+                            }
+                            let d = 1.2;
+                            let pa = (tip.0 + u1.0 * d, tip.1 + u1.1 * d);
+                            let pb = (tip.0 + u2.0 * d, tip.1 + u2.1 * d);
+                            // Already stitched here?
+                            let dup = r.segments.iter().any(|sg| {
+                                ((sg.start.0 - pa.0).hypot(sg.start.1 - pa.1) < 1e-6
+                                    && (sg.end.0 - pb.0).hypot(sg.end.1 - pb.1) < 1e-6)
+                                    || ((sg.start.0 - pb.0).hypot(sg.start.1 - pb.1) < 1e-6
+                                        && (sg.end.0 - pa.0).hypot(sg.end.1 - pa.1) < 1e-6)
+                            }) || stitches.iter().any(|(sg, _)| {
+                                (sg.start.0 - pa.0).hypot(sg.start.1 - pa.1) < 1e-6
+                            });
+                            if dup {
+                                continue;
+                            }
+                            stitches.push((
+                                RouteSegment {
+                                    layer: s1.layer,
+                                    start: pa,
+                                    end: pb,
+                                    width_mm: s1.width_mm.max(s2.width_mm),
+                                },
+                                0,
+                            ));
+                        }
+                    }
+                }
+                if !stitches.is_empty() {
+                    let idx =
+                        geom::ClearanceIndex::build(&board, &final_routes, Some(final_routes[i].net_id));
+                    let net_id = final_routes[i].net_id;
+                    for (sg, _) in stitches {
+                        if idx
+                            .first_conflict(sg.start, sg.end, sg.width_mm, sg.layer, net_id)
+                            .is_some()
+                        {
+                            continue; // foreign copper in the wedge — leave it
+                        }
+                        // The chord ends land in host-segment INTERIORS
+                        // — KiCad's endpoint graph is end-to-end only,
+                        // so each host must be T-SPLIT at the landing
+                        // (the un-split version shipped the chord as a
+                        // track_dangling pair).
+                        let r = &mut final_routes[i];
+                        for pt in [sg.start, sg.end] {
+                            let host = r.segments.iter().position(|h| {
+                                h.layer == sg.layer
+                                    && geom::point_segment_dist(pt, h.start, h.end) < 1e-6
+                                    && (pt.0 - h.start.0).hypot(pt.1 - h.start.1) > 1e-6
+                                    && (pt.0 - h.end.0).hypot(pt.1 - h.end.1) > 1e-6
+                            });
+                            if let Some(hk) = host {
+                                let old_end = r.segments[hk].end;
+                                r.segments[hk].end = pt;
+                                r.segments.insert(
+                                    hk + 1,
+                                    RouteSegment {
+                                        layer: sg.layer,
+                                        start: pt,
+                                        end: old_end,
+                                        width_mm: r.segments[hk].width_mm,
+                                    },
+                                );
+                                for (qs, ql) in r.path_spans.iter_mut() {
+                                    if *qs <= hk && hk < *qs + *ql {
+                                        *ql += 1;
+                                    } else if *qs > hk {
+                                        *qs += 1;
+                                    }
+                                }
+                            }
+                        }
+                        let seg_start = r.segments.len();
+                        let via_start = r.vias.len();
+                        info!(
+                            "hairpin stitch: '{}' blunted a V at ({:.2},{:.2})",
+                            board.nets[i].name, sg.start.0, sg.start.1
+                        );
+                        r.segments.push(sg);
+                        r.path_spans.push((seg_start, 1));
+                        r.path_parents.push(None);
+                        r.via_spans.push((via_start, 0));
+                        pruned += 1;
+                    }
+                }
+            }
             // TAIL TRIM: a long span whose END dangles (post-validator
             // passes can amputate what it attached to) — walk inward
             // one segment at a time until a junction/anchor, exactly
