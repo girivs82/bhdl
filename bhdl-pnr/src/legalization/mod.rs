@@ -245,6 +245,64 @@ pub fn legalize(board: &mut Board, snap_grid_mm: f64) {
 /// Full placement legality of component `i` at hypothetical (x, y):
 /// inside the board (polygon-aware), clear of every other component's
 /// envelope (+0.5mm), keepouts, and mounting holes.
+/// PAD-AWARE box: component width/height model the BODY — a TQFP's
+/// 1.8mm pad fingers overhang the envelope, so an envelope test
+/// cannot see a pad-to-pad overlap (the shipped case: fingers 0.34mm
+/// into a pinned ICSP pin's annulus while envelopes showed a 1.05mm
+/// gap). Box = envelope UNION every pad's rotated rect.
+pub(crate) fn pad_bbox(board: &Board, k: usize) -> (f64, f64, f64, f64) {
+    let c = &board.components[k];
+    let (ecx, ecy, hw, hh) = c.envelope();
+    let (mut x0, mut y0, mut x1, mut y1) = (ecx - hw, ecy - hh, ecx + hw, ecy + hh);
+    let cos_t = c.theta.cos();
+    let sin_t = c.theta.sin();
+    let quarter = ((c.theta / std::f64::consts::FRAC_PI_2).round() as i64).rem_euclid(2);
+    for pin in &c.pins {
+        if pin.unplaced {
+            continue;
+        }
+        let gx = c.x + pin.dx * cos_t - pin.dy * sin_t;
+        let gy = c.y + pin.dx * sin_t + pin.dy * cos_t;
+        let (pw, ph) = match &pin.pad {
+            Some(p) => (p.width_mm, p.height_mm),
+            None => (0.5, 0.5),
+        };
+        let (pw, ph) = if quarter == 1 { (ph, pw) } else { (pw, ph) };
+        x0 = x0.min(gx - pw / 2.0);
+        y0 = y0.min(gy - ph / 2.0);
+        x1 = x1.max(gx + pw / 2.0);
+        y1 = y1.max(gy + ph / 2.0);
+    }
+    (x0, y0, x1, y1)
+}
+
+/// Residual pad-box overlaps in the final placement — a trial that
+/// ships one can NEVER beat a trial that ships none (placement
+/// illegality grades as clearance + mask-bridge violations no
+/// routing quality can buy back).
+pub(crate) fn residual_pad_overlaps(board: &Board) -> usize {
+    let n = board.components.len();
+    let pad_clear = board.config.min_spacing_mm;
+    let mut count = 0usize;
+    for i in 0..n {
+        for j in (i + 1)..n {
+            if !board.components[i].shares_surface(&board.components[j]) {
+                continue;
+            }
+            let (ax0, ay0, ax1, ay1) = pad_bbox(board, i);
+            let (bx0, by0, bx1, by1) = pad_bbox(board, j);
+            if !(ax0 >= bx1 + pad_clear
+                || bx0 >= ax1 + pad_clear
+                || ay0 >= by1 + pad_clear
+                || by0 >= ay1 + pad_clear)
+            {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
 pub(crate) fn position_legal(board: &Board, i: usize, x: f64, y: f64) -> bool {
     let comp = &board.components[i];
     let (ecx0, ecy0, hw, hh) = comp.envelope();
@@ -453,6 +511,101 @@ fn resolve_overlaps(board: &mut Board) {
         }
 
         if !any_overlap {
+            break;
+        }
+    }
+    // TERMINAL REPAIR: the pairwise push can fail to converge against
+    // pinned mechanicals (measured: a free TQFP-64 left with its pad
+    // column 1.4mm from a pinned ICSP header pin — the overlap shipped
+    // silently and graded as pad-to-pad clearance + mask bridges).
+    // Any pair still overlapping gets its free member relocated to the
+    // nearest fully legal position (position_legal covers every pair,
+    // edge, cutout, and keepout). Deterministic spiral; if no legal
+    // spot exists within reach, the component stays and the attempt's
+    // routing score reflects it honestly.
+    let pad_box = pad_bbox;
+    let pad_clear = board.config.min_spacing_mm;
+    for _round in 0..2 {
+        let mut moved = false;
+        for i in 0..n {
+            for j in (i + 1)..n {
+                if !board.components[i].shares_surface(&board.components[j]) {
+                    continue;
+                }
+                let (ax0, ay0, ax1, ay1) = pad_box(board, i);
+                let (bx0, by0, bx1, by1) = pad_box(board, j);
+                if ax0 >= bx1 + pad_clear
+                    || bx0 >= ax1 + pad_clear
+                    || ay0 >= by1 + pad_clear
+                    || by0 >= ay1 + pad_clear
+                {
+                    continue;
+                }
+                let k = if !board.components[j].placement.is_fixed() {
+                    j
+                } else if !board.components[i].placement.is_fixed() {
+                    i
+                } else {
+                    continue; // both pinned — user's contract, not ours
+                };
+                let (ox, oy) = (board.components[k].x, board.components[k].y);
+                let mut placed = false;
+                // Reach scales with the part: a 12mm TQFP on a dense
+                // board may have no legal spot within 8mm — searching
+                // only that far left it overlapping a pinned header.
+                let (_, _, khw, khh) = board.components[k].envelope();
+                let max_ring = (16 + ((khw.max(khh) * 4.0) as usize)).min(48);
+                'spiral: for ring in 1..=max_ring {
+                    let r = ring as f64 * 0.5;
+                    for a in 0..16 {
+                        let ang = a as f64 * std::f64::consts::PI / 8.0;
+                        let (nx, ny) = (ox + r * ang.cos(), oy + r * ang.sin());
+                        if !position_legal(board, k, nx, ny) {
+                            continue;
+                        }
+                        // Pad-aware clearance at the trial position
+                        // against every other component's pad box.
+                        board.components[k].x = nx;
+                        board.components[k].y = ny;
+                        let (tx0, ty0, tx1, ty1) = pad_box(board, k);
+                        let clear = (0..n).all(|m| {
+                            if m == k
+                                || !board.components[k]
+                                    .shares_surface(&board.components[m])
+                            {
+                                return true;
+                            }
+                            let (mx0, my0, mx1, my1) = pad_box(board, m);
+                            tx0 >= mx1 + pad_clear
+                                || mx0 >= tx1 + pad_clear
+                                || ty0 >= my1 + pad_clear
+                                || my0 >= ty1 + pad_clear
+                        });
+                        if clear {
+                            placed = true;
+                            moved = true;
+                            break 'spiral;
+                        }
+                        board.components[k].x = ox;
+                        board.components[k].y = oy;
+                    }
+                }
+                if placed {
+                    log::info!(
+                        "legalize: relocated '{}' off a residual overlap with '{}'",
+                        board.components[k].refdes,
+                        board.components[if k == i { j } else { i }].refdes
+                    );
+                } else {
+                    log::warn!(
+                        "legalize: NO legal spot for '{}' overlapping '{}' — placement ships illegal",
+                        board.components[k].refdes,
+                        board.components[if k == i { j } else { i }].refdes
+                    );
+                }
+            }
+        }
+        if !moved {
             break;
         }
     }

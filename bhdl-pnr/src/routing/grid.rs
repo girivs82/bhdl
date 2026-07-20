@@ -278,6 +278,100 @@ impl RoutingGrid {
             }
         }
 
+        // FANOUT DISCIPLINE: the interior of a quad IC's courtyard on
+        // the SURFACE layers is fanout space, not a transit corridor.
+        // A power tree cutting across a TQFP body can box one of the
+        // IC's own pins so tightly that no via site remains anywhere
+        // (uno free-MCU: a VCC U-run through the TQFP-64 body left
+        // UGND with provably zero drop sites). Cells strictly inside
+        // the pad ring admit only nets with a pad of THIS component
+        // nearby (the local fanout bubble) — short own-pin dips stay
+        // legal, through-body transit does not. Scope: quad packages
+        // (pads on >=3 sides; two-row channels are classic routing
+        // space), SMD-majority (under-DIP channels likewise), and
+        // boards WITH inner layers (2-layer boards must route under
+        // bodies).
+        if num_layers > 2 {
+            for comp in &board.components {
+                if comp.pins.len() < 8 {
+                    continue;
+                }
+                let tht = comp
+                    .pins
+                    .iter()
+                    .filter(|p| {
+                        p.pad.as_ref().map_or(false, |pd| pd.drill_mm.is_some())
+                    })
+                    .count();
+                if tht * 2 > comp.pins.len() {
+                    continue;
+                }
+                let cos_t = comp.theta.cos();
+                let sin_t = comp.theta.sin();
+                let mut pads_g: Vec<(f64, f64, Option<NetId>)> = Vec::new();
+                for pin in &comp.pins {
+                    if pin.unplaced {
+                        continue;
+                    }
+                    let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
+                    let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+                    pads_g.push((gx, gy, pin.net));
+                }
+                if pads_g.len() < 8 {
+                    continue;
+                }
+                let bx0 = pads_g.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
+                let bx1 = pads_g.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max);
+                let by0 = pads_g.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
+                let by1 = pads_g.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
+                let sides = [
+                    pads_g.iter().any(|p| p.0 - bx0 < 1.0),
+                    pads_g.iter().any(|p| bx1 - p.0 < 1.0),
+                    pads_g.iter().any(|p| p.1 - by0 < 1.0),
+                    pads_g.iter().any(|p| by1 - p.1 < 1.0),
+                ]
+                .iter()
+                .filter(|&&s| s)
+                .count();
+                if sides < 3 {
+                    continue;
+                }
+                let (x0, x1) = (bx0 + 1.0, bx1 - 1.0);
+                let (y0, y1) = (by0 + 1.0, by1 - 1.0);
+                if x1 - x0 < 0.5 || y1 - y0 < 0.5 {
+                    continue;
+                }
+                for &l in &[0usize, num_layers - 1] {
+                    for r in 0..grid.y_coords.len().saturating_sub(1) {
+                        let cy = (grid.y_coords[r] + grid.y_coords[r + 1]) / 2.0;
+                        if cy < y0 || cy > y1 {
+                            continue;
+                        }
+                        for c in 0..grid.x_coords.len().saturating_sub(1) {
+                            let cx = (grid.x_coords[c] + grid.x_coords[c + 1]) / 2.0;
+                            if cx < x0 || cx > x1 {
+                                continue;
+                            }
+                            let cell = &mut grid.cells[l][r][c];
+                            if cell.blocked || cell.hard {
+                                continue; // already restricted (pad halo, keepout)
+                            }
+                            cell.blocked = true;
+                            for &(px, py, net) in &pads_g {
+                                if let Some(n) = net {
+                                    if (px - cx).hypot(py - cy) < 1.5
+                                        && !cell.owners.contains(&n)
+                                    {
+                                        cell.owners.push(n);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         grid
     }
 

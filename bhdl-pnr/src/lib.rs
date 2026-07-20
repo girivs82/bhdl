@@ -68,14 +68,25 @@ pub fn place_and_route_best_of(
         let trial_board = board.clone();
         let result = place_and_route(trial_board, config.clone(), base_seed.wrapping_add(trial as u64))?;
 
+        // PLACEMENT LEGALITY FIRST: a trial shipping a residual
+        // pad-box overlap grades as clearance + mask-bridge
+        // violations no routing quality can buy back — it can never
+        // beat an overlap-free trial (uno s99: an illegal-placement
+        // trial out-scored a legal one on connected sinks and shipped
+        // 7 violations).
+        let r_over = legalization::residual_pad_overlaps(&result.board);
         let dominated = best.as_ref().map_or(false, |b| {
-            // Better = more CONNECTED SINKS, then lower HPWL. Counting
+            // Then more CONNECTED SINKS, then lower HPWL. Counting
             // non-empty routes let a trial shipping one surviving branch
             // and 19 stranded pads tie a fully-connected one.
+            let b_over = legalization::residual_pad_overlaps(&b.board);
             let b_conn = b.metrics.connected_sinks;
             let r_conn = result.metrics.connected_sinks;
-            r_conn < b_conn
-                || (r_conn == b_conn && result.metrics.hpwl_mm >= b.metrics.hpwl_mm)
+            r_over > b_over
+                || (r_over == b_over
+                    && (r_conn < b_conn
+                        || (r_conn == b_conn
+                            && result.metrics.hpwl_mm >= b.metrics.hpwl_mm)))
         });
 
         if !dominated {
@@ -91,7 +102,8 @@ pub fn place_and_route_best_of(
                 .map(|n| n.pins.len())
                 .sum();
             let perfect = result.metrics.connected_sinks >= total_sinks
-                && result.drc_violations.is_empty();
+                && result.drc_violations.is_empty()
+                && r_over == 0;
             best = Some(result);
             if perfect {
                 info!(
@@ -3450,6 +3462,58 @@ fn claim_via_site(
 /// on its own surface layer to the nearest same-net copper (another
 /// pad's drop stub or via) with the exact router. The plane carries
 /// it from there.
+/// FANOUT DISCIPLINE for plane-net rescue legs: F.Cu inside an IC's
+/// courtyard belongs to that IC's own fanout. A rescue path may dip
+/// into a courtyard near its endpoints (a pad fans out through its
+/// own body bubble; an attach lands on copper beside another pad)
+/// but may not TRANSIT a body interior — the measured failure is a
+/// VCC Z-leg cutting through the QFN32 body and boxing UGND with no
+/// via site left anywhere (uno free-MCU s42/s7). ICs only (>=8
+/// pins); crossing an 0603's courtyard is harmless and common.
+fn path_respects_courtyards(board: &Board, path: &[(f64, f64)]) -> bool {
+    if path.len() < 2 {
+        return true;
+    }
+    let src = path[0];
+    let dst = *path.last().unwrap();
+    let mut pts: Vec<(f64, f64)> = Vec::new();
+    for w in path.windows(2) {
+        pts.push(w[0]);
+        pts.push(((w[0].0 + w[1].0) / 2.0, (w[0].1 + w[1].1) / 2.0));
+    }
+    pts.push(dst);
+    for comp in &board.components {
+        if comp.pins.len() < 8 {
+            continue;
+        }
+        let quarter =
+            ((comp.theta / std::f64::consts::FRAC_PI_2).round() as i64).rem_euclid(2);
+        let (w, h) = if quarter == 1 {
+            (comp.height_mm, comp.width_mm)
+        } else {
+            (comp.width_mm, comp.height_mm)
+        };
+        let (hx, hy) = (w / 2.0 - 0.3, h / 2.0 - 0.3);
+        if hx <= 0.0 || hy <= 0.0 {
+            continue;
+        }
+        for &p in &pts {
+            if (p.0 - comp.x).abs() < hx && (p.1 - comp.y).abs() < hy {
+                let near_end = (p.0 - src.0).hypot(p.1 - src.1) < 2.0
+                    || (p.0 - dst.0).hypot(p.1 - dst.1) < 1.0;
+                if !near_end {
+                    debug!(
+                        "courtyard discipline: rejected leg ({:.2},{:.2})->({:.2},{:.2}) transiting '{}' at ({:.2},{:.2})",
+                        src.0, src.1, dst.0, dst.1, comp.refdes, p.0, p.1
+                    );
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
 fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
     debug!(
         "surface rescue pass: {} plane net(s)",
@@ -3619,6 +3683,9 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
                     if let Some(path) =
                         geom::route_escape(&idx, src, q, width, layer, net_id)
                     {
+                        if !path_respects_courtyards(board, &path) {
+                            break; // next attach candidate — shoving won't help our own rule
+                        }
                         commit_escape(
                             &mut final_routes[i],
                             &path,
@@ -3664,6 +3731,9 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
                         if let Some(path) =
                             geom::route_tunnel(&cidx, src, q, width, layer, net_id)
                         {
+                            if !path_respects_courtyards(board, &path) {
+                                continue;
+                            }
                             commit_escape(
                                 &mut final_routes[i],
                                 &path,
@@ -3734,6 +3804,9 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
                             if let Some(path) =
                                 geom::route_escape(&idx, src, q, width, layer, net_id)
                             {
+                                if !path_respects_courtyards(board, &path) {
+                                    continue;
+                                }
                                 commit_escape(
                                     &mut final_routes[i],
                                     &path,
@@ -4636,6 +4709,11 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
         }
         _ => net.required_trace_width_mm,
     };
+    // Fanout discipline applies to PLANE nets' surface legs: they
+    // never need long surface transits (the plane is their highway),
+    // so a leg transiting an IC body interior only steals that IC's
+    // fanout room (see path_respects_courtyards).
+    let courtyard_guard = net.plane_layer.is_some();
     let comp_idx: std::collections::HashMap<ComponentId, usize> = board
         .components
         .iter()
@@ -4766,6 +4844,9 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
         for &(q, _) in &attach {
             if let Some(path) = geom::route_escape(&cidx, (px, py), q, width, layer, net.id)
             {
+                if courtyard_guard && !path_respects_courtyards(board, &path) {
+                    continue;
+                }
                 commit_escape(&mut final_routes[i], &path, layer, width, None, &net.name);
                 gained += 1;
                 connected = true;
@@ -4807,6 +4888,9 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
                     if let Some(path) =
                         geom::route_escape(&cidx, (px, py), q, width, l2, net.id)
                     {
+                        if courtyard_guard && !path_respects_courtyards(board, &path) {
+                            continue;
+                        }
                         commit_escape(
                             &mut final_routes[i],
                             &path,
@@ -5308,6 +5392,11 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
                             if let Some(path) = geom::route_escape(
                                 &cidx3, src, q, width, layer, net.id,
                             ) {
+                                if courtyard_guard
+                                    && !path_respects_courtyards(board, &path)
+                                {
+                                    continue;
+                                }
                                 commit_escape(
                                     &mut final_routes[i], &path, layer, width, None,
                                     &net.name,
@@ -5331,8 +5420,8 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
         if !connected {
             if let Some(&(q, _)) = attach.first() {
                 let cidx4 = geom::ClearanceIndex::build(board, final_routes, Some(net.id));
-                if let Some(path) =
-                    geom::route_tunnel(&cidx4, (px, py), q, width, layer, net.id)
+                if let Some(path) = geom::route_tunnel(&cidx4, (px, py), q, width, layer, net.id)
+                    .filter(|p| !courtyard_guard || path_respects_courtyards(board, p))
                 {
                     commit_escape(&mut final_routes[i], &path, layer, width, None, &net.name);
                     info!(
@@ -5358,6 +5447,9 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
                     if let Some(path) =
                         geom::route_escape(&cidx2, (px, py), q, width, layer, net.id)
                     {
+                        if courtyard_guard && !path_respects_courtyards(board, &path) {
+                            break; // our own rule, not a blocker — next candidate
+                        }
                         commit_escape(&mut final_routes[i], &path, layer, width, None, &net.name);
                         gained += 1;
                         connected = true;
