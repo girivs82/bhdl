@@ -1528,7 +1528,21 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                         }
                         let cross = da.0 * db.1 - da.1 * db.0;
                         let dot = da.0 * db.0 + da.1 * db.1;
-                        if cross.abs() < 1e-6 && dot < 0.0 {
+                        // Collinear retrace (exact), or a HAIRPIN —
+                        // out-and-back at a shallow angle (< ~25°):
+                        // the two arms' copper union tapers to a
+                        // sub-min-feature spike at the tip, KiCad's
+                        // copper_sliver (measured: a 3.2mm V at 10.5°
+                        // shipped 2 slivers under si_cost routing).
+                        // Hairpin collapse REROUTES copper (the chord
+                        // deviates from the arms) — exact-gated below.
+                        let sin_ang = cross.abs() / (la * lb);
+                        let collinear = cross.abs() < 1e-6 && dot < 0.0;
+                        let hairpin = !collinear
+                            && dot < 0.0
+                            && sin_ang < 0.42
+                            && la.min(lb) > 0.5;
+                        if collinear || hairpin {
                             // A via AT the retrace tip rides that
                             // copper — collapsing orphans it (final
                             // sweep was the pass stranding maze vias:
@@ -1540,6 +1554,31 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                                 (v.x - tip.0).hypot(v.y - tip.1) <= via_r
                             }) {
                                 continue;
+                            }
+                            if hairpin {
+                                // The chord a.start -> b.end is NEW
+                                // copper — commit only when the exact
+                                // kernel clears it.
+                                let idx = geom::ClearanceIndex::build(
+                                    &board,
+                                    &final_routes,
+                                    Some(final_routes[i].net_id),
+                                );
+                                let r2 = &final_routes[i];
+                                let (aa, bb) =
+                                    (r2.segments[k].clone(), r2.segments[k + 1].clone());
+                                if idx
+                                    .first_conflict(
+                                        aa.start,
+                                        bb.end,
+                                        aa.width_mm,
+                                        aa.layer,
+                                        r2.net_id,
+                                    )
+                                    .is_some()
+                                {
+                                    continue;
+                                }
                             }
                             hit = Some((si, k));
                             break 'outback;
