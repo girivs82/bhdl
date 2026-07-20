@@ -69,6 +69,8 @@ fn board_with_blocker() -> (Board, NetId, NetId) {
 
     let mk_net = |id, name: &str, pins: Vec<(ComponentId, PinId)>| PnrNet {
         allowed_layers: None,
+        solved_voltage_v: None,
+        edge_swing_v: None,
         id,
         name: name.into(),
         pins,
@@ -226,6 +228,8 @@ fn route_avoids_nc_pad_on_own_component() {
         components: vec![comp_a, comp_m],
         nets: vec![PnrNet {
         allowed_layers: None,
+        solved_voltage_v: None,
+        edge_swing_v: None,
             id: sig,
             name: "SIG".into(),
             pins: vec![(a, a1), (m, mk_pin)],

@@ -560,6 +560,12 @@ pub struct PnrNet {
     /// any signal layer). Pad layers are auto-included with a warning
     /// when a rule conflicts with where the pads physically are.
     pub allowed_layers: Option<Vec<usize>>,
+    /// SOLVED DC voltage at this net (from the simulation
+    /// annotations) — the rail level IR-drop percentages divide by.
+    pub solved_voltage_v: Option<f64>,
+    /// MEASURED edge swing (V) from a solved IBIS transient trace on
+    /// this net — the aggressor amplitude crosstalk volts scale by.
+    pub edge_swing_v: Option<f64>,
     /// Legacy string-form intent (from the older `intent_routing_constraints`
     /// path). Retained during transition; superseded by typed constraints
     /// in `Board.constraints`.

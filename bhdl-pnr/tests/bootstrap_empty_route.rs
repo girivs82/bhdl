@@ -51,6 +51,8 @@ fn board_with_fence(fenced: bool) -> (Board, Vec<Route>) {
 
     let mk_net = |id, name: &str, pins: Vec<(ComponentId, PinId)>| PnrNet {
         allowed_layers: None,
+        solved_voltage_v: None,
+        edge_swing_v: None,
         id,
         name: name.into(),
         pins,

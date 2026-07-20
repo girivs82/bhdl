@@ -552,6 +552,18 @@ pub fn build_board(
         let net_idx = nets.len();
         id_map.net_to_idx.insert(nl_net_id, net_idx);
 
+        let solved_v = simulation.and_then(|sim| sim.net_voltages.get(&net_name).copied());
+        let edge_swing = simulation.and_then(|sim| {
+            sim.transients
+                .iter()
+                .filter(|t| t.net == net_name)
+                .min_by_key(|t| if t.corner == "typ" { 0 } else { 1 })
+                .and_then(|t| {
+                    let (a, b) = (t.volts.first()?, t.volts.last()?);
+                    let sw = (b - a).abs();
+                    (sw > 0.1).then_some(sw)
+                })
+        });
         nets.push(PnrNet {
             id: NetId::default(),
             name: net_name,
@@ -566,6 +578,8 @@ pub fn build_board(
             plane_layer: None,
             plane_region: None,
             allowed_layers: None,
+            solved_voltage_v: solved_v,
+            edge_swing_v: edge_swing,
         });
     }
 

@@ -104,6 +104,8 @@ mod tests {
     fn mk_net(id: NetId, name: &str, weight: f64) -> PnrNet {
         PnrNet {
             allowed_layers: None,
+        solved_voltage_v: None,
+        edge_swing_v: None,
             id,
             name: name.into(),
             pins: vec![],

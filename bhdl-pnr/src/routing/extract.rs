@@ -141,10 +141,26 @@ pub(crate) fn crosstalk_rows(
         .into_iter()
         .take(top_n)
         .map(|(_, vi, ai, mm, gap, kb)| {
-            format!(
-                "crosstalk {} || {}: coupled {mm:.1}mm at mean gap {gap:.2}mm — k_b {kb:.1}% (saturated backward)",
-                board.nets[vi].name, board.nets[ai].name
-            )
+            // Stage-2 re-simulation: crosstalk VOLTS where the
+            // aggressor's swing was MEASURED (a solved IBIS edge on
+            // either side of the couple — coupling is reciprocal, so
+            // the swung net is the aggressor). No trace, no volts.
+            let swing = board.nets[ai]
+                .edge_swing_v
+                .or(board.nets[vi].edge_swing_v);
+            match swing {
+                Some(sw) => {
+                    let noise_mv = kb / 100.0 * sw * 1000.0;
+                    format!(
+                        "crosstalk {} || {}: coupled {mm:.1}mm at mean gap {gap:.2}mm — k_b {kb:.1}%, measured swing {sw:.2}V → noise ≈ {noise_mv:.0}mV",
+                        board.nets[vi].name, board.nets[ai].name
+                    )
+                }
+                None => format!(
+                    "crosstalk {} || {}: coupled {mm:.1}mm at mean gap {gap:.2}mm — k_b {kb:.1}% (saturated backward; no measured edge → volts unknowable)",
+                    board.nets[vi].name, board.nets[ai].name
+                ),
+            }
         })
         .collect()
 }
@@ -191,10 +207,19 @@ pub(crate) fn ir_rows(board: &Board, routes: &[Route]) -> Vec<String> {
         let r_mohm = r_ohm * 1000.0;
         let dv_mv = r_ohm * i_a * 1000.0;
         rows.push(if i_a > 0.0 {
-            format!(
-                "ir-drop {}: {length:.0}mm routed, R={r_mohm:.1}mΩ, worst sink {i_a:.2}A → ΔV={dv_mv:.1}mV",
-                net.name
-            )
+            // Stage-2: the drop as a fraction of the SOLVED rail —
+            // the number a rail budget would gate on.
+            match net.solved_voltage_v.filter(|v| v.abs() > 0.5) {
+                Some(v) => format!(
+                    "ir-drop {}: {length:.0}mm routed, R={r_mohm:.1}mΩ, worst sink {i_a:.2}A → ΔV={dv_mv:.1}mV = {:.2}% of solved {v:.2}V rail",
+                    net.name,
+                    dv_mv / 10.0 / v
+                ),
+                None => format!(
+                    "ir-drop {}: {length:.0}mm routed, R={r_mohm:.1}mΩ, worst sink {i_a:.2}A → ΔV={dv_mv:.1}mV",
+                    net.name
+                ),
+            }
         } else {
             format!(
                 "ir-drop {}: {length:.0}mm routed, R={r_mohm:.1}mΩ (no solved current — ΔV unknowable, see absence ledger)",
