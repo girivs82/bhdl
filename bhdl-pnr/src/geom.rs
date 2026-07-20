@@ -604,12 +604,35 @@ pub fn route_tunnel(
     layer: usize,
     net: NetId,
 ) -> Option<Vec<(f64, f64)>> {
+    // No phase-snap retry here: granting it to every single-layer
+    // maze measurably WORSENED the board evolution (uno s13 4->6
+    // unc — early rungs commit greedy corridors that block later
+    // nets). The snap retry lives only in route_tunnel_ml, the
+    // final rung, where there is no later evolution to disturb.
+    route_tunnel_phase(idx, from, to, width, layer, net, false)
+}
+
+fn route_tunnel_phase(
+    idx: &ClearanceIndex,
+    from: (f64, f64),
+    to: (f64, f64),
+    width: f64,
+    layer: usize,
+    net: NetId,
+    phase_snap: bool,
+) -> Option<Vec<(f64, f64)>> {
     use std::cmp::Reverse;
     use std::collections::{BinaryHeap, HashMap};
     let step = (width + idx.spacing).max(0.25);
     let margin = 4.0;
-    let x0 = from.0.min(to.0) - margin;
-    let y0 = from.1.min(to.1) - margin;
+    let (x0, y0) = if phase_snap {
+        (
+            ((from.0.min(to.0) - margin - step / 2.0) / step).floor() * step + step / 2.0,
+            ((from.1.min(to.1) - margin - step / 2.0) / step).floor() * step + step / 2.0,
+        )
+    } else {
+        (from.0.min(to.0) - margin, from.1.min(to.1) - margin)
+    };
     let x1 = from.0.max(to.0) + margin;
     let y1 = from.1.max(to.1) + margin;
     let cols = (((x1 - x0) / step).ceil() as i32).max(1) + 1;
@@ -752,12 +775,50 @@ pub fn route_tunnel_ml(
     net: NetId,
     margin: f64,
 ) -> Option<Vec<(f64, f64, usize)>> {
+    route_tunnel_ml_phase(
+        idx, from, from_layer, to, to_layer, width, via_r, layers, net, margin, false,
+    )
+    .or_else(|| {
+        // PHASE-SNAP RETRY: an arbitrary-phase lattice sits ~0.03mm
+        // off the committed 0.3mm-pitch tracks, so every lattice
+        // column aliases INTO a track's clearance band and long
+        // corridors that plainly exist read as blocked (measured: a
+        // 30mm SCK haul over free inner layers found "no corridor").
+        // Snapping to the global grid (centers step/2 + k*step) fixes
+        // that — but ONLY as a retry: unconditional snapping
+        // perturbed every maze evolution board-wide (s13 4->7 unc).
+        route_tunnel_ml_phase(
+            idx, from, from_layer, to, to_layer, width, via_r, layers, net, margin, true,
+        )
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn route_tunnel_ml_phase(
+    idx: &ClearanceIndex,
+    from: (f64, f64),
+    from_layer: usize,
+    to: (f64, f64),
+    to_layer: usize,
+    width: f64,
+    via_r: f64,
+    layers: &[usize],
+    net: NetId,
+    margin: f64,
+    phase_snap: bool,
+) -> Option<Vec<(f64, f64, usize)>> {
     use std::cmp::Reverse;
     use std::collections::{BinaryHeap, HashMap};
     let step = (width + idx.spacing).max(0.25);
     let margin = margin.max(1.0);
-    let x0 = from.0.min(to.0) - margin;
-    let y0 = from.1.min(to.1) - margin;
+    let (x0, y0) = if phase_snap {
+        (
+            ((from.0.min(to.0) - margin - step / 2.0) / step).floor() * step + step / 2.0,
+            ((from.1.min(to.1) - margin - step / 2.0) / step).floor() * step + step / 2.0,
+        )
+    } else {
+        (from.0.min(to.0) - margin, from.1.min(to.1) - margin)
+    };
     let x1 = from.0.max(to.0) + margin;
     let y1 = from.1.max(to.1) + margin;
     let cols = (((x1 - x0) / step).ceil() as i32).max(1) + 1;

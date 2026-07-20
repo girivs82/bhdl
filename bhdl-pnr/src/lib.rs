@@ -5280,6 +5280,10 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
                         net.id, 12.0,
                     )
                 }) else {
+                    debug!(
+                        "ml-maze: '{}' ({px:.2},{py:.2})l{layer} -> ({:.2},{:.2})l{ql} found no corridor",
+                        net.name, q.0, q.1
+                    );
                     continue;
                 };
                 // OWN-net vias are invisible to the index (skip_net),
