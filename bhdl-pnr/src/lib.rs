@@ -5354,6 +5354,161 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
                 connected = true;
                 break;
             }
+            // MAZE RIP LADDER: the entry-edge probe showed the last
+            // knots' endpoints sealed by ONE net's copper threading a
+            // pin row. Name the rippable Track blockers on the pad's
+            // and top attaches' entry edges, rip one, retry the maze
+            // through the freed corridor, rebuild the victim (grid
+            // extend + exact strip only — NO recursive ladder), and
+            // accept ONLY when the board's total unreached strictly
+            // drops; anything else reverts both nets. The strict-win
+            // gate is what the measured-worse candidate-set
+            // experiments lacked.
+            if !connected {
+                let mut victims: Vec<usize> = Vec::new();
+                {
+                    let mut probe_pts: Vec<((f64, f64), usize)> =
+                        vec![((px, py), layer)];
+                    for &(q, ql, _) in attach_ml.iter().take(2) {
+                        probe_pts.push((q, ql));
+                    }
+                    for (p, l) in probe_pts {
+                        for d in [
+                            (0.35, 0.0),
+                            (-0.35, 0.0),
+                            (0.0, 0.35),
+                            (0.0, -0.35),
+                            (0.25, 0.25),
+                            (0.25, -0.25),
+                            (-0.25, 0.25),
+                            (-0.25, -0.25),
+                        ] {
+                            if let Some(geom::Conflict::Track { net: vn, .. }) = cidx5
+                                .first_conflict(
+                                    p,
+                                    (p.0 + d.0, p.1 + d.1),
+                                    width,
+                                    l,
+                                    net.id,
+                                )
+                            {
+                                if let Some(vj) =
+                                    board.nets.iter().position(|n| n.id == vn)
+                                {
+                                    if board.nets[vj].plane_layer.is_none()
+                                        && vj != i
+                                        && !final_routes[vj].is_empty()
+                                        && !victims.contains(&vj)
+                                    {
+                                        victims.push(vj);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                let before_total = total_unreached(board, final_routes);
+                'rip: for &vj in victims.iter().take(2) {
+                    let snap_v = final_routes[vj].clone();
+                    let snap_i = final_routes[i].clone();
+                    final_routes[vj] = Route::empty(snap_v.net_id);
+                    let cidx6 =
+                        geom::ClearanceIndex::build(board, final_routes, Some(net.id));
+                    let mut found: Option<Vec<(f64, f64, usize)>> = None;
+                    'retry: for &(q, ql, _) in &attach_ml {
+                        for m in [4.0, 12.0] {
+                            if let Some(way) = geom::route_tunnel_ml(
+                                &cidx6, (px, py), layer, q, ql, width, via_r,
+                                &signal_layers, net.id, m,
+                            ) {
+                                found = Some(way);
+                                break 'retry;
+                            }
+                        }
+                    }
+                    let Some(way) = found else {
+                        final_routes[vj] = snap_v;
+                        continue 'rip;
+                    };
+                    let hole_gap = board.layer_stack.via.drill_mm + 0.25;
+                    let own_conflict = way.windows(2).any(|w| {
+                        w[0].2 != w[1].2
+                            && final_routes[i].vias.iter().any(|v| {
+                                let d = (v.x - w[0].0).hypot(v.y - w[0].1);
+                                d > 1e-6 && d < hole_gap
+                            })
+                    });
+                    if own_conflict {
+                        final_routes[vj] = snap_v;
+                        continue 'rip;
+                    }
+                    {
+                        let route = &mut final_routes[i];
+                        let seg_start = route.segments.len();
+                        let via_start = route.vias.len();
+                        let n_l = board.layer_stack.layers.len() - 1;
+                        for w in way.windows(2) {
+                            let (a, b) = (w[0], w[1]);
+                            if a.2 == b.2 {
+                                if (a.0 - b.0).hypot(a.1 - b.1) > 1e-9 {
+                                    route.segments.push(RouteSegment {
+                                        layer: a.2,
+                                        start: (a.0, a.1),
+                                        end: (b.0, b.1),
+                                        width_mm: width,
+                                    });
+                                }
+                            } else if !route
+                                .vias
+                                .iter()
+                                .any(|v| (v.x - a.0).hypot(v.y - a.1) < 1e-6)
+                            {
+                                route.vias.push(RouteVia {
+                                    x: a.0,
+                                    y: a.1,
+                                    from_layer: 0,
+                                    to_layer: n_l,
+                                });
+                            }
+                        }
+                        let n_vias = route.vias.len() - via_start;
+                        route
+                            .path_spans
+                            .push((seg_start, route.segments.len() - seg_start));
+                        route.path_parents.push(None);
+                        route.via_spans.push((via_start, n_vias));
+                    }
+                    // Rebuild the victim on the board carrying the join.
+                    let mut jgrid = RoutingGrid::build(board);
+                    for (m2, r_) in final_routes.iter().enumerate() {
+                        if m2 != vj && !r_.is_empty() {
+                            pathfinder::block_route_geometry(&mut jgrid, r_, board);
+                        }
+                    }
+                    let mut fresh = Route::empty(snap_v.net_id);
+                    pathfinder::extend_route(
+                        &mut jgrid, &board.nets[vj], board, &mut fresh, 1.0, 1.0, &[],
+                        &[], false, None,
+                    );
+                    {
+                        let mut bans = Vec::new();
+                        exact_commit_strip(board, final_routes, vj, &mut fresh, 0, &mut bans);
+                    }
+                    final_routes[vj] = fresh;
+                    let after_total = total_unreached(board, final_routes);
+                    if after_total < before_total {
+                        info!(
+                            "completion: MAZE RIP connected a '{}' pad at ({px:.2},{py:.2}) after ripping '{}' (board unreached {before_total} -> {after_total})",
+                            net.name, board.nets[vj].name
+                        );
+                        gained += 1;
+                        connected = true;
+                        break 'rip;
+                    }
+                    final_routes[i] = snap_i;
+                    final_routes[vj] = snap_v;
+                }
+            }
         }
         // FRAGMENT SOURCES: the pad's entry stub often survives an
         // amputation that killed the tree path — the pad's own
