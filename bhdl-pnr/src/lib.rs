@@ -947,7 +947,11 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         // the local check missed), that net reverts to its pre-miter
         // route wholesale — validated copper we already had.
         let saved = final_routes.clone();
-        let mitered = miter_pass(&board, &mut final_routes);
+        let mitered = if std::env::var("BHDL_PNR_NO_MITER").is_ok() {
+            0
+        } else {
+            miter_pass(&board, &mut final_routes)
+        };
         if mitered > 0 {
             info!("45° miter pass: {} corners cut", mitered);
             let post: Vec<usize> =
