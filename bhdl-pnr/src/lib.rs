@@ -2352,7 +2352,13 @@ fn miter_pass(board: &Board, final_routes: &mut [Route]) -> usize {
         }
     }
     let pad_on_layer = |p: &PadObs, layer: usize| -> bool {
-        (layer == 0 && p.layer_top) || (layer == n_layers - 1 && p.layer_bot)
+        // THT barrels (top && bot) exist on EVERY copper layer — the
+        // surface-only test left inner-layer miters blind to them (an
+        // In2 corner cut grazed a PTH annulus at 0.075mm, shipped as
+        // the s99 clearance latent). Same rule as first_conflict.
+        (p.layer_top && p.layer_bot)
+            || (layer == 0 && p.layer_top)
+            || (layer == n_layers - 1 && p.layer_bot)
     };
 
     // Snapshot foreign segments/vias per net lazily is O(n²); boards are
