@@ -424,8 +424,16 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
             }
         }
         let polys = match &poly_boundary {
-            Some(b) => vec![fracture_fill_poly(b, &holes, &cutout_rects)],
-            None => fracture_fill(fx0, fy0, fx1, fy1, &holes, &cutout_rects, &anchors),
+            // Poly outlines ride the SAME raster engine, masked to the
+            // inset boundary — one truth for both outline shapes.
+            Some(b) => {
+                let bx0 = b.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
+                let bx1 = b.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max);
+                let by0 = b.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
+                let by1 = b.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
+                fracture_fill(bx0, by0, bx1, by1, &holes, &cutout_rects, &anchors, Some(b))
+            }
+            None => fracture_fill(fx0, fy0, fx1, fy1, &holes, &cutout_rects, &anchors, None),
         };
         for pts in &polys {
             out.push_str(&format!("    (filled_polygon (layer \"{}\") (pts\n", layer_name));
@@ -607,24 +615,7 @@ pub(crate) fn point_in_poly(pts: &[(f64, f64)], x: f64, y: f64) -> bool {
     inside
 }
 
-fn dist_point_segment(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
-    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-    let len2 = dx * dx + dy * dy;
-    let t = if len2 <= 1e-12 {
-        0.0
-    } else {
-        (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / len2).clamp(0.0, 1.0)
-    };
-    (p.0 - (a.0 + t * dx)).hypot(p.1 - (a.1 + t * dy))
-}
 
-/// Minimum distance from a point to the polygon boundary.
-pub(crate) fn poly_edge_distance(pts: &[(f64, f64)], x: f64, y: f64) -> f64 {
-    let n = pts.len();
-    (0..n)
-        .map(|i| dist_point_segment((x, y), pts[i], pts[(i + 1) % n]))
-        .fold(f64::INFINITY, f64::min)
-}
 
 /// True when every edge is axis-aligned — the only polygon class the
 /// plane fracture supports (chassis cutouts are rectilinear in
@@ -752,219 +743,6 @@ pub(crate) fn clip_poly_to_rect(
     dedup
 }
 
-/// fracture_fill generalized to a rectilinear boundary polygon: holes
-/// near an edge become rectangular notches cut into THAT edge; interior
-/// holes get the same octagon + rightward-slit treatment (the slit ray
-/// already casts against the full vertex chain).
-fn fracture_fill_poly(
-    boundary: &[(f64, f64)],
-    holes_in: &[(f64, f64, f64)],
-    rects_in: &[(f64, f64, f64, f64)],
-) -> Vec<(f64, f64)> {
-    // Cutout rects: fully-interior ones punch as rect rings; rects
-    // whose punch CROSSES the fill boundary become rectangular NOTCHES
-    // cut into the crossing edge (v1 warned + skipped these — the
-    // saved fill silently covered copper the fab routs away, a drift
-    // headless KiCad cannot see because it doesn't re-check saved
-    // fills against interior Edge.Cuts).
-    let mut interior_cut_rects: Vec<(f64, f64, f64, f64)> = Vec::new();
-    let mut crossing_rects: Vec<(f64, f64, f64, f64)> = Vec::new();
-    for &(rx0, ry0, rx1, ry1) in rects_in {
-        let corners = [(rx0, ry0), (rx1, ry0), (rx1, ry1), (rx0, ry1)];
-        let ins = corners
-            .iter()
-            .filter(|&&(x, y)| point_in_poly(boundary, x, y))
-            .count();
-        if ins == 4 {
-            interior_cut_rects.push((rx0, ry0, rx1, ry1));
-        } else if ins > 0 {
-            crossing_rects.push((rx0, ry0, rx1, ry1));
-        }
-        // ins == 0: entirely outside the fill — nothing to punch.
-    }
-    let mut rects = interior_cut_rects;
-    // Circles overlapping an interior cutout rect ABSORB into a grown
-    // rect (rect-path parity): emitting them as separate rings makes
-    // the slit weave self-intersect and KiCad's normalization
-    // re-fills the overlap — measured on the dense poly fixture as a
-    // via at 0.17mm from the fill (zone clearance 0.3).
-    let mut circle_holes: Vec<(f64, f64, f64)> = Vec::new();
-    'circles: for &(cx, cy, r) in holes_in {
-        if !(point_in_poly(boundary, cx, cy)
-            || poly_edge_distance(boundary, cx, cy) < r + 0.05)
-        {
-            continue;
-        }
-        for rect in rects.iter_mut() {
-            let (rx0, ry0, rx1, ry1) = *rect;
-            let nx = cx.clamp(rx0, rx1);
-            let ny = cy.clamp(ry0, ry1);
-            if (cx - nx).hypot(cy - ny) < r {
-                *rect = (
-                    rx0.min(cx - r),
-                    ry0.min(cy - r),
-                    rx1.max(cx + r),
-                    ry1.max(cy + r),
-                );
-                continue 'circles;
-            }
-        }
-        circle_holes.push((cx, cy, r));
-    }
-    let holes = merge_holes(circle_holes);
-    let slack = 0.05;
-    let nb = boundary.len();
-    // Per-edge notches: (t_enter, t_exit, depth) in edge-travel order.
-    let mut edge_notches: Vec<Vec<(f64, f64, f64)>> = vec![Vec::new(); nb];
-    let mut interior: Vec<(f64, f64, f64)> = Vec::new();
-    'holes: for &(cx, cy, r) in &holes {
-        // Crossing judged by the EMITTED octagon circumradius
-        // (r/cos22.5) — rect-path parity: a ring interior by r can
-        // still poke its octagon vertex past the boundary, lose its
-        // slit ray, and take its parent chain of holes with it.
-        let rc = r / (std::f64::consts::PI / 8.0).cos();
-        for e in 0..nb {
-            let a = boundary[e];
-            let b = boundary[(e + 1) % nb];
-            if dist_point_segment((cx, cy), a, b) < rc + slack {
-                // Clamp hole span to the edge segment, depth = far side
-                // of the hole measured along the inward normal.
-                let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-                let len = (dx * dx + dy * dy).sqrt();
-                if len < 1e-9 {
-                    continue;
-                }
-                let (ux, uy) = (dx / len, dy / len);
-                let (nx, ny) = (-uy, ux); // interior side (positive area)
-                let tc = (cx - a.0) * ux + (cy - a.1) * uy;
-                let ta = (tc - r).max(0.0);
-                let tb = (tc + r).min(len);
-                if tb <= ta {
-                    continue;
-                }
-                let d = ((cx - a.0) * nx + (cy - a.1) * ny) + r;
-                if d <= 0.0 {
-                    continue 'holes; // entirely outside this edge
-                }
-                edge_notches[e].push((ta, tb, d));
-                continue 'holes;
-            }
-        }
-        if point_in_poly(boundary, cx, cy) {
-            interior.push((cx, cy, r));
-        }
-        // else: fully outside (e.g. inside a cutout bite) — no copper
-        // to punch.
-    }
-    // Edge-crossing cutout rects → per-edge rectangular notches:
-    // project the rect onto each axis-aligned boundary edge; where the
-    // spans overlap AND the rect straddles the edge line, cut a notch
-    // (clamped span, inward penetration depth).
-    for &(rx0, ry0, rx1, ry1) in &crossing_rects {
-        let mut cut = false;
-        for e in 0..nb {
-            let a = boundary[e];
-            let b = boundary[(e + 1) % nb];
-            let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-            let len = (dx * dx + dy * dy).sqrt();
-            if len < 1e-9 {
-                continue;
-            }
-            let (ux, uy) = (dx / len, dy / len);
-            let (nx, ny) = (-uy, ux); // interior side (positive area)
-            let corners = [(rx0, ry0), (rx1, ry0), (rx1, ry1), (rx0, ry1)];
-            let ts: Vec<f64> = corners
-                .iter()
-                .map(|&(x, y)| (x - a.0) * ux + (y - a.1) * uy)
-                .collect();
-            let ds: Vec<f64> = corners
-                .iter()
-                .map(|&(x, y)| (x - a.0) * nx + (y - a.1) * ny)
-                .collect();
-            let (tmin, tmax) = (
-                ts.iter().cloned().fold(f64::INFINITY, f64::min),
-                ts.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
-            );
-            let (dmin, dmax) = (
-                ds.iter().cloned().fold(f64::INFINITY, f64::min),
-                ds.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
-            );
-            // Straddles this edge's line and overlaps its span?
-            if dmin < slack && dmax > 0.0 && tmax > 0.0 && tmin < len {
-                edge_notches[e].push((tmin.max(0.0), tmax.min(len), dmax));
-                cut = true;
-            }
-        }
-        if !cut {
-            log::warn!(
-                "plane fill: edge-crossing cutout ({rx0:.1},{ry0:.1})-({rx1:.1},{ry1:.1}) matched no boundary edge — not punched"
-            );
-        }
-    }
-    // Merge overlapping notches per edge (same rule as merge_iv: union
-    // the span, keep the deeper cut).
-    for list in edge_notches.iter_mut() {
-        list.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        let mut out: Vec<(f64, f64, f64)> = Vec::new();
-        for n in list.drain(..) {
-            match out.last_mut() {
-                Some(last) if n.0 <= last.1 => {
-                    last.1 = last.1.max(n.1);
-                    last.2 = last.2.max(n.2);
-                }
-                _ => out.push(n),
-            }
-        }
-        *list = out;
-    }
-    // Walk the boundary inserting notch detours.
-    let mut poly: Vec<(f64, f64)> = Vec::new();
-    for e in 0..nb {
-        let a = boundary[e];
-        let b = boundary[(e + 1) % nb];
-        poly.push(a);
-        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-        let len = (dx * dx + dy * dy).sqrt();
-        if len < 1e-9 {
-            continue;
-        }
-        let (ux, uy) = (dx / len, dy / len);
-        let (nx, ny) = (-uy, ux);
-        for &(ta, tb, d) in &edge_notches[e] {
-            let pa = (a.0 + ux * ta, a.1 + uy * ta);
-            let pb = (a.0 + ux * tb, a.1 + uy * tb);
-            poly.push(pa);
-            poly.push((pa.0 + nx * d, pa.1 + ny * d));
-            poly.push((pb.0 + nx * d, pb.1 + ny * d));
-            poly.push(pb);
-        }
-    }
-    // Interior circles become octagons hull-merged at the 0.30 web
-    // (rect-path parity): near-touching rings punched separately
-    // leave a sub-clearance copper web between them.
-    let mut poly_rings: Vec<Vec<(f64, f64)>> = interior
-        .iter()
-        .map(|&(cx, cy, r)| {
-            let rr = r / (std::f64::consts::PI / 8.0).cos();
-            (0..8)
-                .map(|q| {
-                    let ang = -(q as f64) * std::f64::consts::FRAC_PI_4;
-                    (cx + rr * ang.cos(), cy + rr * ang.sin())
-                })
-                .collect()
-        })
-        .collect();
-    hull_merge_close_rings(&mut poly_rings, 0.30);
-    let mut rings: Vec<RingKind> =
-        poly_rings.into_iter().map(RingKind::Poly).collect();
-    rings.extend(
-        rects
-            .into_iter()
-            .map(|(rx0, ry0, rx1, ry1)| RingKind::Rect { x0: rx0, y0: ry0, x1: rx1, y1: ry1 }),
-    );
-    punch_interior_rings(&mut poly, rings);
-    poly
-}
 
 
 /// ONE-TRUTH void classification for a plane fill: split merged holes
@@ -974,644 +752,7 @@ fn fracture_fill_poly(
 /// vias against them) — the two MUST agree or drops verified as
 /// connected ship inside carved copper.
 #[allow(clippy::type_complexity)]
-pub(crate) fn classify_voids(
-    x0: f64,
-    y0: f64,
-    x1: f64,
-    y1: f64,
-    holes: &[(f64, f64, f64)],
-    rects: &[(f64, f64, f64, f64)],
-) -> (
-    Vec<(f64, f64, f64)>,
-    Vec<(f64, f64, f64)>,
-    Vec<(f64, f64, f64)>,
-    Vec<(f64, f64, f64)>,
-    Vec<(u8, f64, f64, f64, f64)>,
-    Vec<(f64, f64, f64)>,
-    Vec<(f64, f64, f64, f64)>,
-    Vec<Vec<(f64, f64)>>,
-) {
-    // Split holes: interior ones become slit-fractured octagons; ones
-    // whose punch crosses the fill boundary become EDGE NOTCHES —
-    // rectangular detours cut into the outline (clamping an interior
-    // hole inward uncovered the barrel it was punched for).
-    let slack = 0.05;
-    let mut notches_bottom: Vec<(f64, f64, f64)> = Vec::new(); // (xa, xb, depth_to_y)
-    let mut notches_top: Vec<(f64, f64, f64)> = Vec::new();
-    let mut notches_right: Vec<(f64, f64, f64)> = Vec::new(); // (ya, yb, depth_to_x)
-    let mut notches_left: Vec<(f64, f64, f64)> = Vec::new();
-    // Boundary-crossing circles keep the proven NOTCH path (boxes,
-    // drop-verifier-consistent). INTERIOR circles become octagon
-    // polygons, then near-touching/banded pairs merge by CONVEX HULL
-    // — polygon-level, bounded growth (a hull of two octagons is a
-    // capsule, not a covering circle), no cascade. The hull contains
-    // both punch discs, so the pair punches as one ring and the
-    // sub-clearance web between them never exists.
-    let mut interior: Vec<(f64, f64, f64)> = Vec::new();
-    for &(cx, cy, r) in holes {
-        let rc0 = r / (std::f64::consts::PI / 8.0).cos();
-        // A hole entirely OUTSIDE the fill rect punches nothing here —
-        // and classifying it "crossing" builds an INVERTED notch box
-        // (region-clamped fills see the whole board's hole list;
-        // measured: clamp(min>max) panic with a hole at x=65 against a
-        // rail band ending at x=27.85).
-        if cx + rc0 < x0 + slack
-            || cx - rc0 > x1 - slack
-            || cy + rc0 < y0 + slack
-            || cy - rc0 > y1 - slack
-        {
-            continue;
-        }
-        // Crossing is judged by the EMITTED octagon's circumradius
-        // (r/cos22.5°, 8.2% past the circle) — a ring classified
-        // interior by r can still poke its octagon vertex past the
-        // fill edge, where its rightward slit ray finds no target
-        // and every ring parented through it loses its hole
-        // (measured: 72 unpunched-via violations from ONE such ring
-        // at x=78.19 on a 78mm board).
-        let rc = r / (std::f64::consts::PI / 8.0).cos();
-        let crosses = cx - rc < x0 + slack
-            || cx + rc > x1 - slack
-            || cy - rc < y0 + slack
-            || cy + rc > y1 - slack;
-        if !crosses {
-            interior.push((cx, cy, r));
-            continue;
-        }
-        let crosses_left = cx - rc < x0 + slack;
-        let crosses_right = cx + rc > x1 - slack;
-        let crosses_top = cy - rc < y0 + slack;
-        let crosses_bottom = cy + rc > y1 - slack;
-        if crosses_top && crosses_bottom {
-            // The punch spans the WHOLE band (split-plane regions are
-            // short strips; a header hole is taller than the band):
-            // a one-sided notch leaves an unpunched sliver on the far
-            // edge. Full-height cut — the band is severed here.
-            notches_bottom.push(((cx - r).max(x0), (cx + r).min(x1), y0));
-        } else if crosses_left && crosses_right {
-            notches_right.push(((cy - r).max(y0), (cy + r).min(y1), x0));
-        } else if crosses_bottom {
-            notches_bottom.push(((cx - r).max(x0), (cx + r).min(x1), (cy - r).clamp(y0, y1)));
-        } else if crosses_top {
-            notches_top.push(((cx - r).max(x0), (cx + r).min(x1), (cy + r).clamp(y0, y1)));
-        } else if crosses_right {
-            notches_right.push((((cy - r).max(y0)), (cy + r).min(y1), (cx - r).clamp(x0, x1)));
-        } else if crosses_left {
-            notches_left.push((((cy - r).max(y0)), (cy + r).min(y1), (cx + r).clamp(x0, x1)));
-        }
-    }
-    // Merge overlapping notch intervals per side; min keeps the
-    // deeper cut for bottom/right, and span unions.
-    let merge_iv = |mut v: Vec<(f64, f64, f64)>| -> Vec<(f64, f64, f64)> {
-        v.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        let mut out: Vec<(f64, f64, f64)> = Vec::new();
-        for n in v {
-            match out.last_mut() {
-                Some(last) if n.0 <= last.1 => {
-                    last.1 = last.1.max(n.1);
-                    last.2 = if last.2 < n.2 { last.2 } else { n.2 };
-                }
-                _ => out.push(n),
-            }
-        }
-        out
-    };
-    // Cutout rects near a fill side become EXACT rectangular notches;
-    // fully interior rects become RingKind::Rect punches.
-    let mut interior_rects: Vec<(f64, f64, f64, f64)> = Vec::new();
-    for &(rx0, ry0, rx1, ry1) in rects {
-        let crosses_left = rx0 < x0 + slack;
-        let crosses_right = rx1 > x1 - slack;
-        let crosses_top = ry0 < y0 + slack;
-        let crosses_bottom = ry1 > y1 - slack;
-        if crosses_top && crosses_bottom {
-            notches_bottom.push((rx0.max(x0), rx1.min(x1), y0));
-        } else if crosses_left && crosses_right {
-            notches_right.push((ry0.max(y0), ry1.min(y1), x0));
-        } else if crosses_bottom {
-            notches_bottom.push((rx0.max(x0), rx1.min(x1), ry0.clamp(y0, y1)));
-        } else if crosses_top {
-            notches_top.push((rx0.max(x0), rx1.min(x1), ry1.clamp(y0, y1)));
-        } else if crosses_right {
-            notches_right.push((ry0.max(y0), ry1.min(y1), rx0.clamp(x0, x1)));
-        } else if crosses_left {
-            notches_left.push((ry0.max(y0), ry1.min(y1), rx1.clamp(x0, x1)));
-        } else {
-            interior_rects.push((rx0, ry0, rx1, ry1));
-        }
-    }
-    let mut notches_bottom = merge_iv(notches_bottom);
-    let mut notches_top = merge_iv(notches_top);
-    let mut notches_right = merge_iv(notches_right);
-    let mut notches_left = merge_iv(notches_left);
-    // ABSORB-OR-BAY: an interior ring overlapping a notch box starts
-    // its slit walk inside VOID (measured: lost holes / no slit
-    // target). The old cure absorbed every such ring by GROWING the
-    // box — but a grown box reaches further rings and the fixpoint
-    // chained across a via field into a ~10mm void that stranded
-    // healthy plane vias (uno s7, 6x via_dangling). The right
-    // primitive for a ring brushing ONE notch wall is a BAY: splice
-    // the circle into the wall as an arc — copper cost is one hole,
-    // and the box never grows. Absorption (box growth) remains only
-    // for rings a bay can't express: center already in void, corner
-    // contact, or a chord that doesn't fit the wall.
-    // bay: (axis 0=vertical wall/1=horizontal, w, cx, cy, r)
-    let mut bays: Vec<(u8, f64, f64, f64, f64)> = Vec::new();
-    for _round in 0..64 {
-        let mut grew = false;
-        let mut k = 0;
-        'next_circle: while k < interior.len() {
-            let (cx, cy, r) = interior[k];
-            let rr = r / (std::f64::consts::PI / 8.0).cos();
-            for (list, side) in [
-                (&mut notches_bottom, 0),
-                (&mut notches_top, 1),
-                (&mut notches_right, 2),
-                (&mut notches_left, 3),
-            ] {
-                for n in list.iter_mut() {
-                    let (bx0, by0, bx1, by1) = match side {
-                        0 => (n.0, n.2, n.1, y1),
-                        1 => (n.0, y0, n.1, n.2),
-                        2 => (n.2, n.0, x1, n.1),
-                        _ => (x0, n.0, n.2, n.1),
-                    };
-                    let nx = cx.clamp(bx0, bx1);
-                    let ny = cy.clamp(by0, by1);
-                    if (cx - nx).hypot(cy - ny) >= rr {
-                        continue;
-                    }
-                    let in_x = cx >= bx0 && cx <= bx1;
-                    let in_y = cy >= by0 && cy <= by1;
-                    let bay = if in_y && !in_x {
-                        let w = if cx < bx0 { bx0 } else { bx1 };
-                        let dy = (rr * rr - (w - cx) * (w - cx)).max(0.0).sqrt();
-                        if cy - dy > by0 + 0.01 && cy + dy < by1 - 0.01 {
-                            Some((0u8, w))
-                        } else {
-                            None
-                        }
-                    } else if in_x && !in_y {
-                        let w = if cy < by0 { by0 } else { by1 };
-                        let dx = (rr * rr - (w - cy) * (w - cy)).max(0.0).sqrt();
-                        if cx - dx > bx0 + 0.01 && cx + dx < bx1 - 0.01 {
-                            Some((1u8, w))
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    };
-                    match bay {
-                        Some((axis, w)) => bays.push((axis, w, cx, cy, r)),
-                        None => {
-                            match side {
-                                0 => {
-                                    n.0 = n.0.min(cx - rr);
-                                    n.1 = n.1.max(cx + rr);
-                                    n.2 = n.2.min(cy - rr);
-                                }
-                                1 => {
-                                    n.0 = n.0.min(cx - rr);
-                                    n.1 = n.1.max(cx + rr);
-                                    n.2 = n.2.max(cy + rr);
-                                }
-                                2 => {
-                                    n.0 = n.0.min(cy - rr);
-                                    n.1 = n.1.max(cy + rr);
-                                    n.2 = n.2.min(cx - rr);
-                                }
-                                _ => {
-                                    n.0 = n.0.min(cy - rr);
-                                    n.1 = n.1.max(cy + rr);
-                                    n.2 = n.2.max(cx + rr);
-                                }
-                            }
-                            grew = true;
-                        }
-                    }
-                    interior.remove(k);
-                    continue 'next_circle;
-                }
-            }
-            k += 1;
-        }
-        // Two bays whose chords overlap on the same wall can't both
-        // splice — grow the nearest notch over both instead (rare;
-        // merge_holes keeps circles apart). Conservative: return them
-        // to interior; next round the changed boxes re-classify them.
-        let mut conflict: Option<(usize, usize)> = None;
-        'conf: for a in 0..bays.len() {
-            for b in (a + 1)..bays.len() {
-                let (aa, aw, acx, acy, ar) = bays[a];
-                let (ba, bw, bcx, bcy, br) = bays[b];
-                if aa != ba || (aw - bw).abs() > 1e-9 {
-                    continue;
-                }
-                let arr = ar / (std::f64::consts::PI / 8.0).cos();
-                let brr = br / (std::f64::consts::PI / 8.0).cos();
-                let (ac, bc) = if aa == 0 { (acy, bcy) } else { (acx, bcx) };
-                let (ad, bd) = if aa == 0 {
-                    ((arr * arr - (aw - acx) * (aw - acx)).max(0.0).sqrt(),
-                     (brr * brr - (bw - bcx) * (bw - bcx)).max(0.0).sqrt())
-                } else {
-                    ((arr * arr - (aw - acy) * (aw - acy)).max(0.0).sqrt(),
-                     (brr * brr - (bw - bcy) * (bw - bcy)).max(0.0).sqrt())
-                };
-                if (ac - bc).abs() < ad + bd + 0.02 {
-                    conflict = Some((a, b));
-                    break 'conf;
-                }
-            }
-        }
-        if let Some((a, b)) = conflict {
-            // return both circles; forcing absorption is done by
-            // nudging them to fail the bay test next round via a
-            // direct box grow on whichever notch owns the wall.
-            let later = bays.remove(b);
-            let earlier = bays.remove(a);
-            for (_, _, cx, cy, r) in [earlier, later] {
-                let rr = r / (std::f64::consts::PI / 8.0).cos();
-                for (list, side) in [
-                    (&mut notches_bottom, 0),
-                    (&mut notches_top, 1),
-                    (&mut notches_right, 2),
-                    (&mut notches_left, 3),
-                ] {
-                    let mut hit = false;
-                    for n in list.iter_mut() {
-                        let (bx0, by0, bx1, by1) = match side {
-                            0 => (n.0, n.2, n.1, y1),
-                            1 => (n.0, y0, n.1, n.2),
-                            2 => (n.2, n.0, x1, n.1),
-                            _ => (x0, n.0, n.2, n.1),
-                        };
-                        let nx = cx.clamp(bx0, bx1);
-                        let ny = cy.clamp(by0, by1);
-                        if (cx - nx).hypot(cy - ny) < rr {
-                            match side {
-                                0 => {
-                                    n.0 = n.0.min(cx - rr);
-                                    n.1 = n.1.max(cx + rr);
-                                    n.2 = n.2.min(cy - rr);
-                                }
-                                1 => {
-                                    n.0 = n.0.min(cx - rr);
-                                    n.1 = n.1.max(cx + rr);
-                                    n.2 = n.2.max(cy + rr);
-                                }
-                                2 => {
-                                    n.0 = n.0.min(cy - rr);
-                                    n.1 = n.1.max(cy + rr);
-                                    n.2 = n.2.min(cx - rr);
-                                }
-                                _ => {
-                                    n.0 = n.0.min(cy - rr);
-                                    n.1 = n.1.max(cy + rr);
-                                    n.2 = n.2.max(cx + rr);
-                                }
-                            }
-                            hit = true;
-                            break;
-                        }
-                    }
-                    if hit {
-                        break;
-                    }
-                }
-            }
-            grew = true;
-        }
-        if !grew {
-            break;
-        }
-        // Boxes grew: earlier bays may now be swallowed or their wall
-        // moved — dump them back and re-classify against the new
-        // geometry (growth is monotone, so this terminates).
-        for (_, _, cx, cy, r) in bays.drain(..) {
-            interior.push((cx, cy, r));
-        }
-        notches_bottom = merge_iv(std::mem::take(&mut notches_bottom));
-        notches_top = merge_iv(std::mem::take(&mut notches_top));
-        notches_right = merge_iv(std::mem::take(&mut notches_right));
-        notches_left = merge_iv(std::mem::take(&mut notches_left));
-    }
-    // ONE-TRUTH rings: the CONCAVE UNION of the interior punch
-    // discs, inflated by half the 0.30 web rule so sub-web gaps
-    // merge — the same polygons the fracture punches, shared with
-    // plane_swallows. Replaces chained convex hulls (a via-field
-    // chain collapsed into one mega-hull that carved the mid-board).
-    if std::env::var("BHDL_PNR_DUMP_CIRCLES").is_ok() {
-        for &(cx, cy, r) in &interior {
-            log::warn!("[dump-circle] {cx} {cy} {r}");
-        }
-        log::warn!("[dump-bounds] {x0} {y0} {x1} {y1}");
-    }
-    if let Ok(t) = std::env::var("BHDL_PNR_VIA_NEAR") {
-        if let Some((tx, ty)) = t.split_once(',').and_then(|(a, b)| {
-            Some((a.trim().parse::<f64>().ok()?, b.trim().parse::<f64>().ok()?))
-        }) {
-            for &(cx, cy, r) in &interior {
-                if (cx - tx).hypot(cy - ty) < 2.0 {
-                    log::warn!("[cv] interior ({cx:.2},{cy:.2},{r:.2})");
-                }
-            }
-            for &(_, w, cx, cy, r) in &bays {
-                if (cx - tx).hypot(cy - ty) < 2.0 {
-                    log::warn!("[cv] BAY ({cx:.2},{cy:.2},{r:.2}) wall {w:.2}");
-                }
-            }
-            for (list, side) in [
-                (&notches_bottom, "bottom"),
-                (&notches_top, "top"),
-                (&notches_right, "right"),
-                (&notches_left, "left"),
-            ] {
-                for &(a, b, d) in list.iter() {
-                    let near = if side == "bottom" || side == "top" {
-                        tx > a - 2.0 && tx < b + 2.0
-                    } else {
-                        ty > a - 2.0 && ty < b + 2.0
-                    };
-                    if near {
-                        log::warn!(
-                            "[cv] NOTCH {side} span ({a:.2},{b:.2}) depth {d:.2} [bounds {x0:.2},{y0:.2},{x1:.2},{y1:.2}]"
-                        );
-                    }
-                }
-            }
-        }
-    }
-    let hulls = union_rings(&interior, 0.15, x0, y0, x1, y1);
-    (notches_bottom, notches_top, notches_right, notches_left, bays, interior, interior_rects, hulls)
-}
 
-/// CONCAVE UNION of interior punch circles: stamp each disc
-/// (octagon circumradius + `inflate`) onto a fine boolean grid,
-/// label connected components, and trace each component's OUTER
-/// contour as a rectilinear polygon (collinear runs simplified).
-///
-/// This replaces chained CONVEX hulls: a hull merge cascades
-/// transitively — a connected via-field chain collapsed into one
-/// mega-hull that carved the whole mid-board out of the fill. The
-/// union removes exactly the discs plus the sub-web gaps the
-/// `inflate` band closes, nothing more. Inner contours (enclosed
-/// copper islands) are deliberately dropped — an island inside a
-/// punched void is isolated copper.
-///
-/// Deterministic: grid raster + row-major scans only.
-pub(crate) fn union_rings(
-    circles: &[(f64, f64, f64)],
-    inflate: f64,
-    x0: f64,
-    y0: f64,
-    x1: f64,
-    y1: f64,
-) -> Vec<Vec<(f64, f64)>> {
-    if circles.is_empty() {
-        return Vec::new();
-    }
-    const CELL: f64 = 0.05;
-    let c225 = (std::f64::consts::PI / 8.0).cos();
-    let cols = (((x1 - x0) / CELL).ceil() as usize).max(1) + 2;
-    let rows = (((y1 - y0) / CELL).ceil() as usize).max(1) + 2;
-    let idx = |r: usize, c: usize| r * cols + c;
-    let mut grid = vec![false; rows * cols];
-    for &(cx, cy, r) in circles {
-        let rr = r / c225 + inflate;
-        // Stamp cells whose CENTER lies within rr + half-diagonal —
-        // conservative cover of the disc, clamped strictly inside
-        // the fill rect (a union edge may near the boundary but the
-        // ring must stay interior).
-        let cover = rr + CELL * 0.75;
-        let ca = (((cx - cover - x0) / CELL).floor().max(0.0) as usize).min(cols - 1);
-        let cb = (((cx + cover - x0) / CELL).ceil().max(0.0) as usize).min(cols - 1);
-        let ra = (((cy - cover - y0) / CELL).floor().max(0.0) as usize).min(rows - 1);
-        let rb = (((cy + cover - y0) / CELL).ceil().max(0.0) as usize).min(rows - 1);
-        for row in ra..=rb {
-            let py = y0 + row as f64 * CELL + CELL / 2.0;
-            for col in ca..=cb {
-                let px = x0 + col as f64 * CELL + CELL / 2.0;
-                if (px - cx).hypot(py - cy) <= cover
-                    && px > x0 + 0.05
-                    && px < x1 - 0.05
-                    && py > y0 + 0.05
-                    && py < y1 - 0.05
-                {
-                    grid[idx(row, col)] = true;
-                }
-            }
-        }
-    }
-    // Component labels (4-connectivity), row-major BFS: deterministic.
-    let mut label = vec![0u32; rows * cols];
-    let mut next = 0u32;
-    let mut queue: Vec<(usize, usize)> = Vec::new();
-    for r in 0..rows {
-        for c in 0..cols {
-            if !grid[idx(r, c)] || label[idx(r, c)] != 0 {
-                continue;
-            }
-            next += 1;
-            label[idx(r, c)] = next;
-            queue.clear();
-            queue.push((r, c));
-            while let Some((qr, qc)) = queue.pop() {
-                let mut push = |nr: usize, nc: usize, q: &mut Vec<(usize, usize)>,
-                                label: &mut Vec<u32>| {
-                    if grid[idx(nr, nc)] && label[idx(nr, nc)] == 0 {
-                        label[idx(nr, nc)] = next;
-                        q.push((nr, nc));
-                    }
-                };
-                if qr > 0 {
-                    push(qr - 1, qc, &mut queue, &mut label);
-                }
-                if qr + 1 < rows {
-                    push(qr + 1, qc, &mut queue, &mut label);
-                }
-                if qc > 0 {
-                    push(qr, qc - 1, &mut queue, &mut label);
-                }
-                if qc + 1 < cols {
-                    push(qr, qc + 1, &mut queue, &mut label);
-                }
-            }
-        }
-    }
-    // Outer contour per component: collect boundary edges (grid-line
-    // unit segments with the component on exactly one side), chain
-    // them into loops, keep the loop enclosing the LARGEST area
-    // (outer), drop inner loops (island removal).
-    let mut out: Vec<Vec<(f64, f64)>> = Vec::new();
-    for comp in 1..=next {
-        // Edges as (from_vertex, to_vertex) on the grid-corner
-        // lattice, oriented so the FILLED side is on the left —
-        // loops then chain consistently CCW around the component.
-        use std::collections::BTreeMap;
-        // Vec, NOT a map keyed by from-vertex: a diagonal pinch has
-        // TWO edges leaving one vertex, and map insert silently
-        // overwrote one — the multimap downstream never saw it.
-        let mut edges: Vec<((u32, u32), (u32, u32))> = Vec::new();
-        let at = |r: usize, c: usize, lab: &Vec<u32>| -> bool {
-            lab[r * cols + c] == comp
-        };
-        for r in 0..rows {
-            for c in 0..cols {
-                if !at(r, c, &label) {
-                    continue;
-                }
-                let (r32, c32) = (r as u32, c as u32);
-                // top edge: outside above → edge left-to-right
-                if r == 0 || !at(r - 1, c, &label) {
-                    edges.push(((c32, r32), (c32 + 1, r32)));
-                }
-                // bottom edge: right-to-left
-                if r + 1 >= rows || !at(r + 1, c, &label) {
-                    edges.push(((c32 + 1, r32 + 1), (c32, r32 + 1)));
-                }
-                // left edge: bottom-to-top
-                if c == 0 || !at(r, c - 1, &label) {
-                    edges.push(((c32, r32 + 1), (c32, r32)));
-                }
-                // right edge: top-to-bottom
-                if c + 1 >= cols || !at(r, c + 1, &label) {
-                    edges.push(((c32 + 1, r32), (c32 + 1, r32 + 1)));
-                }
-            }
-        }
-        // A lattice vertex carries TWO outgoing edges at a diagonal
-        // pinch — a flat map OVERWROTE one and the walk short-
-        // circuited across the pinch, dropping whole lobes from the
-        // traced loop (measured: a via cluster's lobe stayed copper,
-        // two unpunched holes). Direction-aware boundary following:
-        // at a fork, prefer the LEFT turn (filled side is on the
-        // left), so each lobe closes on itself.
-        let mut loops: Vec<Vec<(u32, u32)>> = Vec::new();
-        let mut edges_left: BTreeMap<(u32, u32), Vec<(u32, u32)>> = BTreeMap::new();
-        for (f, t) in edges {
-            edges_left.entry(f).or_default().push(t);
-        }
-        for v in edges_left.values_mut() {
-            v.sort();
-        }
-        loop {
-            let Some((&start, _)) = edges_left.iter().find(|(_, v)| !v.is_empty())
-            else {
-                break;
-            };
-            let mut walk = vec![start];
-            let mut cur = start;
-            let mut dir: Option<(i64, i64)> = None;
-            loop {
-                let Some(cands) = edges_left.get_mut(&cur) else { break };
-                if cands.is_empty() {
-                    break;
-                }
-                let nxt = if cands.len() == 1 {
-                    cands.remove(0)
-                } else {
-                    let d = dir.unwrap_or((1, 0));
-                    // Lobe-closing turn first. Worked through both
-                    // diagonal-pinch configurations by hand (filled-
-                    // left edge orientation, y-down lattice): the
-                    // turn that keeps the walk on its OWN lobe is
-                    // (-dy, dx); the other rotation jumps to the
-                    // twin lobe and weaves a mixed loop (measured:
-                    // lobe fragments truncated mid-disc, circle
-                    // centers uncovered).
-                    let prefs = [
-                        (-d.1, d.0),
-                        d,
-                        (d.1, -d.0),
-                        (-d.0, -d.1),
-                    ];
-                    let pick = prefs.iter().find_map(|&(pdx, pdy)| {
-                        cands.iter().position(|&t| {
-                            (t.0 as i64 - cur.0 as i64, t.1 as i64 - cur.1 as i64)
-                                == (pdx, pdy)
-                        })
-                    });
-                    match pick {
-                        Some(k) => cands.remove(k),
-                        None => cands.remove(0),
-                    }
-                };
-                dir = Some((nxt.0 as i64 - cur.0 as i64, nxt.1 as i64 - cur.1 as i64));
-                if nxt == start {
-                    break;
-                }
-                walk.push(nxt);
-                cur = nxt;
-            }
-            if walk.len() >= 4 {
-                loops.push(walk);
-            } else if walk.len() == 1 {
-                // Degenerate start with no continuation: drop it so
-                // the outer scan terminates.
-                edges_left.get_mut(&start).map(|v| v.clear());
-            }
-        }
-        // Keep EVERY outer-orientation loop, not just the biggest:
-        // left-turn tracing splits a PINCHED component (dumbbell of
-        // two discs sharing one lattice vertex) into two lobe loops —
-        // max-area kept one and silently DROPPED the twin, shipping
-        // its via unpunched (the pds 2-ring loss). Outer loops share
-        // the tracing orientation's shoelace SIGN; inner contours
-        // (enclosed copper islands) come out with the opposite sign
-        // and are dropped by design.
-        let signed_area = |lp: &Vec<(u32, u32)>| -> f64 {
-            let mut a = 0.0;
-            for k in 0..lp.len() {
-                let p = lp[k];
-                let q = lp[(k + 1) % lp.len()];
-                a += p.0 as f64 * q.1 as f64 - q.0 as f64 * p.1 as f64;
-            }
-            a / 2.0
-        };
-        let outer_sign = loops
-            .iter()
-            .map(|lp| signed_area(lp))
-            .max_by(|a1, b1| {
-                a1.abs()
-                    .partial_cmp(&b1.abs())
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .map(|a| a.signum())
-            .unwrap_or(1.0);
-        for lp in loops {
-            let a = signed_area(&lp);
-            // Same orientation as the (definitely outer) biggest
-            // loop, and at least a few cells of area.
-            if a.signum() != outer_sign || a.abs() < 4.0 {
-                continue;
-            }
-            // Lattice → mm, collinear runs simplified.
-            let pts: Vec<(f64, f64)> = lp
-                .into_iter()
-                .map(|(vc, vr)| (x0 + vc as f64 * CELL, y0 + vr as f64 * CELL))
-                .collect();
-            let mut simp: Vec<(f64, f64)> = Vec::with_capacity(pts.len());
-            let n = pts.len();
-            for k in 0..n {
-                let prev = pts[(k + n - 1) % n];
-                let cur = pts[k];
-                let nxt = pts[(k + 1) % n];
-                let collinear = ((cur.0 - prev.0) * (nxt.1 - cur.1)
-                    - (cur.1 - prev.1) * (nxt.0 - cur.0))
-                    .abs()
-                    < 1e-9;
-                if !collinear {
-                    simp.push(cur);
-                }
-            }
-            if simp.len() >= 4 {
-                out.push(simp);
-            }
-        }
-    }
-    out
-}
 
 
 /// ONE VOID ENGINE (rect fills): rasterize COPPER = fill rect minus
@@ -1640,6 +781,26 @@ pub(crate) fn fill_copper_grid(
     holes: &[(f64, f64, f64)],
     rects: &[(f64, f64, f64, f64)],
 ) -> (Vec<bool>, usize, usize) {
+    fill_copper_grid_masked(x0, y0, x1, y1, holes, rects, None)
+}
+
+/// The one void engine's raster, optionally MASKED to a polygon
+/// boundary (the poly-outline fill path): cells whose center falls
+/// outside the already-inset rectilinear boundary start as void, and
+/// everything downstream — punches, morphological open, component
+/// loops — is identical to the rect path. This dissolves the whole
+/// v1 poly classification (interior vs crossing rects, absorb-into-
+/// rect, notch walks): a cutout crossing the boundary just rasters
+/// as the union of two voids.
+pub(crate) fn fill_copper_grid_masked(
+    x0: f64,
+    y0: f64,
+    x1: f64,
+    y1: f64,
+    holes: &[(f64, f64, f64)],
+    rects: &[(f64, f64, f64, f64)],
+    mask: Option<&[(f64, f64)]>,
+) -> (Vec<bool>, usize, usize) {
     let c225 = (std::f64::consts::PI / 8.0).cos();
     let cols = (((x1 - x0) / VOID_CELL).ceil() as usize).max(1);
     let rows = (((y1 - y0) / VOID_CELL).ceil() as usize).max(1);
@@ -1647,6 +808,15 @@ pub(crate) fn fill_copper_grid(
     let cx_of = |c: usize| x0 + (c as f64 + 0.5) * VOID_CELL;
     let cy_of = |r: usize| y0 + (r as f64 + 0.5) * VOID_CELL;
     let mut copper = vec![true; rows * cols];
+    if let Some(poly) = mask {
+        for r in 0..rows {
+            for c in 0..cols {
+                if !point_in_poly(poly, cx_of(c), cy_of(r)) {
+                    copper[idx(r, c)] = false;
+                }
+            }
+        }
+    }
     // Void circles: octagon circumradius + half the 0.30 web rule, so
     // sub-web gaps between neighboring punches merge; + raster cover.
     for &(hx, hy, hr) in holes {
@@ -1851,10 +1021,11 @@ fn fracture_fill(
     holes: &[(f64, f64, f64)],
     rects: &[(f64, f64, f64, f64)],
     anchors: &[(f64, f64)],
+    mask: Option<&[(f64, f64)]>,
 ) -> Vec<Vec<(f64, f64)>> {
     // ONE VOID ENGINE: raster copper, trace copper components, punch
     // hole loops via the keyhole forest. See fill_copper_grid.
-    let (copper, cols, rows) = fill_copper_grid(x0, y0, x1, y1, holes, rects);
+    let (copper, cols, rows) = fill_copper_grid_masked(x0, y0, x1, y1, holes, rects, mask);
     // Label copper components (4-connectivity), row-major BFS.
     let mut label = vec![0u32; rows * cols];
     let mut next = 0u32;
@@ -1958,25 +1129,6 @@ pub(crate) enum RingKind {
 }
 
 impl RingKind {
-    fn cy(&self) -> f64 {
-        match self {
-            RingKind::Circle { cy, .. } => *cy,
-            RingKind::Rect { y0, y1, .. } => (y0 + y1) / 2.0,
-            RingKind::Poly(pts) => {
-                // The slit ray must leave from the RIGHTMOST vertex's
-                // own row — using the bbox center teleported that
-                // vertex onto a foreign row, deforming the ring (KiCad
-                // normalization then erased it: vias at 0.0mm).
-                pts.iter()
-                    .fold(None::<(f64, f64)>, |best, p| match best {
-                        Some(b) if (b.0, -b.1) >= (p.0, -p.1) => Some(b),
-                        _ => Some(*p),
-                    })
-                    .map(|p| p.1)
-                    .unwrap_or(0.0)
-            }
-        }
-    }
     fn center_x(&self) -> f64 {
         match self {
             RingKind::Circle { cx, .. } => *cx,
@@ -1992,109 +1144,6 @@ impl RingKind {
 }
 
 
-/// Merge ring polygons that intersect or come within `web` of each
-/// other into their CONVEX HULL: the copper web between two near
-/// rings under-clears both barrels (and self-intersecting rings
-/// re-fill under KiCad normalization). Hull growth is bounded — a
-/// capsule over the pair — so no covering-circle cascade. Fixpoint.
-fn hull_merge_close_rings(rings: &mut Vec<Vec<(f64, f64)>>, web: f64) {
-    let seg_pt = |p: (f64, f64), a: (f64, f64), b: (f64, f64)| -> f64 {
-        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-        let l2 = dx * dx + dy * dy;
-        let t = if l2 <= 1e-12 {
-            0.0
-        } else {
-            (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / l2).clamp(0.0, 1.0)
-        };
-        (p.0 - (a.0 + t * dx)).hypot(p.1 - (a.1 + t * dy))
-    };
-    let poly_dist = |pa: &[(f64, f64)], pb: &[(f64, f64)]| -> f64 {
-        // Vertex-to-edge alone misses pure EDGE crossings (both
-        // polygons' vertices far from the other's edges) — measured
-        // as an un-merged intersecting pair whose weave re-filled the
-        // overlap (0.2573mm zone clearance vs a via).
-        let orient = |p: (f64, f64), q: (f64, f64), r: (f64, f64)| -> f64 {
-            (q.0 - p.0) * (r.1 - p.1) - (q.1 - p.1) * (r.0 - p.0)
-        };
-        for ea in 0..pa.len() {
-            let (a1, a2) = (pa[ea], pa[(ea + 1) % pa.len()]);
-            for eb in 0..pb.len() {
-                let (b1, b2) = (pb[eb], pb[(eb + 1) % pb.len()]);
-                let (o1, o2) = (orient(a1, a2, b1), orient(a1, a2, b2));
-                let (o3, o4) = (orient(b1, b2, a1), orient(b1, b2, a2));
-                if o1 * o2 < 0.0 && o3 * o4 < 0.0 {
-                    return 0.0;
-                }
-            }
-        }
-        let mut d = f64::MAX;
-        for p in pa {
-            for e in 0..pb.len() {
-                d = d.min(seg_pt(*p, pb[e], pb[(e + 1) % pb.len()]));
-            }
-        }
-        for p in pb {
-            for e in 0..pa.len() {
-                d = d.min(seg_pt(*p, pa[e], pa[(e + 1) % pa.len()]));
-            }
-        }
-        d
-    };
-    let hull = |mut pts: Vec<(f64, f64)>| -> Vec<(f64, f64)> {
-        pts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        pts.dedup_by(|a, b| (a.0 - b.0).hypot(a.1 - b.1) < 1e-9);
-        if pts.len() < 3 {
-            return pts;
-        }
-        let cross = |o: (f64, f64), a: (f64, f64), b: (f64, f64)| {
-            (a.0 - o.0) * (b.1 - o.1) - (a.1 - o.1) * (b.0 - o.0)
-        };
-        let mut lower: Vec<(f64, f64)> = Vec::new();
-        for &p in &pts {
-            while lower.len() >= 2
-                && cross(lower[lower.len() - 2], lower[lower.len() - 1], p) <= 0.0
-            {
-                lower.pop();
-            }
-            lower.push(p);
-        }
-        let mut upper: Vec<(f64, f64)> = Vec::new();
-        for &p in pts.iter().rev() {
-            while upper.len() >= 2
-                && cross(upper[upper.len() - 2], upper[upper.len() - 1], p) <= 0.0
-            {
-                upper.pop();
-            }
-            upper.push(p);
-        }
-        lower.pop();
-        upper.pop();
-        lower.extend(upper);
-        lower
-    };
-    loop {
-        let mut merged: Option<(usize, usize)> = None;
-        'find: for a in 0..rings.len() {
-            for b in a + 1..rings.len() {
-                if poly_dist(&rings[a], &rings[b]) < web {
-                    merged = Some((a, b));
-                    break 'find;
-                }
-            }
-        }
-        match merged {
-            Some((a, b)) => {
-                let mut pts = rings[a].clone();
-                pts.extend_from_slice(&rings[b]);
-                let h = hull(pts);
-                rings.remove(b);
-                rings.remove(a);
-                rings.push(h);
-            }
-            None => break,
-        }
-    }
-}
 
 fn punch_interior_rings(poly: &mut Vec<(f64, f64)>, rings: Vec<RingKind>) {
     // Fills v2: STATIC KEYHOLE FOREST. The old builder inserted each
@@ -2351,15 +1400,6 @@ fn punch_interior_rings(poly: &mut Vec<(f64, f64)>, rings: Vec<RingKind>) {
     }
 }
 
-fn punch_interior_holes(poly: &mut Vec<(f64, f64)>, holes: Vec<(f64, f64, f64)>) {
-    punch_interior_rings(
-        poly,
-        holes
-            .into_iter()
-            .map(|(cx, cy, r)| RingKind::Circle { cx, cy, r })
-            .collect(),
-    );
-}
 
 
 /// Foreign through-barrels for a plane net's fill: punch radius =
@@ -2542,97 +1582,5 @@ pub(crate) fn plane_swallows(
 mod union_tests {
     use super::*;
 
-    #[test]
-    fn union_covers_all_input_circles() {
-        // The pds cluster that lost two punches: three r=0.65 circles.
-        let circles = vec![
-            (41.68, 43.26, 0.65),
-            (41.68, 45.80, 0.65),
-            (42.88, 44.53, 0.65),
-        ];
-        let rings = union_rings(&circles, 0.15, 0.5, 0.5, 52.9, 52.9);
-        // Every circle center must be inside SOME ring.
-        for &(cx, cy, _) in &circles {
-            let covered = rings.iter().any(|ring| point_in_poly(ring, cx, cy));
-            assert!(covered, "circle at ({cx},{cy}) not covered; rings={}", rings.len());
-        }
-        // And the PUNCHED fill must have no copper at any center —
-        // the keyhole weave must survive with staircase union rings
-        // (pds regression: two of these three shipped unpunched).
-        let mut poly: Vec<(f64, f64)> =
-            vec![(0.5, 0.5), (52.9, 0.5), (52.9, 52.9), (0.5, 52.9)];
-        punch_interior_rings(
-            &mut poly,
-            rings.into_iter().map(RingKind::Poly).collect(),
-        );
-        for &(cx, cy, _) in &circles {
-            assert!(
-                !point_in_poly(&poly, cx, cy),
-                "copper at ({cx},{cy}) after punch ({} verts)",
-                poly.len()
-            );
-        }
-    }
 
-    #[test]
-    fn union_covers_pds_gnd_fill() {
-        // The FULL 48-circle GND fill from test_power_domain_
-        // scalability seed 42 — the two vias at x=41.675 lost their
-        // punches in vivo while a 3-circle repro passed.
-        let circles: Vec<(f64, f64, f64)> = vec![
-    (10.499264068711929, 36.92926406871193, 0.65),
-    (31.975, 51.905, 0.65),
-    (12.895000000000001, 27.575000000000003, 0.65),
-    (20.795, 25.775000000000006, 0.65),
-    (42.87500000000001, 47.07000000000001, 0.65),
-    (41.675000000000004, 45.800000000000004, 0.65),
-    (42.87500000000001, 44.53, 0.65),
-    (41.675000000000004, 43.260000000000005, 0.65),
-    (42.87500000000001, 41.99, 0.65),
-    (37.925000000000004, 41.99, 0.65),
-    (37.74926406871193, 43.68426406871193, 0.65),
-    (36.375, 44.53, 0.65),
-    (42.69926406871193, 48.76426406871193, 0.65),
-    (22.076677913517834, 32.01663111474067, 0.65),
-    (21.973251105397598, 51.57532459959199, 0.65),
-    (15.774999999999999, 30.024316285030586, 0.65),
-    (12.575, 51.900000000000006, 0.65),
-    (28.475000000000005, 44.1, 0.65),
-    (12.700000000000001, 47.825, 0.65),
-    (20.775000000000006, 27.670994720872336, 0.65),
-    (17.475000000000005, 43.9232613103874, 0.65),
-    (27.08102512873765, 35.2, 0.65),
-    (15.075, 36.12033422170346, 0.65),
-    (13.684723682324961, 33.730480206189135, 0.65),
-    (19.6280149855371, 34.380650165031746, 0.65),
-    (17.075000000000003, 46.23924124125064, 0.65),
-    (17.337515174109527, 51.39958866830391, 0.65),
-    (24.186920163247464, 49.87200632635338, 0.65),
-    (18.507641438194575, 50.08002995674088, 0.65),
-    (29.400000000000002, 40.475, 0.65),
-    (23.474767381602778, 42.35387245640458, 0.65),
-    (22.825000000000003, 46.07705003551164, 0.65),
-    (22.632623929330922, 44.20306173877364, 0.65),
-    (20.43985405012435, 49.30239544986791, 0.65),
-    (11.998404592370129, 42.7, 0.65),
-    (15.491603150016921, 41.80841036923347, 0.65),
-    (24.0393199100249, 47.96580384571045, 0.65),
-    (20.825000000000003, 29.904464727524314, 0.65),
-    (24.528014985537098, 37.9, 0.65),
-    (14.933334385808863, 49.18685134291886, 0.65),
-    (16.3, 40.03508242720355, 0.65),
-    (25.589767381602776, 40.300000000000004, 0.65),
-    (20.225, 36.55192892451, 0.65),
-    (26.700000000000003, 44.87500000000001, 0.65),
-    (19.21675928262476, 41.81688256163278, 0.65),
-    (18.571798424147342, 32.204527660707384, 0.65),
-    (20.300000000000004, 40.15655268851514, 0.65),
-    (10.425, 42.300000000000004, 0.65),
-];
-        let rings = union_rings(&circles, 0.15, 0.5, 0.5, 52.874588668303915, 52.874588668303915);
-        for &(cx, cy, _) in &circles {
-            let covered = rings.iter().any(|ring| point_in_poly(ring, cx, cy));
-            assert!(covered, "circle at ({cx},{cy}) not covered; {} rings", rings.len());
-        }
-    }
 }
