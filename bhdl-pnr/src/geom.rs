@@ -923,6 +923,36 @@ fn route_tunnel_ml_phase(
         }
     }
     if !reached {
+        // ENTRY-EDGE PROBE (diagnosis only): distinguish "search
+        // exhausted the window" from "an endpoint is sealed at the
+        // lattice-entry scale" and name the sealing copper.
+        if std::env::var("BHDL_PNR_ML_PROBE").is_ok() {
+            let probe = |p: (f64, f64), node: Node, l: usize| {
+                let mut clear_n = 0usize;
+                let mut first: Option<Conflict> = None;
+                for &(dx, dy) in &dirs {
+                    let nb = (node.0 + dx, node.1 + dy);
+                    if nb.0 < 0 || nb.1 < 0 || nb.0 >= cols || nb.1 >= rows {
+                        continue;
+                    }
+                    match idx.first_conflict(p, pt(nb), width, l, net) {
+                        None => clear_n += 1,
+                        Some(c) => {
+                            if first.is_none() {
+                                first = Some(c);
+                            }
+                        }
+                    }
+                }
+                (clear_n, first)
+            };
+            let (s_clear, s_conf) = probe(from, start, from_layer);
+            let (g_clear, g_conf) = probe(to, goal, to_layer);
+            log::debug!(
+                "ml-probe: ({:.2},{:.2})l{from_layer}->({:.2},{:.2})l{to_layer} m={margin} snap={phase_snap} expanded={expanded} entry {s_clear}/8 (block {:?}) exit {g_clear}/8 (block {:?})",
+                from.0, from.1, to.0, to.1, s_conf, g_conf
+            );
+        }
         return None;
     }
     // Reconstruct with true endpoints at the ends.

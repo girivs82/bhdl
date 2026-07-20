@@ -5261,6 +5261,12 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
                 })
                 .collect();
             attach_ml.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
+            // Candidate-set experiments all measured WORSE (open-exit
+            // filtering of the nearest-3 reshuffled 3 clean seeds;
+            // an open-exit fallback tier still degraded s13 3->5):
+            // the residual knots are EVOLUTION-COUPLED — any new
+            // mid-completion success cascades. Diagnosis lives in the
+            // BHDL_PNR_ML_PROBE entry-edge probe (geom.rs).
             attach_ml.truncate(3);
             let cidx5 = geom::ClearanceIndex::build(board, final_routes, Some(net.id));
             for &(q, ql, _) in &attach_ml {
