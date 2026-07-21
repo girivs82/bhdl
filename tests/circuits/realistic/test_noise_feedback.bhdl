@@ -1,0 +1,119 @@
+// P5 stage 3 — MEASURED noise feedback into PLACEMENT, end to end:
+// the aggressor chain is PINNED, the victim is FREE. Wirelength pulls
+// the victim's source next to the aggressor (shared VCC/GND), the
+// first pass measures the coupled noise against the declared budget,
+// and when it FAILS the stage-3 loop inverts the coupling model into
+// the separation the budget demands (s = h·sqrt(0.25·swing/budget−1)),
+// re-places with that KeepAway, and re-MEASURES. Acceptance is by
+// measurement, never by the constraint.
+//
+// Same electrical shape as test_noise_budget; only placement freedom
+// differs — no wall, no victim pins.
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+
+entity TestEdgeDriver() {
+    pin VCC:  power in;
+    pin OUT1: signal out;
+    pin GND:  ground;
+
+    attribute component_class = "ic_logic";
+    attribute i_quiescent = 1mA;
+
+    simulation {
+        model {
+            ibis "test_buffer.ibs" component "TESTCHIP" corner typ;
+        }
+    }
+}
+
+interface Quiet {
+    signal V: inout;
+    constraints {
+        *: noise_budget 40mV;
+        *: layer top;
+    }
+}
+
+entity QuietSrc() {
+    interface Quiet q;
+    pin VCC: power in;
+    pin GND: ground;
+
+    attribute component_class = "ic";
+}
+
+layout QuietSrc {
+    package SOIC-8;
+}
+
+// Layer tap: joining the aggressor net to this interface pin binds
+// the MERGED net to the top layer (2-layer boards route point-to-
+// point nets wherever they fit — the noise_budget fixture's lesson:
+// without a bind the pair splits F/B broadside and there is nothing
+// to measure).
+interface TopBind {
+    signal S: inout;
+    constraints {
+        *: layer top;
+    }
+}
+
+entity TopTap() {
+    interface TopBind t;
+
+    attribute component_class = "passive";
+}
+
+layout TopTap {
+    package 0603;
+}
+
+board NoiseFeedback {
+    power VCC = 5V @ 100mA;
+    ground GND;
+
+    // Aggressor: the scheduled IBIS edge, loaded like ibis_edge.
+    u1: TestEdgeDriver(ibis_wave_OUT1="rise@2n");
+    @VCC -> u1.VCC;
+    u1.GND -> @GND;
+    u1.OUT1 -> load_node;
+    load_node -> r_load: Res(125Ω).1;
+    r_load.2 -> @GND;
+    load_node -> c_load: Cap(100pF).1;
+    c_load.2 -> @GND;
+    tap: TopTap();
+    load_node -> tap.t.S;
+
+    // Victim: FREE placement. Shared VCC/GND pull src toward u1, so
+    // the first pass couples; stage 3 must earn the separation.
+    src: QuietSrc();
+    src.VCC -> @VCC;
+    src.GND -> @GND;
+    src.q.V -> r_v: Res(1k).1;
+    r_v.2 -> @GND;
+}
+
+layout NoiseFeedback {
+    // 2-layer: thick dielectric → k_b decays slowly with gap, so the
+    // budget demands a separation placement can only reach by MOVING
+    // the victim (mm-scale), not by routing finesse.
+    layer_stackup 2;
+    outline rect 30 20;
+    // The AGGRESSOR chain is pinned as a LONG horizontal run along
+    // the bottom (u1 → tap → c_load → r_load spans x=4..26 at y≈3).
+    // The victim's far end r_v is pinned HIGH (y=17: 14mm off the
+    // aggressor — comfortably clearable) while src is FREE: shared
+    // VCC/GND drag src down beside u1, so every first-pass trial
+    // runs the victim diagonal through the coupled band (measured
+    // FAIL) and only the stage-3 KeepAway can buy the run back
+    // upward. Two earlier revisions bracketed this: r_v at y=7 was
+    // unclearable through the anchored trace end; r_v fully free
+    // let trial diversity (stage 2) find quiet without feedback.
+    place u1 at (4.2, 3);
+    place c_load at (15, 3);
+    place r_load at (26, 3);
+    place tap at (20, 3);
+    place r_v at (26, 17);
+}

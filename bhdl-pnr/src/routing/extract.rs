@@ -13,9 +13,16 @@ use crate::types::*;
 /// Copper resistivity, Ω·mm (annealed copper at 20°C).
 const RHO_CU_OHM_MM: f64 = 1.724e-5;
 
-/// Coupling reach: beyond this edge gap the backward-crosstalk
-/// coefficient on PCB geometries is below ~1% — not worth a row.
-const XT_REACH_MM: f64 = 1.0;
+/// Coupling reach in DIELECTRIC HEIGHTS: k_b = 0.25/(1+(s/h)²) drops
+/// below ~1% at s ≈ 5h, so that is where a couple stops being worth
+/// measuring. The reach must scale with the stackup — a fixed 1mm
+/// cutoff (the original constant) was silently blind to 2-layer
+/// boards, whose h≈1.5mm keeps k_b at 3% out past 4mm: ~100mV of
+/// real noise on a measured 3.3V edge, invisible to the extractor.
+const XT_REACH_H: f64 = 5.0;
+
+/// Fallback dielectric height when the stackup declares none.
+const H_FALLBACK_MM: f64 = 0.1;
 
 /// Dielectric height used for the crosstalk coefficient on `layer` —
 /// same geometry the impedance model uses.
@@ -86,7 +93,11 @@ pub(crate) fn crosstalk_rows(
                     continue;
                 }
                 // Sample 5 points; count coupled length by nearest
-                // same-layer aggressor copper within reach.
+                // same-layer aggressor copper within reach (5h — the
+                // reach follows the stackup, not a fixed mm).
+                let h_layer =
+                    layer_h(&board.layer_stack, sv.layer).unwrap_or(H_FALLBACK_MM);
+                let reach = XT_REACH_H * h_layer;
                 let mut hits = 0usize;
                 let mut gmin_acc = 0.0;
                 for k in 0..5 {
@@ -114,11 +125,11 @@ pub(crate) fn crosstalk_rows(
                             - sa.width_mm / 2.0;
                         gmin = gmin.min(d.max(0.0));
                     }
-                    if gmin <= XT_REACH_MM {
+                    if gmin <= reach {
                         hits += 1;
                         gmin_acc += gmin;
                         if h_ref.is_none() {
-                            h_ref = layer_h(&board.layer_stack, sv.layer);
+                            h_ref = Some(h_layer);
                         }
                     }
                 }
@@ -131,7 +142,7 @@ pub(crate) fn crosstalk_rows(
                 continue;
             }
             let gap = gap_sum / coupled;
-            let h = h_ref.unwrap_or(0.1);
+            let h = h_ref.unwrap_or(H_FALLBACK_MM);
             let kb = 0.25 / (1.0 + (gap / h).powi(2)) * 100.0;
             found.push((kb * coupled, vi, ai, coupled, gap, kb));
         }
@@ -168,16 +179,30 @@ pub(crate) fn crosstalk_rows(
 /// Worst MEASURED crosstalk noise into `vi` (mV): max over aggressors
 /// of k_b x measured swing — Some only when a solved IBIS edge exists
 /// on either side of the worst couple (Real-Data: no trace, no gate).
+/// Returns (mv, aggressor idx, coupled mm, dielectric h mm, swing V) —
+/// h and swing let P5 stage 3 invert the coupling model into the
+/// separation a failing budget demands.
 pub(crate) fn crosstalk_worst_mv(
     board: &Board,
     routes: &[Route],
     vi: usize,
-) -> Option<(f64, usize, f64)> {
-    let mut worst: Option<(f64, usize, f64)> = None;
+) -> Option<(f64, usize, f64, f64, f64)> {
+    // Intentional pairs (DiffPair partners) are the design, not
+    // noise — excluded exactly as in crosstalk_rows.
+    let mut partners: std::collections::HashSet<(NetId, NetId)> =
+        std::collections::HashSet::new();
+    for c in &board.constraints {
+        if let Constraint::DiffPair { p_net, n_net, .. } = c {
+            partners.insert((*p_net, *n_net));
+            partners.insert((*n_net, *p_net));
+        }
+    }
+    let mut worst: Option<(f64, usize, f64, f64, f64)> = None;
     for (ai, an) in board.nets.iter().enumerate() {
         if ai == vi
             || !matches!(an.net_class, PnrNetClass::Signal)
             || an.plane_layer.is_some()
+            || partners.contains(&(board.nets[vi].id, an.id))
         {
             continue;
         }
@@ -192,6 +217,9 @@ pub(crate) fn crosstalk_worst_mv(
             if lv < 0.3 {
                 continue;
             }
+            let h_layer =
+                layer_h(&board.layer_stack, sv.layer).unwrap_or(H_FALLBACK_MM);
+            let reach = XT_REACH_H * h_layer;
             let mut hits = 0usize;
             let mut gacc = 0.0;
             for k in 0..5 {
@@ -219,11 +247,11 @@ pub(crate) fn crosstalk_worst_mv(
                         - sa.width_mm / 2.0;
                     gmin = gmin.min(d.max(0.0));
                 }
-                if gmin <= XT_REACH_MM {
+                if gmin <= reach {
                     hits += 1;
                     gacc += gmin;
                     if h_ref.is_none() {
-                        h_ref = layer_h(&board.layer_stack, sv.layer);
+                        h_ref = Some(h_layer);
                     }
                 }
             }
@@ -236,11 +264,11 @@ pub(crate) fn crosstalk_worst_mv(
             continue;
         }
         let gap = gap_sum / coupled;
-        let h = h_ref.unwrap_or(0.1);
+        let h = h_ref.unwrap_or(H_FALLBACK_MM);
         let kb = 0.25 / (1.0 + (gap / h).powi(2));
         let mv = kb * sw * 1000.0;
-        if worst.map_or(true, |(wm, _, _)| mv > wm) {
-            worst = Some((mv, ai, coupled));
+        if worst.map_or(true, |(wm, _, _, _, _)| mv > wm) {
+            worst = Some((mv, ai, coupled, h, sw));
         }
     }
     worst

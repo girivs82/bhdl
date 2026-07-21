@@ -70,7 +70,7 @@ fn measured_noise_mv(result: &PnrResult) -> Option<f64> {
         if !matches!(n.net_class, PnrNetClass::Signal) || n.plane_layer.is_some() {
             continue;
         }
-        if let Some((mv, _, _)) =
+        if let Some((mv, ..)) =
             routing::extract::crosstalk_worst_mv(&result.board, &result.routes, vi)
         {
             total += mv;
@@ -224,6 +224,108 @@ pub fn place_and_route_best_of(
             }
         }
     }
+    // P5 STAGE 3 — measured rewards feed PLACEMENT: when a declared
+    // noise budget FAILS on measured numbers, invert the coupling
+    // model into the separation the budget demands —
+    //   k_b = 0.25/(1+(s/h)^2)  →  s = h·sqrt(0.25·swing/budget − 1)
+    // — and re-run the trials with soft KeepAways holding the
+    // victim's components that far from the aggressor's. The
+    // constraint is a lever, not the judge: acceptance stays with
+    // trial_dominated, so a feedback trial ships only when legality
+    // and connectivity hold and the copper MEASURES quieter.
+    if has_measured {
+        let mut fb: Vec<crate::constraint::Constraint> = Vec::new();
+        if let Some(b) = &best {
+            use crate::constraint::{Constraint, ConstraintSource, CostShape, EntitySel, Hardness};
+            for c in &b.board.constraints {
+                let Constraint::NoiseBudget { net, max_mv, .. } = c else {
+                    continue;
+                };
+                let Some(vi) = b.board.nets.iter().position(|n| n.id == *net) else {
+                    continue;
+                };
+                let Some((mv, ai, _, h, sw)) =
+                    routing::extract::crosstalk_worst_mv(&b.board, &b.routes, vi)
+                else {
+                    continue;
+                };
+                if mv <= *max_mv as f64 {
+                    continue;
+                }
+                let kb_needed = *max_mv as f64 / 1000.0 / sw;
+                if kb_needed <= 0.0 || kb_needed >= 0.25 {
+                    continue;
+                }
+                // 1.5× headroom over the physics floor: the KeepAway
+                // acts on COMPONENT centers while the budget governs
+                // TRACE gaps, and traces sag toward their pads (1.25×
+                // measured 6.6mm of trace gap where 6.8mm was needed —
+                // the discrepancy eats more than a quarter). The margin
+                // is a lever setting, not a claim — acceptance stays
+                // with the re-measurement.
+                let s_needed = 1.5 * h * (0.25 / kb_needed - 1.0).sqrt();
+                info!(
+                    "P5 stage 3: noise budget {} FAILING measured ({mv:.1}mV > {max_mv}mV vs {}) — budget demands {s_needed:.2}mm separation (h={h:.2}mm, swing {sw:.2}V), re-placing",
+                    b.board.nets[vi].name, b.board.nets[ai].name
+                );
+                let src = ConstraintSource {
+                    file: String::new(),
+                    line: None,
+                    intent_kind: "p5_noise_feedback".into(),
+                    recipe_version: "0".into(),
+                };
+                let vcomps: std::collections::BTreeSet<ComponentId> =
+                    b.board.nets[vi].pins.iter().map(|&(c, _)| c).collect();
+                let acomps: std::collections::BTreeSet<ComponentId> =
+                    b.board.nets[ai].pins.iter().map(|&(c, _)| c).collect();
+                for &cv in &vcomps {
+                    for &ca in &acomps {
+                        if cv == ca {
+                            continue;
+                        }
+                        // Weight 12: this spring must beat the shared-
+                        // rail wirelength basin that CAUSED the couple
+                        // (weight-4 feedback moved 1 of 3 trials).
+                        fb.push(Constraint::KeepAway {
+                            a: EntitySel::Component(cv),
+                            b: EntitySel::Component(ca),
+                            min_mm: s_needed as f32,
+                            hardness: Hardness::Soft {
+                                shape: CostShape::Quadratic,
+                                weight: 12.0,
+                            },
+                            source: src.clone(),
+                        });
+                    }
+                }
+            }
+        }
+        if !fb.is_empty() {
+            for trial in 0..trials {
+                info!("=== Noise-feedback trial {}/{} ===", trial + 1, trials);
+                let mut trial_board = board.clone();
+                trial_board.constraints.extend(fb.iter().cloned());
+                let result = place_and_route(
+                    trial_board,
+                    config.clone(),
+                    base_seed.wrapping_add(trial as u64),
+                )?;
+                let dominated = best
+                    .as_ref()
+                    .map_or(false, |b| trial_dominated(&result, b, true));
+                if !dominated {
+                    info!(
+                        "Noise-feedback trial {} is new best: {} connected sink(s), measured noise {:.1}mV",
+                        trial + 1,
+                        result.metrics.connected_sinks,
+                        measured_noise_mv(&result).unwrap_or(0.0)
+                    );
+                    best = Some(result);
+                }
+            }
+        }
+    }
+
     best.ok_or_else(|| anyhow::anyhow!("No trials completed"))
 }
 
@@ -2327,7 +2429,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                 Constraint::NoiseBudget { net, max_mv, .. } => {
                     let Some(i) = idx_of(*net) else { continue };
                     match routing::extract::crosstalk_worst_mv(&board, &final_routes, i) {
-                        Some((mv, ai, mm)) => {
+                        Some((mv, ai, mm, _, _)) => {
                             let ok = mv <= *max_mv as f64;
                             rows.push(format!(
                                 "noise budget {}: measured worst {mv:.1}mV (vs {}, {mm:.1}mm coupled) budget {max_mv}mV — {}",
@@ -2335,6 +2437,18 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                                 board.nets[ai].name,
                                 if ok { "PASS" } else { "FAIL" }
                             ));
+                        }
+                        // None means either NOTHING was measured (no
+                        // solved edge → ungradable, absence ledger) or
+                        // the copper genuinely sits beyond coupling
+                        // reach (5h) of every measured aggressor —
+                        // which is a PASS earned by separation, not a
+                        // data gap.
+                        None if board.nets.iter().any(|n| n.edge_swing_v.is_some()) => {
+                            rows.push(format!(
+                                "noise budget {}: measured aggressor edge present, no couple within coupling reach (5·h) — PASS by separation (budget {max_mv}mV)",
+                                board.nets[i].name
+                            ))
                         }
                         None => rows.push(format!(
                             "noise budget {}: declared {max_mv}mV but no measured aggressor edge — ungradable, see absence ledger",

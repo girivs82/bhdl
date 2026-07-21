@@ -86,6 +86,56 @@ pub fn initialize(board: &mut Board, seed: u64, placement_recipes: &std::collect
 
     // Initialize constrained components
     init_constrained(board);
+
+    // P5 stage 3: measured-noise feedback KeepAways also shape the
+    // SEED — a soft spring alone cannot pull a converged placement
+    // out of the wirelength basin that caused the measured failure
+    // (three lever strengths plateaued at the same coupled copper).
+    // Free endpoints seeded in violation are pushed out along the
+    // separation direction before the descent starts; every other
+    // board has no such constraint and is untouched.
+    let fb: Vec<(ComponentId, ComponentId, f64)> = board
+        .constraints
+        .iter()
+        .filter_map(|c| match c {
+            crate::constraint::Constraint::KeepAway { a, b, min_mm, source, .. }
+                if source.intent_kind == "p5_noise_feedback" =>
+            {
+                match (a, b) {
+                    (
+                        crate::constraint::EntitySel::Component(ca),
+                        crate::constraint::EntitySel::Component(cb),
+                    ) => Some((*ca, *cb, *min_mm as f64)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+        .collect();
+    for (ca, cb, min_mm) in fb {
+        let Some(pb) = board
+            .components
+            .iter()
+            .find(|c| c.id == cb)
+            .map(|c| (c.x, c.y))
+        else {
+            continue;
+        };
+        let Some(a) = board.components.iter_mut().find(|c| c.id == ca) else {
+            continue;
+        };
+        if !a.placement.is_free() {
+            continue;
+        }
+        let (dx, dy) = (a.x - pb.0, a.y - pb.1);
+        let d = (dx * dx + dy * dy).sqrt().max(1e-6);
+        if d >= min_mm {
+            continue;
+        }
+        let (ux, uy) = (dx / d, dy / d);
+        a.x = (pb.0 + ux * min_mm).clamp(ec, width - ec);
+        a.y = (pb.1 + uy * min_mm).clamp(ec, height - ec);
+    }
 }
 
 /// Find the index of the most-connected component (the center anchor).
