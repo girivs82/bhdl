@@ -135,7 +135,23 @@ fn init_constrained(board: &mut Board) {
                 comp.y = *y;
             }
             PlacementConstraint::Edge { edge, offset } => {
-                let ec = board.config.edge_clearance_mm;
+                // Inset from the edge: clearance by default; for
+                // connectors (J-refdes, same classifier the priors
+                // miner uses) a loaded priors file supplies the
+                // center inset real designers ship (position
+                // convention → median seam). Never tighter than the
+                // board's own edge clearance.
+                let is_conn = comp.refdes.starts_with('J')
+                    && comp.refdes[1..].chars().all(|c| c.is_ascii_digit());
+                let ec = if is_conn {
+                    crate::priors::convention_mm(
+                        "connector_edge_inset",
+                        board.config.edge_clearance_mm,
+                    )
+                    .max(board.config.edge_clearance_mm)
+                } else {
+                    board.config.edge_clearance_mm
+                };
                 match edge {
                     BoardEdge::Left => {
                         comp.x = ec;

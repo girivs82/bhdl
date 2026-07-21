@@ -183,7 +183,8 @@ fn lower_one(
                 out.constraints.push(Constraint::Proximity {
                     a: EntitySel::Component(self_id),
                     b: EntitySel::Component(partner_id),
-                    max_mm: crate::priors::convention_mm("decap_to_ic", 6.0) as f32,
+                    max_mm: crate::priors::convention_max_mm("xtal_loadcap_pair", 6.0)
+                        as f32,
                     hardness: soft_linear(0.5),
                     source: src(kind),
                 });
@@ -208,7 +209,7 @@ fn lower_one(
             out.constraints.push(Constraint::Proximity {
                 a: EntitySel::Component(self_id),
                 b: EntitySel::Pin(rail_pin),
-                max_mm: crate::priors::convention_mm("decap_to_ic", 3.0) as f32,
+                max_mm: crate::priors::convention_max_mm("decap_to_ic", 3.0) as f32,
                 hardness: Hardness::Hard,
                 source: src(kind),
             });
@@ -236,7 +237,8 @@ fn lower_one(
                 out.constraints.push(Constraint::Proximity {
                     a: EntitySel::Component(self_id),
                     b: EntitySel::Pin(fb),
-                    max_mm: crate::priors::convention_mm("crystal_to_ic", 5.0) as f32,
+                    max_mm: crate::priors::convention_max_mm("resistor_to_ic", 5.0)
+                        as f32,
                     hardness: soft_linear(1.0),
                     source: src(kind),
                 });
@@ -276,7 +278,8 @@ fn lower_one(
                 out.constraints.push(Constraint::Proximity {
                     a: EntitySel::Component(self_id),
                     b: EntitySel::Pin(d),
-                    max_mm: crate::priors::convention_mm("decap_to_ic", 3.0) as f32,
+                    max_mm: crate::priors::convention_max_mm("resistor_to_ic", 3.0)
+                        as f32,
                     hardness: Hardness::Hard,
                     source: src(kind),
                 });
@@ -289,7 +292,8 @@ fn lower_one(
                 out.constraints.push(Constraint::Proximity {
                     a: EntitySel::Component(self_id),
                     b: EntitySel::Pin(g),
-                    max_mm: 3.0,
+                    max_mm: crate::priors::convention_max_mm("resistor_to_ic", 3.0)
+                        as f32,
                     hardness: Hardness::Hard,
                     source: src(kind),
                 });

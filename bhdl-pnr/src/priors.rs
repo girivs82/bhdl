@@ -288,6 +288,13 @@ fn is_crystal(p: &PartPlacement) -> bool {
             && p.refdes[1..].chars().all(|c| c.is_ascii_digit()))
 }
 
+fn is_resistor(p: &PartPlacement) -> bool {
+    let f = p.footprint.to_ascii_lowercase();
+    f.contains("r_0") || f.contains("resistor")
+        || (p.refdes.starts_with('R')
+            && p.refdes[1..].chars().all(|c| c.is_ascii_digit()))
+}
+
 /// Parse a capacitor Value ("100nF", "4.7u", "22p") to farads.
 fn cap_farads(v: &str) -> Option<f64> {
     let t = v.trim().trim_end_matches(['F', 'f']).trim();
@@ -335,6 +342,13 @@ fn is_gnd_net(name: &str) -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Prior {
     pub median_mm: f64,
+    /// 90th percentile — the honest bound for MAX-type constraints.
+    /// A Proximity max fed the median would flag half the placements
+    /// real designers actually ship; the tail is where "still fine"
+    /// lives. Old priors files without the field load as 0 and the
+    /// max seam falls back to the convention.
+    #[serde(default)]
+    pub p90_mm: f64,
     pub n: usize,
 }
 
@@ -347,6 +361,14 @@ pub struct PlacementPriors {
     pub connector_edge_inset: Option<Prior>,
     /// Crystal center distance to the nearest IC sharing a net.
     pub crystal_to_ic: Option<Prior>,
+    /// Distance between the two load caps serving the same crystal.
+    #[serde(default)]
+    pub xtal_loadcap_pair: Option<Prior>,
+    /// Signal-resistor center to the nearest IC pad sharing a net
+    /// (series terminations, gate resistors, dividers — where real
+    /// designers park the R relative to the pin it serves).
+    #[serde(default)]
+    pub resistor_to_ic: Option<Prior>,
     /// Boards the medians were mined from.
     pub source_boards: Vec<String>,
 }
@@ -359,13 +381,62 @@ fn median(mut v: Vec<f64>) -> Option<f64> {
     Some(v[v.len() / 2])
 }
 
+fn p90(mut v: Vec<f64>) -> Option<f64> {
+    if v.is_empty() {
+        return None;
+    }
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    Some(v[((v.len() - 1) as f64 * 0.9).round() as usize])
+}
+
 pub fn mine(boards: &[PcbSnapshot]) -> PlacementPriors {
     let mut decap = Vec::new();
     let mut conn = Vec::new();
     let mut xtal = Vec::new();
+    let mut loadcap_pair = Vec::new();
+    let mut res_ic = Vec::new();
     for b in boards {
         let ics: Vec<&PartPlacement> = b.parts.iter().filter(|p| is_ic(p)).collect();
+        // Load-cap pairs: for each crystal, the caps hanging on its
+        // signal nets (the XTAL nets, not GND) within reach — the
+        // distance between the two caps of the pair is the prior.
+        for x in b.parts.iter().filter(|p| is_crystal(p)) {
+            let xnets: Vec<&String> =
+                x.nets.iter().filter(|n| !is_gnd_net(n) && !is_power_net(n)).collect();
+            let caps: Vec<&PartPlacement> = b
+                .parts
+                .iter()
+                .filter(|p| {
+                    is_cap(p)
+                        && p.nets.iter().any(|n| xnets.iter().any(|q| *q == n))
+                        && (p.x - x.x).hypot(p.y - x.y) < 10.0
+                })
+                .collect();
+            for i in 0..caps.len() {
+                for j in i + 1..caps.len() {
+                    loadcap_pair
+                        .push((caps[i].x - caps[j].x).hypot(caps[i].y - caps[j].y));
+                }
+            }
+        }
         for p in &b.parts {
+            // Signal resistor → nearest IC pad on a shared net: where
+            // real designers park the R relative to the pin it serves
+            // (series terminations, gate Rs, dividers all draw from
+            // this same well).
+            if is_resistor(p) {
+                let d = ics
+                    .iter()
+                    .flat_map(|ic| ic.pad_pts.iter())
+                    .filter(|(_, _, n)| {
+                        !is_gnd_net(n) && !is_power_net(n) && p.nets.iter().any(|q| q == n)
+                    })
+                    .map(|(px, py, _)| (px - p.x).hypot(py - p.y))
+                    .fold(f64::INFINITY, f64::min);
+                if d.is_finite() && d < 15.0 {
+                    res_ic.push(d);
+                }
+            }
             if is_decap(p)
                 && p.nets.iter().any(|n| is_power_net(n))
                 && p.nets.iter().any(|n| is_gnd_net(n))
@@ -408,12 +479,19 @@ pub fn mine(boards: &[PcbSnapshot]) -> PlacementPriors {
     }
     let prior = |v: Vec<f64>| {
         let n = v.len();
-        median(v).map(|m| Prior { median_mm: (m * 100.0).round() / 100.0, n })
+        let p9 = p90(v.clone()).unwrap_or(0.0);
+        median(v).map(|m| Prior {
+            median_mm: (m * 100.0).round() / 100.0,
+            p90_mm: (p9 * 100.0).round() / 100.0,
+            n,
+        })
     };
     PlacementPriors {
         decap_to_ic: prior(decap),
         connector_edge_inset: prior(conn),
         crystal_to_ic: prior(xtal),
+        xtal_loadcap_pair: prior(loadcap_pair),
+        resistor_to_ic: prior(res_ic),
         source_boards: boards.iter().map(|b| b.name.clone()).collect(),
     }
 }
@@ -436,25 +514,49 @@ fn loaded() -> &'static Option<PlacementPriors> {
     })
 }
 
+fn lookup<'a>(p: &'a PlacementPriors, key: &str) -> &'a Option<Prior> {
+    match key {
+        "decap_to_ic" => &p.decap_to_ic,
+        "connector_edge_inset" => &p.connector_edge_inset,
+        "crystal_to_ic" => &p.crystal_to_ic,
+        "xtal_loadcap_pair" => &p.xtal_loadcap_pair,
+        "resistor_to_ic" => &p.resistor_to_ic,
+        _ => &None,
+    }
+}
+
 /// The recipe seam: a convention constant, REPLACED by the mined
 /// median when a priors file is loaded and the sample is honest
 /// (n >= 8). Without a priors file this returns `convention`
 /// untouched — byte-identical behavior.
 pub fn convention_mm(key: &str, convention: f64) -> f64 {
     let Some(p) = loaded() else { return convention };
-    let prior = match key {
-        "decap_to_ic" => &p.decap_to_ic,
-        "connector_edge_inset" => &p.connector_edge_inset,
-        "crystal_to_ic" => &p.crystal_to_ic,
-        _ => &None,
-    };
-    match prior {
+    match lookup(p, key) {
         Some(pr) if pr.n >= 8 => {
             log::info!(
                 "prior '{key}': mined median {:.2}mm (n={}) replaces convention {convention}mm",
                 pr.median_mm, pr.n
             );
             pr.median_mm
+        }
+        _ => convention,
+    }
+}
+
+/// The MAX-type seam: same contract, but for constraints of the form
+/// "no farther than X" the honest mined bound is the p90, not the
+/// median — a max fed the median would flag half the placements real
+/// designers actually ship. Files mined before p90 existed carry 0
+/// there and fall back to the convention.
+pub fn convention_max_mm(key: &str, convention: f64) -> f64 {
+    let Some(p) = loaded() else { return convention };
+    match lookup(p, key) {
+        Some(pr) if pr.n >= 8 && pr.p90_mm > 0.0 => {
+            log::info!(
+                "prior '{key}': mined p90 {:.2}mm (n={}) replaces max convention {convention}mm",
+                pr.p90_mm, pr.n
+            );
+            pr.p90_mm
         }
         _ => convention,
     }
@@ -480,24 +582,63 @@ mod tests {
     (property "Reference" "Y1")
     (pad "1" smd rect (at -1 0) (net 3 "XTAL1"))
     (pad "2" smd rect (at 1 0) (net 2 "GND")))
+  (footprint "Capacitor_SMD:C_0402" (at 23 28)
+    (property "Reference" "C2")
+    (property "Value" "22pF")
+    (pad "1" smd rect (at -0.5 0) (net 3 "XTAL1"))
+    (pad "2" smd rect (at 0.5 0) (net 2 "GND")))
+  (footprint "Capacitor_SMD:C_0402" (at 27 28)
+    (property "Reference" "C3")
+    (property "Value" "22pF")
+    (pad "1" smd rect (at -0.5 0) (net 3 "XTAL1"))
+    (pad "2" smd rect (at 0.5 0) (net 2 "GND")))
+  (footprint "Resistor_SMD:R_0603" (at 28 16)
+    (property "Reference" "R1")
+    (property "Value" "33R")
+    (pad "1" smd rect (at -0.7 0) (net 4 "SIG"))
+    (pad "2" smd rect (at 0.7 0) (net 5 "SIG_OUT")))
   (footprint "Connector_PinHeader:PinHeader_1x04" (at 2.5 20)
     (property "Reference" "J1")
     (pad "1" thru_hole circle (at 0 0) (net 2 "GND"))))"#;
 
     #[test]
-    fn mines_the_three_priors_from_a_real_shaped_pcb() {
-        let snap = parse_kicad_pcb("tiny", TINY_PCB).unwrap();
-        assert_eq!(snap.parts.len(), 4);
+    fn mines_the_prior_families_from_a_real_shaped_pcb() {
+        // U1 gains a SIG pad for the resistor family.
+        let text = TINY_PCB.replace(
+            r#"(pad "3" smd rect (at 0 3) (net 3 "XTAL1")))"#,
+            r#"(pad "3" smd rect (at 0 3) (net 3 "XTAL1"))
+    (pad "4" smd rect (at 0 -3) (net 4 "SIG")))"#,
+        );
+        let snap = parse_kicad_pcb("tiny", &text).unwrap();
+        assert_eq!(snap.parts.len(), 7);
         assert_eq!(snap.bbox, (0.0, 0.0, 50.0, 40.0));
         let p = mine(&[snap]);
         let d = p.decap_to_ic.unwrap();
+        // Only C1 is a decap: C2/C3 sit on XTAL1, no power net.
         assert_eq!(d.n, 1);
         // Pad-level: C1 center (27,22) to U1's VCC pad at (22,20).
         assert!((d.median_mm - (5.0f64 * 5.0 + 2.0 * 2.0).sqrt()).abs() < 0.01, "{d:?}");
+        // Single sample: p90 == median.
+        assert!((d.p90_mm - d.median_mm).abs() < 0.01, "{d:?}");
         let c = p.connector_edge_inset.unwrap();
         assert!((c.median_mm - 2.5).abs() < 0.01, "{c:?}");
         let x = p.crystal_to_ic.unwrap();
         assert!((x.median_mm - 6.0).abs() < 0.01, "{x:?}");
+        // Load-cap pair: C2 (23,28) ↔ C3 (27,28) = 4mm apart.
+        let lp = p.xtal_loadcap_pair.unwrap();
+        assert_eq!(lp.n, 1);
+        assert!((lp.median_mm - 4.0).abs() < 0.01, "{lp:?}");
+        // R1 center (28,16) to U1's SIG pad at (25,17) = sqrt(10).
+        let r = p.resistor_to_ic.unwrap();
+        assert_eq!(r.n, 1);
+        assert!((r.median_mm - 10.0f64.sqrt()).abs() < 0.01, "{r:?}");
+    }
+
+    #[test]
+    fn p90_sits_in_the_tail_not_the_middle() {
+        let v: Vec<f64> = (1..=10).map(|i| i as f64).collect();
+        assert_eq!(median(v.clone()).unwrap(), 6.0);
+        assert_eq!(p90(v).unwrap(), 9.0);
     }
 
     #[test]

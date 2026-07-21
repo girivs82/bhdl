@@ -571,9 +571,14 @@ async fn main() -> Result<()> {
                 ("decap_to_ic", &priors.decap_to_ic),
                 ("connector_edge_inset", &priors.connector_edge_inset),
                 ("crystal_to_ic", &priors.crystal_to_ic),
+                ("xtal_loadcap_pair", &priors.xtal_loadcap_pair),
+                ("resistor_to_ic", &priors.resistor_to_ic),
             ] {
                 match v {
-                    Some(p) => println!("    {k}: median {:.2}mm (n={})", p.median_mm, p.n),
+                    Some(p) => println!(
+                        "    {k}: median {:.2}mm / p90 {:.2}mm (n={})",
+                        p.median_mm, p.p90_mm, p.n
+                    ),
                     None => println!("    {k}: no samples"),
                 }
             }
