@@ -1,0 +1,103 @@
+// P4 stage 4 — measured-noise gate, END TO END: the aggressor's edge
+// is SOLVED (ibis_wave schedules a rise of the test_buffer.ibs CMOS
+// buffer; the transient solver measures the swing at the driven net),
+// the victim declares a noise budget through its interface, and the
+// sign-off gates k_b × measured-swing against it. No assumed logic
+// levels anywhere — remove the ibis_wave directive and the row
+// honestly degrades to "ungradable".
+//
+// Placement pulls the victim run beside the aggressor (tiny board,
+// both nets cross the same channel) so the coupled length is real.
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+
+entity TestEdgeDriver() {
+    pin VCC:  power in;
+    pin OUT1: signal out;
+    pin GND:  ground;
+
+    attribute component_class = "ic_logic";
+    attribute i_quiescent = 1mA;
+
+    simulation {
+        model {
+            ibis "test_buffer.ibs" component "TESTCHIP" corner typ;
+        }
+    }
+}
+
+interface Quiet {
+    signal V: inout;
+    constraints {
+        *: noise_budget 40mV;
+    }
+}
+
+entity QuietSrc() {
+    interface Quiet q;
+    pin VCC: power in;
+    pin GND: ground;
+
+    attribute component_class = "ic";
+}
+
+layout QuietSrc {
+    package SOIC-8;
+}
+
+entity QuietSink() {
+    interface Quiet q;
+    pin VCC: power in;
+    pin GND: ground;
+
+    attribute component_class = "ic";
+}
+
+layout QuietSink {
+    package SOIC-8;
+}
+
+board NoiseBudget {
+    power VCC = 5V @ 100mA;
+    ground GND;
+
+    // Aggressor: the scheduled IBIS edge, loaded like ibis_edge.
+    u1: TestEdgeDriver(ibis_wave_OUT1="rise@2n");
+    @VCC -> u1.VCC;
+    u1.GND -> @GND;
+    u1.OUT1 -> load_node;
+    load_node -> r_load: Res(125Ω).1;
+    r_load.2 -> @GND;
+    load_node -> c_load: Cap(100pF).1;
+    c_load.2 -> @GND;
+
+    // Victim: a quiet link crossing the same channel.
+    src: QuietSrc();
+    snk: QuietSink();
+    src.VCC -> @VCC;
+    src.GND -> @GND;
+    snk.VCC -> @VCC;
+    snk.GND -> @GND;
+    src.q.V -> snk.q.V;
+}
+
+layout NoiseBudget {
+    // 2-layer ribbon: no inner layers to escape to and one narrow
+    // channel — the two links MUST run parallel, so the coupled
+    // stretch exists by construction (a 4-layer version routed them
+    // 7mm apart and the gate correctly had nothing to grade).
+    layer_stackup 2;
+    outline rect 30 10;
+    // A wall with ONE narrow pass: every left-right net must squeeze
+    // through the top channel, so the aggressor and victim run
+    // adjacent there BY CONSTRUCTION — no routing style can separate
+    // them, which is the whole point of the fixture.
+    cutout rect (14, 1.0) (16, 7.5);
+    // Endpoints pinned on OPPOSITE sides of the wall: both links must
+    // cross through the one channel above it.
+    place u1 at (4, 5);
+    place src at (10.5, 5);
+    place snk at (20, 5);
+    place r_load at (27, 3);
+}

@@ -1704,6 +1704,20 @@ async fn run_layout(
     // 5. GLACIER DC
     let sim_annotations = {
         let mut converter = bhdl_spice::NetlistToSpiceConverter::new();
+        // §5 vendor models + IBIS refs — without these the converter
+        // stamps no buffers and take_ibis_drives() is empty, so the
+        // layout pipeline could never carry measured edges.
+        converter.set_model_overrides(bhdl_synthesizer::model_evaluator::evaluate_model_overrides(
+            &netlist,
+            &analysis.model_recipes,
+            &analysis.entity_attribute_index,
+        ));
+        converter.set_ibis_models(
+            analysis.model_recipes.iter()
+                .filter_map(|(e, r)| (!r.ibis.is_empty()).then(|| (e.clone(), r.ibis.clone())))
+                .collect(),
+            source_path.parent().map(|p| p.to_path_buf()).unwrap_or_default(),
+        );
         match converter.convert(&netlist) {
             Ok(circuit) => {
                 let circuit_ref = circuit.clone();
@@ -1711,7 +1725,24 @@ async fn run_layout(
                 match solver.solve(circuit) {
                     Ok(result) => {
                         println!("  {} GLACIER DC: {} iterations", "✓".green(), result.iterations);
-                        Some(build_simulation_annotations(&result, &circuit_ref))
+                        let mut ann = build_simulation_annotations(&result, &circuit_ref);
+                        // P4: solve any SCHEDULED IBIS edges so the layout
+                        // pipeline carries MEASURED swings/rise times —
+                        // the derived skew budgets and the noise-budget
+                        // gates read these (typ corner; the measurement
+                        // needs no min/max envelope).
+                        let (traces, _dur) = run_ibis_transient_traces(
+                            converter.take_ibis_drives(), &circuit_ref, &result, "typ", None,
+                        );
+                        if !traces.is_empty() {
+                            println!(
+                                "  {} IBIS edges solved: {} trace(s)",
+                                "✓".green(),
+                                traces.len()
+                            );
+                        }
+                        ann.transients = traces;
+                        Some(ann)
                     }
                     Err(e) => {
                         eprintln!("  {} GLACIER DC failed: {}", "⚠".yellow(), e);
