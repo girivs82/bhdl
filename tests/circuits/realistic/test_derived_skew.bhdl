@@ -55,14 +55,14 @@ board DerivedSkew {
     @VCC -> u2.VCC;
     u2.GND -> @GND;
 
-    ps: PairSink();
-    ps.VCC -> @VCC;
-    ps.GND -> @GND;
+    psink: PairSink();
+    psink.VCC -> @VCC;
+    psink.GND -> @GND;
 
     u1.OUT1 -> sig_p;
-    sig_p -> ps.pr.P;
+    sig_p -> psink.pr.P;
     u2.OUT1 -> sig_n;
-    sig_n -> ps.pr.N;
+    sig_n -> psink.pr.N;
 
     // DC loads so the edges have their load lines.
     sig_p -> r1: Res(125Ω).1;
