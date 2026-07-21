@@ -52,6 +52,13 @@ pub struct BoardConfig {
     /// BHDL_PNR_SI_COST env still forces it globally.
     #[serde(default)]
     pub si_return_cost: bool,
+    /// Fanout-first: pre-site IC plane-pad stub+vias on the EMPTY
+    /// board before signal routing. Cures the late-drop failure
+    /// class (a walled-in QFP ground pad) but perturbs every route —
+    /// measured costing a previously-perfect seed a sink — so it
+    /// runs only as a best-of FALLBACK tier, never by default.
+    #[serde(default)]
+    pub fanout_first: bool,
     pub min_spacing_mm: f64,
     pub edge_clearance_mm: f64,
     pub fixed_placements: Vec<FixedPlacement>,
@@ -83,6 +90,7 @@ impl Default for BoardConfig {
             stackup: StackupSource::Auto,
             min_trace_width_mm: 0.15,
             si_return_cost: false,
+            fanout_first: false,
             min_spacing_mm: 0.15,
             edge_clearance_mm: 0.5,
             fixed_placements: Vec::new(),

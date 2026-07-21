@@ -224,6 +224,64 @@ pub fn place_and_route_best_of(
             }
         }
     }
+    // FANOUT-FIRST TIER: still imperfect after the SI tier → retry
+    // with plane-pad fanout claimed BEFORE signal routing. Measured
+    // both ways on the uno: it CURES the walled-in-QFP-ground-pad
+    // class (s99's UGND, dead through every completion rung) but the
+    // global perturbation cost a previously-perfect seed a sink —
+    // so, like the SI knob, it only ever runs as a fallback where
+    // dominance can police it per board.
+    let still_imperfect = best.as_ref().map_or(true, |b| {
+        let total_sinks: usize = b
+            .board
+            .nets
+            .iter()
+            .filter(|n| n.pins.len() >= 2)
+            .map(|n| n.pins.len())
+            .sum();
+        b.metrics.connected_sinks < total_sinks
+            || !b.drc_violations.is_empty()
+            || legalization::residual_pad_overlaps(&b.board) > 0
+    });
+    if still_imperfect {
+        for trial in 0..trials {
+            info!("=== Fanout-first trial {}/{} ===", trial + 1, trials);
+            let mut trial_board = board.clone();
+            trial_board.config.fanout_first = true;
+            let result = place_and_route(
+                trial_board,
+                config.clone(),
+                base_seed.wrapping_add(trial as u64),
+            )?;
+            let dominated = best
+                .as_ref()
+                .map_or(false, |b| trial_dominated(&result, b, has_measured));
+            if !dominated {
+                info!(
+                    "Fanout-first trial {} is new best: {} connected sink(s), HPWL={:.1}mm",
+                    trial + 1,
+                    result.metrics.connected_sinks,
+                    result.metrics.hpwl_mm
+                );
+                let total_sinks: usize = result
+                    .board
+                    .nets
+                    .iter()
+                    .filter(|n| n.pins.len() >= 2)
+                    .map(|n| n.pins.len())
+                    .sum();
+                let r_over = legalization::residual_pad_overlaps(&result.board);
+                let perfect = result.metrics.connected_sinks >= total_sinks
+                    && result.drc_violations.is_empty()
+                    && r_over == 0;
+                best = Some(result);
+                if perfect {
+                    break;
+                }
+            }
+        }
+    }
+
     // P5 STAGE 3 — measured rewards feed PLACEMENT: when a declared
     // noise budget FAILS on measured numbers, invert the coupling
     // model into the separation the budget demands —
@@ -730,6 +788,218 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         })
         .collect();
     let mut final_grid = RoutingGrid::build(&board);
+
+    // FANOUT-FIRST for IC plane pads: claim each SMD plane-pad's
+    // stub+via while the board is EMPTY. Completion-time drops
+    // compete with every signal escape for corridor space — the uno
+    // s99 endgame: UGND mid-row in the QFP with its only outlet
+    // crossed by the VCC rail, every siting rung dead (ring, routed
+    // dijkstra, victim rip — whole-rail rebuilds strand 5-23 sinks).
+    // Real fanout runs BEFORE routing for exactly this reason.
+    // Sites are exact-kernel checked (pads are the only copper at
+    // this stage); the drops are blocked in the pass-1 grid so
+    // signals route around them, and the completion pass's
+    // live-drop guard adopts them instead of double-dropping.
+    let mut fanout_drops: Vec<(usize, Route)> = Vec::new();
+    if board.config.fanout_first || std::env::var("BHDL_PNR_FANOUT_FIRST").is_ok() {
+        let empty: Vec<Route> =
+            board.nets.iter().map(|nn| Route::empty(nn.id)).collect();
+        let nl = board.layer_stack.layers.len();
+        let via_r = board.layer_stack.via.pad_mm / 2.0;
+        let bw = board.config.outline.width();
+        let bh = board.config.outline.height();
+        let edge = board.config.edge_clearance_mm + via_r;
+        let punch_gap = 2.0 * (via_r + 0.35) + 0.15;
+        let mut new_vias: Vec<(f64, f64)> = Vec::new();
+        let comp_idx: std::collections::HashMap<ComponentId, usize> = board
+            .components
+            .iter()
+            .enumerate()
+            .map(|(k, c)| (c.id, k))
+            .collect();
+        for i in 0..board.nets.len() {
+            let net = &board.nets[i];
+            if net.plane_layer.is_none() {
+                continue;
+            }
+            let share = stackup::trace_width_for_current(
+                stackup::current_for_trace_width(net.required_trace_width_mm)
+                    / net.pins.len().max(1) as f64,
+                1.0,
+                10.0,
+            )
+            .max(0.3)
+            .min(net.required_trace_width_mm);
+            let merged = output::kicad::merge_holes(output::kicad::plane_foreign_holes(
+                &board, &empty, net.id,
+            ));
+            let cidx = geom::ClearanceIndex::build(&board, &empty, Some(net.id));
+            let region = net.plane_region;
+            let mut drop_route = Route::empty(net.id);
+            for &(comp_id, pin_id) in &net.pins {
+                let Some(&ci) = comp_idx.get(&comp_id) else { continue };
+                let comp = &board.components[ci];
+                // ICs only: their pin rows are what gets walled in;
+                // passives' pads stay reachable for the completion
+                // pass, and fewer pre-commitments = less perturbation.
+                if comp.pins.len() < 8 {
+                    continue;
+                }
+                let Some(pin) = comp.pins.iter().find(|p| p.pin_id == pin_id) else {
+                    continue;
+                };
+                if pin.unplaced {
+                    continue;
+                }
+                let cos_t = comp.theta.cos();
+                let sin_t = comp.theta.sin();
+                let px = comp.x + pin.dx * cos_t - pin.dy * sin_t;
+                let py = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+                if pin.pad.as_ref().and_then(|p| p.drill_mm).is_some() {
+                    // THT barrels pierce the plane in-region (same
+                    // rule as the completion pass).
+                    let in_region = match region {
+                        None => true,
+                        Some((rx0, ry0, rx1, ry1)) => {
+                            px > rx0 + 0.05
+                                && px < rx1 - 0.05
+                                && py > ry0 + 0.05
+                                && py < ry1 - 0.05
+                        }
+                    };
+                    if in_region {
+                        continue;
+                    }
+                }
+                let stub_layer = match comp.side {
+                    BoardSide::Top => 0,
+                    BoardSide::Bottom => nl - 1,
+                };
+                // AISLE DISCIPLINE: a pre-drop consumes a ~1.4mm
+                // punch swath — parked in a NEIGHBOR's escape lane it
+                // strands that pad instead (s99: the first greedy
+                // siting cured UGND and displaced the knot onto D_N
+                // two pads over). Prefer the pad's OWN lane: angles
+                // sorted by closeness to its outward normal.
+                let onorm = {
+                    let (ox, oy) = (px - comp.x, py - comp.y);
+                    let l = ox.hypot(oy).max(1e-6);
+                    (ox / l, oy / l)
+                };
+                let mut angles: Vec<f64> = (0..8)
+                    .map(|k| k as f64 * std::f64::consts::FRAC_PI_4)
+                    .collect();
+                angles.sort_by(|a, b| {
+                    let da = -(a.cos() * onorm.0 + a.sin() * onorm.1);
+                    let db = -(b.cos() * onorm.0 + b.sin() * onorm.1);
+                    da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+                });
+                let mut placed: Option<(f64, f64)> = None;
+                'rings: for ring in 0..10 {
+                    let r = 0.6 + ring as f64 * 0.35;
+                    for &ang in &angles {
+                        let (x, y) = (px + r * ang.cos(), py + r * ang.sin());
+                        if x < edge || y < edge || x > bw - edge || y > bh - edge {
+                            continue;
+                        }
+                        if let Some((rx0, ry0, rx1, ry1)) = region {
+                            if x - via_r < rx0 + 0.05
+                                || y - via_r < ry0 + 0.05
+                                || x + via_r > rx1 - 0.05
+                                || y + via_r > ry1 - 0.05
+                            {
+                                continue;
+                            }
+                        }
+                        // Foreign plane fills: the barrel must be
+                        // cleanly punchable (same rule as completion).
+                        let punch = via_r + 0.35;
+                        let mut straddles = false;
+                        for other in board.nets.iter().filter(|n| n.id != net.id) {
+                            if other.plane_layer.is_none() {
+                                continue;
+                            }
+                            let (zx0, zy0, zx1, zy1) = match other.plane_region {
+                                Some((x0, y0, x1, y1)) => (
+                                    x0.max(edge),
+                                    y0.max(edge),
+                                    x1.min(bw - edge),
+                                    y1.min(bh - edge),
+                                ),
+                                None => (edge, edge, bw - edge, bh - edge),
+                            };
+                            let intersects = x > zx0 - punch
+                                && x < zx1 + punch
+                                && y > zy0 - punch
+                                && y < zy1 + punch;
+                            let interior = x > zx0 + punch
+                                && x < zx1 - punch
+                                && y > zy0 + punch
+                                && y < zy1 - punch;
+                            if intersects && !interior {
+                                straddles = true;
+                                break;
+                            }
+                        }
+                        if straddles {
+                            continue;
+                        }
+                        if output::kicad::plane_swallows(
+                            &board, &merged, x, y, via_r, region,
+                        ) {
+                            continue;
+                        }
+                        if new_vias
+                            .iter()
+                            .any(|&(vx, vy)| (x - vx).hypot(y - vy) < punch_gap)
+                        {
+                            continue;
+                        }
+                        if cidx.via_conflict(x, y, via_r, net.id).is_some()
+                            || cidx
+                                .first_conflict((px, py), (x, y), share, stub_layer, net.id)
+                                .is_some()
+                        {
+                            continue;
+                        }
+                        placed = Some((x, y));
+                        break 'rings;
+                    }
+                }
+                if let Some((vx, vy)) = placed {
+                    let seg_start = drop_route.segments.len();
+                    let via_start = drop_route.vias.len();
+                    drop_route.segments.push(RouteSegment {
+                        layer: stub_layer,
+                        start: (px, py),
+                        end: (vx, vy),
+                        width_mm: share,
+                    });
+                    drop_route.path_spans.push((seg_start, 1));
+                    drop_route.path_parents.push(None);
+                    drop_route.vias.push(RouteVia {
+                        x: vx,
+                        y: vy,
+                        from_layer: 0,
+                        to_layer: nl - 1,
+                    });
+                    drop_route.via_spans.push((via_start, 1));
+                    new_vias.push((vx, vy));
+                }
+            }
+            if !drop_route.segments.is_empty() {
+                fanout_drops.push((i, drop_route));
+            }
+        }
+        let total: usize = fanout_drops.iter().map(|(_, r)| r.vias.len()).sum();
+        if total > 0 {
+            info!("fanout-first: {total} plane drop(s) pre-sited for IC pads");
+        }
+    }
+    for (_, r) in &fanout_drops {
+        pathfinder::block_route_geometry(&mut final_grid, r, &board);
+    }
+
     let mut final_routes = pathfinder::pathfinder_route(
         &mut final_grid,
         &routing_nets,
@@ -739,6 +1009,9 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         1.0,
         false, // no vias
     );
+    for (i, r) in fanout_drops {
+        final_routes[i] = r;
+    }
 
     if std::env::var("BHDL_PNR_DEBUG_CLEARANCE").is_ok() {
         debug_check_foreign_pads(&board, &final_routes, "after-pass1");
@@ -7262,6 +7535,9 @@ fn drop_site_victim_rip(
                 }
             }
             if output::kicad::plane_swallows(board, &merged, x, y, via_r, region) {
+                if std::env::var("BHDL_DROP_DEBUG").is_ok() {
+                    log::info!("drop-rip cand ({x:.2},{y:.2}) r={r:.2}: plane-swallowed");
+                }
                 continue;
             }
             let mut hard = false;
@@ -7287,14 +7563,31 @@ fn drop_site_victim_rip(
                 }
             }
             if hard {
+                if std::env::var("BHDL_DROP_DEBUG").is_ok() {
+                    log::info!("drop-rip cand ({x:.2},{y:.2}) r={r:.2}: hard by PAD");
+                }
                 continue;
             }
             let mut soft: Vec<usize> = Vec::new();
             'routes: for (j, r_) in final_routes.iter().enumerate() {
                 for v in &r_.vias {
                     if (x - v.x).hypot(y - v.y) < punch_gap {
-                        hard = true;
-                        break 'routes;
+                        // SIGNAL vias are rippable too: ripping net j
+                        // takes its via along, and the rebuild may
+                        // dive elsewhere. Escape vias wall a ~1.4mm
+                        // swath each — with them hard, a mid-row QFP
+                        // ground pad's whole corridor can be untriable
+                        // (uno s99 UGND: every ring site sat inside
+                        // some escape via's punch gap). Plane nets and
+                        // our own drops stay hard.
+                        if j == i || board.nets[j].plane_layer.is_some() {
+                            hard = true;
+                            break 'routes;
+                        }
+                        if !soft.contains(&j) {
+                            soft.push(j);
+                        }
+                        continue;
                     }
                 }
                 for sg in &r_.segments {
@@ -7310,19 +7603,103 @@ fn drop_site_victim_rip(
                     }
                 }
             }
+            // STUB victims: the pad→site stub crosses copper the SITE
+            // scan never sees — this is exactly why a mid-row QFP
+            // ground pad stayed walled while 174 "free" sites (soft
+            // empty, hard false) were being skipped: every free site
+            // was unreachable THROUGH the escape field. Foreign pads
+            // on the stub are unrippable (hard); signal tracks and
+            // vias join the victim list like site conflicts do.
+            if !hard {
+                for p in &pads {
+                    if p.net == Some(net_id) {
+                        continue;
+                    }
+                    if geom::segment_rect_dist(
+                        (px, py),
+                        (x, y),
+                        p.cx - p.hx,
+                        p.cy - p.hy,
+                        p.cx + p.hx,
+                        p.cy + p.hy,
+                    ) < share / 2.0 + clearance
+                    {
+                        hard = true;
+                        break;
+                    }
+                }
+            }
+            if !hard {
+                'stub: for (j, r_) in final_routes.iter().enumerate() {
+                    if j == i {
+                        // Same-net copper on the stub is a JOIN, not a
+                        // conflict (the commit gate excludes own-net).
+                        continue;
+                    }
+                    for sg in &r_.segments {
+                        if sg.layer != stub_layer {
+                            continue;
+                        }
+                        let m = share / 2.0 + sg.width_mm / 2.0 + clearance;
+                        if geom::segments_too_close((px, py), (x, y), sg.start, sg.end, m)
+                        {
+                            if board.nets[j].plane_layer.is_some() {
+                                hard = true;
+                                break 'stub;
+                            }
+                            if !soft.contains(&j) {
+                                soft.push(j);
+                            }
+                        }
+                    }
+                    for v in &r_.vias {
+                        let m = share / 2.0 + via_r + clearance;
+                        if geom::point_segment_dist((v.x, v.y), (px, py), (x, y)) < m {
+                            if board.nets[j].plane_layer.is_some() {
+                                hard = true;
+                                break 'stub;
+                            }
+                            if !soft.contains(&j) {
+                                soft.push(j);
+                            }
+                        }
+                    }
+                }
+            }
+            if std::env::var("BHDL_DROP_DEBUG").is_ok() {
+                log::info!(
+                    "drop-rip cand ({x:.2},{y:.2}) r={r:.2}: hard={hard} soft={:?}",
+                    soft.iter().map(|&j| board.nets[j].name.clone()).collect::<Vec<_>>()
+                );
+            }
             if hard || soft.is_empty() || soft.len() > 2 {
                 continue;
             }
             cands.push(((x, y), soft, r));
         }
     }
+    // Rebuild risk is proportional to the COPPER being ripped, not
+    // the victim count: one crossing of the VCC rail (hundreds of
+    // segments, whole-net rebuild always strands a sink) is a far
+    // worse bet than two 2-pin signal stubs — sorting by count alone
+    // burned all attempts on the rail while the winnable candidates
+    // sat just past the cutoff.
     cands.sort_by(|a, b| {
-        (a.1.len(), a.2)
-            .partial_cmp(&(b.1.len(), b.2))
+        let cost = |v: &Vec<usize>| -> usize {
+            v.iter().map(|&j| final_routes[j].segments.len()).sum()
+        };
+        (cost(&a.1), a.1.len(), a.2)
+            .partial_cmp(&(cost(&b.1), b.1.len(), b.2))
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    'site: for (site, victims, _) in cands.into_iter().take(4) {
+    'site: for (site, victims, _) in cands.into_iter().take(8) {
         let (vx, vy) = site;
+        if std::env::var("BHDL_DROP_DEBUG").is_ok() {
+            log::info!(
+                "drop-rip TRY ({vx:.2},{vy:.2}) for pad ({px:.2},{py:.2}) victims={:?}",
+                victims.iter().map(|&j| board.nets[j].name.clone()).collect::<Vec<_>>()
+            );
+        }
         let snaps: Vec<(usize, Route)> = victims
             .iter()
             .map(|&vj| (vj, final_routes[vj].clone()))
@@ -7333,11 +7710,15 @@ fn drop_site_victim_rip(
         let drop_snap = final_routes[i].clone();
         {
             let idx = geom::ClearanceIndex::build(board, final_routes, Some(net_id));
-            if idx.via_conflict(vx, vy, via_r, net_id).is_some()
-                || idx
-                    .first_conflict((px, py), (vx, vy), share, stub_layer, net_id)
-                    .is_some()
-            {
+            let vc = idx.via_conflict(vx, vy, via_r, net_id);
+            let sc = idx.first_conflict((px, py), (vx, vy), share, stub_layer, net_id);
+            if vc.is_some() || sc.is_some() {
+                if std::env::var("BHDL_DROP_DEBUG").is_ok() {
+                    log::info!(
+                        "drop-rip TRY ({vx:.2},{vy:.2}): COMMIT-GATE reject (via_conflict={} stub_conflict={})",
+                        vc.is_some(), sc.is_some()
+                    );
+                }
                 for (vj, old) in snaps {
                     final_routes[vj] = old;
                 }
@@ -7390,6 +7771,12 @@ fn drop_site_victim_rip(
                 &final_routes[vj],
             );
             if after > before {
+                if std::env::var("BHDL_DROP_DEBUG").is_ok() {
+                    log::info!(
+                        "drop-rip TRY ({vx:.2},{vy:.2}): victim '{}' rebuild WORSE ({before} -> {after})",
+                        board.nets[vj].name
+                    );
+                }
                 all_ok = false;
                 break;
             }
