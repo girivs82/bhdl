@@ -31,6 +31,7 @@ interface Quiet {
     signal V: inout;
     constraints {
         *: noise_budget 40mV;
+        *: layer top;
     }
 }
 
@@ -85,11 +86,11 @@ layout NoiseBudget {
     // TWO passes: a 0.5mm bottom slot (GND's lane) and a ~0.9mm top
     // channel that fits exactly the two signals — adjacency by
     // construction.
-    cutout rect (14, 2.0) (16, 8.6);
+    cutout rect (17, 0.5) (19, 8.0);
     // Endpoints pinned on OPPOSITE sides of the wall: both links must
     // cross through the one channel above it.
-    place u1 at (3, 5);
-    place src at (10.9, 5);
-    place r_v at (20, 5);
+    place u1 at (4.2, 5);
+    place src at (11.8, 5);
+    place r_v at (23, 5);
     place r_load at (27, 3);
 }
