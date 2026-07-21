@@ -123,12 +123,14 @@ fn map_token_stream(tokens: Vec<(Result<LexerToken, ()>, Range<usize>)>, source_
                     
                     if prev_was_number {
                         kind // Keep as unit
+                    } else if is_identifier_shaped(&text) {
+                        // A unit token not following a number is a name (e.g. an
+                        // instance named `ps`); units only ever appear after a
+                        // number in the grammar. Symbolic units (Ω, %, °C, µF)
+                        // can't be identifiers and stay units.
+                        SyntaxKind::IDENT
                     } else {
-                        // Check if this looks like a single-letter identifier that was misclassified
-                        match text.as_str() {
-                            "A" | "F" | "H" | "K" | "V" | "W" | "s" => SyntaxKind::IDENT,
-                            _ => kind, // Keep multi-letter units as units
-                        }
+                        kind
                     }
                 } else {
                     kind
@@ -150,6 +152,12 @@ fn map_token_stream(tokens: Vec<(Result<LexerToken, ()>, Range<usize>)>, source_
     }
 
     result
+}
+
+fn is_identifier_shaped(text: &str) -> bool {
+    let mut chars = text.chars();
+    chars.next().map_or(false, |c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 fn map_token(token: LexerToken) -> SyntaxKind {

@@ -834,4 +834,34 @@ alias LM1117_33 = LinearRegulator<3.3V>;
         let result = parse(input);
         assert!(result.errors.is_empty(), "Parse errors: {:?}", result.errors);
     }
+
+    #[test]
+    fn unit_token_as_instance_name() {
+        // `ps`, `ns`, `mA` etc. lex as unit tokens, but with no number before
+        // them they are ordinary identifiers — e.g. an instance named `ps`.
+        let input = r#"
+            entity PairSink() {
+                pin VCC: power in;
+            }
+
+            board UnitNames {
+                power VCC_3V3 = 3.3V @ 1A;
+                ps: PairSink();
+                ps.VCC -> @VCC_3V3;
+            }
+        "#;
+        let result = parse(input);
+        assert!(result.errors.is_empty(), "Parse errors: {:?}", result.errors);
+    }
+
+    #[test]
+    fn unit_token_after_number_stays_unit() {
+        let tokens = crate::lex("100 ps");
+        let kinds: Vec<_> = tokens.iter().filter(|(k, _)| !k.is_trivia()).map(|(k, _)| *k).collect();
+        assert_eq!(kinds, vec![NUMBER, UNIT_IDENTIFIER]);
+
+        let tokens = crate::lex("ps");
+        let kinds: Vec<_> = tokens.iter().filter(|(k, _)| !k.is_trivia()).map(|(k, _)| *k).collect();
+        assert_eq!(kinds, vec![IDENT]);
+    }
 }
