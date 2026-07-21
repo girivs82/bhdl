@@ -825,8 +825,14 @@ pub fn build_board(
         outline,
         si_return_cost: false,
         // Courtyard keepout (per side) follows the density level the
-        // footprints were generated at.
-        courtyard_excess_mm: config.density_level.courtyard_excess_mm(),
+        // footprints were generated at. BHDL_PNR_COURTYARD_BOOST adds
+        // to it (mm/side) — the aisle-reservation experiment lever:
+        // wider courtyards = wider escape corridors between parts.
+        courtyard_excess_mm: config.density_level.courtyard_excess_mm()
+            + std::env::var("BHDL_PNR_COURTYARD_BOOST")
+                .ok()
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(0.0),
         ..config.board_config
     };
 
