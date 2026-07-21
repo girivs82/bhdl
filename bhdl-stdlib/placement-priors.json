@@ -1,0 +1,21 @@
+{
+  "decap_to_ic": {
+    "median_mm": 3.44,
+    "n": 31
+  },
+  "connector_edge_inset": {
+    "median_mm": 4.4,
+    "n": 26
+  },
+  "crystal_to_ic": {
+    "median_mm": 12.18,
+    "n": 5
+  },
+  "source_boards": [
+    "ESP32-PoE_Rev_B2",
+    "StickHub",
+    "complex_hierarchy",
+    "pic_programmer",
+    "video"
+  ]
+}

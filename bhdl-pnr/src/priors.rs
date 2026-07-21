@@ -124,6 +124,10 @@ pub struct PartPlacement {
     pub y: f64,
     /// Net names touched by this part's pads.
     pub nets: Vec<String>,
+    /// Pad GLOBAL positions with their net names (rotation applied).
+    pub pad_pts: Vec<(f64, f64, String)>,
+    /// The footprint's Value property (e.g. "100nF") when present.
+    pub value: String,
 }
 
 #[derive(Debug, Clone)]
@@ -149,34 +153,53 @@ pub fn parse_kicad_pcb(name: &str, text: &str) -> Option<PcbSnapshot> {
                 let footprint =
                     item.str_at(1).unwrap_or("").to_string();
                 let at = item.child("at");
-                let (x, y) = match at {
-                    Some(a) => (a.num(1).unwrap_or(0.0), a.num(2).unwrap_or(0.0)),
+                let (x, y, rot) = match at {
+                    Some(a) => (
+                        a.num(1).unwrap_or(0.0),
+                        a.num(2).unwrap_or(0.0),
+                        a.num(3).unwrap_or(0.0).to_radians(),
+                    ),
                     None => continue,
                 };
                 let mut refdes = String::new();
+                let mut value = String::new();
                 for prop in item.children("property") {
                     if prop.str_at(1) == Some("Reference") {
                         refdes = prop.str_at(2).unwrap_or("").to_string();
                     }
+                    if prop.str_at(1) == Some("Value") {
+                        value = prop.str_at(2).unwrap_or("").to_string();
+                    }
                 }
-                if refdes.is_empty() {
-                    for t in item.children("fp_text") {
-                        if t.str_at(1) == Some("reference") {
-                            refdes = t.str_at(2).unwrap_or("").to_string();
-                        }
+                for t in item.children("fp_text") {
+                    if refdes.is_empty() && t.str_at(1) == Some("reference") {
+                        refdes = t.str_at(2).unwrap_or("").to_string();
+                    }
+                    if value.is_empty() && t.str_at(1) == Some("value") {
+                        value = t.str_at(2).unwrap_or("").to_string();
                     }
                 }
                 let mut nets = Vec::new();
+                let mut pad_pts = Vec::new();
+                let (c, sn) = (rot.cos(), rot.sin());
                 for pad in item.children("pad") {
-                    if let Some(n) = pad.child("net") {
-                        if let Some(nm) = n.str_at(2) {
-                            if !nets.iter().any(|e| e == nm) {
-                                nets.push(nm.to_string());
-                            }
-                        }
+                    let Some(n) = pad.child("net") else { continue };
+                    let Some(nm) = n.str_at(2) else { continue };
+                    if !nets.iter().any(|e| e == nm) {
+                        nets.push(nm.to_string());
+                    }
+                    if let Some(pa) = pad.child("at") {
+                        let (dx, dy) = (pa.num(1).unwrap_or(0.0), pa.num(2).unwrap_or(0.0));
+                        // KiCad fp pad offsets rotate WITH the footprint
+                        // (screen coords, y-down): global = at + R(rot)·d.
+                        pad_pts.push((
+                            x + dx * c + dy * sn,
+                            y - dx * sn + dy * c,
+                            nm.to_string(),
+                        ));
                     }
                 }
-                parts.push(PartPlacement { refdes, footprint, x, y, nets });
+                parts.push(PartPlacement { refdes, footprint, x, y, nets, pad_pts, value });
             }
             Some("gr_line") | Some("gr_rect") | Some("gr_poly") | Some("gr_arc") => {
                 let on_edge = item
@@ -265,6 +288,31 @@ fn is_crystal(p: &PartPlacement) -> bool {
             && p.refdes[1..].chars().all(|c| c.is_ascii_digit()))
 }
 
+/// Parse a capacitor Value ("100nF", "4.7u", "22p") to farads.
+fn cap_farads(v: &str) -> Option<f64> {
+    let t = v.trim().trim_end_matches(['F', 'f']).trim();
+    let (num, mult) = if let Some(n) = t.strip_suffix(['p', 'P']) {
+        (n, 1e-12)
+    } else if let Some(n) = t.strip_suffix(['n', 'N']) {
+        (n, 1e-9)
+    } else if let Some(n) = t.strip_suffix(['u', 'U', 'µ']) {
+        (n, 1e-6)
+    } else if let Some(n) = t.strip_suffix(['m', 'M']) {
+        (n, 1e-3)
+    } else {
+        (t, 1.0)
+    };
+    num.trim().replace(',', ".").parse::<f64>().ok().map(|x| x * mult)
+}
+
+/// A DECOUPLING cap, not bulk/filter: value known and <= 1uF. Caps
+/// with unparseable values are excluded — mining bulk electrolytics
+/// as "decap distance" corrupted the prior (first real harvest:
+/// median 9.2mm over 70 mixed samples).
+fn is_decap(p: &PartPlacement) -> bool {
+    is_cap(p) && cap_farads(&p.value).map_or(false, |f| f <= 1.0e-6)
+}
+
 fn is_power_net(name: &str) -> bool {
     let u = name.to_ascii_uppercase();
     u.starts_with("VCC")
@@ -318,16 +366,20 @@ pub fn mine(boards: &[PcbSnapshot]) -> PlacementPriors {
     for b in boards {
         let ics: Vec<&PartPlacement> = b.parts.iter().filter(|p| is_ic(p)).collect();
         for p in &b.parts {
-            if is_cap(p)
+            if is_decap(p)
                 && p.nets.iter().any(|n| is_power_net(n))
                 && p.nets.iter().any(|n| is_gnd_net(n))
             {
                 let pow: Vec<&String> =
                     p.nets.iter().filter(|n| is_power_net(n)).collect();
+                // Cap center to the nearest matching IC PAD — the pin
+                // the decap serves, not the package centroid (center-
+                // to-center inflated large QFPs to an 11mm "median").
                 let d = ics
                     .iter()
-                    .filter(|ic| ic.nets.iter().any(|n| pow.iter().any(|q| *q == n)))
-                    .map(|ic| (ic.x - p.x).hypot(ic.y - p.y))
+                    .flat_map(|ic| ic.pad_pts.iter())
+                    .filter(|(_, _, n)| pow.iter().any(|q| *q == n))
+                    .map(|(px, py, _)| (px - p.x).hypot(py - p.y))
                     .fold(f64::INFINITY, f64::min);
                 if d.is_finite() && d < 25.0 {
                     decap.push(d);
@@ -421,6 +473,7 @@ mod tests {
     (pad "3" smd rect (at 0 3) (net 3 "XTAL1")))
   (footprint "Capacitor_SMD:C_0603" (at 27 22)
     (property "Reference" "C1")
+    (property "Value" "100nF")
     (pad "1" smd rect (at -0.7 0) (net 1 "VCC"))
     (pad "2" smd rect (at 0.7 0) (net 2 "GND")))
   (footprint "Crystal:Crystal_SMD" (at 25 26)
@@ -439,7 +492,8 @@ mod tests {
         let p = mine(&[snap]);
         let d = p.decap_to_ic.unwrap();
         assert_eq!(d.n, 1);
-        assert!((d.median_mm - (2.0f64 * 2.0 + 2.0 * 2.0).sqrt()).abs() < 0.01);
+        // Pad-level: C1 center (27,22) to U1's VCC pad at (22,20).
+        assert!((d.median_mm - (5.0f64 * 5.0 + 2.0 * 2.0).sqrt()).abs() < 0.01, "{d:?}");
         let c = p.connector_edge_inset.unwrap();
         assert!((c.median_mm - 2.5).abs() < 0.01, "{c:?}");
         let x = p.crystal_to_ic.unwrap();
