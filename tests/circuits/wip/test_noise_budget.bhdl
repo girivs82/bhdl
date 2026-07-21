@@ -46,18 +46,6 @@ layout QuietSrc {
     package SOIC-8;
 }
 
-entity QuietSink() {
-    interface Quiet q;
-    pin VCC: power in;
-    pin GND: ground;
-
-    attribute component_class = "ic";
-}
-
-layout QuietSink {
-    package SOIC-8;
-}
-
 board NoiseBudget {
     power VCC = 5V @ 100mA;
     ground GND;
@@ -72,14 +60,15 @@ board NoiseBudget {
     load_node -> c_load: Cap(100pF).1;
     c_load.2 -> @GND;
 
-    // Victim: a quiet link crossing the same channel.
+    // Victim: a quiet link crossing the same channel into a passive
+    // termination — no sink IC, so only THREE nets cross the wall
+    // (aggressor, victim, GND) and the channel budget forces the two
+    // signals together up top while GND takes the bottom pass.
     src: QuietSrc();
-    snk: QuietSink();
     src.VCC -> @VCC;
     src.GND -> @GND;
-    snk.VCC -> @VCC;
-    snk.GND -> @GND;
-    src.q.V -> snk.q.V;
+    src.q.V -> r_v: Res(1k).1;
+    r_v.2 -> @GND;
 }
 
 layout NoiseBudget {
@@ -93,11 +82,14 @@ layout NoiseBudget {
     // through the top channel, so the aggressor and victim run
     // adjacent there BY CONSTRUCTION — no routing style can separate
     // them, which is the whole point of the fixture.
-    cutout rect (14, 1.0) (16, 7.5);
+    // TWO passes: a 0.5mm bottom slot (GND's lane) and a ~0.9mm top
+    // channel that fits exactly the two signals — adjacency by
+    // construction.
+    cutout rect (14, 2.0) (16, 8.6);
     // Endpoints pinned on OPPOSITE sides of the wall: both links must
     // cross through the one channel above it.
-    place u1 at (4, 5);
-    place src at (10.5, 5);
-    place snk at (20, 5);
+    place u1 at (3, 5);
+    place src at (10.9, 5);
+    place r_v at (20, 5);
     place r_load at (27, 3);
 }
