@@ -1,34 +1,49 @@
 {
   "decap_to_ic": {
-    "median_mm": 3.44,
-    "p90_mm": 5.86,
-    "n": 31
+    "median_mm": 2.73,
+    "p90_mm": 10.12,
+    "n": 132
   },
   "connector_edge_inset": {
-    "median_mm": 4.4,
-    "p90_mm": 17.15,
-    "n": 26
+    "median_mm": 4.44,
+    "p90_mm": 18.88,
+    "n": 34
   },
   "crystal_to_ic": {
-    "median_mm": 12.18,
-    "p90_mm": 29.29,
-    "n": 5
+    "median_mm": 8.33,
+    "p90_mm": 27.17,
+    "n": 16
   },
   "xtal_loadcap_pair": {
-    "median_mm": 5.06,
-    "p90_mm": 8.89,
-    "n": 3
+    "median_mm": 5.36,
+    "p90_mm": 8.7,
+    "n": 8
   },
   "resistor_to_ic": {
-    "median_mm": 3.7,
-    "p90_mm": 8.36,
-    "n": 80
+    "median_mm": 2.61,
+    "p90_mm": 7.22,
+    "n": 1031
   },
   "source_boards": [
+    "CM5_MINIMA_3",
     "ESP32-PoE_Rev_B2",
+    "Fomu_pvt",
+    "Glasgow",
+    "One-Air-Max",
+    "OrangeCrab_r0.2.1",
+    "RoyalBlue54L-Feather",
     "StickHub",
+    "ULX3S",
     "complex_hierarchy",
+    "interf_u",
+    "jetson-agx-thor-baseboard",
+    "kit-dev-coldfire-xilinx_5213",
+    "microwave",
+    "multichannel_mixer",
     "pic_programmer",
-    "video"
+    "sonde_xilinx",
+    "tinytapeout-demo",
+    "video",
+    "vme-wren"
   ]
 }

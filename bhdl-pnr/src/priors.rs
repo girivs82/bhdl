@@ -270,15 +270,20 @@ fn is_ic(p: &PartPlacement) -> bool {
             && p.refdes[1..].chars().all(|c| c.is_ascii_digit()))
 }
 
-fn is_connector(p: &PartPlacement) -> bool {
+/// A PANEL connector — the kind the edge-inset folklore is about.
+/// Classified by footprint TYPE (USB/RJ45/jack/…), never by position
+/// (filtering "connectors near the edge" would be circular). Plain
+/// pin headers are board-internal interconnect and sit anywhere; on
+/// the 20-board corpus they dragged the inset median 4.4→8.8mm the
+/// same way bulk caps polluted the decap prior.
+fn is_edge_connector(p: &PartPlacement) -> bool {
     let f = p.footprint.to_ascii_lowercase();
-    f.contains("pinheader")
-        || f.contains("conn")
-        || f.contains("usb")
-        || f.contains("jack")
-        || f.contains("header")
-        || (p.refdes.starts_with('J')
-            && p.refdes[1..].chars().all(|c| c.is_ascii_digit()))
+    [
+        "usb", "rj45", "rj-45", "jack", "hdmi", "dsub", "d_sub", "sd_card",
+        "microsd", "micro_sd", "barrel", "terminalblock", "din41612",
+    ]
+    .iter()
+    .any(|k| f.contains(k))
 }
 
 fn is_crystal(p: &PartPlacement) -> bool {
@@ -357,7 +362,8 @@ pub struct PlacementPriors {
     /// Center distance from a decoupling cap to the nearest IC
     /// sharing its power net.
     pub decap_to_ic: Option<Prior>,
-    /// Connector center inset from the nearest board edge.
+    /// PANEL-connector (USB/RJ45/jack/…) center inset from the
+    /// nearest board edge; plain pin headers are excluded.
     pub connector_edge_inset: Option<Prior>,
     /// Crystal center distance to the nearest IC sharing a net.
     pub crystal_to_ic: Option<Prior>,
@@ -456,7 +462,7 @@ pub fn mine(boards: &[PcbSnapshot]) -> PlacementPriors {
                     decap.push(d);
                 }
             }
-            if is_connector(p) {
+            if is_edge_connector(p) {
                 let (x0, y0, x1, y1) = b.bbox;
                 let inset = (p.x - x0)
                     .min(x1 - p.x)
@@ -597,7 +603,7 @@ mod tests {
     (property "Value" "33R")
     (pad "1" smd rect (at -0.7 0) (net 4 "SIG"))
     (pad "2" smd rect (at 0.7 0) (net 5 "SIG_OUT")))
-  (footprint "Connector_PinHeader:PinHeader_1x04" (at 2.5 20)
+  (footprint "Connector_USB:USB_B_OST_USB-B1HSxx_Horizontal" (at 2.5 20)
     (property "Reference" "J1")
     (pad "1" thru_hole circle (at 0 0) (net 2 "GND"))))"#;
 
