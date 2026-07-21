@@ -54,8 +54,59 @@ use routing::grid::RoutingGrid;
 use routing::pathfinder;
 use types::*;
 
+/// P5 stage 2 — the MEASURED reward a trial is scored on: total
+/// worst-couple crosstalk noise (mV) summed across signal nets,
+/// computable only where the board carries a solved IBIS edge.
+/// Real-Data policy: no measured edge anywhere → None, and trial
+/// selection stays exactly the legality/connectivity/HPWL chain
+/// (byte-identical). Measured edges present but no couple in
+/// reach → Some(0.0): the copper genuinely measures quiet.
+fn measured_noise_mv(result: &PnrResult) -> Option<f64> {
+    if !result.board.nets.iter().any(|n| n.edge_swing_v.is_some()) {
+        return None;
+    }
+    let mut total = 0.0;
+    for (vi, n) in result.board.nets.iter().enumerate() {
+        if !matches!(n.net_class, PnrNetClass::Signal) || n.plane_layer.is_some() {
+            continue;
+        }
+        if let Some((mv, _, _)) =
+            routing::extract::crosstalk_worst_mv(&result.board, &result.routes, vi)
+        {
+            total += mv;
+        }
+    }
+    Some(total)
+}
+
+/// Trial dominance: legality first (residual pad overlaps), then
+/// connected sinks, then — ONLY on boards with a measured IBIS edge
+/// (P5 stage 2) — lower total measured crosstalk noise, then HPWL.
+fn trial_dominated(result: &PnrResult, best: &PnrResult, has_measured: bool) -> bool {
+    let r_over = legalization::residual_pad_overlaps(&result.board);
+    let b_over = legalization::residual_pad_overlaps(&best.board);
+    if r_over != b_over {
+        return r_over > b_over;
+    }
+    let r_conn = result.metrics.connected_sinks;
+    let b_conn = best.metrics.connected_sinks;
+    if r_conn != b_conn {
+        return r_conn < b_conn;
+    }
+    if has_measured {
+        let rn = measured_noise_mv(result).unwrap_or(0.0);
+        let bn = measured_noise_mv(best).unwrap_or(0.0);
+        if (rn - bn).abs() > 1e-9 {
+            return rn > bn;
+        }
+    }
+    result.metrics.hpwl_mm >= best.metrics.hpwl_mm
+}
+
 /// Run multiple placement+routing trials with different initializations,
-/// return the best result (highest routability, then lowest HPWL).
+/// return the best result (highest routability, then lowest HPWL; on
+/// boards with measured IBIS edges, lower measured crosstalk breaks
+/// the tie between equally-connected trials — P5 stage 2).
 pub fn place_and_route_best_of(
     board: Board,
     config: PnrConfig,
@@ -63,6 +114,12 @@ pub fn place_and_route_best_of(
     base_seed: u64,
 ) -> Result<PnrResult> {
     let mut best: Option<PnrResult> = None;
+    // P5 stage 2 switch: with a solved edge on the board the trials
+    // compete on MEASURED physics too, so a perfect trial no longer
+    // short-circuits the loop — later trials may measure quieter.
+    // Boards without measured data keep the early break, preserving
+    // byte-identity.
+    let has_measured = board.nets.iter().any(|n| n.edge_swing_v.is_some());
 
     for trial in 0..trials {
         info!("=== Trial {}/{} ===", trial + 1, trials);
@@ -74,27 +131,26 @@ pub fn place_and_route_best_of(
         // violations no routing quality can buy back — it can never
         // beat an overlap-free trial (uno s99: an illegal-placement
         // trial out-scored a legal one on connected sinks and shipped
-        // 7 violations).
+        // 7 violations). Then more CONNECTED SINKS (counting
+        // non-empty routes let a trial shipping one surviving branch
+        // and 19 stranded pads tie a fully-connected one), then
+        // measured noise where it exists, then lower HPWL.
         let r_over = legalization::residual_pad_overlaps(&result.board);
-        let dominated = best.as_ref().map_or(false, |b| {
-            // Then more CONNECTED SINKS, then lower HPWL. Counting
-            // non-empty routes let a trial shipping one surviving branch
-            // and 19 stranded pads tie a fully-connected one.
-            let b_over = legalization::residual_pad_overlaps(&b.board);
-            let b_conn = b.metrics.connected_sinks;
-            let r_conn = result.metrics.connected_sinks;
-            r_over > b_over
-                || (r_over == b_over
-                    && (r_conn < b_conn
-                        || (r_conn == b_conn
-                            && result.metrics.hpwl_mm >= b.metrics.hpwl_mm)))
-        });
+        let dominated = best
+            .as_ref()
+            .map_or(false, |b| trial_dominated(&result, b, has_measured));
 
         if !dominated {
-            info!(
-                "Trial {} is new best: {} connected sink(s), HPWL={:.1}mm",
-                trial + 1, result.metrics.connected_sinks, result.metrics.hpwl_mm
-            );
+            match measured_noise_mv(&result) {
+                Some(mv) if has_measured => info!(
+                    "Trial {} is new best: {} connected sink(s), HPWL={:.1}mm, measured noise {mv:.1}mV",
+                    trial + 1, result.metrics.connected_sinks, result.metrics.hpwl_mm
+                ),
+                _ => info!(
+                    "Trial {} is new best: {} connected sink(s), HPWL={:.1}mm",
+                    trial + 1, result.metrics.connected_sinks, result.metrics.hpwl_mm
+                ),
+            }
             let total_sinks: usize = result
                 .board
                 .nets
@@ -106,7 +162,7 @@ pub fn place_and_route_best_of(
                 && result.drc_violations.is_empty()
                 && r_over == 0;
             best = Some(result);
-            if perfect {
+            if perfect && !has_measured {
                 info!(
                     "Trial {} fully connected with no DRC — skipping remaining trials",
                     trial + 1
@@ -143,16 +199,9 @@ pub fn place_and_route_best_of(
             let result =
                 place_and_route(trial_board, config.clone(), base_seed.wrapping_add(trial as u64))?;
             let r_over = legalization::residual_pad_overlaps(&result.board);
-            let dominated = best.as_ref().map_or(false, |b| {
-                let b_over = legalization::residual_pad_overlaps(&b.board);
-                let b_conn = b.metrics.connected_sinks;
-                let r_conn = result.metrics.connected_sinks;
-                r_over > b_over
-                    || (r_over == b_over
-                        && (r_conn < b_conn
-                            || (r_conn == b_conn
-                                && result.metrics.hpwl_mm >= b.metrics.hpwl_mm)))
-            });
+            let dominated = best
+                .as_ref()
+                .map_or(false, |b| trial_dominated(&result, b, has_measured));
             if !dominated {
                 info!(
                     "SI-cost trial {} is new best: {} connected sink(s), HPWL={:.1}mm",
