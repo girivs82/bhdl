@@ -27,6 +27,7 @@
 //! let kicad_pcb = bhdl_pnr::output::kicad::export_kicad_pcb(&result.board, &result.routes);
 //! ```
 
+pub mod priors;
 pub mod constraint;
 pub mod geom;
 use geom::{segment_point_too_close, segments_too_close};

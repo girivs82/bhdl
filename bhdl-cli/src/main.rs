@@ -165,6 +165,18 @@ enum Commands {
         use_metadata: bool,
     },
     
+    /// P5: mine placement priors from a directory of real KiCad
+    /// layouts (.kicad_pcb) — decap/connector/crystal distance
+    /// medians with sample counts, written as JSON for
+    /// BHDL_PLACEMENT_PRIORS.
+    MinePriors {
+        /// Directory scanned recursively for .kicad_pcb files
+        dir: PathBuf,
+        /// Output priors JSON path
+        #[arg(short, long, default_value = "placement-priors.json")]
+        output: PathBuf,
+    },
+
     /// Time-domain simulation of scheduled IBIS buffer edges
     /// (`ibis_wave_<PIN>="rise@2n fall@10n"` instance directives)
     Transient {
@@ -511,6 +523,62 @@ async fn main() -> Result<()> {
             run_spice(&source_file, &analysis, output, use_metadata, cli.sku.as_deref()).await?;
         }
         
+        Some(Commands::MinePriors { dir, output }) => {
+            let mut boards = Vec::new();
+            let mut stack = vec![dir.clone()];
+            while let Some(d) = stack.pop() {
+                for e in std::fs::read_dir(&d)?.flatten() {
+                    let path = e.path();
+                    if path.is_dir() {
+                        stack.push(path);
+                    } else if path.extension().and_then(|x| x.to_str()) == Some("kicad_pcb")
+                    {
+                        let text = std::fs::read_to_string(&path)?;
+                        let name = path
+                            .file_stem()
+                            .and_then(|x| x.to_str())
+                            .unwrap_or("board")
+                            .to_string();
+                        match bhdl_pnr::priors::parse_kicad_pcb(&name, &text) {
+                            Some(snap) => {
+                                println!(
+                                    "  {} {}: {} part(s)",
+                                    "✓".green(),
+                                    name,
+                                    snap.parts.len()
+                                );
+                                boards.push(snap);
+                            }
+                            None => println!("  {} {}: unparseable, skipped", "⚠".yellow(), name),
+                        }
+                    }
+                }
+            }
+            if boards.is_empty() {
+                anyhow::bail!("no .kicad_pcb files found under {}", dir.display());
+            }
+            // Deterministic mining order regardless of directory walk.
+            boards.sort_by(|a, b| a.name.cmp(&b.name));
+            let priors = bhdl_pnr::priors::mine(&boards);
+            std::fs::write(&output, serde_json::to_string_pretty(&priors)?)?;
+            println!(
+                "  {} priors from {} board(s) → {}",
+                "✓".green(),
+                boards.len(),
+                output.display()
+            );
+            for (k, v) in [
+                ("decap_to_ic", &priors.decap_to_ic),
+                ("connector_edge_inset", &priors.connector_edge_inset),
+                ("crystal_to_ic", &priors.crystal_to_ic),
+            ] {
+                match v {
+                    Some(p) => println!("    {k}: median {:.2}mm (n={})", p.median_mm, p.n),
+                    None => println!("    {k}: no samples"),
+                }
+            }
+            return Ok(());
+        }
         Some(Commands::Transient { output, probe, duration, timestep, corners }) => {
             cmd_transient(&source_file, &cli.input, output, probe, duration, timestep, corners).await?;
         }
