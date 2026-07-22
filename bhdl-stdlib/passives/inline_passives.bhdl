@@ -15,4 +15,12 @@ entity Bead(part_no: string = "") {
     attribute component_class = "ferrite-bead";
     attribute role            = "hf-noise-damping";
     attribute part_number     = part_no;
+    // Murata BLM18AG601SN1 (the 0603 600 Ω general-purpose bead —
+    // the de-facto generic): 600 Ω ±25% at 100 MHz, DCR 0.38 Ω typ
+    // (0.5 Ω max), 500 mA rated (Murata datasheet). The DC solve
+    // wants dcr (a bead in a rail IS a resistor at DC); the 100 MHz
+    // impedance is the filtering identity.
+    attribute impedance_100mhz = 600Ω;
+    attribute dcr              = 0.38Ω;
+    attribute i_rated          = 500mA;
 }

@@ -12,16 +12,27 @@
 //
 // Grammar discipline: parser-compatible v2.0 subset.
 
-entity Crystal(part_no: string = "") {
+entity Crystal(part_no: string = "", freq_mhz: float = 16.0) {
     pin A: signal inout;     //                                 (pin 1)
     pin B: signal inout;     //                                 (pin 2)
 
     attribute component_class = "crystal";
     attribute terminals       = 2;
     attribute part_number     = part_no;
+    // Electrical identity — AT-cut fundamental, HC-49/SMD & 3225-class
+    // typicals (ECS ECS-160-18-4X, NDK NX3225GA, Abracon ABM8G
+    // datasheets). ESR is the MAX spec (oscillator margin math wants
+    // the worst case); load capacitance is the 18 pF class shipped on
+    // the Uno-style MCU boards this library grew up with. Instances
+    // override for other cuts/loads.
+    attribute frequency_mhz   = freq_mhz;
+    attribute c_load_pf       = 18.0;   // specified load capacitance
+    attribute c_shunt_pf      = 5.0;    // C0 shunt (max 7 pF on ABM8G)
+    attribute esr             = 80Ω;    // max, HC-49/SMD 16 MHz class
+    attribute drive_level_max_mw = 0.1; // 100 µW class drive limit
 }
 
-entity Crystal_GND2(part_no: string = "") {
+entity Crystal_GND2(part_no: string = "", freq_mhz: float = 16.0) {
     pin A:    signal inout;  // terminal 1                      (pin 1)
     pin GND2: signal inout;  // case ground                     (pin 2)
     pin B:    signal inout;  // terminal 2                      (pin 3)
@@ -29,9 +40,17 @@ entity Crystal_GND2(part_no: string = "") {
     attribute component_class = "crystal";
     attribute terminals       = 3;
     attribute part_number     = part_no;
+    // Same electrical identity as Crystal (see above); ceramic
+    // RESONATORS bound to these shells (CSTCE16M0V53) carry their
+    // built-in load caps — instances override c_load_pf to 0 there.
+    attribute frequency_mhz   = freq_mhz;
+    attribute c_load_pf       = 18.0;
+    attribute c_shunt_pf      = 5.0;
+    attribute esr             = 80Ω;
+    attribute drive_level_max_mw = 0.1;
 }
 
-entity Crystal_GND24(part_no: string = "") {
+entity Crystal_GND24(part_no: string = "", freq_mhz: float = 16.0) {
     pin A:    signal inout;  // terminal 1                      (pin 1)
     pin GND2: signal inout;  // case ground (lower-left pad)    (pin 2)
     pin B:    signal inout;  // terminal 2                      (pin 3)
@@ -40,4 +59,12 @@ entity Crystal_GND24(part_no: string = "") {
     attribute component_class = "crystal";
     attribute terminals       = 4;
     attribute part_number     = part_no;
+    // Same electrical identity as Crystal (see above); ceramic
+    // RESONATORS bound to these shells (CSTCE16M0V53) carry their
+    // built-in load caps — instances override c_load_pf to 0 there.
+    attribute frequency_mhz   = freq_mhz;
+    attribute c_load_pf       = 18.0;
+    attribute c_shunt_pf      = 5.0;
+    attribute esr             = 80Ω;
+    attribute drive_level_max_mw = 0.1;
 }

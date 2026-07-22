@@ -36,6 +36,12 @@ entity BJT(
     attribute ic_max          = ic_max;
     attribute hfe_min         = hfe_min;
     attribute power_rating    = power_rating;
+    // Small-signal generic class points (onsemi 2N3904 datasheet):
+    // VCE(sat) 0.2 V at 10 mA collector / 1 mA base, fT 300 MHz.
+    // Saturation voltage feeds switch-mode DC solves; real part
+    // numbers override at the instance.
+    attribute vce_sat  = 0.2V;
+    attribute f_t_mhz  = 300.0;
     attribute kicad_symbol    = "Device:Q_NPN_BCE";
 }
 

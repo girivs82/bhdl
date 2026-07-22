@@ -1,0 +1,71 @@
+// The classic first circuit, as a data-fidelity proof: a 555 astable
+// blinker gated by a 74HC08 AND — two part classes that have NO
+// vendor simulation models anywhere, now carried in the stdlib with
+// their datasheets AS the model (TI SLFS022I / SCLS081). The
+// composite's expansion places the REAL timing network (RA, RB, CT,
+// CONT cap), the DC solve draws the real quiescent currents, the
+// timing cap's 2/3·VCC peak lands in the stress ledger, and the
+// whole thing routes through the standard gates like any board.
+//
+//   f = 1.44 / ((4.7k + 2·100k) · 10µF) ≈ 0.70 Hz — a visible blink.
+
+import { NE555Astable } from "bhdl-stdlib/actives/ne555.bhdl";
+import { SN74HC08 } from "bhdl-stdlib/actives/logic_74hc.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
+import { Pin_Header_01x03 } from "bhdl-stdlib/connectors/pin_header.bhdl";
+
+board Ne555Blink {
+    port VCC: power in = 5V @ 100mA;
+    port GND: ground;
+
+    // Power entry + rail decoupling — added because ERC020/ERC028
+    // flagged their absence on the first pass (the toolchain
+    // reviewing the design, as intended): a physical header for the
+    // port, bulk + local 100nF per supplied part.
+    J1: Pin_Header_01x03();
+    @VCC -> J1.1;
+    J1.2 -> @GND;
+    J1.3 -> @GND;
+    @VCC -> c_bulk: Cap(10µF).1;
+    c_bulk.2 -> @GND;
+    @VCC -> c_555: Cap(100nF).1;
+    c_555.2 -> @GND;
+    @VCC -> c_gate: Cap(100nF).1;
+    c_gate.2 -> @GND;
+
+    blinker: NE555Astable(ra=4.7kΩ, rb=100kΩ, ct=10µF);
+    @VCC -> blinker.VCC;
+    blinker.GND -> @GND;
+
+    // Gate the blink with an enable line (pulled up = enabled).
+    gate: SN74HC08();
+    @VCC -> gate.VCC;
+    gate.GND -> @GND;
+    blinker.OUT -> gate.A1;
+    @VCC -> r_en: Res(10kΩ).1;
+    r_en.2 -> gate.B1;
+
+    // Y1 drives the LED through the ballast: (5 − 2.0 − 0.1) / 330
+    // ≈ 8.8 mA — inside the HC08's 5.2 mA rated drive? No: 8.8 mA
+    // exceeds ±5.2 mA rated — size the ballast for the GATE, not the
+    // LED: 680 Ω → (5 − 2.0 − VOL·) / 680 ≈ 4.3 mA, within rating
+    // and plenty for an indicator.
+    gate.Y1 -> r_led: Res(680Ω).1;
+    r_led.2 -> led_blink: LED(color="red").A;
+    led_blink.K -> @GND;
+
+    // CMOS inputs never float (the same rule ERC enforces): unused
+    // gate inputs tied low, unused outputs left open.
+    gate.A2 -> @GND;
+    gate.B2 -> @GND;
+    gate.A3 -> @GND;
+    gate.B3 -> @GND;
+    gate.A4 -> @GND;
+    gate.B4 -> @GND;
+}
+
+layout Ne555Blink {
+    outline rect 40 30;
+}

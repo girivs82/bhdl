@@ -15,5 +15,12 @@ entity LED(color: string) {
     attribute forward_voltage = 2.0V;
     attribute forward_current = 20mA;
     attribute max_current = 30mA;
+    // Slope of the V-I curve around the 20 mA operating point —
+    // ~12 Ω is the AlInGaP/InGaN indicator-LED class typical
+    // (Kingbright APT1608 family datasheet curves). Lets the DC
+    // solve place the operating point on a line instead of an
+    // ideal step at Vf.
+    attribute r_dynamic       = 12Ω;
+    attribute c_junction_pf   = 30.0;
     attribute kicad_symbol = "Device:LED";
 }

@@ -12,6 +12,13 @@ entity Ind(value: inductance, rated_current: current = 1A) {
 
     attribute component_class = "inductor";
     attribute inductance = value;
+    // Power-inductor class data, 10 µH 6045-size shielded reference
+    // point (Bourns SRN6045-100M datasheet: DCR 45 mΩ typ, Isat 3 A,
+    // SRF 18 MHz). IR-drop and ripple math read dcr; instances
+    // override for other sizes.
+    attribute dcr      = 0.045Ω;
+    attribute i_sat    = 3A;
+    attribute srf_mhz  = 18.0;
     attribute current_rating = rated_current;
     attribute kicad_symbol = "Device:L";
 }

@@ -23,6 +23,13 @@ entity SW_Push(part_no: string = "") {
     attribute poles           = 1;
     attribute throws          = 1;
     attribute part_number     = part_no;
+    // Omron B3F-1000 class (the standard 6 mm tactile): 100 mΩ max
+    // contact resistance, 50 mA / 24 V DC switching limits (B3F
+    // datasheet). The reset-button path's DC solve sees a real
+    // contact, not a 0 Ω ideal.
+    attribute contact_resistance = 0.1Ω;
+    attribute i_max = 50mA;
+    attribute v_max = 24V;
 }
 
 entity SW_Tactile_4Pad(part_no: string = "") {

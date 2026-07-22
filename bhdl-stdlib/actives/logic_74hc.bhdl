@@ -1,0 +1,132 @@
+// 74HC logic — the parts every designer uses with NO vendor SPICE and
+// (for most vendors) no IBIS: the datasheet is the model, so the
+// datasheet is what these entities carry. Every number cites the TI
+// SN74HC08 / SN74HC00 datasheets (SCLS081 / SCLS047) and the Nexperia
+// 74HC family characteristics; all values are the VCC = 4.5 V column
+// unless noted.
+//
+// What the numbers feed TODAY:
+//   - i_quiescent → the DC solve's rail draw (`draws` model);
+//   - r_out (VOL/IOL slope) → honest output-stage resistance for
+//     level/divider math instead of an ideal 0 Ω driver;
+//   - c_in / cpd → the dynamic-draw equation I = Cpd·VCC·f + ΣCL·VCC·f
+//     (SCLS081 §power dissipation) when a clock is declared;
+//   - t_pd → timing budgets (the derived-skew machinery grades routed
+//     delay against edge fractions — a gate's tpd is the same currency).
+//
+// NEXT fidelity rung (recorded, not yet built): datasheet-derived IBIS
+// — the VOL/IOL and VOH/IOH curve points published in the datasheet
+// are exactly a [Pulldown]/[Pullup] table; a hand-derived .ibs with
+// clear provenance would plug these gates into the measured-edge
+// chain (solved swings, noise gates) like the vendor-IBIS MCUs.
+
+entity SN74HC08() {
+    // Quad 2-input AND, standard 14-pin pinout.
+    pin A1: signal in;    // 1
+    pin B1: signal in;    // 2
+    pin Y1: signal out;   // 3
+    pin A2: signal in;    // 4
+    pin B2: signal in;    // 5
+    pin Y2: signal out;   // 6
+    pin GND: ground;      // 7
+    pin Y3: signal out;   // 8
+    pin A3: signal in;    // 9
+    pin B3: signal in;    // 10
+    pin Y4: signal out;   // 11
+    pin A4: signal in;    // 12
+    pin B4: signal in;    // 13
+    pin VCC: power in;    // 14
+
+    attribute component_class = "ic_logic";
+    attribute part_number     = "SN74HC08";
+    attribute datasheet       = "TI SCLS081";
+    attribute logic_function  = "AND2 x4";
+
+    // ── Supply (SCLS081 §6.5) ──
+    attribute vcc_min      = 2V;
+    attribute vcc_max      = 6V;
+    attribute i_quiescent  = 2uA;    // ICC max, static, whole package
+
+    // ── Output stage (VCC = 4.5 V column) ──
+    // VOL 0.1 V typ at IOL = 4 mA → r_out ≈ 25 Ω typ; rated drive
+    // ±5.2 mA at 4.5 V (±7.8 mA at 6 V).
+    attribute i_out_max = 5.2mA;
+    attribute v_ol      = 0.1V;      // typ @ 4 mA
+    attribute r_out     = 25Ω;       // VOL/IOL slope, typ
+
+    // ── Dynamics (VCC = 4.5 V, CL = 50 pF) ──
+    attribute t_pd_ns   = 9.0;       // propagation, typ
+    attribute t_t_ns    = 8.0;       // output transition, typ
+    attribute c_in_pf   = 3.5;       // input capacitance, typ
+    attribute cpd_pf    = 10.0;      // power-dissipation cap per gate
+
+    simulation {
+        model {
+            node VCC draws = self.i_quiescent;
+        }
+    }
+}
+
+layout SN74HC08 {
+    package SOIC-14;
+}
+
+symbol SN74HC08 {
+    left   { A1, B1, A2, B2, A3, B3, A4, B4 }
+    right  { Y1, Y2, Y3, Y4 }
+    top    { VCC }
+    bottom { GND }
+}
+
+// Quad 2-input NAND — the 7400 itself. Same family characteristics as
+// the HC08 (both cite the VCC = 4.5 V column of their TI datasheets);
+// the NAND's tpd is a touch faster (SCLS047: 8 ns typ).
+entity SN74HC00() {
+    pin A1: signal in;    // 1
+    pin B1: signal in;    // 2
+    pin Y1: signal out;   // 3
+    pin A2: signal in;    // 4
+    pin B2: signal in;    // 5
+    pin Y2: signal out;   // 6
+    pin GND: ground;      // 7
+    pin Y3: signal out;   // 8
+    pin A3: signal in;    // 9
+    pin B3: signal in;    // 10
+    pin Y4: signal out;   // 11
+    pin A4: signal in;    // 12
+    pin B4: signal in;    // 13
+    pin VCC: power in;    // 14
+
+    attribute component_class = "ic_logic";
+    attribute part_number     = "SN74HC00";
+    attribute datasheet       = "TI SCLS047";
+    attribute logic_function  = "NAND2 x4";
+
+    attribute vcc_min      = 2V;
+    attribute vcc_max      = 6V;
+    attribute i_quiescent  = 2uA;
+    attribute i_out_max    = 5.2mA;
+    attribute v_ol         = 0.1V;
+    attribute r_out        = 25Ω;
+    attribute t_pd_ns      = 8.0;
+    attribute t_t_ns       = 8.0;
+    attribute c_in_pf      = 3.5;
+    attribute cpd_pf       = 10.0;
+
+    simulation {
+        model {
+            node VCC draws = self.i_quiescent;
+        }
+    }
+}
+
+layout SN74HC00 {
+    package SOIC-14;
+}
+
+symbol SN74HC00 {
+    left   { A1, B1, A2, B2, A3, B3, A4, B4 }
+    right  { Y1, Y2, Y3, Y4 }
+    top    { VCC }
+    bottom { GND }
+}

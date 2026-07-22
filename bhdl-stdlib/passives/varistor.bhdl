@@ -13,4 +13,11 @@ entity Varistor(part_no: string = "") {
     attribute component_class = "varistor";
     attribute role            = "transient-voltage-suppressor";
     attribute part_number     = part_no;
+    // ChipGuard-class ESD suppressor (Bourns CG0603MLC family — the
+    // USB-line part on Uno-class boards): 5 V working class, IEC
+    // 61000-4-2 level 4 (±8 kV contact). Clamping curve and parasitic
+    // capacitance vary per suffix — NOT carried until sourced from
+    // the specific suffix's datasheet (absence over invention).
+    attribute v_working  = 5.5V;
+    attribute esd_rating = "IEC61000-4-2 ±8kV contact";
 }

@@ -1,0 +1,117 @@
+// NE555 — the timer. No vendor SPICE or IBIS exists for the bipolar
+// 555 (designers have worked from the datasheet since 1972), so this
+// entity carries the datasheet ITSELF as data: every number below is
+// from the TI NE555 datasheet (SLFS022I) and the internal 3 × 5 kΩ
+// divider that gives the part its name and its 1/3–2/3 VCC comparator
+// thresholds.
+//
+// Fidelity path (Real-Data doctrine, no guesswork):
+//   - the DC solve sees the real supply draw (`draws` model);
+//   - the composite NE555Astable below carries the timing components
+//     as REAL expansion parts, so the datasheet astable equations
+//     (f = 1.44/((RA+2RB)·C), duty = (RA+RB)/(RA+2RB)) run against
+//     the actual attached values in its stress block, and the timing
+//     cap's real 2/3·VCC peak feeds the voltage-rating sign-off;
+//   - part-carried checks encode the datasheet's application rules
+//     (RESET tied when unused, CONT decoupled).
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+
+entity NE555() {
+    pin GND:   ground;        // 1
+    pin TRIG:  signal in;     // 2 — fires at 1/3 VCC (falling)
+    pin OUT:   signal out;    // 3 — ±200 mA capable totem pole
+    pin RESET: signal in;     // 4 — active low, tie to VCC when unused
+    pin CONT:  signal inout;  // 5 — 2/3 VCC divider tap (10 nF to GND)
+    pin THRES: signal in;     // 6 — fires at 2/3 VCC (rising)
+    pin DISCH: signal inout;  // 7 — open collector to GND
+    pin VCC:   power in;      // 8
+
+    attribute component_class = "ic_analog";
+    attribute part_number     = "NE555";
+    attribute datasheet       = "TI SLFS022I";
+
+    // ── Supply (SLFS022I §6.5, VCC = 5 V column) ──
+    attribute vcc_min      = 4.5V;
+    attribute vcc_max      = 16V;
+    attribute i_quiescent  = 3mA;    // typ @ 5 V (10 mA typ @ 15 V)
+
+    // ── Comparator thresholds — set by the internal 5k/5k/5k string ──
+    attribute r_divider        = 5kΩ;   // × 3, the "555"
+    attribute threshold_ratio  = 0.667; // THRES trips at 2/3 VCC
+    attribute trigger_ratio    = 0.333; // TRIG trips at 1/3 VCC
+
+    // ── Output & discharge (§6.5) ──
+    attribute i_out_max     = 200mA;  // source or sink
+    attribute v_ol          = 0.25V;  // typ @ 5 V, 8 mA sink
+    attribute t_rise_ns     = 100.0;  // output transition, typ
+    attribute t_fall_ns     = 100.0;
+    attribute timing_error_astable_pct = 2.25; // initial accuracy, typ
+
+    simulation {
+        model {
+            node VCC draws = self.i_quiescent;
+        }
+        check {
+            require connected(RESET) else "RESET is active-low with no defined floating state — tie to VCC when unused (SLFS022I application note)";
+        }
+    }
+}
+
+layout NE555 {
+    package SOIC-8;
+}
+
+symbol NE555 {
+    left   { TRIG, THRES, CONT }
+    right  { OUT, DISCH }
+    top    { VCC, RESET }
+    bottom { GND }
+}
+
+// Astable (free-running) 555 — the design idiom, as a composite: the
+// timing network is REAL parts carried by the expansion (same pattern
+// as the triode gain stage and buck composites), so the datasheet
+// equations run against the actual attached values.
+//
+//   RA: VCC → DISCH        RB: DISCH → THRES(=TRIG)
+//   CT: THRES → GND        C_CONT: CONT → GND (datasheet 10 nF)
+//
+//   f    = 1.44 / ((RA + 2·RB) · CT)
+//   duty = (RA + RB) / (RA + 2·RB)      (OUT high fraction)
+//
+// The timing cap charges between 1/3 and 2/3 VCC — its real peak is
+// 2/3·VCC, stamped into the stress ledger so cap voltage-rating
+// sign-off grades against physics, not guesswork.
+entity NE555Astable(ra: resistance = 4.7kΩ, rb: resistance = 100kΩ, ct: capacitance = 10µF) {
+    pin VCC: power in;
+    pin GND: ground;
+    pin OUT: signal out;
+
+    attribute component_class = "ic_analog";
+
+    expansion {
+        timer: NE555();
+        VCC -> timer.VCC;
+        timer.GND -> GND;
+        timer.OUT -> OUT;
+        VCC -> timer.RESET;                    // unused RESET tied high
+        VCC -> r_a: Res(ra).1;
+        r_a.2 -> timer.DISCH;
+        timer.DISCH -> r_b: Res(rb).1;
+        r_b.2 -> timer.THRES;
+        timer.THRES -> timer.TRIG;             // astable: self-retrigger
+        timer.THRES -> c_t: Cap(ct).1;
+        c_t.2 -> GND;
+        timer.CONT -> c_cont: Cap(10nF).1;     // datasheet CONT decoupling
+        c_cont.2 -> GND;
+    }
+
+    simulation {
+        stress {
+            // Timing-cap peak = the upper comparator threshold.
+            c_t.v_pk = 0.667 * vin;
+        }
+    }
+}
