@@ -537,6 +537,75 @@ impl RoutingGrid {
         nbrs
     }
 
+    /// Allocation-free twin of `planar_neighbors` for the dijkstra hot
+    /// loop: fills a fixed array in the EXACT same order (cardinals
+    /// then no-corner-cut diagonals) and returns the count. The Vec
+    /// version allocated per expanded cell — millions of times per
+    /// layout — and was measurable in the profile; order-preserving
+    /// replacement, byte-identical boards.
+    #[inline]
+    pub fn planar_neighbors_arr(&self, c: CellCoord) -> ([(CellCoord, f64); 8], usize) {
+        let mut out = [(c, 0.0f64); 8];
+        let mut n = 0usize;
+        let r = c.row;
+        let co = c.col;
+        let max_r = self.rows();
+        let max_c = self.cols();
+        if r > 0 {
+            out[n] = (CellCoord { row: r - 1, col: co, ..c }, 1.0);
+            n += 1;
+        }
+        if r + 1 < max_r {
+            out[n] = (CellCoord { row: r + 1, col: co, ..c }, 1.0);
+            n += 1;
+        }
+        if co > 0 {
+            out[n] = (CellCoord { row: r, col: co - 1, ..c }, 1.0);
+            n += 1;
+        }
+        if co + 1 < max_c {
+            out[n] = (CellCoord { row: r, col: co + 1, ..c }, 1.0);
+            n += 1;
+        }
+        if !self.allow_diagonal {
+            return (out, n);
+        }
+        let diag = std::f64::consts::SQRT_2;
+        if r > 0
+            && co > 0
+            && !self.cells[c.layer][r - 1][co].blocked
+            && !self.cells[c.layer][r][co - 1].blocked
+        {
+            out[n] = (CellCoord { row: r - 1, col: co - 1, ..c }, diag);
+            n += 1;
+        }
+        if r > 0
+            && co + 1 < max_c
+            && !self.cells[c.layer][r - 1][co].blocked
+            && !self.cells[c.layer][r][co + 1].blocked
+        {
+            out[n] = (CellCoord { row: r - 1, col: co + 1, ..c }, diag);
+            n += 1;
+        }
+        if r + 1 < max_r
+            && co > 0
+            && !self.cells[c.layer][r + 1][co].blocked
+            && !self.cells[c.layer][r][co - 1].blocked
+        {
+            out[n] = (CellCoord { row: r + 1, col: co - 1, ..c }, diag);
+            n += 1;
+        }
+        if r + 1 < max_r
+            && co + 1 < max_c
+            && !self.cells[c.layer][r + 1][co].blocked
+            && !self.cells[c.layer][r][co + 1].blocked
+        {
+            out[n] = (CellCoord { row: r + 1, col: co + 1, ..c }, diag);
+            n += 1;
+        }
+        (out, n)
+    }
+
     /// All 8 surrounding cells on the same layer, regardless of the
     /// `allow_diagonal` routing setting. Via SITING must check diagonals
     /// too: a foreign track on a diagonal neighbor (0.42mm at 0.3mm

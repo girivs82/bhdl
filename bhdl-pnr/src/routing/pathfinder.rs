@@ -782,6 +782,85 @@ pub(crate) fn plane_no_via_zones(board: &Board) -> Vec<(NetId, (f64, f64, f64, f
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Reusable dijkstra workspace: the dense per-call state
+/// (`vec![INFINITY; n_cells]` and friends) was multi-MB of alloc +
+/// memset on EVERY one of the ~6.7k calls per layout. Epoch stamping
+/// makes "reset" an integer increment: a slot is valid only when its
+/// stamp equals the current epoch. Order-preserving by construction —
+/// every read returns exactly what the fresh arrays would have held.
+struct DijkScratch {
+    epoch: u32,
+    /// dist/prev validity. Invariant: stamp[i] == epoch implies BOTH
+    /// dist[i] and prev[i] were written this call (sources write
+    /// prev = u32::MAX explicitly).
+    stamp: Vec<u32>,
+    dist: Vec<f64>,
+    prev: Vec<u32>,
+    sink_stamp: Vec<u32>,
+    attract_stamp: Vec<u32>,
+    heap: BinaryHeap<DijkState>,
+}
+
+impl DijkScratch {
+    fn new() -> Self {
+        DijkScratch {
+            epoch: 0,
+            stamp: Vec::new(),
+            dist: Vec::new(),
+            prev: Vec::new(),
+            sink_stamp: Vec::new(),
+            attract_stamp: Vec::new(),
+            heap: BinaryHeap::new(),
+        }
+    }
+    fn begin(&mut self, n_cells: usize) {
+        if self.stamp.len() < n_cells {
+            self.stamp.resize(n_cells, 0);
+            self.dist.resize(n_cells, f64::INFINITY);
+            self.prev.resize(n_cells, u32::MAX);
+            self.sink_stamp.resize(n_cells, 0);
+            self.attract_stamp.resize(n_cells, 0);
+        }
+        self.epoch = self.epoch.wrapping_add(1);
+        if self.epoch == 0 {
+            // u32 wrap (never in practice): stale stamps could alias
+            // the new epoch — hard-reset once per 4 billion calls.
+            self.stamp.iter_mut().for_each(|s| *s = 0);
+            self.sink_stamp.iter_mut().for_each(|s| *s = 0);
+            self.attract_stamp.iter_mut().for_each(|s| *s = 0);
+            self.epoch = 1;
+        }
+        self.heap.clear();
+    }
+    #[inline(always)]
+    fn dist_at(&self, i: usize) -> f64 {
+        if self.stamp[i] == self.epoch {
+            self.dist[i]
+        } else {
+            f64::INFINITY
+        }
+    }
+    #[inline(always)]
+    fn set_dist(&mut self, i: usize, d: f64, prev: u32) {
+        self.stamp[i] = self.epoch;
+        self.dist[i] = d;
+        self.prev[i] = prev;
+    }
+    #[inline(always)]
+    fn is_sink(&self, i: usize) -> bool {
+        self.sink_stamp[i] == self.epoch
+    }
+    #[inline(always)]
+    fn is_attract(&self, i: usize) -> bool {
+        self.attract_stamp[i] == self.epoch
+    }
+}
+
+thread_local! {
+    static DIJK_SCRATCH: std::cell::RefCell<DijkScratch> =
+        std::cell::RefCell::new(DijkScratch::new());
+}
+
 fn dijkstra_to_any(
     grid: &RoutingGrid,
     sources: &BTreeSet<CellCoord>,
@@ -797,10 +876,50 @@ fn dijkstra_to_any(
     attract: Option<&BTreeSet<CellCoord>>,
     no_via_zones: &[(NetId, (f64, f64, f64, f64))],
 ) -> Option<(Vec<CellCoord>, CellCoord)> {
+    DIJK_SCRATCH.with(|s| {
+        dijkstra_to_any_inner(
+            grid,
+            sources,
+            sinks,
+            net,
+            stack,
+            history_factor,
+            present_factor,
+            allow_vias,
+            via_keepout,
+            banned_sites,
+            clear_ring,
+            attract,
+            no_via_zones,
+            &mut s.borrow_mut(),
+        )
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dijkstra_to_any_inner(
+    grid: &RoutingGrid,
+    sources: &BTreeSet<CellCoord>,
+    sinks: &BTreeSet<CellCoord>,
+    net: &PnrNet,
+    stack: &LayerStack,
+    history_factor: f64,
+    present_factor: f64,
+    allow_vias: bool,
+    via_keepout: &[(f64, f64)],
+    banned_sites: &[(f64, f64)],
+    clear_ring: usize,
+    attract: Option<&BTreeSet<CellCoord>>,
+    no_via_zones: &[(NetId, (f64, f64, f64, f64))],
+    s: &mut DijkScratch,
+) -> Option<(Vec<CellCoord>, CellCoord)> {
     // DENSE state: the default SipHash HashMap<CellCoord, _> was ~40%
     // of the whole layout runtime (sampled) across ~6.7k dijkstra
     // calls. dist/prev/sink/attract are flat arrays indexed by
-    // (layer, row, col) — value-identical semantics, zero hashing.
+    // (layer, row, col) — value-identical semantics, zero hashing —
+    // and live in the epoch-stamped thread-local scratch (see
+    // DijkScratch) so the per-call cost is an integer bump, not a
+    // multi-MB memset.
     let rows = grid.rows();
     let cols = grid.cols();
     let plane = rows * cols;
@@ -810,37 +929,33 @@ fn dijkstra_to_any(
         let i = i as usize;
         CellCoord { layer: i / plane, row: (i % plane) / cols, col: i % cols }
     };
-    let mut dist: Vec<f64> = vec![f64::INFINITY; n_cells];
-    let mut prev: Vec<u32> = vec![u32::MAX; n_cells];
-    let mut sink_mask: Vec<bool> = vec![false; n_cells];
+    s.begin(n_cells);
     for &sk in sinks {
-        sink_mask[ci(sk)] = true;
+        s.sink_stamp[ci(sk)] = s.epoch;
     }
-    let attract_mask: Option<Vec<bool>> = attract.map(|set| {
-        let mut m = vec![false; n_cells];
+    let has_attract = attract.is_some();
+    if let Some(set) = attract {
         for &c in set {
-            m[ci(c)] = true;
+            s.attract_stamp[ci(c)] = s.epoch;
         }
-        m
-    });
-    let mut heap = BinaryHeap::new();
+    }
 
     for &src in sources {
-        dist[ci(src)] = 0.0;
-        heap.push(DijkState {
+        s.set_dist(ci(src), 0.0, u32::MAX);
+        s.heap.push(DijkState {
             cost: 0.0,
             cell: src,
         });
     }
 
-    while let Some(DijkState { cost, cell }) = heap.pop() {
+    while let Some(DijkState { cost, cell }) = s.heap.pop() {
         // Check if we reached a sink
-        if sink_mask[ci(cell)] {
+        if s.is_sink(ci(cell)) {
             // Backtrace
             let mut path = vec![cell];
             let mut cur = cell;
-            while prev[ci(cur)] != u32::MAX {
-                let p = decode(prev[ci(cur)]);
+            while s.prev[ci(cur)] != u32::MAX {
+                let p = decode(s.prev[ci(cur)]);
                 path.push(p);
                 cur = p;
             }
@@ -849,12 +964,14 @@ fn dijkstra_to_any(
         }
 
         // Skip if we already found a better path
-        if cost > dist[ci(cell)] {
+        if cost > s.dist_at(ci(cell)) {
             continue;
         }
 
-        // Expand planar neighbors (4 cardinal + 4 diagonal)
-        for (nbr, move_cost) in grid.planar_neighbors(cell) {
+        // Expand planar neighbors (4 cardinal + 4 diagonal) —
+        // allocation-free twin, identical order.
+        let (nbrs, n_nbrs) = grid.planar_neighbors_arr(cell);
+        for &(nbr, move_cost) in &nbrs[..n_nbrs] {
             let gc = grid.get(nbr);
             // Blocked cells are unroutable through-traffic (pads, keepouts).
             // EXCEPTION: a cell that is one of *this* net's own terminals
@@ -865,7 +982,7 @@ fn dijkstra_to_any(
             // unroutable. Terminals only; we still never tunnel through other
             // components' pads.
             if gc.blocked
-                    && !sink_mask[ci(nbr)]
+                    && !s.is_sink(ci(nbr))
                     && (gc.hard || gc.nc_blocked || !gc.owners.contains(&net.id))
                 {
                 continue;
@@ -875,7 +992,7 @@ fn dijkstra_to_any(
             // foreign pads by construction (the validator then rips the
             // root span and the loop ping-pongs). Require a clear
             // Chebyshev ring proportional to the extra half-width.
-            if clear_ring > 0 && !sink_mask[ci(nbr)] {
+            if clear_ring > 0 && !s.is_sink(ci(nbr)) {
                 let mut ok = true;
                 'ring: for dr in -(clear_ring as i64)..=(clear_ring as i64) {
                     for dc in -(clear_ring as i64)..=(clear_ring as i64) {
@@ -914,7 +1031,7 @@ fn dijkstra_to_any(
             // Layer rule: the net's copper may only exist on its
             // allowed layers.
             if let Some(allowed) = &net.allowed_layers {
-                if !allowed.contains(&nbr.layer) && !sink_mask[ci(nbr)] {
+                if !allowed.contains(&nbr.layer) && !s.is_sink(ci(nbr)) {
                     continue;
                 }
             }
@@ -922,7 +1039,7 @@ fn dijkstra_to_any(
             // copper was amputated by the validator (dangling ends) —
             // re-routing through them deterministically re-creates the
             // same offender and ping-pongs to the round cap.
-            if !banned_sites.is_empty() && !sink_mask[ci(nbr)] {
+            if !banned_sites.is_empty() && !s.is_sink(ci(nbr)) {
                 let (bx, by) = grid.cell_center(nbr);
                 if banned_sites
                     .iter()
@@ -937,16 +1054,16 @@ fn dijkstra_to_any(
             // Diff-pair attraction: riding alongside the routed partner
             // is cheap — the pair converges to a coupled run without
             // geometric lockstep.
-            let attract_factor = match &attract_mask {
-                Some(m) if m[ci(nbr)] => 0.15,
-                _ => 1.0,
+            let attract_factor = if has_attract && s.is_attract(ci(nbr)) {
+                0.15
+            } else {
+                1.0
             };
             let new_cost = cost + edge_cost * width_factor * move_cost * attract_factor;
 
-            if new_cost < dist[ci(nbr)] {
-                dist[ci(nbr)] = new_cost;
-                prev[ci(nbr)] = ci(cell) as u32;
-                heap.push(DijkState {
+            if new_cost < s.dist_at(ci(nbr)) {
+                s.set_dist(ci(nbr), new_cost, ci(cell) as u32);
+                s.heap.push(DijkState {
                     cost: new_cost,
                     cell: nbr,
                 });
@@ -963,7 +1080,7 @@ fn dijkstra_to_any(
                 // Same terminal exception as the planar case: a via may land
                 // on a blocked cell only if it is this net's own pin terminal.
                 if gc.blocked
-                    && !sink_mask[ci(nbr)]
+                    && !s.is_sink(ci(nbr))
                     && (gc.hard || gc.nc_blocked || !gc.owners.contains(&net.id))
                 {
                     continue;
@@ -982,10 +1099,10 @@ fn dijkstra_to_any(
                             || (g.blocked && !g.owners.contains(&net.id)))
                     })
                 });
-                if !ring_clear && !sink_mask[ci(nbr)] {
+                if !ring_clear && !s.is_sink(ci(nbr)) {
                     continue;
                 }
-                if !banned_sites.is_empty() && !sink_mask[ci(nbr)] {
+                if !banned_sites.is_empty() && !s.is_sink(ci(nbr)) {
                     let (bx, by) = grid.cell_center(nbr);
                     if banned_sites
                         .iter()
@@ -1031,10 +1148,9 @@ fn dijkstra_to_any(
                 // it (an EMPTY far layer otherwise wins on congestion).
                 let via_factor = if attract.is_some() { 4.0 } else { 1.0 };
                 let new_cost = cost + grid.via_cost * via_factor;
-                if new_cost < dist[ci(nbr)] {
-                    dist[ci(nbr)] = new_cost;
-                    prev[ci(nbr)] = ci(cell) as u32;
-                    heap.push(DijkState {
+                if new_cost < s.dist_at(ci(nbr)) {
+                    s.set_dist(ci(nbr), new_cost, ci(cell) as u32);
+                    s.heap.push(DijkState {
                         cost: new_cost,
                         cell: nbr,
                     });
