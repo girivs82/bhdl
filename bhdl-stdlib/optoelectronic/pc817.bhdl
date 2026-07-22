@@ -1,0 +1,114 @@
+// PC817 — DIP-4 general-purpose photocoupler (Sharp PC817X series).
+// The hobby-to-industrial isolation workhorse: IRED optically coupled
+// to a phototransistor, 5.0 kVrms input-output isolation.
+//
+// No vendor SPICE our chain can ingest, no IBIS (it is not a digital
+// I/O buffer) — the datasheet is the model (campaign doctrine). Every
+// number cites the Sharp PC817X datasheet, Sheet No. D2-A03101EN
+// (Sep. 30 2003), 25 degC unless noted.
+//
+// THE defining data of an optocoupler is CTR (current transfer ratio,
+// IC/IF) — a WIDE-VARIANCE parameter sold in ranks, a strong function
+// of IF (Fig.6 is non-monotonic: it PEAKS near IF=2 mA), a falling
+// function of temperature (Fig.9), and a falling function of TIME
+// (Sharp design guide: plan for 50% IRED degradation over 5 years).
+// A design that works at nominal CTR and fails at min-rank x hot x
+// aged is the classic opto field failure; this entity carries the
+// whole derating chain so a checker can walk it.
+//
+// CTR rank bins (IC in mA at IF=5 mA, VCE=5 V — Model Line-up table;
+// CTR% = IC/5mA x 100):
+//   no rank: 2.5-30.0  ( 50-600%)     A: 4.0-8.0  ( 80-160%)
+//   B: 6.5-13.0 (130-260%)            C: 10.0-20.0 (200-400%)
+//   D: 15.0-30.0 (300-600%)           and A/B, B/C, C/D, A/B/C,
+//   B/C/D, A/B/C/D merged bins per the line-up table.
+// The ctr_min_pct/ctr_max_pct PARAMS default to the unranked envelope;
+// a design ordering a ranked part (e.g. PC817X1 = rank A) overrides
+// them at instantiation — the rank is a purchasing decision, so it is
+// a constructor argument, not a class constant.
+
+entity PC817(ctr_min_pct: float = 50.0, ctr_max_pct: float = 600.0,
+             part_no: string = "PC817X") {
+    pin A: signal in;     // IRED anode                          (pin 1)
+    pin K: signal in;     // IRED cathode                        (pin 2)
+    pin E: signal inout;  // phototransistor emitter             (pin 3)
+    pin C: signal inout;  // phototransistor collector           (pin 4)
+
+    attribute component_class = "optocoupler";
+    attribute part_number     = part_no;
+    attribute datasheet       = "Sharp D2-A03101EN";
+
+    // ── Input (IRED) — abs max + electro-optical table ──
+    attribute forward_voltage = 1.2V;    // typ @ IF=20 mA (1.4 V max)
+    attribute if_max          = 50mA;    // absolute maximum forward current
+    attribute ifm_peak        = 1A;      // peak, pulse<=100us duty 0.001
+    attribute v_r_max         = 6V;      // IRED reverse voltage abs max
+    attribute p_diode         = 70mW;    // IRED power dissipation
+    attribute c_terminal_pf   = 30.0;    // Ct typ, V=0 f=1kHz (250 max)
+
+    // ── Output (phototransistor) ──
+    attribute v_ceo           = 80V;     // BVceo min (35 V for date codes
+                                         // before "P7"/Jul 2002 — modern
+                                         // stock is the 80 V screen)
+    attribute v_eco           = 6V;      // emitter-collector abs max
+    attribute ic_max          = 50mA;    // collector current abs max
+    attribute p_collector     = 150mW;   // collector dissipation
+    attribute p_total         = 200mW;   // total package dissipation
+    attribute i_dark_na       = 100.0;   // ICEO max @ VCE=50V, IF=0
+    attribute vce_sat         = 0.1V;    // typ @ IF=20mA IC=1mA (0.2 max)
+
+    // ── Transfer: CTR envelope at the rank point (IF=5 mA, VCE=5 V) ──
+    attribute ctr_min_pct     = ctr_min_pct;
+    attribute ctr_max_pct     = ctr_max_pct;
+
+    // CTR vs IF, NORMALIZED to the IF=5 mA rank point (Fig.6 typical
+    // curve, VCE=5 V, 25 degC; graph data "for reference not
+    // guarantee"). Non-monotonic: peaks near 2 mA, ROLLS OFF hard
+    // above; below 1 mA Sharp's design guide additionally warns CTR
+    // VARIATION increases (the dashed region of Fig.6).
+    attribute ctr_norm_100ua  = 0.20;    // read from Fig.6
+    attribute ctr_norm_500ua  = 0.55;    // read from Fig.6
+    attribute ctr_norm_1ma    = 0.90;    // read from Fig.6
+    attribute ctr_norm_2ma    = 1.35;    // curve peak, read from Fig.6
+    attribute ctr_norm_5ma    = 1.00;    // definition point
+    attribute ctr_norm_10ma   = 0.60;    // read from Fig.6
+    attribute if_ctr_stable_min = 1mA;   // design guide: below this,
+                                         // CTR variation increases
+
+    // CTR vs temperature, normalized to 25 degC (Fig.9, IF=5 mA
+    // VCE=5 V curve): the derating a hot enclosure design must carry.
+    attribute ctr_temp_m30c   = 1.12;    // read from Fig.9
+    attribute ctr_temp_85c    = 0.70;    // read from Fig.9
+    attribute ctr_temp_100c   = 0.60;    // read from Fig.9
+
+    // IRED aging (Design Considerations): plan the worst-case chain
+    // as ctr_min_pct x temp factor x this.
+    attribute ctr_aging_5yr   = 0.50;    // 50% degradation over 5 years
+
+    // ── Dynamics (VCE=2 V, IC=2 mA, RL=100 ohm) ──
+    // Response time SCALES WITH LOAD RESISTANCE (Fig.13: ~100x from
+    // RL=100 ohm to 10 kohm) — a 10k collector pullup is a ~kHz-class
+    // channel, not the 80 kHz headline.
+    attribute t_rise_us       = 4.0;     // typ (18 max)
+    attribute t_fall_us       = 3.0;     // typ (18 max)
+    attribute f_cutoff_khz    = 80.0;    // typ, -3dB @ VCE=5V IC=2mA RL=100
+
+    // ── Isolation barrier ──
+    attribute v_iso_kv        = 5.0;     // Viso(rms), 1 min, 40-60%RH
+    attribute r_iso_gohm      = 100.0;   // typ (5x10^10 min) @ DC500V
+    attribute c_iso_pf        = 0.6;     // floating capacitance typ (1.0 max)
+
+    // GLACIER has no optocoupler device kind yet — the class stamps
+    // nothing into the DC solve; the LED-side conduction and the
+    // CTR-coupled collector current are recorded as the solver
+    // integration queue item. Data first; consumers next (doctrine).
+}
+
+layout PC817 {
+    package DIP-4;
+}
+
+symbol PC817 {
+    left   { A, K }
+    right  { C, E }
+}

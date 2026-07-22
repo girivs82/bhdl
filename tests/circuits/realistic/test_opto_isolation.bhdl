@@ -1,0 +1,65 @@
+// Classic optocoupler isolation stage — the PC817 textbook circuit:
+// a 5 V logic-side control signal drives the IRED through a series
+// resistor; across the 5 kVrms barrier, an isolated 12 V domain reads
+// the phototransistor with a collector pullup. TWO ground domains on
+// one board — the whole point of the part — kept apart everywhere
+// except inside the PC817's package.
+//
+// Drive point sits where the datasheet wants it: (5 - 1.2 Vf) / 330
+// = 11.5 mA IF — above the 1 mA CTR-variation floor (design guide),
+// past the Fig.6 peak, well under the 50 mA abs max. Worst-case sink
+// check the entity data enables: 11.5 mA x 50% min CTR x 0.6 hot x
+// 0.5 aged = 1.7 mA available IC vs the 2.4 mA the 4.7k pullup asks —
+// which is exactly why real designs order ranked parts (PC817X2,
+// rank B) or drive harder; the fixture carries the unranked envelope
+// deliberately so the sign-off story stays honest.
+
+import { PC817 } from "bhdl-stdlib/optoelectronic/pc817.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Pin_Header_01x03 } from "bhdl-stdlib/connectors/pin_header.bhdl";
+
+board OptoIsolation {
+    // Logic-side domain.
+    port V5:  power in = 5V @ 20mA;
+    port GND: ground;
+
+    // Field-side domain — isolated 12 V, its own return.
+    port V12:     power in = 12V @ 20mA;
+    port GND_ISO: ground;
+
+    // Logic-side interface: 5 V, control input, logic return.
+    J_CTL: Pin_Header_01x03();
+    @V5 -> J_CTL.1;
+    J_CTL.2 -> CTL;
+    J_CTL.3 -> @GND;
+    @V5 -> c_5: Cap(100nF).1;
+    c_5.2 -> @GND;
+
+    // Drive the IRED: CTL high sources ~11.5 mA through 330R.
+    CTL -> r_led: Res(330Ω).1;
+    r_led.2 -> U1: PC817().A;
+    U1.K -> @GND;
+
+    // Field side: collector pullup to 12 V, emitter to isolated
+    // return; OUT_ISO swings 12 V -> VCE(sat) 0.1 V when driven.
+    @V12 -> r_pu: Res(4.7kΩ).1;
+    r_pu.2 -> OUT_ISO;
+    OUT_ISO -> U1.C;
+    U1.E -> @GND_ISO;
+    @V12 -> c_12: Cap(100nF).1;
+    c_12.2 -> @GND_ISO;
+
+    // Field-side interface: 12 V, isolated output, isolated return.
+    J_OUT: Pin_Header_01x03();
+    @V12 -> J_OUT.1;
+    OUT_ISO -> J_OUT.2;
+    J_OUT.3 -> @GND_ISO;
+}
+
+layout OptoIsolation {
+    layer_stackup 2;
+    outline rect 35 25;
+    place J_CTL at (2.6, 12);
+    place J_OUT at (32.4, 12);
+}
