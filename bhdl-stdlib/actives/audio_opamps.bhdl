@@ -1,0 +1,128 @@
+// Audio operational amplifiers — the two parts half a century of audio
+// gear is built on, neither with vendor models our chain can ingest.
+// The datasheet is the model (campaign doctrine); every number cites
+// its TI datasheet, ±15 V characterization at 25 degC unless noted.
+// Attribute names mirror the lmv358/opamp convention so the existing
+// consumers (GLACIER OpAmp device, precision-path grading via
+// input_offset, gbw) read these identically.
+//
+// The two parts embody OPPOSITE input technologies, and the attribute
+// sets carry each one's defining currency:
+//   NE5532 — bipolar: 5 nV/rtHz voltage noise (the audio-preamp spec)
+//            and 600-ohm drive capability, at the cost of 200 nA bias
+//            current (high-Z sources see i_bias x R_source as noise);
+//   TL072  — JFET: 65 pA bias current (high-impedance sources — the
+//            guitar/piezo/RIAA front-end spec), at the cost of 3x the
+//            voltage noise.
+// e_noise_nv is a NEW identity attribute (nV/rtHz at 1 kHz) — the
+// number audio designers select on first.
+
+// NE5532 — dual low-noise bipolar audio opamp (TI SLOS075).
+entity NE5532(part_no: string = "NE5532P") {
+    pin OUT_A:  signal inout;  // output A                       (pin 1)
+    pin IN_A_N: signal inout;  // inverting input A              (pin 2)
+    pin IN_A_P: signal inout;  // non-inverting input A          (pin 3)
+    pin V_MINUS: signal inout; // negative supply                (pin 4)
+    pin IN_B_P: signal inout;  // non-inverting input B          (pin 5)
+    pin IN_B_N: signal inout;  // inverting input B              (pin 6)
+    pin OUT_B:  signal inout;  // output B                       (pin 7)
+    pin V_PLUS: signal inout;  // positive supply                (pin 8)
+
+    attribute component_class    = "opamp";
+    attribute part_number        = part_no;
+    attribute datasheet          = "TI SLOS075";
+    attribute channels           = 2;
+    attribute family             = "bipolar-low-noise-audio";
+
+    // ── Small-signal (±15 V, 25 degC) ──
+    attribute open_loop_gain     = 100000;   // 100 dB typ
+    attribute gain_bandwidth     = 10MHz;
+    attribute gbw_mhz            = 10.0;
+    attribute slew_rate          = 9V;       // 9 V/µs typ
+    attribute input_offset       = 0.5mV;    // typ (4 mV max)
+    attribute i_bias_na          = 200.0;    // nA typ (the bipolar cost)
+    attribute input_resistance   = 300kΩ;    // typ, differential
+    attribute output_resistance  = 0.3Ω;     // closed-loop, 30 dB gain
+
+    // ── The audio identity ──
+    attribute e_noise_nv         = 5.0;      // nV/rtHz at 1 kHz, typ
+    attribute drive_load_min     = 600Ω;     // rated 10 Vrms into 600 ohm
+
+    // ── Supply (±3 V to ±20 V; stored as total span) ──
+    attribute supply_voltage_min = 6.0;
+    attribute supply_voltage_max = 40.0;
+    attribute i_supply           = 8mA;      // package typ, ±15 V
+
+    simulation {
+        model {
+            node V_PLUS draws = self.i_supply;
+        }
+    }
+}
+
+layout NE5532 {
+    package SOIC-8;
+}
+
+symbol NE5532 {
+    left   { IN_A_P, IN_A_N, IN_B_P, IN_B_N }
+    right  { OUT_A, OUT_B }
+    top    { V_PLUS }
+    bottom { V_MINUS }
+}
+
+// TL072 — dual JFET-input opamp (TI SLOS080).
+entity TL072(part_no: string = "TL072CP") {
+    pin OUT_A:  signal inout;  // output A                       (pin 1)
+    pin IN_A_N: signal inout;  // inverting input A              (pin 2)
+    pin IN_A_P: signal inout;  // non-inverting input A          (pin 3)
+    pin V_MINUS: signal inout; // negative supply                (pin 4)
+    pin IN_B_P: signal inout;  // non-inverting input B          (pin 5)
+    pin IN_B_N: signal inout;  // inverting input B              (pin 6)
+    pin OUT_B:  signal inout;  // output B                       (pin 7)
+    pin V_PLUS: signal inout;  // positive supply                (pin 8)
+
+    attribute component_class    = "opamp";
+    attribute part_number        = part_no;
+    attribute datasheet          = "TI SLOS080";
+    attribute channels           = 2;
+    attribute family             = "jfet-input-audio";
+
+    // ── Small-signal (±15 V, 25 degC) ──
+    attribute open_loop_gain     = 200000;   // 200 V/mV typ
+    attribute gain_bandwidth     = 3MHz;
+    attribute gbw_mhz            = 3.0;
+    attribute slew_rate          = 13V;      // 13 V/µs typ
+    attribute input_offset       = 3mV;      // typ (10 mV max, C grade)
+    attribute i_bias_na          = 0.065;    // 65 pA typ — the JFET identity
+    // True input resistance is the 10^12 Ω JFET class; the attribute
+    // grammar tops out at MΩ literals — i_bias_na above is the real
+    // selection currency anyway.
+    attribute input_resistance   = 1000MΩ;
+    attribute output_resistance  = 200Ω;     // open-loop class
+
+    // ── The audio identity ──
+    attribute e_noise_nv         = 18.0;     // nV/rtHz at 1 kHz, typ
+
+    // ── Supply (±3.5 V to ±18 V; stored as total span) ──
+    attribute supply_voltage_min = 7.0;
+    attribute supply_voltage_max = 36.0;
+    attribute i_supply           = 2.8mA;    // package typ (1.4 mA/ch)
+
+    simulation {
+        model {
+            node V_PLUS draws = self.i_supply;
+        }
+    }
+}
+
+layout TL072 {
+    package SOIC-8;
+}
+
+symbol TL072 {
+    left   { IN_A_P, IN_A_N, IN_B_P, IN_B_N }
+    right  { OUT_A, OUT_B }
+    top    { V_PLUS }
+    bottom { V_MINUS }
+}
