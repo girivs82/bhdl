@@ -282,6 +282,69 @@ pub fn place_and_route_best_of(
         }
     }
 
+    // ESCAPE-DEMAND TIER: still imperfect after the fanout tier →
+    // re-place with IC pin rows projecting fanout-corridor demand
+    // into the density map (scale 2.0) AND fanout-first pre-drops.
+    // The two heavy levers COMPOSE: the aisle gives fanout-first the
+    // corridor room, the pre-drops give the plane pads their vias
+    // before signals fill it — measured, this exact combination is
+    // what cleared s99's conserved congestion debt to 0/0 (the
+    // seed's first perfect ever; escape alone and fanout alone both
+    // measured 1unc, scale 1.0 insufficient). Global perturbation,
+    // so like every heavy lever it only runs where dominance can
+    // police it.
+    let pre_escape_imperfect = best.as_ref().map_or(true, |b| {
+        let total_sinks: usize = b
+            .board
+            .nets
+            .iter()
+            .filter(|n| n.pins.len() >= 2)
+            .map(|n| n.pins.len())
+            .sum();
+        b.metrics.connected_sinks < total_sinks
+            || !b.drc_violations.is_empty()
+            || legalization::residual_pad_overlaps(&b.board) > 0
+    });
+    if pre_escape_imperfect {
+        for trial in 0..trials {
+            info!("=== Escape-demand trial {}/{} ===", trial + 1, trials);
+            let mut trial_board = board.clone();
+            trial_board.config.escape_demand = 2.0;
+            trial_board.config.fanout_first = true;
+            let result = place_and_route(
+                trial_board,
+                config.clone(),
+                base_seed.wrapping_add(trial as u64),
+            )?;
+            let dominated = best
+                .as_ref()
+                .map_or(false, |b| trial_dominated(&result, b, has_measured));
+            if !dominated {
+                info!(
+                    "Escape-demand trial {} is new best: {} connected sink(s), HPWL={:.1}mm",
+                    trial + 1,
+                    result.metrics.connected_sinks,
+                    result.metrics.hpwl_mm
+                );
+                let total_sinks: usize = result
+                    .board
+                    .nets
+                    .iter()
+                    .filter(|n| n.pins.len() >= 2)
+                    .map(|n| n.pins.len())
+                    .sum();
+                let r_over = legalization::residual_pad_overlaps(&result.board);
+                let perfect = result.metrics.connected_sinks >= total_sinks
+                    && result.drc_violations.is_empty()
+                    && r_over == 0;
+                best = Some(result);
+                if perfect {
+                    break;
+                }
+            }
+        }
+    }
+
     // P5 STAGE 3 — measured rewards feed PLACEMENT: when a declared
     // noise budget FAILS on measured numbers, invert the coupling
     // model into the separation the budget demands —

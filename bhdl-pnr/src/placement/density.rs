@@ -88,6 +88,18 @@ pub fn compute_density_forces(board: &Board) -> (Forces, f64) {
     // 1. Stamp component density onto grid
     stamp_components(&mut grid, board);
 
+    // 1b. Escape-demand stamping (opt-in): IC pin rows demand routing
+    // CORRIDOR beyond the package edge, not just body area. Config
+    // sets it per trial (the best-of escape tier); the env var forces
+    // it globally for experiments.
+    let escape_scale = std::env::var("BHDL_PNR_ESCAPE_DEMAND")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(board.config.escape_demand);
+    if escape_scale > 0.0 {
+        stamp_escape_demand(&mut grid, board, escape_scale);
+    }
+
     // 2. Inject obstacles (board boundary)
     inject_obstacles(&mut grid, board);
 
@@ -147,6 +159,83 @@ fn stamp_components(grid: &mut DensityGrid, board: &Board) {
 
                 let idx = k * grid.m + j;
                 grid.rho[idx] += inflation * overlap_area / bin_area;
+            }
+        }
+    }
+}
+
+/// Escape-demand stamping — the s99 lesson made structural: a QFP pin
+/// row needs FANOUT CORRIDOR beyond the package edge (each escape lane
+/// is ~trace+spacing wide), and a placer that only models body area
+/// lets neighbors crowd the band; the router then loses a sink no
+/// completion rung can recover (conserved congestion debt). Each
+/// pad-bearing side of an IC (>=8 pins) projects fractional density
+/// into a band outward from the envelope: pads_on_side x escape pitch
+/// / side_len, over ESCAPE_DEPTH_MM. The Poisson field then keeps
+/// OTHER components out of the aisle, the same way it resolves body
+/// overlap.
+fn stamp_escape_demand(grid: &mut DensityGrid, board: &Board, scale: f64) {
+    const ESCAPE_DEPTH_MM: f64 = 2.5;
+    const ESCAPE_PITCH_MM: f64 = 0.3;
+    let bin_area = grid.bin_w * grid.bin_h;
+    for comp in &board.components {
+        if comp.pins.len() < 8 {
+            continue;
+        }
+        let (cx, cy, hw, hh) = comp.envelope();
+        // Classify pads by their nearest envelope side: L, R, B, T.
+        let cos_t = comp.theta.cos();
+        let sin_t = comp.theta.sin();
+        let mut counts = [0usize; 4];
+        for pin in &comp.pins {
+            if pin.unplaced {
+                continue;
+            }
+            let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
+            let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+            let dl = gx - (cx - hw);
+            let dr = (cx + hw) - gx;
+            let db = gy - (cy - hh);
+            let dt = (cy + hh) - gy;
+            let m = dl.min(dr).min(db).min(dt);
+            if m == dl {
+                counts[0] += 1;
+            } else if m == dr {
+                counts[1] += 1;
+            } else if m == db {
+                counts[2] += 1;
+            } else {
+                counts[3] += 1;
+            }
+        }
+        for (side, &n_pads) in counts.iter().enumerate() {
+            if n_pads == 0 {
+                continue;
+            }
+            let (x_lo, x_hi, y_lo, y_hi, side_len) = match side {
+                0 => (cx - hw - ESCAPE_DEPTH_MM, cx - hw, cy - hh, cy + hh, 2.0 * hh),
+                1 => (cx + hw, cx + hw + ESCAPE_DEPTH_MM, cy - hh, cy + hh, 2.0 * hh),
+                2 => (cx - hw, cx + hw, cy - hh - ESCAPE_DEPTH_MM, cy - hh, 2.0 * hw),
+                _ => (cx - hw, cx + hw, cy + hh, cy + hh + ESCAPE_DEPTH_MM, 2.0 * hw),
+            };
+            if side_len < 1e-6 {
+                continue;
+            }
+            let demand = (scale * n_pads as f64 * ESCAPE_PITCH_MM / side_len).min(0.9);
+            let j_lo = ((x_lo - grid.x0) / grid.bin_w).floor().max(0.0) as usize;
+            let j_hi = ((x_hi - grid.x0) / grid.bin_w).ceil().min(grid.m as f64) as usize;
+            let k_lo = ((y_lo - grid.y0) / grid.bin_h).floor().max(0.0) as usize;
+            let k_hi = ((y_hi - grid.y0) / grid.bin_h).ceil().min(grid.n as f64) as usize;
+            for k in k_lo..k_hi {
+                for j in j_lo..j_hi {
+                    let bin_x_lo = grid.x0 + j as f64 * grid.bin_w;
+                    let bin_y_lo = grid.y0 + k as f64 * grid.bin_h;
+                    let ox =
+                        (x_hi.min(bin_x_lo + grid.bin_w) - x_lo.max(bin_x_lo)).max(0.0);
+                    let oy =
+                        (y_hi.min(bin_y_lo + grid.bin_h) - y_lo.max(bin_y_lo)).max(0.0);
+                    grid.rho[k * grid.m + j] += demand * ox * oy / bin_area;
+                }
             }
         }
     }

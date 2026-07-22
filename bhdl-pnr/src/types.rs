@@ -59,6 +59,13 @@ pub struct BoardConfig {
     /// runs only as a best-of FALLBACK tier, never by default.
     #[serde(default)]
     pub fanout_first: bool,
+    /// Escape-demand density scale: >0 makes IC pin rows project
+    /// fanout-corridor demand into the placer's density map (s99's
+    /// conserved congestion debt cleared at 2.0 — the row finally
+    /// got its aisle at placement time). Global placement
+    /// perturbation, so it runs only as a best-of fallback tier.
+    #[serde(default)]
+    pub escape_demand: f64,
     pub min_spacing_mm: f64,
     pub edge_clearance_mm: f64,
     pub fixed_placements: Vec<FixedPlacement>,
@@ -91,6 +98,7 @@ impl Default for BoardConfig {
             min_trace_width_mm: 0.15,
             si_return_cost: false,
             fanout_first: false,
+            escape_demand: 0.0,
             min_spacing_mm: 0.15,
             edge_clearance_mm: 0.5,
             fixed_placements: Vec::new(),
