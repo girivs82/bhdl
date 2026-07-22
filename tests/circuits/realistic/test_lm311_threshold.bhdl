@@ -1,0 +1,65 @@
+// LM311 threshold detector — the datasheet's own single-supply logic
+// configuration (SLCS007K §6.6 "VCC+ = 4.5 V, VCC− = 0" column):
+// emitter grounded, collector pulled up 1k to the 5 V rail, so the
+// output swings TTL levels (VOL 0.23 V typ at the 8 mA-class point;
+// the 1k pullup asks ~4.8 mA when low). A 10k/10k divider sets the
+// 2.5 V threshold on IN−, the signal enters IN+ through 10k, and 1M
+// from the collector back to IN+ gives ~25 mV of hysteresis — the
+// classic recipe. BALANCE and BAL/STRB stay open: that is the
+// datasheet's characterization baseline (note 1), not an omission.
+
+import { LM311 } from "bhdl-stdlib/actives/lm311.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Pin_Header_01x03 } from "bhdl-stdlib/connectors/pin_header.bhdl";
+
+board Lm311Threshold {
+    port VCC: power in = 5V @ 30mA;
+    port GND: ground;
+
+    // Signal-side interface: 5 V, signal in, return.
+    J_IN: Pin_Header_01x03();
+    @VCC -> J_IN.1;
+    J_IN.2 -> SIG;
+    J_IN.3 -> @GND;
+    @VCC -> c_vcc: Cap(100nF).1;
+    c_vcc.2 -> @GND;
+
+    // 2.5 V threshold divider, comparator inputs.
+    @VCC -> r_t1: Res(10kΩ).1;
+    r_t1.2 -> VTH;
+    VTH -> r_t2: Res(10kΩ).1;
+    r_t2.2 -> @GND;
+
+    U1: LM311();
+    @VCC -> U1.V_PLUS;
+    U1.V_MINUS -> @GND;
+    VTH -> U1.IN_N;
+    SIG -> r_in: Res(10kΩ).1;
+    r_in.2 -> INP;
+    INP -> U1.IN_P;
+
+    // Uncommitted output stage, wired the single-supply way: emitter
+    // referenced to ground, collector to the 1k pullup.
+    U1.EMIT_OUT -> @GND;
+    @VCC -> r_pu: Res(1kΩ).1;
+    r_pu.2 -> OUT;
+    OUT -> U1.COL_OUT;
+
+    // Hysteresis: ~25 mV band from the 10k source impedance vs 1M.
+    OUT -> r_hys: Res(1MΩ).1;
+    r_hys.2 -> INP;
+
+    // Output interface.
+    J_OUT: Pin_Header_01x03();
+    @VCC -> J_OUT.1;
+    OUT -> J_OUT.2;
+    J_OUT.3 -> @GND;
+}
+
+layout Lm311Threshold {
+    layer_stackup 2;
+    outline rect 40 28;
+    place J_IN at (2.6, 13);
+    place J_OUT at (37.4, 13);
+}

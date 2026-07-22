@@ -1,0 +1,92 @@
+// LM311 — single high-speed differential comparator (the fast classic:
+// 165 ns where the LM393 class is ~1.3 µs). No vendor SPICE our chain
+// ingests, no IBIS — the datasheet is the model: every number cites TI
+// SLCS007K (Rev. March 2017), VCC± = 15 V at 25 degC unless noted, from
+// the LM311 column (the 111/211 grades are tighter).
+//
+// The defining electrical fact: the output transistor is UNCOMMITTED AT
+// BOTH ENDS — an open COLLECTOR (pin 7) and an open EMITTER (pin 1).
+// That is what the part is FOR: loads referenced to ground, VCC+ or
+// VCC−, relay/lamp drive to a 40 V rail at 50 mA, level translation
+// between isolated rails. It also means BOTH output pins must always be
+// wired — a floating emitter under a collector load (or vice versa)
+// leaves the output transistor with no circuit at all; the check block
+// carries that rule.
+//
+// BAL/STRB doctrine (SLCS007K note 4): the strobe must be CURRENT
+// driven at −3 to −5 mA and must never be shorted directly to ground.
+// Characterization baseline (note 1) is BALANCE and BAL/STRB open —
+// leaving them unconnected is the datasheet's own default state, so no
+// connectivity rule applies to them.
+
+entity LM311(part_no: string = "LM311P") {
+    pin EMIT_OUT: signal inout; // output emitter — uncommitted    (pin 1)
+    pin IN_P:     signal in;    // non-inverting input             (pin 2)
+    pin IN_N:     signal in;    // inverting input                 (pin 3)
+    pin V_MINUS:  signal inout; // negative supply (GND single-supply) (pin 4)
+    // BALANCE/BAL_STRB are input-stage transistor terminals, not logic
+    // inputs — open is the datasheet's characterization baseline
+    // (note 1), so they are `inout` (a floating-input ERC on them
+    // would contradict the part's own doctrine).
+    pin BALANCE:  signal inout; // offset balance                  (pin 5)
+    pin BAL_STRB: signal inout; // balance/strobe                  (pin 6)
+    pin COL_OUT:  signal inout; // output collector — uncommitted  (pin 7)
+    pin V_PLUS:   power in;     // positive supply                 (pin 8)
+
+    attribute component_class = "comparator";
+    attribute part_number     = part_no;
+    attribute datasheet       = "TI SLCS007K";
+    attribute channels        = 1;
+    attribute output_type     = "open-collector-emitter";
+
+    // ── Supply (§6.3 rec. operating; §6.6 ICC rows) ──
+    attribute vcc_min      = 3.5V;    // total span V_CC+ − V_CC−
+    attribute vcc_max      = 30V;
+    attribute i_quiescent  = 5.1mA;   // ICC+ typ, output low (7.5 max)
+
+    // ── Input accuracy (LM311 column, 25 degC) ──
+    attribute v_offset      = 2mV;    // typ
+    attribute v_offset_max  = 7.5mV;  // max, 25 degC (10 mV full range)
+    attribute i_bias        = 100nA;  // typ (250 nA max 25 degC)
+    attribute i_offset      = 6nA;    // typ (50 nA max)
+    attribute open_loop_gain = 200000; // AVD 200 V/mV typ (40 min)
+
+    // ── Output stage: one transistor, both ends yours ──
+    attribute i_sink_max    = 50mA;   // rated switching current
+    attribute v_ol          = 0.75V;  // typ at IOL = 50 mA (1.5 max)
+    // The 5 V logic point (VCC+ = 4.5 V, VCC− = 0, IOL = 8 mA):
+    attribute v_ol_logic    = 0.23V;  // typ (0.4 max) — TTL-compatible low
+    attribute col_v_max     = 40V;    // collector-to-VCC− abs max (LM311)
+    attribute emit_v_max    = 30V;    // emitter-to-VCC− abs max
+
+    // ── Strobe (note 4: current-driven, NEVER shorted to ground) ──
+    attribute i_strobe_ma   = 3.0;    // low-level strobe current, mA
+
+    // ── Dynamics (±15 V, RC = 500 Ω to 5 V, 5 mV overdrive) ──
+    attribute t_resp_lh_ns  = 115.0;  // response, low→high output
+    attribute t_resp_hl_ns  = 165.0;  // response, high→low output
+
+    simulation {
+        model {
+            node V_PLUS draws = self.i_quiescent;
+        }
+        // The single output transistor needs BOTH its terminals in a
+        // circuit: collector use ⇒ emitter must be referenced (ground
+        // or VCC−); emitter use ⇒ collector must be tied to a rail.
+        check {
+            require connected(COL_OUT) else "COL_OUT floating: the output transistor's collector must be in a circuit — tie to the pullup rail when using the emitter output (SLCS007K)";
+            require connected(EMIT_OUT) else "EMIT_OUT floating: the output transistor's emitter must be referenced (ground/VCC-) when using the collector output (SLCS007K)";
+        }
+    }
+}
+
+layout LM311 {
+    package SOIC-8;
+}
+
+symbol LM311 {
+    left   { IN_P, IN_N, BALANCE, BAL_STRB }
+    right  { COL_OUT, EMIT_OUT }
+    top    { V_PLUS }
+    bottom { V_MINUS }
+}
