@@ -23,7 +23,27 @@ entity Diode(vf: voltage = 0.7V) {
     attribute t_rr_ns         = 4.0;      // reverse recovery
     attribute i_f_max         = 300mA;    // continuous forward
     attribute v_r_max         = 100V;     // repetitive reverse
+    attribute data_source     = "class-point: 1N4148 (Vishay 81857)";
     attribute kicad_symbol = "Device:D";
 }
 
-alias SchottkyDiode = Diode;
+// Schottky is NOT a silicon junction — aliasing it to Diode silently
+// inherited 1N4148 parameters (Is 2.5nA, n 1.75) that are orders of
+// magnitude wrong for a Schottky barrier. Own entity, own class
+// point: the 1N5819 (the ubiquitous small Schottky, Vishay
+// datasheet + published SPICE model: Is 31.7µA, n 1.373, no reverse
+// recovery, Vf 0.32V at 100mA).
+entity SchottkyDiode(vf: voltage = 0.32V) {
+    pin A: signal inout;
+    pin K: signal inout;
+
+    attribute component_class = "diode";
+    attribute forward_voltage = vf;
+    attribute spice_is        = 3.17e-5;
+    attribute spice_n         = 1.373;
+    attribute c_junction_pf   = 110.0;  // Schottky barriers are FAT
+    attribute i_f_max         = 1A;
+    attribute v_r_max         = 40V;
+    attribute data_source     = "class-point: 1N5819 (Vishay)";
+    attribute kicad_symbol = "Device:D_Schottky";
+}

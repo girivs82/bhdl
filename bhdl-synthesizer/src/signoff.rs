@@ -85,6 +85,10 @@ pub struct SignoffRow {
     /// Stage-C value-stepping recommendation when the part is over its ripple
     /// target (e.g. `"4.7µH → 6.8µH (ratio 0.41→0.28)"`), else `None`.
     pub step: Option<String>,
+    /// Rating provenance: `mpn:<MPN>` (catalog-bound), `declared`
+    /// (author's claim), a stdlib `data_source` class point, or
+    /// `unrated (…)` when no rating claim exists at all.
+    pub source: Option<String>,
 }
 
 /// Operating point of a switching (buck) converter, recovered from the
@@ -1374,13 +1378,52 @@ pub fn compute_signoff(
         // family's blind fallback stamp. Parse-aware: a declaration that
         // never evaluated (an unbound param leaves the raw expression, e.g.
         // `"voltage"`) must not eclipse a parseable stamped rating.
+        // 0-valued ratings are the UNDECLARED sentinel (an inductor's
+        // `Ind(10µH)` with no rating claim), not a zero-ampere part —
+        // they read as ABSENT so the verdict is honestly NO DATA
+        // instead of a division against a phantom.
+        let nz = |v: f64| v > 0.0;
         let rating = if inst.attributes.contains_key("mpn") {
-            inst.attributes.get(rating_key).and_then(|s| parse_si(s))
+            inst.attributes
+                .get(rating_key)
+                .and_then(|s| parse_si(s))
+                .filter(|r| nz(*r))
         } else {
             inst.attributes
                 .get(&format!("declared_{rating_key}"))
                 .and_then(|s| parse_si(s))
-                .or_else(|| inst.attributes.get(rating_key).and_then(|s| parse_si(s)))
+                .filter(|r| nz(*r))
+                .or_else(|| {
+                    inst.attributes
+                        .get(rating_key)
+                        .and_then(|s| parse_si(s))
+                        .filter(|r| nz(*r))
+                })
+        };
+        // Rating PROVENANCE for the report: which claim is this margin
+        // graded against? An MPN-bound catalog rating, the author's
+        // declaration, a stdlib class point (data_source attribute),
+        // or nothing.
+        let source = if rating.is_none() {
+            inst.attributes
+                .get("data_source")
+                .map(|s| format!("unrated ({s})"))
+                .or_else(|| Some("unrated".to_string()))
+        } else if let Some(mpn) = inst.attributes.get("mpn") {
+            Some(format!("mpn:{mpn}"))
+        } else if inst
+            .attributes
+            .get(&format!("declared_{rating_key}"))
+            .and_then(|s| parse_si(s))
+            .filter(|r| nz(*r))
+            .is_some()
+        {
+            Some("declared".to_string())
+        } else {
+            inst.attributes
+                .get("data_source")
+                .cloned()
+                .or_else(|| Some("declared".to_string()))
         };
         let derated = stress.map(|s| s * derate);
         let margin = match (rating, derated) {
@@ -1408,6 +1451,7 @@ pub fn compute_signoff(
             dnp,
             ripple,
             step,
+            source,
         });
     }
 
@@ -1468,6 +1512,7 @@ pub fn compute_signoff(
             dnp,
             ripple: Some(format!("P_pass={:.3}W (stress block)", p_diss)),
             step: None,
+            source: None,
         });
     }
 
@@ -1528,7 +1573,8 @@ pub fn compute_signoff(
                     ),
                 }),
                 step: None,
-            });
+            source: None,
+        });
         }
 
         // i_q_max vs the part's declared quiescent current.
@@ -1565,7 +1611,8 @@ pub fn compute_signoff(
                     ),
                 }),
                 step: None,
-            });
+            source: None,
+        });
         }
 
         // efficiency_min: no loss model surfaced to sign-off yet — always an
@@ -1587,7 +1634,8 @@ pub fn compute_signoff(
                     "spec ≥ {spec_txt}; achieved UNCHECKED (loss model not yet surfaced)"
                 )),
                 step: None,
-            });
+            source: None,
+        });
         }
     }
 
@@ -1722,8 +1770,8 @@ pub fn format_signoff_report(rows: &[SignoffRow]) -> Option<String> {
     }
     let mut out = String::new();
     out.push_str("\n## Sign-off report (DC operating point, post-snap)\n\n");
-    out.push_str("| Ref des | Class | Axis | Value | Stress | Derated | Rating | Margin | Ripple | Verdict |\n");
-    out.push_str("|---------|-------|------|-------|--------|---------|--------|--------|--------|---------|\n");
+    out.push_str("| Ref des | Class | Axis | Value | Stress | Derated | Rating | Margin | Ripple | Source | Verdict |\n");
+    out.push_str("|---------|-------|------|-------|--------|---------|--------|--------|--------|--------|---------|\n");
 
     let (mut signed, mut under, mut over, mut nodata) = (0, 0, 0, 0);
     for r in rows {
@@ -1749,7 +1797,7 @@ pub fn format_signoff_report(rows: &[SignoffRow]) -> Option<String> {
             r.verdict.label().to_string()
         };
         out.push_str(&format!(
-            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
+            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
             r.display,
             r.class,
             r.axis,
@@ -1759,6 +1807,7 @@ pub fn format_signoff_report(rows: &[SignoffRow]) -> Option<String> {
             fmt_opt(r.rating, unit),
             margin,
             r.ripple.as_deref().unwrap_or("—"),
+            r.source.as_deref().unwrap_or("—"),
             verdict,
         ));
     }

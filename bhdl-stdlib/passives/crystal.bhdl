@@ -30,6 +30,7 @@ entity Crystal(part_no: string = "", freq_mhz: float = 16.0) {
     attribute c_shunt_pf      = 5.0;    // C0 shunt (max 7 pF on ABM8G)
     attribute esr             = 80Ω;    // max, HC-49/SMD 16 MHz class
     attribute drive_level_max_mw = 0.1; // 100 µW class drive limit
+    attribute data_source     = "class-point: HC-49/3225 16MHz AT-cut class";
 }
 
 entity Crystal_GND2(part_no: string = "", freq_mhz: float = 16.0) {

@@ -30,6 +30,7 @@ entity SW_Push(part_no: string = "") {
     attribute contact_resistance = 0.1Ω;
     attribute i_max = 50mA;
     attribute v_max = 24V;
+    attribute data_source = "class-point: Omron B3F";
 }
 
 entity SW_Tactile_4Pad(part_no: string = "") {

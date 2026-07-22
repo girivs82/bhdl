@@ -22,5 +22,6 @@ entity LED(color: string) {
     // ideal step at Vf.
     attribute r_dynamic       = 12Ω;
     attribute c_junction_pf   = 30.0;
+    attribute data_source     = "class-point: Kingbright APT1608 family";
     attribute kicad_symbol = "Device:LED";
 }

@@ -42,6 +42,7 @@ entity BJT(
     // numbers override at the instance.
     attribute vce_sat  = 0.2V;
     attribute f_t_mhz  = 300.0;
+    attribute data_source = "class-point: onsemi 2N3904 (vce_sat, fT)";
     attribute kicad_symbol    = "Device:Q_NPN_BCE";
 }
 

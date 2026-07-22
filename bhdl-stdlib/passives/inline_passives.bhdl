@@ -23,4 +23,5 @@ entity Bead(part_no: string = "") {
     attribute impedance_100mhz = 600Ω;
     attribute dcr              = 0.38Ω;
     attribute i_rated          = 500mA;
+    attribute data_source      = "class-point: Murata BLM18AG601SN1";
 }
