@@ -1,0 +1,87 @@
+// SN74HC595 — 8-bit serial-in/parallel-out shift register with output
+// latch and 3-state outputs; the hobby-to-production workhorse for pin
+// expansion. Same doctrine as logic_74hc.bhdl: no vendor SPICE, most
+// vendors no IBIS — the datasheet is the model. Every number cites the
+// TI SN74HC595 datasheet (SCLS041), VCC = 4.5 V column at 25 degC
+// unless noted.
+//
+// The parallel outputs are the STRONGER bus-driver class of the HC
+// family (rated ±6 mA at 4.5 V vs the gate outputs' ±5.2 mA); they are
+// modeled with the family HC_OUT stage in the DERIVED IBIS file
+// (bhdl-stdlib/ibis/sn74hc_5v.ibs — [Component] SN74HC595 there maps
+// this pinout), which the file's provenance header covers: the stage
+// slope comes from the same published VOL/IOL family points, and the
+// 595's slightly stronger rating makes that model CONSERVATIVE for it.
+//
+// Cpd is deliberately NOT carried: the 595's per-device Cpd spec was
+// not verified against SCLS041 at authoring time — absence over
+// invention; add it with the citation when sourced.
+
+entity SN74HC595() {
+    pin QB:    signal out;    //                                (pin 1)
+    pin QC:    signal out;    //                                (pin 2)
+    pin QD:    signal out;    //                                (pin 3)
+    pin QE:    signal out;    //                                (pin 4)
+    pin QF:    signal out;    //                                (pin 5)
+    pin QG:    signal out;    //                                (pin 6)
+    pin QH:    signal out;    //                                (pin 7)
+    pin GND:   ground;        //                                (pin 8)
+    pin QH_S:  signal out;    // serial cascade out (QH')       (pin 9)
+    pin SRCLR: signal in;     // shift-register clear, act-low  (pin 10)
+    pin SRCLK: signal in;     // shift clock                    (pin 11)
+    pin RCLK:  signal in;     // storage (latch) clock          (pin 12)
+    pin OE:    signal in;     // output enable, active-low      (pin 13)
+    pin SER:   signal in;     // serial data in                 (pin 14)
+    pin QA:    signal out;    //                                (pin 15)
+    pin VCC:   power in;      //                                (pin 16)
+
+    attribute component_class = "ic_logic";
+    attribute part_number     = "SN74HC595";
+    attribute datasheet       = "TI SCLS041";
+    attribute logic_function  = "8-bit SIPO shift register + latch";
+
+    // ── Supply (SCLS041 §6.3) ──
+    attribute vcc_min      = 2V;
+    attribute vcc_max      = 6V;
+    attribute i_quiescent  = 4uA;    // ICC max, static, whole package
+
+    // ── Output stage (VCC = 4.5 V column; bus-driver class) ──
+    attribute i_out_max = 6mA;       // rated parallel-output drive
+    attribute v_ol      = 0.1V;      // typ @ 6 mA class point
+    attribute r_out     = 25Ω;       // family VOL/IOL slope
+
+    // ── Dynamics (VCC = 4.5 V, CL = 50 pF) ──
+    attribute t_pd_ns   = 15.0;      // SRCLK→QH', typ class
+    attribute t_t_ns    = 8.0;       // output transition, family typ
+    attribute c_in_pf   = 3.5;       // input capacitance, typ
+    attribute f_max_mhz = 25.0;      // guaranteed shift clock at 4.5 V
+
+    simulation {
+        model {
+            node VCC draws = self.i_quiescent;
+            // Derived family IBIS — the 595's [Component] entry maps
+            // this pinout onto the HC_OUT/HC_IN stages (provenance in
+            // the .ibs header; conservative for the 595's stronger
+            // rated outputs).
+            ibis "bhdl-stdlib/ibis/sn74hc_5v.ibs" component "SN74HC595" corner typ;
+        }
+        // Part-carried application rules (SCLS041): floating control
+        // inputs are not a state — SRCLR high to shift, OE low to
+        // drive the parallel outputs.
+        check {
+            require connected(SRCLR) else "SRCLR floating: tie high (or drive it) — a floating clear is not a state (SCLS041)";
+            require connected(OE) else "OE floating: tie low to enable the parallel outputs — floating 3-state control is not a state (SCLS041)";
+        }
+    }
+}
+
+layout SN74HC595 {
+    package SOIC-16;
+}
+
+symbol SN74HC595 {
+    left   { SER, SRCLK, RCLK, SRCLR, OE }
+    right  { QA, QB, QC, QD, QE, QF, QG, QH, QH_S }
+    top    { VCC }
+    bottom { GND }
+}

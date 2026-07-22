@@ -67,6 +67,28 @@
 13     B4           HC_IN
 14     VCC          POWER
 |
+[Component]  SN74HC595
+[Manufacturer] bhdl derived (from TI SCLS041; outputs are the family
+| bus-driver class, rated +/-6 mA — the HC_OUT stage below is the
+| published-family-point model and CONSERVATIVE for them)
+[Pin]  signal_name  model_name
+1      QB           HC_OUT
+2      QC           HC_OUT
+3      QD           HC_OUT
+4      QE           HC_OUT
+5      QF           HC_OUT
+6      QG           HC_OUT
+7      QH           HC_OUT
+8      GND          GND
+9      QH_S         HC_OUT
+10     SRCLR        HC_IN
+11     SRCLK        HC_IN
+12     RCLK         HC_IN
+13     OE           HC_IN
+14     SER          HC_IN
+15     QA           HC_OUT
+16     VCC          POWER
+|
 [Model]  HC_OUT
 Model_type   Output
 C_comp       3.5pF  3.5pF  3.5pF

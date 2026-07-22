@@ -1,0 +1,67 @@
+// The classic 555-clocked 595 LED ladder — the hobbyist's first shift-
+// register circuit, here as the corpus board proving the SN74HC595 at
+// full fidelity: the NE555 astable clocks SRCLK/RCLK, SER ties high so
+// a walking-ones pattern marches down QA..QH, and each output drives an
+// LED through its resistor. A scheduled edge on QA exercises the
+// DERIVED family IBIS (the 595's [Component] entry) through the
+// measured-edge chain at board scale.
+//
+// Power entry + per-part decoupling carried from the start (the
+// blinker fixture's ERC lessons, applied preemptively).
+
+import { NE555Astable } from "bhdl-stdlib/actives/ne555.bhdl";
+import { SN74HC595 } from "bhdl-stdlib/actives/logic_74hc595.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
+import { Pin_Header_01x03 } from "bhdl-stdlib/connectors/pin_header.bhdl";
+
+board Ladder595 {
+    port VCC: power in = 5V @ 200mA;
+    port GND: ground;
+
+    // Power entry + rail decoupling.
+    J1: Pin_Header_01x03();
+    @VCC -> J1.1;
+    J1.2 -> @GND;
+    J1.3 -> @GND;
+    @VCC -> c_bulk: Cap(10µF).1;
+    c_bulk.2 -> @GND;
+    @VCC -> c_555: Cap(100nF).1;
+    c_555.2 -> @GND;
+    @VCC -> c_595: Cap(100nF).1;
+    c_595.2 -> @GND;
+
+    // ~2 Hz walking clock.
+    clk: NE555Astable(ra=10kΩ, rb=33kΩ, ct=10µF);
+    @VCC -> clk.VCC;
+    clk.GND -> @GND;
+
+    // Shift register: clock both SRCLK and RCLK from the 555 (the
+    // classic single-clock hookup — the latch trails the shift by one
+    // edge, fine for a ladder), SER high = walking ones, SRCLR high,
+    // OE low. QA carries the scheduled edge for the measured chain.
+    sr: SN74HC595(ibis_wave_QA="rise@2n");
+    @VCC -> sr.VCC;
+    sr.GND -> @GND;
+    clk.OUT -> sr.SRCLK;
+    clk.OUT -> sr.RCLK;
+    @VCC -> sr.SER;
+    @VCC -> sr.SRCLR;
+    sr.OE -> @GND;
+
+    // Eight LED rungs.
+    sr.QA -> r_a: Res(1kΩ).1; r_a.2 -> led_a: LED(color="red").A;    led_a.K -> @GND;
+    sr.QB -> r_b: Res(1kΩ).1; r_b.2 -> led_b: LED(color="red").A;    led_b.K -> @GND;
+    sr.QC -> r_c: Res(1kΩ).1; r_c.2 -> led_c: LED(color="yellow").A; led_c.K -> @GND;
+    sr.QD -> r_d: Res(1kΩ).1; r_d.2 -> led_d: LED(color="yellow").A; led_d.K -> @GND;
+    sr.QE -> r_e: Res(1kΩ).1; r_e.2 -> led_e: LED(color="green").A;  led_e.K -> @GND;
+    sr.QF -> r_f: Res(1kΩ).1; r_f.2 -> led_f: LED(color="green").A;  led_f.K -> @GND;
+    sr.QG -> r_g: Res(1kΩ).1; r_g.2 -> led_g: LED(color="blue").A;   led_g.K -> @GND;
+    sr.QH -> r_h: Res(1kΩ).1; r_h.2 -> led_h: LED(color="blue").A;   led_h.K -> @GND;
+}
+
+layout Ladder595 {
+    layer_stackup 2;
+    outline rect 55 40;
+}

@@ -1,0 +1,82 @@
+// LM393 — dual differential comparator, the industry generic (every
+// vendor second-sources it; no vendor SPICE worth the name, no IBIS
+// anywhere). The datasheet is the model: every number below cites the
+// TI LM393 datasheet (SLCS005), 25 degC, VCC = 5 V column unless noted.
+//
+// The defining electrical fact: OPEN-COLLECTOR outputs. The output
+// device only SINKS current — the high state comes entirely from an
+// external pullup, and a floating LM393 output is not a logic level.
+// `output_type` carries that fact for ERC and for anyone reading the
+// solved DC point (the output node's high level is the pullup's rail,
+// not a driven VOH).
+//
+// What the numbers feed TODAY:
+//   - i_quiescent → the DC solve's rail draw (draws model);
+//   - v_ol / i_sink_max → output-low level and sink-limit math for
+//     the pullup divider at the solved operating point;
+//   - v_offset_max / i_bias → threshold-accuracy budgets (the
+//     precision-path machinery's currency);
+//   - t_response_us → timing budgets for slow control loops.
+
+entity LM393(part_no: string = "LM393DR") {
+    // ─── Comparator A ───────────────────────────────────────
+    pin OUT_A:  signal inout;  // open-collector output A        (pin 1)
+    pin IN_A_N: signal in;     // inverting input A              (pin 2)
+    pin IN_A_P: signal in;     // non-inverting input A          (pin 3)
+
+    // ─── Comparator B ───────────────────────────────────────
+    pin IN_B_P: signal in;     // non-inverting input B          (pin 5)
+    pin IN_B_N: signal in;     // inverting input B              (pin 6)
+    pin OUT_B:  signal inout;  // open-collector output B        (pin 7)
+
+    // ─── Power ──────────────────────────────────────────────
+    pin GND: ground;           //                                (pin 4)
+    pin VCC: power in;         //                                (pin 8)
+
+    attribute component_class = "comparator";
+    attribute part_number     = part_no;
+    attribute datasheet       = "TI SLCS005";
+    attribute channels        = 2;
+    attribute output_type     = "open-collector";
+
+    // ── Supply (SLCS005 §6.5): single 2–36 V; ICC 0.4 mA typ /
+    // 1 mA max for the whole package at 5 V. ──
+    attribute vcc_min      = 2V;
+    attribute vcc_max      = 36V;
+    attribute i_quiescent  = 0.4mA;
+
+    // ── Input accuracy (the comparator's real currency) ──
+    attribute v_offset      = 1mV;    // typ
+    attribute v_offset_max  = 5mV;    // max, 25 degC
+    attribute i_bias        = 25nA;   // typ, input bias
+    attribute i_offset      = 5nA;    // typ, input offset current
+
+    // ── Output stage (open-collector sink only) ──
+    attribute v_ol         = 150mV;   // typ at I_sink = 4 mA
+    attribute i_sink_max   = 16mA;    // max continuous sink
+    attribute r_out_sink   = 37.5Ω;   // VOL/I slope at the 4 mA point
+
+    // ── Dynamics ──
+    attribute t_response_us = 1.3;    // typ, 5 mV overdrive
+
+    simulation {
+        model {
+            node VCC draws = self.i_quiescent;
+        }
+        // Part-carried rule: an open-collector output that is wired
+        // but has no path to a rail through a pullup never makes a
+        // high level. The full topological check is ERC territory;
+        // the attribute above marks the class for it.
+    }
+}
+
+layout LM393 {
+    package SOIC-8;
+}
+
+symbol LM393 {
+    left   { IN_A_P, IN_A_N, IN_B_P, IN_B_N }
+    right  { OUT_A, OUT_B }
+    top    { VCC }
+    bottom { GND }
+}
