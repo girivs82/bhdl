@@ -131,16 +131,12 @@ pub fn pathfinder_route(
         // Update history for overused cells. Skip blocked cells (cap 0): the
         // only demand they carry is a net terminating on its own pin terminal,
         // which is unavoidable and must not accrue congestion history.
-        for layer in &mut grid.cells {
-            for row in layer {
-                for cell in row {
-                    if cell.blocked {
-                        continue;
-                    }
-                    if cell.demand > cell.capacity {
-                        cell.history += (cell.demand - cell.capacity) as f64;
-                    }
-                }
+        for cell in &mut grid.cells {
+            if cell.blocked {
+                continue;
+            }
+            if cell.demand > cell.capacity {
+                cell.history += (cell.demand - cell.capacity) as f64;
             }
         }
 
@@ -923,7 +919,7 @@ fn dijkstra_to_any_inner(
     let rows = grid.rows();
     let cols = grid.cols();
     let plane = rows * cols;
-    let n_cells = plane * grid.cells.len();
+    let n_cells = plane * grid.num_layers;
     let ci = |c: CellCoord| c.layer * plane + c.row * cols + c.col;
     let decode = |i: u32| {
         let i = i as usize;

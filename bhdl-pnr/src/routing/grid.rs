@@ -10,7 +10,12 @@ use crate::types::*;
 
 /// 3D routing grid.
 pub struct RoutingGrid {
-    pub cells: Vec<Vec<Vec<GridCell>>>, // [layer][row][col]
+    /// FLAT cell storage, indexed (layer * rows + row) * cols + col —
+    /// the nested Vec<Vec<Vec<_>>> cost three dependent pointer chases
+    /// per access in the router hot path. Use `ci3`/`get`/`get_mut`.
+    pub cells: Vec<GridCell>,
+    pub rows_n: usize,
+    pub cols_n: usize,
     pub x_coords: Vec<f64>,            // Column boundaries (mm)
     pub y_coords: Vec<f64>,            // Row boundaries (mm)
     pub num_layers: usize,
@@ -106,7 +111,9 @@ impl RoutingGrid {
         let y_coords: Vec<f64> = (0..=rows).map(|i| (i as f64 * cell_size_mm).min(outline_h)).collect();
 
         let mut grid = RoutingGrid {
-            cells: vec![vec![vec![GridCell::default(); cols]; rows]; num_layers],
+            cells: vec![GridCell::default(); num_layers * rows * cols],
+            rows_n: rows,
+            cols_n: cols,
             x_coords,
             y_coords,
             num_layers,
@@ -123,10 +130,9 @@ impl RoutingGrid {
                 LayerKind::Signal => 1,
                 LayerKind::Mixed => 1,
             };
-            for row in &mut grid.cells[l] {
-                for cell in row.iter_mut() {
-                    cell.capacity = (base_cap as f64 * layer.capacity_factor) as usize;
-                }
+            let plane = rows * cols;
+            for cell in &mut grid.cells[l * plane..(l + 1) * plane] {
+                cell.capacity = (base_cap as f64 * layer.capacity_factor) as usize;
             }
         }
 
@@ -165,7 +171,7 @@ impl RoutingGrid {
                 };
                 for l in pad_layers {
                     mark_rect_blocked_owned(
-                        &mut grid.cells[l],
+                        &mut grid.cells[l * rows * cols..(l + 1) * rows * cols],
                         gx - hx, gy - hy, gx + hx, gy + hy,
                         &grid.x_coords, &grid.y_coords,
                         pin.net,
@@ -203,7 +209,7 @@ impl RoutingGrid {
                         || cx > outline_w - edge_band
                         || cy > outline_h - edge_band
                     {
-                        let cell = &mut grid.cells[l][r][c];
+                        let cell = &mut grid.cells[(l * rows + r) * cols + c];
                         cell.blocked = true;
                         // Do NOT stomp pad-owned cells: an edge-placed
                         // (user-fixed) connector's pins must remain
@@ -225,7 +231,7 @@ impl RoutingGrid {
             let r = hole.drill_mm / 2.0 + hole.keepout_mm;
             for l in 0..num_layers {
                 mark_circle_blocked(
-                    &mut grid.cells[l],
+                    &mut grid.cells[l * rows * cols..(l + 1) * rows * cols],
                     hole.x_mm, hole.y_mm, r,
                     &grid.x_coords, &grid.y_coords,
                 );
@@ -247,8 +253,8 @@ impl RoutingGrid {
                             if cx < x0 - band || cx > x1 + band {
                                 continue;
                             }
-                            grid.cells[l][row][col].blocked = true;
-                            grid.cells[l][row][col].hard = true;
+                            grid.cells[(l * rows + row) * cols + col].blocked = true;
+                            grid.cells[(l * rows + row) * cols + col].hard = true;
                         }
                     }
                 }
@@ -260,7 +266,7 @@ impl RoutingGrid {
             if matches!(zone.applies_to, KeepoutTarget::All | KeepoutTarget::RoutingOnly) {
                 for l in 0..num_layers {
                     mark_shape_blocked(
-                        &mut grid.cells[l],
+                        &mut grid.cells[l * rows * cols..(l + 1) * rows * cols],
                         &zone.shape,
                         &grid.x_coords, &grid.y_coords,
                     );
@@ -276,11 +282,10 @@ impl RoutingGrid {
         // through-vias still transit (they never LAND on plane cells).
         for (l, layer) in board.layer_stack.layers.iter().enumerate() {
             if layer.capacity_factor <= 0.0 {
-                for row in grid.cells[l].iter_mut() {
-                    for cell in row.iter_mut() {
-                        cell.blocked = true;
-                        cell.hard = true;
-                    }
+                let plane = rows * cols;
+                for cell in &mut grid.cells[l * plane..(l + 1) * plane] {
+                    cell.blocked = true;
+                    cell.hard = true;
                 }
             }
         }
@@ -359,7 +364,7 @@ impl RoutingGrid {
                             if cx < x0 || cx > x1 {
                                 continue;
                             }
-                            let cell = &mut grid.cells[l][r][c];
+                            let cell = &mut grid.cells[(l * rows + r) * cols + c];
                             if cell.blocked || cell.hard {
                                 continue; // already restricted (pad halo, keepout)
                             }
@@ -435,7 +440,7 @@ impl RoutingGrid {
                                 continue;
                             }
                             for &l in &signal_layers {
-                                let cell = &mut grid.cells[l][r][c];
+                                let cell = &mut grid.cells[(l * rows + r) * cols + c];
                                 if cell.si_cost < SI_RETURN_COST {
                                     cell.si_cost = SI_RETURN_COST;
                                 }
@@ -457,43 +462,44 @@ impl RoutingGrid {
         self.x_coords.len().saturating_sub(1)
     }
 
-    pub fn get(&self, coord: CellCoord) -> &GridCell {
-        &self.cells[coord.layer][coord.row][coord.col]
+    /// Flat index of (layer, row, col).
+    #[inline(always)]
+    pub fn ci3(&self, layer: usize, row: usize, col: usize) -> usize {
+        (layer * self.rows_n + row) * self.cols_n + col
     }
 
+    #[inline(always)]
+    pub fn get(&self, coord: CellCoord) -> &GridCell {
+        &self.cells[self.ci3(coord.layer, coord.row, coord.col)]
+    }
+
+    #[inline(always)]
     pub fn get_mut(&mut self, coord: CellCoord) -> &mut GridCell {
-        &mut self.cells[coord.layer][coord.row][coord.col]
+        let i = self.ci3(coord.layer, coord.row, coord.col);
+        &mut self.cells[i]
     }
 
     /// Reset demand on all cells (before each PathFinder iteration).
     pub fn reset_demand(&mut self) {
-        for layer in &mut self.cells {
-            for row in layer {
-                for cell in row {
-                    cell.demand = 0;
-                }
-            }
+        for cell in &mut self.cells {
+            cell.demand = 0;
         }
     }
 
     /// Maximum overflow across all cells.
     pub fn max_overflow(&self) -> usize {
         let mut max = 0;
-        for layer in &self.cells {
-            for row in layer {
-                for cell in row {
-                    // Blocked cells (pads, keepouts) have capacity 0. The only
-                    // demand they ever carry is a net terminating on its own
-                    // pin — unavoidable terminal access, not routable
-                    // congestion — so they must not register as overflow or the
-                    // negotiated-congestion loop would never converge.
-                    if cell.blocked {
-                        continue;
-                    }
-                    if cell.demand > cell.capacity {
-                        max = max.max(cell.demand - cell.capacity);
-                    }
-                }
+        for cell in &self.cells {
+            // Blocked cells (pads, keepouts) have capacity 0. The only
+            // demand they ever carry is a net terminating on its own
+            // pin — unavoidable terminal access, not routable
+            // congestion — so they must not register as overflow or the
+            // negotiated-congestion loop would never converge.
+            if cell.blocked {
+                continue;
+            }
+            if cell.demand > cell.capacity {
+                max = max.max(cell.demand - cell.capacity);
             }
         }
         max
@@ -521,16 +527,16 @@ impl RoutingGrid {
             return nbrs;
         }
         let diag = std::f64::consts::SQRT_2;
-        if r > 0 && co > 0 && !self.cells[c.layer][r-1][co].blocked && !self.cells[c.layer][r][co-1].blocked {
+        if r > 0 && co > 0 && !self.cells[self.ci3(c.layer, r - 1, co)].blocked && !self.cells[self.ci3(c.layer, r, co - 1)].blocked {
             nbrs.push((CellCoord { row: r-1, col: co-1, ..c }, diag));
         }
-        if r > 0 && co + 1 < max_c && !self.cells[c.layer][r-1][co].blocked && !self.cells[c.layer][r][co+1].blocked {
+        if r > 0 && co + 1 < max_c && !self.cells[self.ci3(c.layer, r - 1, co)].blocked && !self.cells[self.ci3(c.layer, r, co + 1)].blocked {
             nbrs.push((CellCoord { row: r-1, col: co+1, ..c }, diag));
         }
-        if r + 1 < max_r && co > 0 && !self.cells[c.layer][r+1][co].blocked && !self.cells[c.layer][r][co-1].blocked {
+        if r + 1 < max_r && co > 0 && !self.cells[self.ci3(c.layer, r + 1, co)].blocked && !self.cells[self.ci3(c.layer, r, co - 1)].blocked {
             nbrs.push((CellCoord { row: r+1, col: co-1, ..c }, diag));
         }
-        if r + 1 < max_r && co + 1 < max_c && !self.cells[c.layer][r+1][co].blocked && !self.cells[c.layer][r][co+1].blocked {
+        if r + 1 < max_r && co + 1 < max_c && !self.cells[self.ci3(c.layer, r + 1, co)].blocked && !self.cells[self.ci3(c.layer, r, co + 1)].blocked {
             nbrs.push((CellCoord { row: r+1, col: co+1, ..c }, diag));
         }
 
@@ -573,32 +579,32 @@ impl RoutingGrid {
         let diag = std::f64::consts::SQRT_2;
         if r > 0
             && co > 0
-            && !self.cells[c.layer][r - 1][co].blocked
-            && !self.cells[c.layer][r][co - 1].blocked
+            && !self.cells[self.ci3(c.layer, r - 1, co)].blocked
+            && !self.cells[self.ci3(c.layer, r, co - 1)].blocked
         {
             out[n] = (CellCoord { row: r - 1, col: co - 1, ..c }, diag);
             n += 1;
         }
         if r > 0
             && co + 1 < max_c
-            && !self.cells[c.layer][r - 1][co].blocked
-            && !self.cells[c.layer][r][co + 1].blocked
+            && !self.cells[self.ci3(c.layer, r - 1, co)].blocked
+            && !self.cells[self.ci3(c.layer, r, co + 1)].blocked
         {
             out[n] = (CellCoord { row: r - 1, col: co + 1, ..c }, diag);
             n += 1;
         }
         if r + 1 < max_r
             && co > 0
-            && !self.cells[c.layer][r + 1][co].blocked
-            && !self.cells[c.layer][r][co - 1].blocked
+            && !self.cells[self.ci3(c.layer, r + 1, co)].blocked
+            && !self.cells[self.ci3(c.layer, r, co - 1)].blocked
         {
             out[n] = (CellCoord { row: r + 1, col: co - 1, ..c }, diag);
             n += 1;
         }
         if r + 1 < max_r
             && co + 1 < max_c
-            && !self.cells[c.layer][r + 1][co].blocked
-            && !self.cells[c.layer][r][co + 1].blocked
+            && !self.cells[self.ci3(c.layer, r + 1, co)].blocked
+            && !self.cells[self.ci3(c.layer, r, co + 1)].blocked
         {
             out[n] = (CellCoord { row: r + 1, col: co + 1, ..c }, diag);
             n += 1;
@@ -702,24 +708,24 @@ impl RoutingGrid {
 // ── Helpers ────────────────────────────────────────────────────────────
 
 fn mark_rect_blocked_owned(
-    layer_cells: &mut [Vec<GridCell>],
+    layer_cells: &mut [GridCell],
     x_min: f64, y_min: f64, x_max: f64, y_max: f64,
     x_coords: &[f64], y_coords: &[f64],
     owner: Option<NetId>,
 ) {
     let rows = y_coords.len().saturating_sub(1);
     let cols = x_coords.len().saturating_sub(1);
-    for r in 0..rows.min(layer_cells.len()) {
+    for r in 0..rows.min(if cols > 0 { layer_cells.len() / cols } else { 0 }) {
         let (cy0, cy1) = (y_coords[r], y_coords[r + 1]);
         if cy1 < y_min || cy0 > y_max {
             continue;
         }
-        for c in 0..cols.min(layer_cells[r].len()) {
+        for c in 0..cols {
             let (cx0, cx1) = (x_coords[c], x_coords[c + 1]);
             if cx1 < x_min || cx0 > x_max {
                 continue;
             }
-            let cell = &mut layer_cells[r][c];
+            let cell = &mut layer_cells[r * cols + c];
             cell.blocked = true;
             match owner {
                 None => cell.nc_blocked = true, // NC pad: nobody enters
@@ -734,7 +740,7 @@ fn mark_rect_blocked_owned(
 }
 
 fn mark_rect_blocked(
-    layer_cells: &mut [Vec<GridCell>],
+    layer_cells: &mut [GridCell],
     x_min: f64, y_min: f64, x_max: f64, y_max: f64,
     x_coords: &[f64], y_coords: &[f64],
 ) {
@@ -749,15 +755,15 @@ fn mark_rect_blocked(
         for c in 0..cols {
             let cell_x_mid = (x_coords[c] + x_coords[c + 1]) / 2.0;
             if cell_x_mid >= x_min && cell_x_mid <= x_max {
-                layer_cells[r][c].blocked = true;
-                layer_cells[r][c].capacity = 0;
+                layer_cells[r * cols + c].blocked = true;
+                layer_cells[r * cols + c].capacity = 0;
             }
         }
     }
 }
 
 fn mark_circle_blocked(
-    layer_cells: &mut [Vec<GridCell>],
+    layer_cells: &mut [GridCell],
     cx: f64, cy: f64, radius: f64,
     x_coords: &[f64], y_coords: &[f64],
 ) {
@@ -772,16 +778,16 @@ fn mark_circle_blocked(
             let dx = cell_x - cx;
             let dy = cell_y - cy;
             if dx * dx + dy * dy <= r2 {
-                layer_cells[r][c].blocked = true;
-                layer_cells[r][c].hard = true;
-                layer_cells[r][c].capacity = 0;
+                layer_cells[r * cols + c].blocked = true;
+                layer_cells[r * cols + c].hard = true;
+                layer_cells[r * cols + c].capacity = 0;
             }
         }
     }
 }
 
 fn mark_shape_blocked(
-    layer_cells: &mut [Vec<GridCell>],
+    layer_cells: &mut [GridCell],
     shape: &ZoneShape,
     x_coords: &[f64], y_coords: &[f64],
 ) {
@@ -800,9 +806,9 @@ fn mark_shape_blocked(
                 for c in 0..cols {
                     let cell_x = (x_coords[c] + x_coords[c + 1]) / 2.0;
                     if shape.contains(cell_x, cell_y) {
-                        layer_cells[r][c].blocked = true;
-                layer_cells[r][c].hard = true;
-                        layer_cells[r][c].capacity = 0;
+                        layer_cells[r * cols + c].blocked = true;
+                        layer_cells[r * cols + c].hard = true;
+                        layer_cells[r * cols + c].capacity = 0;
                     }
                 }
             }
