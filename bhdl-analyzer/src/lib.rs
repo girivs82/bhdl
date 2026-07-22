@@ -2401,14 +2401,52 @@ pub fn extract_model_recipes(
                         .and_then(|i| idents.get(i + 1))
                         .cloned()
                         .unwrap_or_default();
-                    // map { PIN = sig; … } — pairs of idents around EQ inside
-                    // the brace run after "map".
+    // map { PIN = sig; … } — walk the raw token stream of the
+                    // brace region: LHS = idents up to `=`, RHS = every
+                    // non-trivia token up to `;`/`}` joined VERBATIM. The
+                    // old ident-pair chunking silently mangled vendor
+                    // signal names containing `-` (ST's "PA0-WKUP" lexes
+                    // as three tokens and shifted every following pair).
                     let mut pin_map = Vec::new();
-                    if let Some(mi) = idents.iter().position(|t| t == "map") {
-                        let pairs = &idents[mi + 1..];
-                        for w in pairs.chunks(2) {
-                            if let [a, b] = w {
-                                pin_map.push((a.clone(), b.clone()));
+                    {
+                        let toks: Vec<_> = stmt
+                            .children_with_tokens()
+                            .filter_map(|el| el.into_token())
+                            .collect();
+                        if let Some(mi) = toks.iter().position(|t| {
+                            t.kind() == SyntaxKind::IDENT && t.text() == "map"
+                        }) {
+                            let mut lhs = String::new();
+                            let mut rhs = String::new();
+                            let mut in_rhs = false;
+                            for t in &toks[mi + 1..] {
+                                let txt = t.text();
+                                match txt {
+                                    "{" => {}
+                                    "=" => in_rhs = true,
+                                    ";" | "," | "}" => {
+                                        if !lhs.is_empty() && !rhs.is_empty() {
+                                            pin_map.push((
+                                                lhs.clone(),
+                                                rhs.trim_matches('"').to_string(),
+                                            ));
+                                        }
+                                        lhs.clear();
+                                        rhs.clear();
+                                        in_rhs = false;
+                                        if txt == "}" {
+                                            break;
+                                        }
+                                    }
+                                    _ if txt.trim().is_empty() => {}
+                                    _ => {
+                                        if in_rhs {
+                                            rhs.push_str(txt);
+                                        } else {
+                                            lhs.push_str(txt);
+                                        }
+                                    }
+                                }
                             }
                         }
                     }

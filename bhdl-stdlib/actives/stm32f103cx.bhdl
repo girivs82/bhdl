@@ -162,6 +162,24 @@ entity STM32F103Cx(
     attribute pkg             = "LQFP-48";
     attribute part_number     = part_no;      // SKU-specific
     attribute kicad_symbol    = kicad_symbol; // SKU-specific
+    // ── Supply (DS5319 §5.3.5, run mode from flash, 72 MHz all
+    // peripherals on: 50 mA typ) ──
+    attribute i_supply        = 50mA;
+
+    simulation {
+        model {
+            node VDD_1 draws = self.i_supply;
+            // ST vendor IBIS (stm32f1-ibis.zip from the STM32F103C8
+            // CAD-resources page, f103c8.ibs = this exact SKU/package).
+            // Lives in the gitignored vendor/ibis/ tree per the Atmel
+            // precedent — absent file degrades to WARN, nothing
+            // fabricated. Maps cover ST's suffixed [Pin] names and the
+            // HSE oscillator pins (our PD0/PD1 = their OSC_IN/OSC_OUT);
+            // pins ST left unmodeled in the file (VBAT, PC15, NRST,
+            // BOOT0, supplies) simply don't stamp.
+            ibis "vendor/ibis/st/stm32f1-ibis/f103c8.ibs" component "STM32F103C8" corner typ map { PC13 = PC13-ANTI_TAMP; PC14 = PC14-OSC32_IN; PA0 = PA0-WKUP; PD0 = OSC_IN; PD1 = OSC_OUT; };
+        }
+    }
 
     // ─── Auto-expansion: datasheet support passives ─────────
     //
