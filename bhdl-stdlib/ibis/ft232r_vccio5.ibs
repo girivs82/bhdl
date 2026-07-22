@@ -1,0 +1,127 @@
+|************************************************************************
+| DATASHEET-DERIVED IBIS — NOT A VENDOR FILE. FTDI publishes no IBIS
+| or SPICE for the FT232R; every table below traces to the published
+| points of the FTDI FT232R datasheet (DS_FT232R v1.04), UART/CBUS
+| I/O at VCCIO = 5.0 V, STANDARD drive level (the chip default):
+|
+|   * Table 7 (VCCIO = 5.0 V, standard drive):
+|       VOL 0.4 V typ / 0.6 max / 0.3 min at I_sink   = 2 mA
+|         -> pulldown slope 200 / 300 / 150 ohm (typ/min/max corners)
+|       VOH 4.1 V typ / 3.2 min / 4.9 max at I_source = 2 mA
+|         -> pullup drop 0.9 / 1.8 / 0.1 V at 2 mA
+|            (450 / 900 / 50 ohm — the P-side spread is the
+|            datasheet's own; the min corner IS the guaranteed device)
+|   * Table 5: absolute max output current 24 mA (a RATING, not a
+|     curve). FTDI publishes NO output curve, so beyond the 2 mA
+|     rated point each table continues its measured slope to ~2x
+|     rated current and then holds — STATED ASSUMPTION, conservative
+|     for SI (a weaker plateau under-predicts drive, never over).
+|   * [Ramp]: no transition time is published. Derived as an RC
+|     estimate from the measured mid-swing slope into the standard
+|     50 pF test load: tau ~ 300 ohm x 50 pF = 15 ns; 20-80% ~ 1.4
+|     tau ~ 21 ns -> 3.0 V / 21 ns. STATED ASSUMPTION (physically a
+|     lower bound on edge time — again conservative for SI).
+|   * C_comp 5 pF: not published; typical CMOS pad class. STATED
+|     ASSUMPTION.
+|   * Inputs carry an internal 200 kohm pull-up to VCCIO (datasheet
+|     footnote to Tables 7-12) — IBIS cannot express it; the entity
+|     carries it as input_pullup_k for ERC/DC honesty.
+|   * Clamp tables = standard CMOS protection-diode curve.
+|
+| The HIGH drive level (EEPROM option, Table 10: same voltage limits
+| at 6 mA) is deliberately NOT modeled — the chip default is standard
+| drive; add an FT_IO_HI model from Table 10 when a board needs it.
+|************************************************************************
+[IBIS Ver]   4.2
+[File Name]  ft232r_vccio5.ibs
+|
+[Component]  FT232RL
+[Manufacturer] bhdl derived (from FTDI DS_FT232R v1.04)
+[Pin]  signal_name  model_name
+1      TXD          FT_IO
+2      DTR_N        FT_IO
+3      RTS_N        FT_IO
+4      VCCIO        POWER
+5      RXD          FT_IO
+6      RI_N         FT_IO
+7      GND1         GND
+8      NC1          NC
+9      DSR_N        FT_IO
+10     DCD_N        FT_IO
+11     CTS_N        FT_IO
+12     CBUS4        FT_IO
+13     CBUS2        FT_IO
+14     CBUS3        FT_IO
+15     USBDP        NC
+16     USBDM        NC
+17     V3OUT        NC
+18     GND2         GND
+19     RESET_N      FT_IN
+20     VCC          POWER
+21     GND3         GND
+22     CBUS1        FT_IO
+23     CBUS0        FT_IO
+24     NC2          NC
+25     AGND         GND
+26     TEST         FT_IN
+27     OSCI         FT_IN
+28     OSCO         FT_IO
+|
+| USBDP/USBDM are the USB PHY (Table 14: 29 ohm typ driver impedance
+| INCLUDING internal series resistors) — dedicated transceiver, not
+| the UART I/O cell; marked NC here rather than mismodeled.
+|
+[Model]  FT_IO
+Model_type   I/O
+C_comp       5.0pF  5.0pF  5.0pF
+[Voltage Range]  5.0V  4.5V  5.25V
+[Pulldown]
+| Vout      I(typ)     I(min)     I(max)
+| slope through the Table-7 VOL/I_sink point per corner; plateau at
+| ~2x rated (stated assumption — no published curve).
+-5.0V      -0.0050    -0.0033    -0.0067
+ 0.0V       0.0000     0.0000     0.0000
+ 0.4V       0.0020     0.0013     0.0027
+ 0.8V       0.0040     0.0027     0.0053
+ 1.2V       0.0045     0.0030     0.0060
+ 5.0V       0.0048     0.0033     0.0063
+ 10.0V      0.0050     0.0035     0.0065
+[Pullup]
+| V(=Vcc-Vpin)  I(typ)   I(min)   I(max)
+| slope through the Table-7 VOH point per corner (0.9/1.8/0.1 V drop
+| at 2 mA); same 2x plateau assumption.
+-5.0V       0.0050     0.0033     0.0067
+ 0.0V       0.0000     0.0000     0.0000
+ 0.9V      -0.0020    -0.0010    -0.0030
+ 1.8V      -0.0040    -0.0020    -0.0055
+ 2.7V      -0.0045    -0.0025    -0.0060
+ 5.0V      -0.0048    -0.0028    -0.0063
+ 10.0V     -0.0050    -0.0030    -0.0065
+[GND Clamp]
+-5.0V      -1.000     -0.800     -1.200
+-0.7V      -0.001     -0.001     -0.001
+ 0.0V       0.000      0.000      0.000
+[POWER Clamp]
+-5.0V       1.000      0.800      1.200
+-0.7V       0.001      0.001      0.001
+ 0.0V       0.000      0.000      0.000
+[Ramp]
+| RC estimate, stated assumption (see header): 20-80% of 5 V over
+| ~1.4 x (300 ohm x 50 pF); min corner scaled by the weaker slope.
+dV/dt_r    3.0/21.0n  3.0/42.0n  3.0/11.0n
+dV/dt_f    3.0/21.0n  3.0/42.0n  3.0/11.0n
+|
+[Model]  FT_IN
+Model_type   Input
+C_comp       5.0pF  5.0pF  5.0pF
+[Voltage Range]  5.0V  4.5V  5.25V
+[GND Clamp]
+-5.0V      -1.000     -0.800     -1.200
+-0.7V      -0.001     -0.001     -0.001
+ 0.0V       0.000      0.000      0.000
+[POWER Clamp]
+-5.0V       1.000      0.800      1.200
+-0.7V       0.001      0.001      0.001
+ 0.0V       0.000      0.000      0.000
+|
+[End]

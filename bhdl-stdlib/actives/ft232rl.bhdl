@@ -77,6 +77,36 @@ entity FT232RL(part_no: string = "FT232RL") {
     attribute usb             = "USB 2.0 device";
     attribute pkg             = "SSOP-28";
     attribute part_number     = part_no;
+    attribute datasheet       = "FTDI DS_FT232R v1.04";
+
+    // ── Supply (DS_FT232R Table 6) ──
+    attribute vcc_min      = 3.3V;
+    attribute vcc_max      = 5.25V;
+    attribute vccio_min    = 1.8V;
+    attribute vccio_max    = 5.25V;
+    attribute i_supply     = 15mA;    // operating, typ
+    attribute i_suspend    = 70uA;    // USB suspend, typ
+
+    // ── I/O identity (Table 7, VCCIO = 5 V standard drive) ──
+    attribute v_in_threshold = 1.6V;  // typ (1.3–1.9)
+    attribute v_hysteresis   = 55mV;  // typ
+    attribute i_out_rated    = 2mA;   // standard drive spec point
+    // Internal 200 kΩ pull-up to VCCIO on every input (Tables 7–12
+    // footnote) — floating UART inputs gently pull HIGH; ERC and the
+    // DC solve should know a "floating" FT232R input is not floating.
+    attribute input_pullup_k = 200.0;
+
+    simulation {
+        model {
+            node VCC draws = self.i_supply;
+            // Datasheet-DERIVED IBIS (bhdl-stdlib/ibis/ft232r_vccio5.ibs
+            // — FTDI publishes no models; provenance and the three
+            // stated assumptions live in the file header). The UART/
+            // CBUS cells are WEAK 200 Ω-class drivers per Table 7 —
+            // materially different SI than MCU pins, now measurable.
+            ibis "bhdl-stdlib/ibis/ft232r_vccio5.ibs" component "FT232RL" corner typ;
+        }
+    }
 
     // ─── Auto-expansion: USB-bridge support passives ────────
     // FTDI AN-184 / FT232RL datasheet §3.3 "Application Examples":

@@ -1,0 +1,82 @@
+// The classic FTDI USB-UART breakout — the FT232R datasheet's own
+// Figure 11 bus-powered application (DS_FT232R v1.04 §7.1): USB-C in,
+// ferrite bead on VBUS, VCCIO strapped to VCC for 5 V logic, TEST
+// grounded, TX/RX activity LEDs on CBUS0/CBUS1, and the 6-pin
+// FTDI-cable UART header. The entity's expansion carries the
+// datasheet decoupling network, reset RC, and USB ESD parts.
+//
+// Fidelity: the FT232RL rides its datasheet-DERIVED IBIS
+// (ft232r_vccio5.ibs) — the scheduled edge on TXD proves the WEAK
+// 200 Ω-class UART driver (Table 7) through the measured-edge chain,
+// a materially different SI character than MCU pins.
+
+import { FT232RL } from "bhdl-stdlib/actives/ft232rl.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Bead } from "bhdl-stdlib/passives/inline_passives.bhdl";
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
+import { USB_C_Receptacle_USB2_16P } from "bhdl-stdlib/connectors/usb_c.bhdl";
+import { Pin_Header_01x06 } from "bhdl-stdlib/connectors/pin_header.bhdl";
+
+board FtdiBreakout {
+    port VBUS: power in = 5V @ 100mA;
+    port GND: ground;
+
+    // ── USB-C receptacle: VBUS / D± / CC pulldowns (UFP sink) ──
+    J_USB: USB_C_Receptacle_USB2_16P();
+    J_USB.A4 -> @VBUS;  J_USB.B4 -> @VBUS;
+    J_USB.A9 -> @VBUS;  J_USB.B9 -> @VBUS;
+    J_USB.A1 -> @GND;   J_USB.B1 -> @GND;
+    J_USB.A12 -> @GND;  J_USB.B12 -> @GND;
+    J_USB.S1 -> @GND;
+    J_USB.A5 -> R_cc1: Res(5.1kΩ).1;
+    R_cc1.2 -> @GND;
+    J_USB.B5 -> R_cc2: Res(5.1kΩ).1;
+    R_cc2.2 -> @GND;
+    J_USB.A6 -> USB_DP;  J_USB.B6 -> USB_DP;
+    J_USB.A7 -> USB_DM;  J_USB.B7 -> USB_DM;
+
+    // ── Bus power through the Figure-11 ferrite bead ──
+    @VBUS -> FB1: Bead().A;
+    FB1.B -> VCC_5V;
+    VCC_5V -> C_vb: Cap(10nF).1;
+    C_vb.2 -> @GND;
+
+    // ── The bridge (expansion carries decoupling/reset/ESD) ──
+    U1: FT232RL(ibis_wave_TXD="rise@2n");
+    VCC_5V -> U1.VCC;
+    VCC_5V -> U1.VCCIO;          // 5 V logic per Figure 11
+    U1.GND1 -> @GND;
+    U1.GND2 -> @GND;
+    U1.GND3 -> @GND;
+    U1.AGND -> @GND;
+    U1.TEST -> @GND;
+    USB_DP -> U1.USBDP;
+    USB_DM -> U1.USBDM;
+
+    // ── TX/RX activity LEDs on CBUS0/CBUS1 (EEPROM default roles) ──
+    VCC_5V -> LED_TX: LED(color="green").A;
+    LED_TX.K -> R_tx: Res(1kΩ).1;
+    R_tx.2 -> U1.CBUS0;
+    VCC_5V -> LED_RX: LED(color="yellow").A;
+    LED_RX.K -> R_rx: Res(1kΩ).1;
+    R_rx.2 -> U1.CBUS1;
+
+    // ── 6-pin FTDI-cable UART header: GND/CTS/VCC/TXD/RXD/RTS ──
+    J_UART: Pin_Header_01x06();
+    J_UART.1 -> @GND;
+    U1.CTS_N -> J_UART.2;
+    VCC_5V -> J_UART.3;
+    U1.TXD -> J_UART.4;
+    U1.RXD -> J_UART.5;
+    U1.RTS_N -> J_UART.6;
+}
+
+layout FtdiBreakout {
+    layer_stackup 2;
+    outline rect 40 22;
+    // Breakout mechanicals: USB in on the left edge, UART header on
+    // the right — the classic dongle form factor.
+    place J_USB at (5.6, 11) rot 270;
+    place J_UART at (37.5, 11);
+}
