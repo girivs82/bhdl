@@ -40,7 +40,10 @@ board Ne555Blink {
     blinker.GND -> @GND;
 
     // Gate the blink with an enable line (pulled up = enabled).
-    gate: SN74HC08();
+    // The scheduled edge makes the DERIVED buffer prove itself: the
+    // transient solver measures Y1's swing from the derived I-V/ramp
+    // tables, exactly as it does from Atmel's vendor curves.
+    gate: SN74HC08(ibis_wave_Y1="rise@2n");
     @VCC -> gate.VCC;
     gate.GND -> @GND;
     blinker.OUT -> gate.A1;

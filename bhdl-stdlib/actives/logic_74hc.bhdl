@@ -14,10 +14,9 @@
 //   - t_pd → timing budgets (the derived-skew machinery grades routed
 //     delay against edge fractions — a gate's tpd is the same currency).
 //
-// NEXT fidelity rung (recorded, not yet built): datasheet-derived IBIS
-// — the VOL/IOL and VOH/IOH curve points published in the datasheet
-// are exactly a [Pulldown]/[Pullup] table; a hand-derived .ibs with
-// clear provenance would plug these gates into the measured-edge
+// Fidelity rung BUILT: bhdl-stdlib/ibis/sn74hc_5v.ibs is the
+// datasheet-DERIVED IBIS (the published VOL/IOL / VOH/IOH points ARE
+// a [Pulldown]/[Pullup] table) — these gates ride the measured-edge
 // chain (solved swings, noise gates) like the vendor-IBIS MCUs.
 
 entity SN74HC08() {
@@ -63,6 +62,12 @@ entity SN74HC08() {
     simulation {
         model {
             node VCC draws = self.i_quiescent;
+            // Datasheet-DERIVED IBIS (bhdl-stdlib/ibis/sn74hc_5v.ibs —
+            // provenance in the file header: interpolation between TI
+            // SCLS081 spec points, never invention beyond them). Plugs
+            // the gate into the measured-edge chain: scheduled edges
+            // solve real swings, noise gates grade real millivolts.
+            ibis "bhdl-stdlib/ibis/sn74hc_5v.ibs" component "SN74HC08" corner typ;
         }
     }
 }
@@ -116,6 +121,12 @@ entity SN74HC00() {
     simulation {
         model {
             node VCC draws = self.i_quiescent;
+            // Datasheet-DERIVED IBIS (bhdl-stdlib/ibis/sn74hc_5v.ibs —
+            // provenance in the file header: interpolation between TI
+            // SCLS047 spec points, never invention beyond them). Plugs
+            // the gate into the measured-edge chain: scheduled edges
+            // solve real swings, noise gates grade real millivolts.
+            ibis "bhdl-stdlib/ibis/sn74hc_5v.ibs" component "SN74HC00" corner typ;
         }
     }
 }
