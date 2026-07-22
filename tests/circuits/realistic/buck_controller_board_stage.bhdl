@@ -25,9 +25,9 @@ board BuckControllerBoardStage {
     // Virtual VOUT deliberately UNWIRED — the board authors the stage.
 
     // ── Board-authored power stage: the author's FETs ──
-    u1.HO -> q_hs: MOSFET("IRF7469", "nmos", 40V, 10A, 9mΩ, 2V, 2.5W).G;
+    u1.HO -> q_hs: MOSFET("IRF7469", "nmos", 40V, 10A, 9mΩ, 2V, 2.5W, qg_nc=34.0).G;  // IR datasheet Qg typ
     @VIN_24V -> q_hs.D; q_hs.S -> sw_node;
-    u1.LO -> q_ls: MOSFET("IRF7469", "nmos", 40V, 10A, 9mΩ, 2V, 2.5W).G;
+    u1.LO -> q_ls: MOSFET("IRF7469", "nmos", 40V, 10A, 9mΩ, 2V, 2.5W, qg_nc=34.0).G;
     sw_node -> q_ls.D; q_ls.S -> @GND;
     sw_node -> u1.SW;
     // The author's bootstrap: the HB cap rides THIS stage's switch node.

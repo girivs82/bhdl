@@ -1697,6 +1697,99 @@ fn display_label(inst: &bhdl_netlist::Instance) -> String {
 /// spec-vs-MEASURED basis — including derivations that were SKIPPED
 /// (seed kept), which the engineer must see for the same reason ERC024
 /// shows unchecked axes: a skipped derivation is a hole, not a pass.
+/// One switching FET's gate-drive demand: I_gate_avg = Qg · f_sw —
+/// exact charge-per-cycle math, deliberately NOT a power claim (power
+/// would need the driver's V_drive, which is unmodeled; absence over
+/// assumption). A row exists only where BOTH facts are real: a FET
+/// whose instance declares its datasheet qg_nc (0 = undeclared
+/// sentinel) inside a recovered switching stage.
+pub struct GateDriveRow {
+    pub display: String,
+    pub part: String,
+    pub stage: String,
+    pub qg_nc: f64,
+    pub f_sw_hz: f64,
+    pub i_avg_a: f64,
+}
+
+pub fn compute_gate_drive(
+    netlist: &Netlist,
+    entity_attrs: &HashMap<String, HashMap<String, String>>,
+) -> Vec<GateDriveRow> {
+    let ops = recover_switcher_ops(netlist, entity_attrs);
+    if ops.is_empty() {
+        return Vec::new();
+    }
+    let sole = ops.len() == 1;
+    let mut rows = Vec::new();
+    for (_, inst) in sorted_instances(netlist) {
+        let is_fet = inst
+            .attributes
+            .get("component_class")
+            .map(|c| c == "mosfet")
+            .unwrap_or(false);
+        if !is_fet {
+            continue;
+        }
+        let Some(qg) = inst
+            .attributes
+            .get("qg_nc")
+            .and_then(|s| parse_si(s))
+            .filter(|q| *q > 0.0)
+        else {
+            continue;
+        };
+        let stage = inst
+            .attributes
+            .get("expansion_parent")
+            .and_then(|p| ops.iter().find(|(n, _)| n == p))
+            .or_else(|| if sole { ops.first() } else { None });
+        let Some((stage_name, op)) = stage else { continue };
+        if op.f_sw <= 0.0 {
+            continue;
+        }
+        rows.push(GateDriveRow {
+            display: display_label(inst),
+            part: inst
+                .attributes
+                .get("part_number")
+                .cloned()
+                .unwrap_or_default(),
+            stage: stage_name.clone(),
+            qg_nc: qg,
+            f_sw_hz: op.f_sw,
+            i_avg_a: qg * 1e-9 * op.f_sw,
+        });
+    }
+    rows
+}
+
+pub fn format_gate_drive(rows: &[GateDriveRow]) -> Option<String> {
+    if rows.is_empty() {
+        return None;
+    }
+    let mut out = String::new();
+    out.push_str("\n## Gate drive (declared Qg × recovered f_sw)\n\n");
+    out.push_str("| FET | Part | Stage | Qg | f_sw | I_gate avg |\n");
+    out.push_str("|-----|------|-------|----|------|------------|\n");
+    for r in rows {
+        out.push_str(&format!(
+            "| {} | {} | {} | {:.1}nC | {} | {} |\n",
+            r.display,
+            if r.part.is_empty() { "—" } else { &r.part },
+            r.stage,
+            r.qg_nc,
+            fmt_si(r.f_sw_hz, "Hz"),
+            fmt_si(r.i_avg_a, "A"),
+        ));
+    }
+    out.push_str(
+        "\nAverage current the controller's driver must source per FET; \
+         power needs V_drive (unmodeled) — deliberately not claimed.\n",
+    );
+    Some(out)
+}
+
 pub fn format_derived_values(netlist: &bhdl_netlist::Netlist) -> Option<String> {
     let mut rows: Vec<(String, String, String, String, String)> = netlist
         .instances

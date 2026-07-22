@@ -25,7 +25,17 @@ entity MOSFET(
     id_max:  current    = 200mA,     // continuous drain current (magnitude)
     rds_on:  resistance = 5Ω,        // on-resistance at datasheet V_GS
     vgs_th_max: voltage = 3V,        // gate threshold, max (magnitude)
-    power_rating: power = 400mW      // package dissipation
+    power_rating: power = 400mW,     // package dissipation
+    // Switching identity — 0 = UNDECLARED sentinel (the Ind
+    // rated_current pattern): gate charge and input capacitance vary
+    // per die, not per class, so there is NO class default. Declare
+    // them from the part's datasheet at the instance (the uno's
+    // FDN340P does) and the sign-off's gate-drive row lights up;
+    // leave them 0 and it honestly doesn't exist. Coss/trr are not
+    // even parameters yet — absence over invention until a board
+    // needs them with a citation in hand.
+    qg_nc: float   = 0.0,            // total gate charge, nC (datasheet typ)
+    ciss_pf: float = 0.0             // input capacitance, pF (datasheet typ)
 )
     where channel in ("nmos", "pmos")   // enum domain — reject e.g. "P"/"N"
 {
@@ -41,6 +51,8 @@ entity MOSFET(
     attribute rds_on          = rds_on;
     attribute vgs_th_max      = vgs_th_max;
     attribute power_rating    = power_rating;
+    attribute qg_nc           = qg_nc;
+    attribute ciss_pf         = ciss_pf;
     attribute kicad_symbol    = "Device:Q_NMOS_GDS";
 }
 

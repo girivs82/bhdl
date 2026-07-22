@@ -3683,6 +3683,13 @@ async fn cmd_bom(
                         {
                             print!("{derived}");
                         }
+                        let gd = bhdl_synthesizer::signoff::compute_gate_drive(
+                            &netlist,
+                            &analysis.entity_attribute_index,
+                        );
+                        if let Some(gdr) = bhdl_synthesizer::signoff::format_gate_drive(&gd) {
+                            print!("{gdr}");
+                        }
                         // Control-loop stability (analytic, datasheet model),
                         // one assessment per regulator stage.
                         let stages = bhdl_synthesizer::signoff::compute_stability(
