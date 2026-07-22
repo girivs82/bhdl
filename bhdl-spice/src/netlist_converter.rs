@@ -363,6 +363,42 @@ impl NetlistToSpiceConverter {
             }
         }
 
+        // Step 3c: DC-reference ties for isolated ground domains. A board
+        // with a second `ground` port (an optocoupler's field-side return)
+        // has a Ground-class net whose NAME isn't the solver's reference
+        // ("GND"/"gnd"/"0") — without a tie it floats and gshunt parks it
+        // mid-rail (observed: GND_ISO at 6 V, halving every stress reading
+        // in its domain). Every solve needs exactly one reference per
+        // domain; tying the returns is the standard SPICE treatment of an
+        // isolation barrier (1 mΩ — microvolts at real currents). GALVANIC
+        // isolation is a netlist/ERC/layout property and is untouched — the
+        // tie exists only inside the DC solve.
+        for (_net_id, net) in &netlist.nets {
+            if !matches!(net.net_class, bhdl_netlist::types::NetClass::Ground) {
+                continue;
+            }
+            let Some(name) = net.name.clone() else { continue };
+            if matches!(name.to_lowercase().as_str(), "gnd" | "ground" | "0") {
+                continue; // the reference itself
+            }
+            if net.connections.len() < 2 {
+                continue; // floating — never became a node
+            }
+            circuit.add_node("GND".to_string(), None);
+            circuit.add_branch(
+                format!("GNDTIE_{name}"),
+                &name,
+                "GND",
+                "Resistor".to_string(),
+                1e-3,
+                None,
+            );
+            info!(
+                "Tied isolated ground domain {} to the DC reference (1 mΩ solve-only tie)",
+                name
+            );
+        }
+
         // ── Vendor IBIS buffers (§5 form #1). For every instance whose
         // entity carries an `ibis` model reference: parse the .ibs (cached
         // per path), resolve each wired entity pin to its buffer model via
@@ -885,6 +921,119 @@ impl NetlistToSpiceConverter {
                 gain,
                 Some(instance_id),
                 meta,
+            );
+            return Ok(());
+        }
+
+        // Optocoupler: decomposed into the two elements the package really
+        // contains — an IRED (LED-class exponential branch A→K, Shockley Is
+        // derived from the part's CITED Vf@IF point) and a phototransistor
+        // (`PhotoCoupled` branch C→E whose current is CTR·IF with a smooth
+        // tanh saturation at the cited VCE(sat)). The coupling is a
+        // controlled source only — no galvanic path crosses the barrier.
+        // CTR = the part's ctr_min_pct: the MINIMUM is the only guaranteed
+        // transfer claim a datasheet makes (typ isn't even published for
+        // ranked parts), so the solved operating point is the conservative
+        // one — a load the min-rank device can sink is signed off for the
+        // whole rank.
+        if class == "optocoupler" {
+            let pin_info = Self::get_pin_net_info(netlist, instance_id);
+            let net_of = |names: &[&str]| {
+                pin_info
+                    .iter()
+                    .find(|p| names.iter().any(|n| p.pin_name.eq_ignore_ascii_case(n)))
+                    .map(|p| p.net_name.clone())
+            };
+            let (Some(a), Some(k), Some(c), Some(e)) = (
+                net_of(&["A", "ANODE"]),
+                net_of(&["K", "CATHODE"]),
+                net_of(&["C", "COLLECTOR"]),
+                net_of(&["E", "EMITTER"]),
+            ) else {
+                warn!(
+                    "Optocoupler {} missing a resolvable A/K/C/E net — no SPICE device emitted",
+                    instance.name
+                );
+                return Ok(());
+            };
+            // Numeric attribute with SI suffix ("1.2V", "50mA", "50.0").
+            let parse_qty = |s: &str| -> Option<f64> {
+                let s = s.trim();
+                let num_end = s
+                    .find(|ch: char| !(ch.is_ascii_digit() || ch == '.' || ch == '-' || ch == '+'))
+                    .unwrap_or(s.len());
+                let v: f64 = s[..num_end].parse().ok()?;
+                Some(v * match s[num_end..].chars().next() {
+                    Some('p') => 1e-12,
+                    Some('n') => 1e-9,
+                    Some('µ') | Some('u') => 1e-6,
+                    Some('m') => 1e-3,
+                    Some('k') | Some('K') => 1e3,
+                    Some('M') => 1e6,
+                    _ => 1.0,
+                })
+            };
+            let attr = |name: &str| -> Option<f64> {
+                instance
+                    .attributes
+                    .get(name)
+                    .or_else(|| module.attributes.get(name))
+                    .and_then(|s| parse_qty(s))
+            };
+            // Both halves need their defining datum — absence beats
+            // invention: no cited Vf or CTR floor, no model.
+            let (Some(vf), Some(ctr_min_pct)) = (attr("forward_voltage"), attr("ctr_min_pct"))
+            else {
+                warn!(
+                    "Optocoupler {} lacks forward_voltage/ctr_min_pct attributes — no SPICE device emitted (absence beats invention)",
+                    instance.name
+                );
+                return Ok(());
+            };
+            // IRED: Is from the cited (Vf, IF) point at the LED-class
+            // emission coefficient n=2 — Is = IF / exp(Vf/(n·Vt)).
+            let if_ref = attr("forward_current").unwrap_or(0.020); // Vf citation point
+            let (n_ideality, vt) = (2.0, 0.026);
+            let is = if_ref / (vf / (n_ideality * vt)).exp();
+            let vce_sat = attr("vce_sat").unwrap_or(0.1);
+
+            let ired_name = format!("{}_ired", instance.name);
+            let mut led_meta = HashMap::new();
+            led_meta.insert(META_SATURATION_CURRENT.to_string(), format!("{is:e}"));
+            led_meta.insert(META_EMISSION_COEFFICIENT.to_string(), n_ideality.to_string());
+            led_meta.insert(META_PARENT_INSTANCE.to_string(), instance.name.clone());
+            led_meta.insert(META_DECOMPOSITION_ROLE.to_string(), "opto_ired".to_string());
+            circuit.add_branch_with_metadata(
+                ired_name.clone(),
+                &a,
+                &k,
+                "LED".to_string(),
+                vf,
+                Some(instance_id),
+                led_meta,
+            );
+
+            let ctr = ctr_min_pct / 100.0;
+            let mut ce_meta = HashMap::new();
+            ce_meta.insert(crate::circuit::META_CTR.to_string(), ctr.to_string());
+            // Knee at VCE(sat)/2: tanh(2) = 0.96 of full CTR current at the
+            // cited saturation voltage.
+            ce_meta.insert(crate::circuit::META_CTR_VKNEE.to_string(), (vce_sat / 2.0).to_string());
+            ce_meta.insert(crate::circuit::META_CTRL_BRANCH.to_string(), ired_name.clone());
+            ce_meta.insert(META_PARENT_INSTANCE.to_string(), instance.name.clone());
+            ce_meta.insert(META_DECOMPOSITION_ROLE.to_string(), "opto_ce".to_string());
+            circuit.add_branch_with_metadata(
+                format!("{}_ce", instance.name),
+                &c,
+                &e,
+                "PhotoCoupled".to_string(),
+                ctr,
+                Some(instance_id),
+                ce_meta,
+            );
+            info!(
+                "Added optocoupler {}: IRED {}→{} (Is={:.3e}, n={}), CTR {:.0}% min, C-E {}→{}",
+                instance.name, a, k, is, n_ideality, ctr_min_pct, c, e
             );
             return Ok(());
         }

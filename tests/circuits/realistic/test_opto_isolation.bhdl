@@ -28,17 +28,20 @@ board OptoIsolation {
     port V12:     power in = 12V @ 20mA;
     port GND_ISO: ground;
 
-    // Logic-side interface: 5 V, control input, logic return.
+    // Logic-side interface: 5 V, IRED-anode probe/override tap, logic
+    // return (pull J_CTL.2 low externally to force the channel off).
     J_CTL: Pin_Header_01x03();
     @V5 -> J_CTL.1;
-    J_CTL.2 -> CTL;
     J_CTL.3 -> @GND;
     @V5 -> c_5: Cap(100nF).1;
     c_5.2 -> @GND;
 
-    // Drive the IRED: CTL high sources ~11.5 mA through 330R.
-    CTL -> r_led: Res(330Ω).1;
-    r_led.2 -> U1: PC817().A;
+    // Drive the IRED straight from the rail so the DC solve sees the ON
+    // operating point: ~11.5 mA through 330R.
+    @V5 -> r_led: Res(330Ω).1;
+    r_led.2 -> LED_A;
+    LED_A -> J_CTL.2;
+    LED_A -> U1: PC817().A;
     U1.K -> @GND;
 
     // Field side: collector pullup to 12 V, emitter to isolated

@@ -36,6 +36,18 @@ pub enum ComponentEquation {
     /// outside the table. Stamped like a voltage-dependent conductance —
     /// KCL contribution direct, Jacobian = local segment slope.
     TableIV { points: Vec<(f64, f64)> },
+
+    /// Optocoupler phototransistor: a current-controlled current source
+    /// with smooth saturation — i = ctr · i(ctrl_edge) · tanh(v_diff/v_knee).
+    /// `ctrl_edge` is the IRED branch whose solved current controls this
+    /// one (it must own a current variable — the converter always emits it
+    /// as an LED-class branch, which does). The tanh knee sits at half the
+    /// part's cited VCE(sat), so the collector current rolls off exactly
+    /// where the datasheet says the transistor saturates; load-limited
+    /// operation collapses V_CE toward saturation instead of fighting the
+    /// source. The coupling is control-only — no galvanic path is stamped
+    /// across the isolation barrier.
+    PhotoCoupled { ctr: f64, v_knee: f64, ctrl_edge: EdgeIndex },
 }
 
 /// PWL interpolation shared by the TableIV residual and Jacobian.
@@ -85,6 +97,11 @@ fn table_iv_interp(points: &[(f64, f64)], v: f64) -> f64 {
 fn table_iv_slope(points: &[(f64, f64)], v: f64) -> f64 {
     let d = 1e-6;
     (table_iv_interp(points, v + d) - table_iv_interp(points, v - d)) / (2.0 * d)
+}
+
+/// Numeric branch-metadata read (the loader's `meta_f64`, local copy).
+fn meta_f64(branch: &Branch, key: &str) -> Option<f64> {
+    branch.metadata.get(key).and_then(|s| s.parse::<f64>().ok())
 }
 
 /// Circuit equation system for SPICE analysis
@@ -185,19 +202,51 @@ impl SpiceEquationSystem {
                     }
                 }
                 "LED" => {
-                    // Red LED parameters - more realistic values
+                    // Shockley parameters from branch metadata when the part
+                    // declared them (an optocoupler IRED's Is is derived from
+                    // its CITED Vf@IF point); class-typical red-LED values
+                    // otherwise.
                     ComponentEquation::Exponential {
-                        is: 1e-14,  // 10 femtoamps - typical for LED
-                        n: 2.0,     // Higher emission coefficient for LED
+                        is: meta_f64(branch, crate::circuit::META_SATURATION_CURRENT)
+                            .unwrap_or(1e-14),
+                        n: meta_f64(branch, crate::circuit::META_EMISSION_COEFFICIENT)
+                            .unwrap_or(2.0),
                         vt: 0.026,  // 26mV at room temperature
                     }
                 }
                 "Diode" => {
-                    // Silicon diode parameters
+                    // Silicon diode parameters (metadata overrides, as LED)
                     ComponentEquation::Exponential {
-                        is: 1e-12,
-                        n: 1.0,
+                        is: meta_f64(branch, crate::circuit::META_SATURATION_CURRENT)
+                            .unwrap_or(1e-12),
+                        n: meta_f64(branch, crate::circuit::META_EMISSION_COEFFICIENT)
+                            .unwrap_or(1.0),
                         vt: 0.026,
+                    }
+                }
+                // Optocoupler phototransistor — resolved to its controlling
+                // IRED branch here so the residual/Jacobian passes need no
+                // name lookups. An unresolvable control edge is a converter
+                // bug: warn loudly, stamp an open circuit.
+                "PhotoCoupled" => {
+                    let ctr = meta_f64(branch, crate::circuit::META_CTR);
+                    let v_knee = meta_f64(branch, crate::circuit::META_CTR_VKNEE);
+                    let ctrl = branch
+                        .metadata
+                        .get(crate::circuit::META_CTRL_BRANCH)
+                        .and_then(|name| self.circuit.get_branch(name))
+                        .map(|(idx, _)| idx);
+                    match (ctr, v_knee, ctrl) {
+                        (Some(ctr), Some(v_knee), Some(ctrl_edge)) if v_knee > 0.0 => {
+                            ComponentEquation::PhotoCoupled { ctr, v_knee, ctrl_edge }
+                        }
+                        _ => {
+                            warn!(
+                                "PhotoCoupled branch {} missing ctr/v_knee/ctrl_branch metadata — open circuit",
+                                branch.name
+                            );
+                            ComponentEquation::Linear { conductance: 1e-9 }
+                        }
                     }
                 }
                 "VoltageSource" => {
@@ -454,7 +503,27 @@ impl EquationSystem for SpiceEquationSystem {
                             residual[idx] -= current;
                         }
                     }
-                    
+
+                    // i = ctr · i_ctrl · tanh(v/v_knee): KCL only — the
+                    // branch owns no current variable; the controlling
+                    // (IRED) branch's current variable is read directly.
+                    ComponentEquation::PhotoCoupled { ctr, v_knee, ctrl_edge } => {
+                        let i_ctrl = self
+                            .get_current_var(*ctrl_edge)
+                            .map(|ci| match variables[ci].space {
+                                VariableSpace::Logarithmic => x[ci].exp(),
+                                VariableSpace::Linear => x[ci],
+                            })
+                            .unwrap_or(0.0);
+                        let current = ctr * i_ctrl * (v_diff / v_knee).tanh();
+                        if let Some(idx) = v1_idx {
+                            residual[idx] += current;
+                        }
+                        if let Some(idx) = v2_idx {
+                            residual[idx] -= current;
+                        }
+                    }
+
                     ComponentEquation::Exponential { is, n, vt } => {
                         if let Some(idx) = i_idx {
                             let var = &variables[idx];
@@ -601,6 +670,42 @@ impl EquationSystem for SpiceEquationSystem {
                             jacobian[(j, j)] += g;
                             if let Some(i) = v1_idx {
                                 jacobian[(j, i)] -= g;
+                            }
+                        }
+                    }
+
+                    // ∂i/∂v = ctr·i_ctrl·sech²(u)/v_knee on the C/E rows;
+                    // ∂i/∂(ctrl var) couples the collector KCL to the IRED
+                    // current variable (exp(w)·… in the IRED's log space).
+                    ComponentEquation::PhotoCoupled { ctr, v_knee, ctrl_edge } => {
+                        let ci = self.get_current_var(*ctrl_edge);
+                        let (i_ctrl, di_dw) = ci
+                            .map(|ci| match variables[ci].space {
+                                VariableSpace::Logarithmic => {
+                                    let i = x[ci].exp();
+                                    (i, i) // d(exp w)/dw = exp w
+                                }
+                                VariableSpace::Linear => (x[ci], 1.0),
+                            })
+                            .unwrap_or((0.0, 0.0));
+                        let t = (v_diff / v_knee).tanh();
+                        let g = ctr * i_ctrl * (1.0 - t * t) / v_knee;
+                        if let Some(i) = v1_idx {
+                            jacobian[(i, i)] += g;
+                            if let Some(j) = v2_idx {
+                                jacobian[(i, j)] -= g;
+                            }
+                            if let Some(ci) = ci {
+                                jacobian[(i, ci)] += ctr * di_dw * t;
+                            }
+                        }
+                        if let Some(j) = v2_idx {
+                            jacobian[(j, j)] += g;
+                            if let Some(i) = v1_idx {
+                                jacobian[(j, i)] -= g;
+                            }
+                            if let Some(ci) = ci {
+                                jacobian[(j, ci)] -= ctr * di_dw * t;
                             }
                         }
                     }
@@ -760,6 +865,14 @@ pub fn extract_solution(
                     let v1 = node_voltages.get(&n1).copied().unwrap_or(0.0);
                     let v2 = node_voltages.get(&n2).copied().unwrap_or(0.0);
                     branch_currents.insert(edge_idx, table_iv_interp(points, v1 - v2));
+                } else if let ComponentEquation::PhotoCoupled { ctr, v_knee, ctrl_edge } = equation {
+                    // Controlling IRED currents were extracted in the first
+                    // pass (LED branches own current variables).
+                    let i_ctrl = branch_currents.get(ctrl_edge).copied().unwrap_or(0.0);
+                    let (n1, n2) = system.circuit.branch_nodes(edge_idx).unwrap();
+                    let v1 = node_voltages.get(&n1).copied().unwrap_or(0.0);
+                    let v2 = node_voltages.get(&n2).copied().unwrap_or(0.0);
+                    branch_currents.insert(edge_idx, ctr * i_ctrl * ((v1 - v2) / v_knee).tanh());
                 }
             }
         }

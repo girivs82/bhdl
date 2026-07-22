@@ -115,6 +115,17 @@ pub const META_TEMP_MIN: &str = "temp_min";
 pub const META_TEMP_MAX: &str = "temp_max";
 /// Free-form variant tag (e.g. LED `color = "red"`); used by fallback LUTs.
 pub const META_VARIANT: &str = "variant";
+/// Optocoupler current-transfer ratio (IC/IF, as a fraction, e.g. 0.5 for
+/// 50%). Carried on the phototransistor (`PhotoCoupled`) branch of the
+/// converter's optocoupler decomposition.
+pub const META_CTR: &str = "ctr";
+/// Soft-saturation knee voltage for the `PhotoCoupled` collector-emitter
+/// branch, in volts: i = CTR·IF·tanh(Vce/knee). Derived from the part's
+/// cited VCE(sat).
+pub const META_CTR_VKNEE: &str = "ctr_v_knee";
+/// Name of the branch whose solved current CONTROLS this branch (the
+/// optocoupler's IRED branch controlling its phototransistor).
+pub const META_CTRL_BRANCH: &str = "ctrl_branch";
 
 /// Electrical node in the circuit
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
