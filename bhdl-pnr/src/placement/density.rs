@@ -582,6 +582,7 @@ mod tests {
         }).collect();
 
         Board {
+            ddr_bin: None,
             config: BoardConfig {
                 outline: BoardOutline::Rectangle { width_mm: 50.0, height_mm: 50.0 },
                 edge_clearance_mm: 0.5,

@@ -1130,6 +1130,18 @@ pub fn build_board(
         // (above); expansion-intent constraints appended by
         // `intent::lower_board_intents`.
         constraints: iface_constraints,
+        // DDR speed bin from an on-board SDRAM entity's cited
+        // attributes (Micron Table 1 via the entity) — UI-relative
+        // context for the delay/skew grading.
+        ddr_bin: netlist.instances.iter().find_map(|(_, inst)| {
+            let class = inst.attributes.get("component_class").map(String::as_str);
+            if class != Some("sdram") {
+                return None;
+            }
+            let bin = inst.attributes.get("speed_bin")?.clone();
+            let tck: f64 = inst.attributes.get("tck_ns")?.parse().ok()?;
+            Some((bin, tck))
+        }),
     })
 }
 

@@ -37,6 +37,11 @@ pub struct Board {
     /// Populated by the intent-lowering pass after semantic build.
     /// See `bhdl-pnr/docs/constraint_model_v0.md`.
     pub constraints: Vec<crate::constraint::Constraint>,
+    /// DDR speed bin carried by an on-board SDRAM entity (bin label,
+    /// tCK ns) — gives the delay/skew grading UI-relative CONTEXT
+    /// (spread as % of the bin's unit interval). Report-only; the
+    /// declared constraint tolerances keep gating.
+    pub ddr_bin: Option<(String, f64)>,
 }
 
 // ── Board configuration ────────────────────────────────────────────────

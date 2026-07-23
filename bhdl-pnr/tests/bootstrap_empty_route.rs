@@ -67,6 +67,7 @@ fn board_with_fence(fenced: bool) -> (Board, Vec<Route>) {
     };
 
     let board = Board {
+        ddr_bin: None,
         config: BoardConfig {
             outline: BoardOutline::Rectangle { width_mm: 50.0, height_mm: 50.0 },
             ..BoardConfig::default()

@@ -143,6 +143,7 @@ mod tests {
             ],
             groups: vec![],
             placement_recipes: Default::default(),
+            ddr_bin: None,
             constraints: vec![
                 Constraint::DiffPair { p_net: dp_p, n_net: dp_n, spacing_mm: 0.15, length_match_mm: 0.1, length_match_ps: None, source: src.clone() },
                 Constraint::SignalClass { net: clk, class: "CLOCK".into(), max_freq_hz: None, source: src.clone() },
@@ -172,6 +173,7 @@ mod tests {
             groups: vec![],
             placement_recipes: Default::default(),
             constraints: vec![],
+            ddr_bin: None,
         };
         assert!(net_criticality(&board).is_empty());
     }

@@ -85,6 +85,7 @@ fn board_with_blocker() -> (Board, NetId, NetId) {
         };
 
     let board = Board {
+        ddr_bin: None,
         config: BoardConfig {
             outline: BoardOutline::Rectangle { width_mm: 30.0, height_mm: 20.0 },
             ..BoardConfig::default()
@@ -220,6 +221,7 @@ fn route_avoids_nc_pad_on_own_component() {
     ]);
 
     let board = Board {
+        ddr_bin: None,
         config: BoardConfig {
             outline: BoardOutline::Rectangle { width_mm: 30.0, height_mm: 20.0 },
             ..BoardConfig::default()

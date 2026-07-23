@@ -88,6 +88,7 @@ fn fixed_component_not_moved_by_overlap_resolution() {
     );
 
     let board = Board {
+        ddr_bin: None,
         config: BoardConfig {
             outline: BoardOutline::Rectangle { width_mm: 6.0, height_mm: 6.0 },
             ..BoardConfig::default()

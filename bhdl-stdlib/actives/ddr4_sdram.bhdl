@@ -38,6 +38,22 @@ entity DDR4_SDRAM_x8(
     part_no: string      = "MT40A1G8",
     density_gb: int      = 8,
     kicad_symbol: string = "Memory_RAM:MT40A1G8",
+    // ── Speed bin (Micron datasheet CCMTD-1725822587-9875 Rev N,
+    // Table 1 "Key Timing Parameters"). Default = -083 (DDR4-2400,
+    // 17-17-17). A different bin binds its own row from the table:
+    //   -062E 3200 22-22-22 tCK 0.625 tAA 13.75
+    //   -068  2933 21-21-21 tCK 0.682 tAA 14.32
+    //   -075E 2666 18-18-18 tCK 0.750 tAA 13.50
+    //   -075  2666 19-19-19 tCK 0.750 tAA 14.25
+    //   -083E 2400 16-16-16 tCK 0.833 tAA 13.32
+    //   -083  2400 17-17-17 tCK 0.833 tAA 14.16
+    //   -093E 2133 15-15-15 tCK 0.937 tAA 14.06
+    //   -107E 1866 13-13-13 tCK 1.071 tAA 13.92 ──
+    speed_bin: string    = "-083",
+    data_rate_mts: int   = 2400,
+    tck_ns: float        = 0.833,
+    cl: int              = 17,
+    taa_ns: float        = 14.16,
 ) {
     // ─── Data path (x8) + command/address bus ───────────────
     // Unbound interface fields: the synthesizer materialises
@@ -68,14 +84,16 @@ entity DDR4_SDRAM_x8(
     attribute vdd_v           = 1.2;     // VDD = VDDQ, POD12
     attribute vpp_v           = 2.5;     // activation pump rail
     attribute zq_ohm          = 240.0;   // calibration ref, 1 %
-    // DELIBERATE ABSENCE: no speed-bin AC timing set (tCK/tAA/CL
-    // tables). The layout-side consumers that exist today (fly_by
-    // topology, stub_max, delay/skew grading) take their budgets
-    // from the interface constraints and the stackup, not from
-    // per-bin tAA — and JESD79-4 bin tables are precision-critical
-    // numbers we would be citing from memory. Carry them from a
-    // fetched Micron SKU datasheet when a timing-closure consumer
-    // (bin-aware tAA/tRCD margin sign-off) exists.
+    // Speed bin (FETCHED Micron Table 1 — the former deliberate
+    // absence, filled the day its consumer arrived: the delay/skew
+    // grading now reports matched-group spread as % of this bin's
+    // unit interval, UI = tCK/2).
+    attribute speed_bin       = speed_bin;
+    attribute data_rate_mts   = data_rate_mts;
+    attribute tck_ns          = tck_ns;
+    attribute cl              = cl;
+    attribute taa_ns          = taa_ns;
+    attribute datasheet       = "Micron CCMTD-1725822587-9875 Rev N";
     attribute density_gb      = density_gb;     // from constructor arg
     attribute pkg             = "FBGA-78";
     attribute io_standard     = "POD12";

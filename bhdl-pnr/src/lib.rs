@@ -2667,6 +2667,10 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         use crate::constraint::Constraint;
         let idx_of = |nid: NetId| board.nets.iter().position(|n| n.id == nid);
         let mut rows: Vec<String> = Vec::new();
+        // Worst matched-group delay spread — feeds the DDR bin
+        // UI-context row (report-only) when the board carries an
+        // SDRAM entity with a speed bin.
+        let mut worst_group_spread_ps: Option<f64> = None;
         for c in &board.constraints {
             match c {
                 Constraint::DiffPair { p_net, n_net, length_match_mm, length_match_ps, spacing_mm, .. } => {
@@ -2758,6 +2762,11 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                         let max = delays.iter().cloned().fold(0.0_f64, f64::max);
                         let spread = max - min;
                         let ok = spread <= *limit_ps as f64 && min > 0.0;
+                        if min > 0.0 {
+                            worst_group_spread_ps = Some(
+                                worst_group_spread_ps.unwrap_or(0.0).max(spread),
+                            );
+                        }
                         rows.push(format!(
                             "delay-match ({} nets): spread={spread:.2}ps (tolerance {limit_ps}ps) — {}",
                             idxs.len(),
@@ -2774,6 +2783,31 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                         let max = lens.iter().cloned().fold(0.0_f64, f64::max);
                         let spread = max - min;
                         let ok = spread <= *tolerance_mm as f64 && min > 0.0;
+                        // mm-declared groups still contribute delay
+                        // spread to the DDR bin context row (the UI is
+                        // a time; grade the routed delay-domain spread
+                        // through the stackup velocities).
+                        if board.ddr_bin.is_some() && min > 0.0 {
+                            let delays: Vec<f64> = idxs
+                                .iter()
+                                .map(|&i| {
+                                    routing::measure::net_routed_delay_ps(
+                                        &final_routes[i],
+                                        &board.layer_stack,
+                                    )
+                                })
+                                .collect();
+                            let dmin =
+                                delays.iter().cloned().fold(f64::INFINITY, f64::min);
+                            let dmax = delays.iter().cloned().fold(0.0_f64, f64::max);
+                            if dmin > 0.0 {
+                                worst_group_spread_ps = Some(
+                                    worst_group_spread_ps
+                                        .unwrap_or(0.0)
+                                        .max(dmax - dmin),
+                                );
+                            }
+                        }
                         rows.push(format!(
                             "length-match ({} nets): spread={spread:.3}mm (tolerance {tolerance_mm}mm) — {}",
                             idxs.len(),
@@ -3024,6 +3058,22 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         rows.extend(routing::extract::crosstalk_rows(&board, &final_routes, 5));
         rows.extend(routing::extract::ir_rows(&board, &final_routes));
         rows.extend(routing::extract::return_path_rows(&board, &final_routes, 5));
+        // DDR speed-bin CONTEXT: the measured matched-group spread,
+        // restated as a fraction of the bin's unit interval
+        // (UI = tCK/2 — DDR transfers on both clock edges). Report-
+        // only: the declared constraint tolerances above keep gating;
+        // this row just anchors "spread=Xps" to the interface the
+        // silicon actually runs (Micron Table 1, carried on the
+        // SDRAM entity).
+        if let (Some((bin, tck_ns)), Some(spread_ps)) =
+            (&board.ddr_bin, worst_group_spread_ps)
+        {
+            let ui_ps = tck_ns * 1000.0 / 2.0;
+            rows.push(format!(
+                "DDR4 bin {bin} (tCK {tck_ns}ns, UI {ui_ps:.0}ps): worst matched-group spread {spread_ps:.1}ps = {:.2}% of UI (context only — declared tolerances gate)",
+                spread_ps / ui_ps * 100.0
+            ));
+        }
         // Both ends of a link can carry the same constraint (each
         // instance's module holds its side's attrs, resolving to the
         // same nets) — one row per distinct fact.

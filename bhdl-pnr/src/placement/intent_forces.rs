@@ -230,6 +230,7 @@ mod tests {
         };
         let _ = &mut pk;
         let board = Board {
+            ddr_bin: None,
             config: BoardConfig::default(),
             layer_stack: crate::stackup::stackup_preset(StackupPreset::TwoLayer),
             components: vec![mk(a, "A", 0.0, 0.0), mk(b, "B", 10.0, 0.0)],

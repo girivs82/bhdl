@@ -153,6 +153,7 @@ mod tests {
             groups: vec![group],
             placement_recipes: Default::default(),
             constraints: vec![],
+            ddr_bin: None,
         }
     }
 

@@ -63,6 +63,7 @@ fn make_component(
 
 fn empty_board(components: Vec<Component>, constraints: Vec<Constraint>) -> Board {
     Board {
+        ddr_bin: None,
         config: BoardConfig::default(),
         layer_stack: crate::stackup::stackup_preset(StackupPreset::TwoLayer),
         components,
