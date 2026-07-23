@@ -7048,6 +7048,10 @@ fn pour_island_stitch(board: &Board, final_routes: &mut [Route]) -> usize {
         // routes pin-to-pin when the flat stitch is fenced.
         let pour_side = if pl == 0 { BoardSide::Top } else { BoardSide::Bottom };
         let mut pin_anchors: Vec<((f64, f64), (ComponentId, PinId))> = Vec::new();
+        // EVERY same-net pin (any side, any pad kind) — the routed
+        // fallback's stranded endpoint can be a top-side SMD pad that
+        // reaches the island only through its drop stub+via.
+        let mut all_pins: Vec<((f64, f64), (ComponentId, PinId))> = Vec::new();
         for comp in &board.components {
             let cos_t = comp.theta.cos();
             let sin_t = comp.theta.sin();
@@ -7056,14 +7060,13 @@ fn pour_island_stitch(board: &Board, final_routes: &mut [Route]) -> usize {
                     continue;
                 }
                 let Some(pad) = &pin.pad else { continue };
+                let pos = (
+                    comp.x + pin.dx * cos_t - pin.dy * sin_t,
+                    comp.y + pin.dx * sin_t + pin.dy * cos_t,
+                );
+                all_pins.push((pos, (comp.id, pin.pin_id)));
                 if pad.drill_mm.is_some() || comp.side == pour_side {
-                    pin_anchors.push((
-                        (
-                            comp.x + pin.dx * cos_t - pin.dy * sin_t,
-                            comp.y + pin.dx * sin_t + pin.dy * cos_t,
-                        ),
-                        (comp.id, pin.pin_id),
-                    ));
+                    pin_anchors.push((pos, (comp.id, pin.pin_id)));
                 }
             }
         }
@@ -7134,7 +7137,27 @@ fn pour_island_stitch(board: &Board, final_routes: &mut [Route]) -> usize {
                 let stranded_pin = pin_anchors
                     .iter()
                     .find(|(p, _)| raster.label_at(p.0, p.1) == l)
-                    .map(|(_, id)| *id);
+                    .map(|(_, id)| *id)
+                    // A pin-less stranded island (a drop VIA island):
+                    // route from the pad that drop SERVES — the same-
+                    // net pin within stub reach of the island's via
+                    // anchor. The pad already connects to the island
+                    // through its stub+via, so bridging the pad to the
+                    // main island joins the clusters.
+                    .or_else(|| {
+                        island_anchors.iter().find_map(|&(vx, vy)| {
+                            all_pins
+                                .iter()
+                                .filter(|(p, _)| (p.0 - vx).hypot(p.1 - vy) < 1.5)
+                                .min_by(|(a, _), (b, _)| {
+                                    let da = (a.0 - vx).hypot(a.1 - vy);
+                                    let db = (b.0 - vx).hypot(b.1 - vy);
+                                    da.partial_cmp(&db)
+                                        .unwrap_or(std::cmp::Ordering::Equal)
+                                })
+                                .map(|(_, id)| *id)
+                        })
+                    });
                 let target_pin = pin_anchors
                     .iter()
                     .find(|(p, _)| raster.label_at(p.0, p.1) == main)
@@ -7158,7 +7181,14 @@ fn pour_island_stitch(board: &Board, final_routes: &mut [Route]) -> usize {
                         let kept = exact_commit_strip(
                             board, final_routes, ni, &mut rebuilt, 0, &mut bans,
                         );
-                        if kept > 0 {
+                        // A PARTIAL bridge is worse than none: merged
+                        // half-copper becomes fresh litter and the
+                        // island stays stranded. Accept only when the
+                        // stripped route still connects BOTH endpoints.
+                        if kept > 0
+                            && pathfinder::unreached_sink_count(&synth, board, &rebuilt)
+                                == 0
+                        {
                             final_routes[ni].segments.extend(rebuilt.segments);
                             final_routes[ni].vias.extend(rebuilt.vias);
                             info!(
@@ -7273,6 +7303,114 @@ fn plane_drop_iteration(
                 }
             } else {
                 vi += 1;
+            }
+        }
+        // ORPHAN-STUB PRUNE (unspanned drop copper): the else-arm
+        // above removes a swallowed via that carries no span
+        // bookkeeping (fanout-first / victim-rip / routed-fallback
+        // drops append raw copper), leaving its stub behind — pad-
+        // anchored litter with NO plane contact that ships as the
+        // "Track ↔ Via" unconnected pair AND blocks the fixpoint
+        // from re-dropping the pad. Fragment the UNSPANNED TAIL
+        // (indices past all span coverage, so span bookkeeping is
+        // untouched) by endpoint adjacency; keep a fragment only if
+        // it still reaches the plane: a surviving via, copper ON the
+        // plane layer (stitch/fallback merging with the fill), or a
+        // same-net THT barrel. Everything else is dead — removed, so
+        // the pad reads un-served and the next iteration re-sites.
+        let r = &mut final_routes[i];
+        let covered = r
+            .path_spans
+            .iter()
+            .map(|&(ps, pl)| ps + pl)
+            .max()
+            .unwrap_or(0);
+        if r.segments.len() > covered {
+            let pl_layer = board.nets[i].plane_layer.unwrap();
+            let tail: Vec<usize> = (covered..r.segments.len()).collect();
+            // Union-find fragments over shared endpoints (1µm tol).
+            let n = tail.len();
+            let mut comp: Vec<usize> = (0..n).collect();
+            fn find(c: &mut Vec<usize>, a: usize) -> usize {
+                let mut a = a;
+                while c[a] != a {
+                    c[a] = c[c[a]];
+                    a = c[a];
+                }
+                a
+            }
+            let close = |a: (f64, f64), b: (f64, f64)| {
+                (a.0 - b.0).abs() < 1e-3 && (a.1 - b.1).abs() < 1e-3
+            };
+            for x in 0..n {
+                for y in x + 1..n {
+                    let (sx, sy) = (&r.segments[tail[x]], &r.segments[tail[y]]);
+                    if close(sx.start, sy.start)
+                        || close(sx.start, sy.end)
+                        || close(sx.end, sy.start)
+                        || close(sx.end, sy.end)
+                    {
+                        let (ra, rb) = (find(&mut comp, x), find(&mut comp, y));
+                        if ra != rb {
+                            comp[ra] = rb;
+                        }
+                    }
+                }
+            }
+            let mut root_alive = vec![false; n];
+            let tht: Vec<(f64, f64)> = board
+                .components
+                .iter()
+                .flat_map(|c2| {
+                    let (ct, st) = (c2.theta.cos(), c2.theta.sin());
+                    c2.pins
+                        .iter()
+                        .filter(|p| {
+                            p.net == Some(board.nets[i].id)
+                                && p.pad.as_ref().and_then(|pd| pd.drill_mm).is_some()
+                        })
+                        .map(move |p| {
+                            (
+                                c2.x + p.dx * ct - p.dy * st,
+                                c2.y + p.dx * st + p.dy * ct,
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            for x in 0..n {
+                let sg = &r.segments[tail[x]];
+                let alive = sg.layer == pl_layer
+                    || r.vias.iter().any(|v| {
+                        close(sg.start, (v.x, v.y)) || close(sg.end, (v.x, v.y))
+                    })
+                    || tht.iter().any(|&(tx, ty)| {
+                        [sg.start, sg.end]
+                            .iter()
+                            .any(|e| (e.0 - tx).hypot(e.1 - ty) < 0.7)
+                    });
+                if alive {
+                    let rx = find(&mut comp, x);
+                    root_alive[rx] = true;
+                }
+            }
+            let mut doomed: Vec<usize> = (0..n)
+                .filter(|&x| {
+                    let rx = find(&mut comp, x);
+                    !root_alive[rx]
+                })
+                .map(|x| tail[x])
+                .collect();
+            if !doomed.is_empty() {
+                log::info!(
+                    "plane drop: pruned {} orphan stub segment(s) on '{}' (dead drop litter)",
+                    doomed.len(),
+                    board.nets[i].name
+                );
+                doomed.sort_unstable_by(|a, b| b.cmp(a));
+                for di in doomed {
+                    r.segments.remove(di);
+                }
             }
         }
     }
