@@ -1,0 +1,11 @@
+# bhdl.lock — auto-generated. Pins exact library versions + content
+# hashes for reproducible builds. Do not edit by hand; commit it.
+
+version = 1
+part = []
+
+[[library]]
+name = "tests"
+version = "0.1.0"
+hash = "sha256:71c32f0fe89ff37ce5329147e691ca91124812829add32e753f1e0762511c3d6"
+source = "path:tests"
