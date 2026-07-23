@@ -1,9 +1,10 @@
 # Project manifest for the bhdl corpus itself: boards under tests/
-# import test-support entities through the `tests` library namespace
-# (e.g. test_model_import_demo's cross-file §5 regulator). Only
-# declared libraries resolve — bhdl-stdlib stays implicit.
+# import test-support entities through the `corpus-support` library
+# (e.g. test_model_import_demo's cross-file §5 regulator). The root
+# is corpus-support/ — NOT tests/ — so growing the corpus never drifts
+# the lock hash. Only declared libraries resolve; bhdl-stdlib implicit.
 [project]
 name = "bhdl-corpus"
 
 [libraries]
-tests = { version = "0.1.0", path = "tests" }
+corpus-support = { version = "0.1.0", path = "corpus-support" }

@@ -7949,13 +7949,17 @@ fn validate_and_rip(
         // at corners and could miss grazes between samples.)
         let seg_hits_rect = |a: (f64, f64), b: (f64, f64), p: &PadRect, gap: f64| -> bool {
             let rc = p.corner_r.min(p.hx).min(p.hy);
+            // Inset half-extents once, so the rect can never invert by
+            // 1 ulp when rc == hx/hy (same epsilon as the clamp sites).
+            let dx = (p.hx - rc).max(0.0);
+            let dy = (p.hy - rc).max(0.0);
             geom::segment_rect_dist(
                 a,
                 b,
-                p.cx - p.hx + rc,
-                p.cy - p.hy + rc,
-                p.cx + p.hx - rc,
-                p.cy + p.hy - rc,
+                p.cx - dx,
+                p.cy - dy,
+                p.cx + dx,
+                p.cy + dy,
             ) - rc
                 < gap - 1e-6
         };
@@ -8247,8 +8251,15 @@ fn validate_and_rip(
                             // amputated gate-legal cross-under vias in
                             // an endless re-commit loop.
                             let rc = p.corner_r.min(p.hx).min(p.hy);
-                            let nx = v.x.clamp(p.cx - p.hx + rc, p.cx + p.hx - rc);
-                            let ny = v.y.clamp(p.cy - p.hy + rc, p.cy + p.hy - rc);
+                            // Inset half-extents computed ONCE: writing the
+                            // bounds as (cx-hx)+rc / (cx+hx)-rc differs by
+                            // 1 ulp when rc == hx (fine-pitch pads whose
+                            // corner radius saturates) and clamp panics on
+                            // min > max by ~1e-15.
+                            let dx = (p.hx - rc).max(0.0);
+                            let dy = (p.hy - rc).max(0.0);
+                            let nx = v.x.clamp(p.cx - dx, p.cx + dx);
+                            let ny = v.y.clamp(p.cy - dy, p.cy + dy);
                             if (v.x - nx).hypot(v.y - ny) - rc < pad_margin - 1e-6 {
                                 bad = true;
                                 why = "foreign-pad";

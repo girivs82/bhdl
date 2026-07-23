@@ -5,7 +5,7 @@ version = 1
 part = []
 
 [[library]]
-name = "tests"
+name = "corpus-support"
 version = "0.1.0"
-hash = "sha256:71c32f0fe89ff37ce5329147e691ca91124812829add32e753f1e0762511c3d6"
-source = "path:tests"
+hash = "sha256:cce393ddd179e36cb49df3835bc9f564754cd8223d848c986192e538031e0aee"
+source = "path:corpus-support"

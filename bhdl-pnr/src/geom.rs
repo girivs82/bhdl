@@ -1125,8 +1125,13 @@ impl ClearanceIndex {
                             // conflicts. Rounded corners modeled exactly
                             // (inset rect + disc).
                             let rc = corner_r.min(*hx).min(*hy);
-                            let nx = x.clamp(cx - hx + rc, cx + hx - rc);
-                            let ny = y.clamp(cy - hy + rc, cy + hy - rc);
+                            // Inset half-extents once — (cx-hx)+rc vs
+                            // (cx+hx)-rc differ by 1 ulp at rc == hx and
+                            // clamp panics (see validate_and_rip).
+                            let dx = (hx - rc).max(0.0);
+                            let dy = (hy - rc).max(0.0);
+                            let nx = x.clamp(cx - dx, cx + dx);
+                            let ny = y.clamp(cy - dy, cy + dy);
                             if (x - nx).hypot(y - ny) - rc < r + self.spacing - EPS {
                                 return Some(Conflict::Pad { net: *n, at: (*cx, *cy) });
                             }

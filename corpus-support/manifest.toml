@@ -2,5 +2,5 @@
 # test-support entities (lib_eff_reg.bhdl etc.) through the declared
 # `tests` namespace in the repo-root bhdl.toml.
 [library]
-name = "tests"
+name = "corpus-support"
 version = "0.1.0"
