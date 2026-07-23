@@ -1,0 +1,232 @@
+// STM32F103Vx — 32-bit ARM Cortex-M3 MCU family, LQFP-100 (the V
+// package of the stm32f103cx/rx product line; one entity per
+// package, parametric within — see stm32f103cx.bhdl's doctrine).
+//
+// The PIN MAP is read from ST's OWN published artifact: the [Pin]
+// table of vendor/ibis/st/stm32f1-ibis/f103vbt.ibs (pin numbers
+// below cite it; [Component] STM32F103VBT, "LQFP100 package").
+// LQFP-100 adds over the R package: the full Port D and Port E
+// banks (PD0..PD15 as plain GPIO — the crystal stays on dedicated
+// OSC_IN/OSC_OUT), a FIFTH VDD/VSS pair, dedicated VREF+/VREF−
+// analog-reference pins, and one NC pad (pin 73).
+//
+//   ┌────────────┬───────────┬──────────┬───────────────┐
+//   │ SKU        │ flash_kb  │ sram_kb  │ vendor .ibs   │
+//   ├────────────┼───────────┼──────────┼───────────────┤
+//   │ F103V8T6   │      64   │     20   │ f103v8t.ibs   │
+//   │ F103VBT6   │     128   │     20   │ f103vbt.ibs   │  ← default
+//   └────────────┴───────────┴──────────┴───────────────┘
+// (The *h variants in the vendor tree are the BGA-100 package —
+// a different footprint, out of scope for this LQFP entity.)
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+
+entity STM32F103Vx(
+    part_no: string      = "STM32F103VBT6",
+    flash_kb: int        = 128,
+    sram_kb: int         = 20,
+    kicad_symbol: string = "MCU_ST_STM32F1:STM32F103VBTx",
+) {
+    // ─── Port A ─────────────────────────────────────────────
+    pin PA0:  signal inout;   // WKUP / USART2_CTS / ADC0       (pin 23)
+    pin PA1:  signal inout;   // USART2_RTS / ADC1              (pin 24)
+    pin PA2:  signal inout;   // USART2_TX / ADC2               (pin 25)
+    pin PA3:  signal inout;   // USART2_RX / ADC3               (pin 26)
+    pin PA4:  signal inout;   // SPI1_NSS / ADC4                (pin 29)
+    pin PA5:  signal inout;   // SPI1_SCK / ADC5                (pin 30)
+    pin PA6:  signal inout;   // SPI1_MISO / ADC6               (pin 31)
+    pin PA7:  signal inout;   // SPI1_MOSI / ADC7               (pin 32)
+    pin PA8:  signal inout;   // USART1_CK / TIM1_CH1 / MCO     (pin 67)
+    pin PA9:  signal inout;   // USART1_TX                      (pin 68)
+    pin PA10: signal inout;   // USART1_RX                      (pin 69)
+    pin PA11: signal inout;   // USART1_CTS / USB_DM            (pin 70)
+    pin PA12: signal inout;   // USART1_RTS / USB_DP            (pin 71)
+    pin PA13: signal inout;   // SWDIO / JTMS                   (pin 72)
+    pin PA14: signal inout;   // SWCLK / JTCK                   (pin 76)
+    pin PA15: signal inout;   // JTDI                           (pin 77)
+
+    // ─── Port B ─────────────────────────────────────────────
+    pin PB0:  signal inout;   // ADC8 / TIM3_CH3                (pin 35)
+    pin PB1:  signal inout;   // ADC9 / TIM3_CH4                (pin 36)
+    pin PB2:  signal inout;   // BOOT1                          (pin 37)
+    pin PB3:  signal inout;   // JTDO                           (pin 89)
+    pin PB4:  signal inout;   // JNTRST                         (pin 90)
+    pin PB5:  signal inout;   // I2C1_SMBAI                     (pin 91)
+    pin PB6:  signal inout;   // I2C1_SCL / USART1_TX_alt       (pin 92)
+    pin PB7:  signal inout;   // I2C1_SDA / USART1_RX_alt       (pin 93)
+    pin PB8:  signal inout;   // I2C1_SCL_alt / CAN_RX          (pin 95)
+    pin PB9:  signal inout;   // I2C1_SDA_alt / CAN_TX          (pin 96)
+    pin PB10: signal inout;   // I2C2_SCL / USART3_TX           (pin 47)
+    pin PB11: signal inout;   // I2C2_SDA / USART3_RX           (pin 48)
+    pin PB12: signal inout;   // SPI2_NSS                       (pin 51)
+    pin PB13: signal inout;   // SPI2_SCK                       (pin 52)
+    pin PB14: signal inout;   // SPI2_MISO                      (pin 53)
+    pin PB15: signal inout;   // SPI2_MOSI                      (pin 54)
+
+    // ─── Port C ─────────────────────────────────────────────
+    pin PC0:  signal inout;   // ADC10                          (pin 15)
+    pin PC1:  signal inout;   // ADC11                          (pin 16)
+    pin PC2:  signal inout;   // ADC12                          (pin 17)
+    pin PC3:  signal inout;   // ADC13                          (pin 18)
+    pin PC4:  signal inout;   // ADC14                          (pin 33)
+    pin PC5:  signal inout;   // ADC15                          (pin 34)
+    pin PC6:  signal inout;   // TIM3_CH1                       (pin 63)
+    pin PC7:  signal inout;   // TIM3_CH2                       (pin 64)
+    pin PC8:  signal inout;   // TIM3_CH3                       (pin 65)
+    pin PC9:  signal inout;   // TIM3_CH4                       (pin 66)
+    pin PC10: signal inout;   // USART3_TX_alt                  (pin 78)
+    pin PC11: signal inout;   // USART3_RX_alt                  (pin 79)
+    pin PC12: signal inout;   // USART3_CK                      (pin 80)
+    pin PC13: signal inout;   // TAMPER / RTC out               (pin 7)
+    pin PC14: signal inout;   // OSC32_IN                       (pin 8)
+    pin PC15: signal inout;   // OSC32_OUT                      (pin 9)
+
+    // ─── Port D (full bank — plain GPIO on LQFP-100) ────────
+    pin PD0:  signal inout;   // CAN_RX_alt / FSMC_D2           (pin 81)
+    pin PD1:  signal inout;   // CAN_TX_alt / FSMC_D3           (pin 82)
+    pin PD2:  signal inout;   // TIM3_ETR                       (pin 83)
+    pin PD3:  signal inout;   // USART2_CTS_alt                 (pin 84)
+    pin PD4:  signal inout;   // USART2_RTS_alt                 (pin 85)
+    pin PD5:  signal inout;   // USART2_TX_alt                  (pin 86)
+    pin PD6:  signal inout;   // USART2_RX_alt                  (pin 87)
+    pin PD7:  signal inout;   // USART2_CK_alt                  (pin 88)
+    pin PD8:  signal inout;   // USART3_TX_remap                (pin 55)
+    pin PD9:  signal inout;   // USART3_RX_remap                (pin 56)
+    pin PD10: signal inout;   // USART3_CK_remap                (pin 57)
+    pin PD11: signal inout;   // USART3_CTS_remap               (pin 58)
+    pin PD12: signal inout;   // TIM4_CH1_remap                 (pin 59)
+    pin PD13: signal inout;   // TIM4_CH2_remap                 (pin 60)
+    pin PD14: signal inout;   // TIM4_CH3_remap                 (pin 61)
+    pin PD15: signal inout;   // TIM4_CH4_remap                 (pin 62)
+
+    // ─── Port E (full bank) ─────────────────────────────────
+    pin PE0:  signal inout;   // TIM4_ETR                       (pin 97)
+    pin PE1:  signal inout;   //                                (pin 98)
+    pin PE2:  signal inout;   // TRACECK                        (pin 1)
+    pin PE3:  signal inout;   // TRACED0                        (pin 2)
+    pin PE4:  signal inout;   // TRACED1                        (pin 3)
+    pin PE5:  signal inout;   // TRACED2                        (pin 4)
+    pin PE6:  signal inout;   // TRACED3                        (pin 5)
+    pin PE7:  signal inout;   // TIM1_ETR_remap                 (pin 38)
+    pin PE8:  signal inout;   // TIM1_CH1N_remap                (pin 39)
+    pin PE9:  signal inout;   // TIM1_CH1_remap                 (pin 40)
+    pin PE10: signal inout;   // TIM1_CH2N_remap                (pin 41)
+    pin PE11: signal inout;   // TIM1_CH2_remap                 (pin 42)
+    pin PE12: signal inout;   // TIM1_CH3N_remap                (pin 43)
+    pin PE13: signal inout;   // TIM1_CH3_remap                 (pin 44)
+    pin PE14: signal inout;   // TIM1_CH4_remap                 (pin 45)
+    pin PE15: signal inout;   // TIM1_BKIN_remap                (pin 46)
+
+    // ─── HSE crystal / reset / boot / NC ────────────────────
+    pin OSC_IN:  signal inout; // HSE crystal in                (pin 12)
+    pin OSC_OUT: signal inout; // HSE crystal out               (pin 13)
+    pin NRST:  signal inout;  // active-low reset               (pin 14)
+    pin BOOT0: signal inout;  //                                (pin 94)
+    pin NC_73: signal inout;  // no connect (ST [Pin] table)    (pin 73)
+
+    // ─── Power, analog reference (5 digital pairs + VREF) ───
+    // VDD_1 is virtual to gate the expansion (same as Cx/Rx).
+    pin VDD_1: signal inout virtual;  //                        (pin 50)
+    pin VDD_2: signal inout;          //                        (pin 75)
+    pin VDD_3: signal inout;          //                        (pin 100)
+    pin VDD_4: signal inout;          //                        (pin 28)
+    pin VDD_5: signal inout;          //                        (pin 11)
+    pin VDDA:  signal inout;          // analog VDD             (pin 22)
+    pin VREF_P: signal inout;         // ADC reference +        (pin 21)
+    pin VREF_N: signal inout;         // ADC reference −        (pin 20)
+    pin VBAT:  signal inout;          // backup-domain VDD      (pin 6)
+    pin VSS_1: signal inout;          //                        (pin 49)
+    pin VSS_2: signal inout;          //                        (pin 74)
+    pin VSS_3: signal inout;          //                        (pin 99)
+    pin VSS_4: signal inout;          //                        (pin 27)
+    pin VSS_5: signal inout;          //                        (pin 10)
+    pin VSSA:  signal inout;          // analog VSS             (pin 19)
+
+    // ─── Peripheral interfaces (same default muxes) ─────────
+    interface SPI spi1 {
+        MOSI = PA7;
+        MISO = PA6;
+        SCK  = PA5;
+        CS   = PA4;
+    }
+    interface SPI spi2 {
+        MOSI = PB15;
+        MISO = PB14;
+        SCK  = PB13;
+        CS   = PB12;
+    }
+    interface I2C i2c1 {
+        SDA = PB7;
+        SCL = PB6;
+    }
+    interface I2C i2c2 {
+        SDA = PB11;
+        SCL = PB10;
+    }
+    interface UART uart1 {
+        TX = PA9;
+        RX = PA10;
+    }
+    interface UART uart2 {
+        TX = PA2;
+        RX = PA3;
+    }
+    interface UART uart3 {
+        TX = PB10;
+        RX = PB11;
+    }
+
+    attribute component_class = "microcontroller";
+    attribute family          = "STM32F1";
+    attribute architecture    = "ARM Cortex-M3";
+    attribute flash_kb        = flash_kb;
+    attribute sram_kb         = sram_kb;
+    attribute max_clock_mhz   = 72;
+    attribute usb             = "USB 2.0 device";
+    attribute pkg             = "LQFP-100";
+    attribute part_number     = part_no;
+    attribute kicad_symbol    = kicad_symbol;
+    // ── Supply (DS5319 §5.3.5, run mode from flash, 72 MHz all
+    // peripherals on: 50 mA typ — same die family) ──
+    attribute i_supply        = 50mA;
+
+    simulation {
+        model {
+            node VDD_1 draws = self.i_supply;
+            // ST vendor IBIS, f103vbt.ibs = this exact SKU/package
+            // ([Component] STM32F103VBT — note trailing T, ST's LQFP
+            // marker). Same suffixed-name maps as Cx/Rx; the NC pad
+            // and supplies don't stamp.
+            ibis "vendor/ibis/st/stm32f1-ibis/f103vbt.ibs" component "STM32F103VBT" corner typ map { PC13 = PC13-ANTI_TAMP; PC14 = PC14-OSC32_IN; PA0 = PA0-WKUP; };
+        }
+    }
+
+    // ─── Auto-expansion: datasheet support passives ─────────
+    // AN2867 network extended to the fifth VDD/VSS pair, plus the
+    // LQFP-100-only VREF+ reference decoupling (AN2867 §4.3 class:
+    // 1 µF + 10 nF at the pin, referenced to VREF−).
+    expansion {
+        VDD_1 -> C_vdd1: Cap(100nF).1; C_vdd1.2 -> VSS_1;
+        VDD_1 -> C_bulk: Cap(4.7µF).1; C_bulk.2 -> VSS_1;
+        VDD_2 -> C_vdd2: Cap(100nF).1; C_vdd2.2 -> VSS_2;
+        VDD_3 -> C_vdd3: Cap(100nF).1; C_vdd3.2 -> VSS_3;
+        VDD_4 -> C_vdd4: Cap(100nF).1; C_vdd4.2 -> VSS_4;
+        VDD_5 -> C_vdd5: Cap(100nF).1; C_vdd5.2 -> VSS_5;
+        VDDA  -> C_vdda1: Cap(1µF).1;  C_vdda1.2 -> VSSA;
+        VDDA  -> C_vdda2: Cap(10nF).1; C_vdda2.2 -> VSSA;
+        VREF_P -> C_vref1: Cap(1µF).1;  C_vref1.2 -> VREF_N;
+        VREF_P -> C_vref2: Cap(10nF).1; C_vref2.2 -> VREF_N;
+        VBAT  -> C_vbat: Cap(100nF).1; C_vbat.2 -> VSS_1;
+
+        // NRST pullup + power-on RC.
+        VDD_1 -> R_nrst: Res(10kΩ).1;  R_nrst.2 -> NRST;
+        NRST  -> C_nrst: Cap(100nF).1; C_nrst.2 -> VSS_1;
+
+        // I²C pullups (gated on board-level wiring, per #89).
+        PB7  -> R_pu_sda1: Res(4.7kΩ).1; R_pu_sda1.2 -> VDD_1;
+        PB6  -> R_pu_scl1: Res(4.7kΩ).1; R_pu_scl1.2 -> VDD_1;
+        PB11 -> R_pu_sda2: Res(4.7kΩ).1; R_pu_sda2.2 -> VDD_1;
+        PB10 -> R_pu_scl2: Res(4.7kΩ).1; R_pu_scl2.2 -> VDD_1;
+    }
+}

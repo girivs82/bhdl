@@ -20,7 +20,9 @@ total_v=0; total_u=0; boards=0; failed=0
 for f in tests/circuits/realistic/*.bhdl; do
   b=$(basename "$f" .bhdl)
   pcb="$outdir/$b.kicad_pcb"
-  if ! BHDL_JLCPARTS_DB=/nonexistent RUST_LOG=off timeout 600 \
+  # 1500s ceiling: the LQFP-100 board (test_stm32_vb_panel) legitimately
+  # needs ~18 min end-to-end — a recorded perf-arc target, not a hang.
+  if ! BHDL_JLCPARTS_DB=/nonexistent RUST_LOG=off timeout 1500 \
       ./target/release/bhdl-cli "$f" layout -o "$pcb" >"$outdir/$b.layout.log" 2>&1; then
     echo "$b: LAYOUT-FAILED"
     failed=$((failed+1))

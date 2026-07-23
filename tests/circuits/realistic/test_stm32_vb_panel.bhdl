@@ -1,0 +1,91 @@
+// STM32F103VB control-panel core — the LQFP-100 V package on 3.3 V.
+// This fixture exercises what only the V package HAS: the Port E
+// bank (PE8..PE11, the TIM1-remap complementary-PWM pins, driving a
+// 4-LED status bar), the Port D bank (PD8/PD9 = USART3 remap, out to
+// a comms header), and the dedicated VREF+/VREF− reference pins
+// (VREF− to analog ground, VREF+ fed from VDDA — the expansion's
+// 1 µF + 10 nF reference decoupling lands across them). PA0-WKUP and
+// PC13-ANTI_TAMP ride the suffixed IBIS maps on the VBT component,
+// same proof as board 89 but against f103vbt.ibs.
+
+import { STM32F103Vx } from "bhdl-stdlib/actives/stm32f103vx.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
+import { Pin_Header_01x03 } from "bhdl-stdlib/connectors/pin_header.bhdl";
+import { Pin_Header_01x04 } from "bhdl-stdlib/connectors/pin_header.bhdl";
+
+board Stm32VbPanel {
+    power VDD = 3.3V @ 150mA;
+    ground GND;
+
+    mcu: STM32F103Vx();
+
+    // Power: five digital VDD/VSS pairs, one die rail.
+    @VDD -> mcu.VDD_1;
+    @VDD -> mcu.VDD_2;
+    @VDD -> mcu.VDD_3;
+    @VDD -> mcu.VDD_4;
+    @VDD -> mcu.VDD_5;
+    @VDD -> mcu.VDDA;
+    mcu.VSS_1 -> @GND;
+    mcu.VSS_2 -> @GND;
+    mcu.VSS_3 -> @GND;
+    mcu.VSS_4 -> @GND;
+    mcu.VSS_5 -> @GND;
+    mcu.VSSA  -> @GND;
+    mcu.VBAT  -> @VDD;      // no backup battery
+    // ADC reference: VREF+ from the analog rail, VREF− to analog
+    // ground (the expansion's reference caps sit across the pair).
+    @VDD -> mcu.VREF_P;
+    mcu.VREF_N -> @GND;
+
+    // Port E status bar: PE8..PE11 each sink an LED from VDD.
+    @VDD -> r_e8: Res(1kΩ).1;
+    r_e8.2 -> d_e8: LED(color="green").A;
+    d_e8.K -> mcu.PE8;
+    @VDD -> r_e9: Res(1kΩ).1;
+    r_e9.2 -> d_e9: LED(color="yellow").A;
+    d_e9.K -> mcu.PE9;
+    @VDD -> r_e10: Res(1kΩ).1;
+    r_e10.2 -> d_e10: LED(color="yellow").A;
+    d_e10.K -> mcu.PE10;
+    @VDD -> r_e11: Res(1kΩ).1;
+    r_e11.2 -> d_e11: LED(color="red").A;
+    d_e11.K -> mcu.PE11;
+
+    // Port D comms: USART3 remap out to a header.
+    J_COM: Pin_Header_01x04();
+    @VDD -> J_COM.1;
+    mcu.PD8 -> J_COM.2;     // USART3_TX (remap)
+    mcu.PD9 -> J_COM.3;     // USART3_RX (remap)
+    J_COM.4 -> @GND;
+
+    // PA0-WKUP button input (suffixed-map pin, VBT component).
+    @VDD -> r_wkup: Res(10kΩ).1;
+    r_wkup.2 -> WKUP;
+    WKUP -> mcu.PA0;
+    J_BTN: Pin_Header_01x03();
+    WKUP -> J_BTN.1;
+    J_BTN.2 -> @GND;
+    J_BTN.3 -> @GND;
+
+    // PC13-ANTI_TAMP LED (suffixed-map pin), active-low as always.
+    @VDD -> r_rtc: Res(1kΩ).1;
+    r_rtc.2 -> d_rtc: LED(color="green").A;
+    d_rtc.K -> mcu.PC13;
+
+    // SWD header.
+    J_SWD: Pin_Header_01x04();
+    @VDD -> J_SWD.1;
+    mcu.PA13 -> J_SWD.2;    // SWDIO
+    mcu.PA14 -> J_SWD.3;    // SWCLK
+    J_SWD.4 -> @GND;
+}
+
+layout Stm32VbPanel {
+    layer_stackup 2;
+    outline rect 62 50;
+    place J_BTN at (2.6, 14);
+    place J_COM at (2.6, 38);
+    place J_SWD at (59.4, 25);
+}
