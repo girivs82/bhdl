@@ -1712,6 +1712,123 @@ pub struct GateDriveRow {
     pub i_avg_a: f64,
 }
 
+/// One MLCC's effective capacitance at its SOLVED DC bias — the
+/// consumer for MPN-bound dc_bias_c_* curve points (SKU-specific
+/// data; the generic Cap class deliberately carries none).
+pub struct MlccBiasRow {
+    pub instance: String,
+    pub c_nom_uf: f64,
+    pub v_rated: f64,
+    pub v_solved: f64,
+    pub factor: f64,
+    pub c_eff_uf: f64,
+    pub verdict: String,
+}
+
+/// Compute effective capacitance under DC bias for every capacitor
+/// instance that carries dc_bias_c_* points (linear interpolation in
+/// volts between the curve points, end-clamped). Solved bias = the
+/// instance's max pin-to-pin DC voltage, same source the voltage-
+/// rating margin uses.
+pub fn compute_mlcc_bias(
+    netlist: &Netlist,
+    net_voltages: &HashMap<String, f64>,
+    entity_attrs: &HashMap<String, HashMap<String, String>>,
+) -> Vec<MlccBiasRow> {
+    let inst_v = compute_instance_max_voltages(netlist, net_voltages);
+    let mut rows = Vec::new();
+    for (_, inst) in sorted_instances(netlist) {
+        let entity = netlist
+            .modules
+            .get(inst.definition)
+            .map(|m| m.name.clone())
+            .unwrap_or_default();
+        let attrs = entity_attrs.get(&entity);
+        let get = |name: &str| -> Option<f64> {
+            inst.attributes
+                .get(name)
+                .or_else(|| attrs.and_then(|a| a.get(name)))
+                .and_then(|v| parse_si(v))
+        };
+        // Curve points at integer volts 0..=10 — collect whatever the
+        // part declares.
+        let mut pts: Vec<(f64, f64)> = (0..=10)
+            .filter_map(|v| get(&format!("dc_bias_c_{v}v")).map(|f| (v as f64, f)))
+            .collect();
+        if pts.len() < 2 {
+            continue;
+        }
+        pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        let Some(&v_solved) = inst_v.get(inst.name.as_str()) else { continue };
+        let Some(c_nom) = get("capacitance") else { continue };
+        let v_rated = get("voltage_rating").unwrap_or(0.0);
+        let factor = {
+            let v = v_solved.abs();
+            if v <= pts[0].0 {
+                pts[0].1
+            } else if v >= pts[pts.len() - 1].0 {
+                pts[pts.len() - 1].1
+            } else {
+                let mut f = pts[pts.len() - 1].1;
+                for w in pts.windows(2) {
+                    if v <= w[1].0 {
+                        let t = (v - w[0].0) / (w[1].0 - w[0].0);
+                        f = w[0].1 + t * (w[1].1 - w[0].1);
+                        break;
+                    }
+                }
+                f
+            }
+        };
+        let verdict = if factor < 0.5 {
+            "SIZE-UP (>50% lost to bias)".to_string()
+        } else if factor < 0.8 {
+            "DERATED".to_string()
+        } else {
+            "OK".to_string()
+        };
+        rows.push(MlccBiasRow {
+            instance: inst.name.clone(),
+            c_nom_uf: c_nom * 1e6,
+            v_rated,
+            v_solved,
+            factor,
+            c_eff_uf: c_nom * factor * 1e6,
+            verdict,
+        });
+    }
+    rows
+}
+
+pub fn format_mlcc_bias(rows: &[MlccBiasRow]) -> Option<String> {
+    if rows.is_empty() {
+        return None;
+    }
+    let mut out = String::new();
+    out.push_str("\n### MLCC DC-bias derating (solved bias vs MPN curve)\n\n");
+    out.push_str("| Instance | C nominal | Rated | Solved bias | C effective | Verdict |\n");
+    out.push_str("|----------|-----------|-------|-------------|-------------|--------|\n");
+    for r in rows {
+        out.push_str(&format!(
+            "| {} | {:.1}µF | {:.1}V | {:.2}V | {:.1}µF ({:.0}%) | {} |\n",
+            r.instance,
+            r.c_nom_uf,
+            r.v_rated,
+            r.v_solved,
+            r.c_eff_uf,
+            r.factor * 100.0,
+            r.verdict
+        ));
+    }
+    out.push_str(
+        "\n_Class-II MLCCs lose capacitance under DC bias; the factor is \
+         interpolated from the part's OWN datasheet curve at the solved \
+         operating voltage. Only MPN-bound parts carry curves — a generic \
+         Cap prints nothing here (absence over invention)._\n",
+    );
+    Some(out)
+}
+
 /// One optocoupler's solved transfer point vs its datasheet envelope
 /// — the consumer for the CTR derating chain the entity carries
 /// (rank envelope × Fig.6 curve × temperature × IRED aging).

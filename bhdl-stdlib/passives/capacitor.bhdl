@@ -36,6 +36,43 @@ entity Cap(value: capacitance, voltage: voltage = 50V) {
 
 alias Capacitor = Cap;
 
+// CC0603MRX5R5BB106 — Yageo 10 µF / 6.3 V / X5R / 0603, the
+// MPN-BOUND carrier for DC-bias derating data (the doctrine: bias
+// curves are SKU-specific, so they ride a real part, never the Cap
+// class). Every number below is read from the FETCHED Yageo
+// High-Capacitance MLCC catalog: the "DC-Bias Performance" figure's
+// X5R/0603/10µF curve (its steepest — larger cases lose far less),
+// the X5R product-range table, and the ordering-code page (PN
+// constructed per that page: M=±20%, R=7" reel, 5=6.3 V, BB,
+// 106=10 µF).
+//
+// dc_bias_c_NV = C_eff/C_nominal at N volts DC. THE trap this data
+// exists to catch: on a 5 V rail this "10 µF" is 3.2 µF — the
+// sign-off's MLCC DC-bias section grades the SOLVED bias.
+entity CC0603_X5R_10uF_6V3(part_no: string = "CC0603MRX5R5BB106") {
+    pin 1: signal inout;
+    pin 2: signal inout;
+
+    attribute component_class = "capacitor";
+    attribute part_number     = part_no;
+    attribute datasheet       = "Yageo High-Cap MLCC catalog";
+    attribute capacitance     = 10µF;
+    attribute voltage_rating  = 6.3V;
+    attribute tolerance       = 0.20;
+    attribute dielectric      = "X5R";
+    attribute esr             = 0.01Ω;
+    attribute data_source     = "mpn: Yageo catalog DC-Bias fig (curve), ordering-code page (PN)";
+    // DC-bias curve points (C_eff/C_nom), read from the figure:
+    attribute dc_bias_c_0v    = 1.00;
+    attribute dc_bias_c_1v    = 0.92;
+    attribute dc_bias_c_2v    = 0.67;
+    attribute dc_bias_c_3v    = 0.48;
+    attribute dc_bias_c_4v    = 0.38;
+    attribute dc_bias_c_5v    = 0.32;
+    attribute dc_bias_c_6v    = 0.30;
+    attribute kicad_symbol    = "Device:C";
+}
+
 entity ElectrolyticCap(value: capacitance, voltage: voltage) {
     pin pos: signal inout;
     pin neg: signal inout;

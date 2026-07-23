@@ -3817,6 +3817,19 @@ async fn cmd_bom(
                                 print!("{ot}");
                             }
                         }
+                        // MLCC DC-bias derating: MPN-bound curves only.
+                        {
+                            let rows = bhdl_synthesizer::signoff::compute_mlcc_bias(
+                                &netlist,
+                                &sv,
+                                &analysis.entity_attribute_index,
+                            );
+                            if let Some(mb) =
+                                bhdl_synthesizer::signoff::format_mlcc_bias(&rows)
+                            {
+                                print!("{mb}");
+                            }
+                        }
                     }
                     Err(e) => eprintln!(
                         "  {}",

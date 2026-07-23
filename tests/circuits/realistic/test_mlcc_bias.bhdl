@@ -1,0 +1,41 @@
+// The MLCC DC-bias trap, as a board: a 10 µF / 6.3 V / X5R 0603 bulk
+// cap on a 5 V rail. On paper the rail has 10 µF of bulk; per the
+// part's OWN datasheet curve it has 3.2 µF (factor 0.32 at 5 V) —
+// the sign-off's "MLCC DC-bias derating" section reads the curve at
+// the SOLVED bias and says SIZE-UP. The 100 nF (generic Cap, no
+// curve carried) deliberately prints nothing there: absence over
+// invention. LED load keeps the rail solve live.
+
+import { CC0603_X5R_10uF_6V3 } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
+import { Pin_Header_01x03 } from "bhdl-stdlib/connectors/pin_header.bhdl";
+
+board MlccBias {
+    port VCC: power in = 5V @ 50mA;
+    port GND: ground;
+
+    J_PWR: Pin_Header_01x03();
+    @VCC -> J_PWR.1;
+    J_PWR.2 -> @GND;
+    J_PWR.3 -> @GND;
+
+    // The trap: nominal 10 µF of "bulk" on the 5 V rail.
+    @VCC -> c_bulk: CC0603_X5R_10uF_6V3().1;
+    c_bulk.2 -> @GND;
+    // HF decoupling — generic class part, no bias curve, no row.
+    @VCC -> c_hf: Cap(100nF).1;
+    c_hf.2 -> @GND;
+
+    // Live load.
+    @VCC -> r_led: Res(330Ω).1;
+    r_led.2 -> d_on: LED(color="green").A;
+    d_on.K -> @GND;
+}
+
+layout MlccBias {
+    layer_stackup 2;
+    outline rect 25 18;
+    place J_PWR at (2.6, 9);
+}
