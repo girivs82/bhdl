@@ -21,6 +21,16 @@ entity Cap(value: capacitance, voltage: voltage = 50V) {
     attribute data_source = "class-point: Murata GRM18 X7R (esr)";
     attribute voltage_rating = voltage;
     attribute tolerance = 0.10;
+    // Dielectric class carried explicitly (matches the GRM18 X7R ESR
+    // class point above). DELIBERATE ABSENCE: no DC-bias capacitance
+    // derating curve — the loss is strongly SKU-specific (case size ×
+    // rated voltage × dielectric; a 0402 X5R at rated V can lose most
+    // of its C while a 0805 X7R at half-rated loses little), and the
+    // only honest source is the vendor's per-SKU characteristic data
+    // (Murata SimSurfing). Carry MPN-bound curves when a consumer
+    // (bias-aware ripple/decoupling sign-off) exists — a class-level
+    // derating factor here would be invention dressed as data.
+    attribute dielectric = "X7R";
     attribute kicad_symbol = "Device:C";
 }
 

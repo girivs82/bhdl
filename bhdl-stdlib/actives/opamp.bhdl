@@ -61,6 +61,11 @@ entity OpAmp(
 // 400 V/mV min, 33 MΩ, Ro 60 Ω). Where a datasheet doesn't state Ro the
 // entity default (75 Ω, LM741-class) applies.
 alias OPAMP_LM741 = OpAmp("LM741", 1MHz, 0.5, 2mV, 1.7mA, 1, 200000, 2MΩ, 75Ω);
+// NOTE (dedup doctrine): the TL072's FULL identity — audio noise
+// currency (e_noise_nv/i_bias_na), pinout, supply span, fixture —
+// lives in actives/audio_opamps.bhdl (entity TL072). This alias is
+// the single-amp BEHAVIORAL view for OpAmp-device simulation and
+// legacy call sites; numbers agree with that file (TI SLOS080).
 alias OPAMP_TL072 = OpAmp("TL072", 3MHz, 13, 3mV, 1.4mA, 2, 200000, 1000000MΩ, 75Ω);   // JFET input
 alias OPAMP_LM358 = OpAmp("LM358", 1MHz, 0.5, 2mV, 0.7mA, 2, 100000, 2MΩ, 75Ω);  // single-supply
 alias OPAMP_OP07  = OpAmp("OP07", 600kHz, 0.3, 75µV, 2.5mA, 1, 400000, 33MΩ, 60Ω); // precision

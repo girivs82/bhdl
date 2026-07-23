@@ -64,6 +64,18 @@ entity DDR4_SDRAM_x8(
     attribute family          = "DDR4";
     attribute jedec_std       = "JESD79-4";
     attribute organization    = "x8";
+    // JEDEC-fixed rail facts (JESD79-4 — package-independent):
+    attribute vdd_v           = 1.2;     // VDD = VDDQ, POD12
+    attribute vpp_v           = 2.5;     // activation pump rail
+    attribute zq_ohm          = 240.0;   // calibration ref, 1 %
+    // DELIBERATE ABSENCE: no speed-bin AC timing set (tCK/tAA/CL
+    // tables). The layout-side consumers that exist today (fly_by
+    // topology, stub_max, delay/skew grading) take their budgets
+    // from the interface constraints and the stackup, not from
+    // per-bin tAA — and JESD79-4 bin tables are precision-critical
+    // numbers we would be citing from memory. Carry them from a
+    // fetched Micron SKU datasheet when a timing-closure consumer
+    // (bin-aware tAA/tRCD margin sign-off) exists.
     attribute density_gb      = density_gb;     // from constructor arg
     attribute pkg             = "FBGA-78";
     attribute io_standard     = "POD12";

@@ -9,7 +9,17 @@
 //
 // Grammar discipline: parser-compatible v2.0 subset.
 
-entity R_Pack04_Split(part_no: string = "") {
+// ── Element data (campaign fill) ──
+// `value` is the per-element resistance, 0 Ω = UNDECLARED sentinel
+// (the inductor rated_current pattern: legacy call sites that only
+// name a part_no stay valid, and a zero reads as honest NO DATA).
+// Tolerance is the thick-film chip-array class: ±5 % ABSOLUTE
+// (Yageo YC164 series, J grade; F grade ±1 % orderable).
+// DELIBERATE ABSENCE: no element-to-element RATIO tolerance is
+// carried — thick-film arrays specify NO tighter matching than the
+// absolute grade (matched ratios are thin-film network territory,
+// a different class and price); claiming one would be invention.
+entity R_Pack04_Split(part_no: string = "", value: resistance = 0Ω) {
     // Resistor element A
     pin R1A: signal inout;   //                                 (pin 1)
     pin R1B: signal inout;   //                                 (pin 2)
@@ -26,5 +36,8 @@ entity R_Pack04_Split(part_no: string = "") {
     attribute component_class = "resistor-network";
     attribute topology        = "isolated-elements";
     attribute element_count   = 4;
+    attribute resistance      = value;     // per element; 0 = undeclared
+    attribute tolerance       = 0.05;      // absolute, thick-film J grade
+    attribute data_source     = "class-point: Yageo YC164 (tolerance)";
     attribute part_number     = part_no;
 }

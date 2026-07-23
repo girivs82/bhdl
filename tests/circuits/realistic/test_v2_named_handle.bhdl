@@ -6,7 +6,7 @@ board NamedHandleTest {
     power VCC = 5V @ 1A;
     port VCC_3V3: power out = 3.3V @ 500mA;
     ground GND;
-    VCC -> regulator: LM1117_33().VI;
+    VCC -> regulator: LM1117_33(dropout=1.2V).VI;   // TI LM1117 headline dropout
     regulator.GND -> @GND;
     regulator.VO -> @VCC_3V3;
 }

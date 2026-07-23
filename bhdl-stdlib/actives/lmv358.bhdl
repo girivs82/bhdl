@@ -28,17 +28,31 @@ entity LMV358(part_no: string = "LMV358IDGKR") {
     pin V_MINUS: signal inout; // negative supply / GND          (pin 4)
     pin V_PLUS:  signal inout; // positive supply / VCC          (pin 8)
 
+    // Every number verified against the FETCHED TI datasheet
+    // (SLOS263Y, §6.8 VCC+ = 5 V table, 25 degC).
     attribute component_class    = "opamp";
-    attribute open_loop_gain     = 100000;   // 100 dB typ
-    attribute gain_bandwidth     = 1MHz;
-    attribute input_resistance   = 100MΩ;
-    attribute output_resistance  = 100Ω;
-    attribute input_offset       = 1.7mV;
-    attribute slew_rate          = 1V;       // 1 V/µs
-    attribute family             = "dual-supply-rail-to-rail";
+    attribute datasheet          = "TI SLOS263Y";
+    attribute open_loop_gain     = 100000;   // AVD 100 V/mV typ
+    attribute gain_bandwidth     = 1MHz;     // B1, CL = 200 pF
+    attribute input_resistance   = 100MΩ;    // CMOS-input class (IIB 15 nA typ)
+    attribute output_resistance  = 100Ω;     // open-loop class
+    attribute input_offset       = 1.7mV;    // VIO typ (7 mV max)
+    attribute i_bias_na          = 15.0;     // IIB typ (250 nA max)
+    attribute e_noise_nv         = 39.0;     // Vn at 1 kHz
+    attribute slew_rate          = 1V;       // SR 1 V/µs
+    // Rail-to-rail OUTPUT (VCC−40 mV high / 65 mV low at 2 kΩ) —
+    // the input range tops out ~1 V below VCC (VICR 0..4 V at 5 V).
+    attribute family             = "low-voltage-rail-to-rail-output";
     attribute channels           = 2;
     attribute supply_voltage_min = 2.7;
     attribute supply_voltage_max = 5.5;
+    attribute i_supply           = 210µA;    // ICC both amps, typ (440 max)
     attribute gbw_mhz            = 1.0;
     attribute part_number        = part_no;
+
+    simulation {
+        model {
+            node V_PLUS draws = self.i_supply;
+        }
+    }
 }

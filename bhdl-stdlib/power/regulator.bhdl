@@ -17,6 +17,13 @@ entity LinearRegulator<V_OUT: voltage, HAS_EN: bool = false>(
     attribute i_quiescent = i_quiescent;
 }
 
+// Alias data honesty (campaign fill): the generic's defaults
+// (dropout 2 V, Iq 5 mA) are the 78xx class — CORRECT for LM7805
+// (TI UA7805: dropout 2 V, bias current ~5 mA class). The LM1117's
+// real dropout is 1.2 V typ at full load (TI LM1117 headline spec),
+// but a type-arg alias cannot bind constructor params — bind it at
+// the instantiation site: `reg: LM1117_33(dropout=1.2V)`. Boards
+// that leave the default get graded against the CONSERVATIVE 2 V.
 alias LM7805 = LinearRegulator<5V>;
 alias LM1117_33 = LinearRegulator<3.3V>;
 alias LM1117_18 = LinearRegulator<1.8V>;
@@ -27,7 +34,11 @@ alias LM1117_33_EN = LinearRegulator<3.3V, true>;
 
 entity BuckRegulator<V_OUT: voltage>(
     dropout: voltage = 0.5V,
-    f_sw: frequency = 500kHz,
+    // 150 kHz: the LM2596's fixed internal oscillator (TI LM2596
+    // datasheet headline) — the only aliases of this generic are
+    // LM2596 SKUs, and the old 500 kHz default contradicted the
+    // alias comment below (ripple/loss sims ran 3.3× fast).
+    f_sw: frequency = 150kHz,
     rds_on: resistance = 200mΩ,
     t_sw: time = 80ns,
     i_quiescent: current = 5mA,
