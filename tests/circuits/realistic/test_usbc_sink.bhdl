@@ -1,0 +1,54 @@
+// USB-C 5 V sink power entry — the smallest board that is a CORRECT
+// Type-C powered device: the USB_C_Sink5V composite (whose expansion
+// carries the two independent 5.1 kΩ Rd pulldowns — without them a
+// C-to-C cable never applies VBUS at all, and with one SHARED Rd an
+// e-marked cable reads Debug/Audio-Accessory states and refuses
+// power: AN1953 §3.2/§3.4, the Raspberry Pi 4 rev-1.0 field bug),
+// bulk + HF decoupling, a power LED as the live load, and the D±
+// pairs brought to a header.
+
+import { USB_C_Sink5V } from "bhdl-stdlib/connectors/usb_c.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap, ElectrolyticCap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
+import { Pin_Header_01x03 } from "bhdl-stdlib/connectors/pin_header.bhdl";
+
+board UsbcSink {
+    port VBUS: power in = 5V @ 500mA;
+    port GND: ground;
+
+    // Input decoupling.
+    @VBUS -> c_bulk: ElectrolyticCap(10µF, 16V).pos;
+    c_bulk.neg -> @GND;
+    @VBUS -> c_hf: Cap(100nF).1;
+    c_hf.2 -> @GND;
+
+    // Power indicator — the live load the DC solve grades.
+    @VBUS -> r_led: Res(330Ω).1;
+    r_led.2 -> D_pwr: LED(color="green").A;
+    D_pwr.K -> @GND;
+
+    // Data breakout.
+    J_DATA: Pin_Header_01x03();
+    USB_DP -> J_DATA.1;
+    USB_DM -> J_DATA.2;
+    J_DATA.3 -> @GND;
+
+    // The connector composite: CC logic arrives with it. (Instantiated
+    // after the inline-declared parts — the expansion interpreter
+    // re-materializes statements and inline decls AFTER a composite
+    // lose their wiring; same ordering as board 82.)
+    J_USB: USB_C_Sink5V();
+    J_USB.VBUS -> @VBUS;
+    J_USB.GND -> @GND;
+    J_USB.SHIELD -> @GND;
+    J_USB.DP -> USB_DP;
+    J_USB.DM -> USB_DM;
+}
+
+layout UsbcSink {
+    layer_stackup 2;
+    outline rect 30 22;
+    place J_USB at (4, 11) rot 90;
+    place J_DATA at (27.4, 11);
+}

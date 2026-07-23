@@ -1,3 +1,5 @@
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
 // USB Type-C receptacle, USB 2.0 variant (16 pads + shield).
 //
 // Matches KiCad's `Connector:USB_C_Receptacle_USB2.0_16P` symbol
@@ -59,4 +61,75 @@ entity USB_C_Receptacle_USB2_16P() {
     attribute connector_type  = "usb_c_receptacle";
     attribute usb_version     = "2.0";
     attribute kicad_symbol    = "Connector:USB_C_Receptacle_USB2.0_16P";
+
+    // ── CC-pin termination logic (Microchip AN1953, §3.0–3.6 — the
+    // app-note digest of the USB Type-C spec tables). The CC resistors
+    // are what make a Type-C port WORK; a sink without them gets no
+    // VBUS from a C-to-C cable (the source only applies 5 V after
+    // detecting a valid Rd — AN1953 §3.4). ──
+    //
+    // UFP (sink) Rd — Table 7: 5.1 kΩ ±10% to GND is the ONLY
+    // implementation that both detects and advertises power capability
+    // (±20% resistor and the 1.1 V clamp forfeit detection; ±10% is
+    // mandatory for 1.5 A / 3.0 A charging). EACH CC pin gets its OWN
+    // resistor — sharing one Rd across CC1/CC2 (the Raspberry Pi 4
+    // rev-1.0 mistake) reads as an Audio Adapter (Ra/Ra-like) to
+    // e-marked cables, which then never deliver power. Table 8: Rd on
+    // BOTH pins simultaneously = Debug Accessory Mode, a real state,
+    // which is why the short-circuit "one shared Rd" is misread.
+    attribute cc_rd_kohm          = 5.1;
+    attribute cc_rd_tol_pct       = 10.0;   // detection-grade tolerance
+    // DFP (source) Rp — Table 6, pull-up to 4.75–5.5 V column
+    // (3.3 V ±5% column and current sources in parentheses):
+    attribute cc_rp_default_kohm  = 56.0;   // 500m/900mA (36 k at 3.3 V, 80 µA)
+    attribute cc_rp_1a5_kohm      = 22.0;   // 1.5 A @ 5 V (12 k, 180 µA)
+    attribute cc_rp_3a_kohm       = 10.0;   // 3.0 A @ 5 V (4.7 k, 330 µA)
+    // Active-cable Ra (§3.3): VCONN-pin pulldown, 800 Ω – 1.2 kΩ.
+    attribute cc_ra_min           = 800Ω;
+    attribute cc_ra_max           = 1.2kΩ;
+    // Sink-side advertisement thresholds on the CC voltage — Table 9
+    // (what a UFP reads back through its own Rd):
+    attribute cc_v_3a_min         = 0.85;   // 3 A window: 0.85–2.60 V
+    attribute cc_v_1a5_min        = 0.45;   // 1.5 A window: 0.45–1.60 V
+    attribute cc_v_default_min    = 0.25;   // default window: 0.25–1.60 V
+    // VCONN (§4.0): 4.75–5.5 V, 1.0 W budget for e-marked cables.
+    attribute vconn_v_min         = 4.75V;
+    attribute vconn_v_max         = 5.5V;
+    attribute vconn_p_max         = 1W;
+}
+
+// USB-C 5 V sink — the correct UFP power entry as a composite: the
+// receptacle plus the CC logic it is REQUIRED to carry, as real parts
+// (campaign pattern: composites are the legit place for support
+// parts). Two INDEPENDENT 5.1 kΩ ±10% Rd pulldowns, one per CC pin
+// (AN1953 Table 7 / §3.2 — see the receptacle's CC doctrine for why
+// sharing one is the classic field failure), and the USB 2.0 D± face
+// pairs tied on the PCB the way §1.3.1 prescribes.
+entity USB_C_Sink5V() {
+    pin VBUS:   signal inout;  // 5 V from the source, post-detection
+    pin GND:    ground;
+    pin DP:     signal inout;  // USB 2.0 D+ (both faces tied)
+    pin DM:     signal inout;  // USB 2.0 D− (both faces tied)
+    pin SHIELD: signal inout;  // shell — tie to chassis/GND per system
+
+    attribute component_class = "connector";
+    attribute connector_type  = "usb_c_sink_5v";
+
+    expansion {
+        j: USB_C_Receptacle_USB2_16P();
+        // Power pads — all four VBUS, all four GND.
+        j.A4 -> VBUS;  j.B4 -> VBUS;
+        j.A9 -> VBUS;  j.B9 -> VBUS;
+        j.A1 -> GND;   j.B1 -> GND;
+        j.A12 -> GND;  j.B12 -> GND;
+        j.S1 -> SHIELD;
+        // CC: one Rd EACH (never shared — Pi-4 lesson).
+        j.A5 -> r_cc1: Res(5.1kΩ).1;
+        r_cc1.2 -> GND;
+        j.B5 -> r_cc2: Res(5.1kΩ).1;
+        r_cc2.2 -> GND;
+        // USB 2.0 pairs: both connector faces onto one PCB net.
+        j.A6 -> DP;  j.B6 -> DP;
+        j.A7 -> DM;  j.B7 -> DM;
+    }
 }

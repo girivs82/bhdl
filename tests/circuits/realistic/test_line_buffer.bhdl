@@ -22,8 +22,8 @@ board LineBuffer {
     @VCC -> J_PWR.1;
     J_PWR.2 -> @GND;
     J_PWR.3 -> @GND;
-    @VCC -> c_bulk: ElectrolyticCap(100µF).1;
-    c_bulk.2 -> @GND;
+    @VCC -> c_bulk: ElectrolyticCap(100µF, 16V).pos;
+    c_bulk.neg -> @GND;
     @VCC -> c_op: Cap(100nF).1;
     c_op.2 -> @GND;
 
@@ -34,8 +34,8 @@ board LineBuffer {
     r_b1.2 -> VBIAS;
     VBIAS -> r_b2: Res(10kΩ).1;
     r_b2.2 -> @GND;
-    VBIAS -> c_bias: ElectrolyticCap(10µF).1;
-    c_bias.2 -> @GND;
+    VBIAS -> c_bias: ElectrolyticCap(10µF, 16V).pos;
+    c_bias.neg -> @GND;
 
     // Audio I/O header: L-in, R-in, GND.
     J_IN: Pin_Header_01x03();
@@ -55,8 +55,8 @@ board LineBuffer {
     r_bl.2 -> VBIAS;
     in_l -> U1.IN_A_P;
     U1.OUT_A -> U1.IN_A_N;             // unity feedback
-    U1.OUT_A -> c_outl: ElectrolyticCap(10µF).1;
-    c_outl.2 -> out_l;
+    U1.OUT_A -> c_outl: ElectrolyticCap(10µF, 16V).pos;
+    c_outl.neg -> out_l;
     out_l -> r_ol: Res(100kΩ).1;       // output bleed
     r_ol.2 -> @GND;
 
@@ -67,8 +67,8 @@ board LineBuffer {
     r_br.2 -> VBIAS;
     in_r -> U1.IN_B_P;
     U1.OUT_B -> U1.IN_B_N;
-    U1.OUT_B -> c_outr: ElectrolyticCap(10µF).1;
-    c_outr.2 -> out_r;
+    U1.OUT_B -> c_outr: ElectrolyticCap(10µF, 16V).pos;
+    c_outr.neg -> out_r;
     out_r -> r_or: Res(100kΩ).1;
     r_or.2 -> @GND;
 
