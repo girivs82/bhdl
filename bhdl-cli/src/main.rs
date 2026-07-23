@@ -1229,6 +1229,7 @@ fn gate_constructor_args(analysis: &bhdl_analyzer::AnalysisResult) -> Result<()>
             matches!(
                 d.kind,
                 bhdl_common::DiagnosticKind::UnknownConstructorArg { .. }
+                    | bhdl_common::DiagnosticKind::MissingConstructorArg { .. }
                     | bhdl_common::DiagnosticKind::ParameterValueNotAllowed { .. }
             )
         })
@@ -1245,7 +1246,7 @@ fn gate_constructor_args(analysis: &bhdl_analyzer::AnalysisResult) -> Result<()>
     for d in &bad {
         eprintln!("  {} {} [{}]", "•".red(), d.message, d.code);
     }
-    anyhow::bail!("constructor argument errors (E0402/E0403)");
+    anyhow::bail!("constructor argument errors (E0402/E0403/E0404)");
 }
 
 async fn run_synthesis(source_file: &SourceFile, output: Option<PathBuf>, format: &str) -> Result<()> {

@@ -3451,11 +3451,37 @@ fn connect_pin_to_net(
             let inst_name = netlist.instances.get(inst_id)
                 .map(|i| i.name.clone())
                 .unwrap_or_else(|| format!("{:?}", inst_id));
-            let msg = format!(
-                "no pin '{}' on instance '{}' — {} left unconnected to {}",
-                pin_name, inst_name, desc, target_desc);
-            error!("{}", msg);
-            eprintln!("warning: {}", msg);
+            let declared_pins: Vec<String> = netlist.instances.get(inst_id)
+                .and_then(|inst| netlist.modules.get(inst.definition))
+                .map(|module| module.pins.iter()
+                    .filter_map(|&pid| netlist.pins.get(pid))
+                    .map(|p| p.name.clone())
+                    .collect())
+                .unwrap_or_default();
+            if declared_pins.is_empty() || declared_pins.iter().any(|p| p == pin_name) {
+                // Two non-error shapes: (a) a module with no registered
+                // pins — an import that has not materialized its pin set
+                // yet (see the pin-less-module note in lib.rs); (b) the
+                // pin IS declared but its pin INSTANCE was never created
+                // (phantom module-named instances hit this). Neither is a
+                // user wiring error — keep the legacy warning.
+                let msg = format!(
+                    "no pin instance '{}' on instance '{}' — {} left unconnected to {} (declared: [{}])",
+                    pin_name, inst_name, desc, target_desc, declared_pins.join(", "));
+                error!("{}", msg);
+                eprintln!("warning: {}", msg);
+            } else {
+                // The entity DOES declare pins and this isn't one of them:
+                // a wired-to-nowhere statement. Silently dropping it ships
+                // a BOM part with zero nets, invisible even to the KiCad
+                // oracle (no nets → no ratsnest) — board 85 shipped four
+                // unwired electrolytics exactly this way. Hard error.
+                return Err(anyhow::anyhow!(
+                    "no pin '{}' on instance '{}' — {} cannot connect to {}; \
+                     the entity's pins are [{}]",
+                    pin_name, inst_name, desc, target_desc,
+                    declared_pins.join(", ")));
+            }
         }
     }
     Ok(())

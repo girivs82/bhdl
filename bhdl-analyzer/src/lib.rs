@@ -68,7 +68,7 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
     let mut resolved_constants = ResolvedConstants::new();
 
     // Pass 1: Build scope registry with base path for imports
-    let (mut scope_registry, alias_specializations, imported_expansion_recipes, imported_symbol_definitions, imported_layout_definitions, imported_placement_recipes, imported_design_recipes, imported_stress_recipes, imported_model_recipes, imported_entity_attr_index, imported_entity_param_index, imported_entity_value_domains, imported_entity_attr_param_refs) = pass1::build_scope_registry_with_base(source_file, base_path);
+    let (mut scope_registry, alias_specializations, imported_expansion_recipes, imported_symbol_definitions, imported_layout_definitions, imported_placement_recipes, imported_design_recipes, imported_stress_recipes, imported_model_recipes, imported_entity_attr_index, imported_entity_param_index, imported_entity_required_param_index, imported_entity_value_domains, imported_entity_attr_param_refs) = pass1::build_scope_registry_with_base(source_file, base_path);
     // Extract legacy data structures for backward compatibility with existing passes
     let global_scope = scope_registry.extract_global_scope();
     let definition_scopes = scope_registry.extract_definition_scopes();
@@ -163,6 +163,10 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
     let mut entity_param_names = imported_entity_param_index.clone();
     for (name, params) in extract_entity_param_names(source_file) {
         entity_param_names.insert(name, params);
+    }
+    let mut entity_required_params = imported_entity_required_param_index.clone();
+    for (name, req) in extract_entity_required_params(source_file) {
+        entity_required_params.insert(name, req);
     }
 
     // Pass 6: Component Inference
@@ -328,7 +332,7 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
     // values outside a parameter's declared allowed set. Both used to pass
     // silently; emitted as Error-severity diagnostics the CLI refuses to
     // build on.
-    for diag in validate_constructor_args(source_file, &entity_param_names, &entity_value_domains) {
+    for diag in validate_constructor_args(source_file, &entity_param_names, &entity_required_params, &entity_value_domains) {
         diagnostics.push(diag);
     }
 
@@ -1628,6 +1632,72 @@ pub fn extract_entity_param_names(
     idx
 }
 
+/// Extract per-entity REQUIRED parameter names — those declared with no
+/// default value, which an instantiation must therefore bind. Same shape
+/// and alias-inheritance rules as [`extract_entity_param_names`]. An
+/// entity absent from this map has no required parameters.
+pub fn extract_entity_required_params(
+    source_file: &SourceFile,
+) -> std::collections::HashMap<String, Vec<String>> {
+    use bhdl_ast::{Entity, HasName};
+    use rowan::ast::AstNode;
+    let mut idx = std::collections::HashMap::new();
+    for item in source_file.items() {
+        if let Some(entity) = Entity::cast(item.syntax().clone()) {
+            if let Some(name_token) = entity.name() {
+                let mut required = Vec::new();
+                if let Some(param_list) = entity.param_list() {
+                    for param_def in param_list.param_defs() {
+                        // A default is written `name: type = expr` — the EQ
+                        // token is the reliable marker. (EntityParam::
+                        // default_value() casts children as Expr, which
+                        // also matches the type annotation, so it reports
+                        // a default on every param.)
+                        let has_default = param_def
+                            .syntax()
+                            .children_with_tokens()
+                            .filter_map(|e| e.into_token())
+                            .any(|t| t.kind() == bhdl_ast::SyntaxKind::EQ);
+                        if !has_default {
+                            if let Some(n) = param_def.name() {
+                                required.push(n.text().to_string());
+                            }
+                        }
+                    }
+                }
+                if !required.is_empty() {
+                    idx.insert(name_token.text().to_string(), required);
+                }
+            }
+        }
+    }
+    // Simple aliases inherit the target's required set (mirror of the
+    // param-name extractor's alias loop).
+    for node in source_file.syntax().descendants() {
+        if node.kind() != bhdl_ast::SyntaxKind::ALIAS {
+            continue;
+        }
+        if node
+            .descendants()
+            .any(|n| n.kind() == bhdl_ast::SyntaxKind::TYPE_ARGS)
+        {
+            continue;
+        }
+        let idents: Vec<String> = node
+            .children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .filter(|t| t.kind() == bhdl_ast::SyntaxKind::IDENT)
+            .map(|t| t.text().to_string())
+            .collect();
+        if let [alias_name, target] = idents.as_slice() {
+            if let Some(req) = idx.get(target).cloned() {
+                idx.entry(alias_name.clone()).or_insert(req);
+            }
+        }
+    }
+    idx
+}
+
 /// Extract per-entity parameter value domains from `where <param> in
 /// (<literal>, ...)` membership constraints — the allowed-value set for a
 /// string/enum parameter. Returns entity name → param name → allowed
@@ -1735,6 +1805,7 @@ fn arg_edit_distance(a: &str, b: &str) -> usize {
 pub fn validate_constructor_args(
     source_file: &SourceFile,
     entity_param_names: &std::collections::HashMap<String, Vec<String>>,
+    entity_required_params: &std::collections::HashMap<String, Vec<String>>,
     value_domains: &std::collections::HashMap<
         String,
         std::collections::HashMap<String, Vec<String>>,
@@ -1750,6 +1821,18 @@ pub fn validate_constructor_args(
         let Some(params) = entity_param_names.get(&entity) else { continue };
         let Some(block) = inst.param_assign_block() else { continue };
         let domains = value_domains.get(&entity);
+        // Parameters this instantiation actually binds — named args by
+        // name, positional args by slot. Compared against the entity's
+        // REQUIRED (no-default) set after the walk: an unbound required
+        // parameter used to pass silently, leaving every attribute
+        // expression referencing it unevaluated (an ElectrolyticCap
+        // instantiated without its voltage shipped as an unratable
+        // part — board 85's four silent electrolytics).
+        let mut bound: std::collections::HashSet<String> = std::collections::HashSet::new();
+        // A placeholder instantiation (`Res(auto)`) delegates its values
+        // to the derivation flow — required-param accounting does not
+        // apply to it.
+        let has_placeholder = block.has_placeholder();
 
         // A value against its parameter's declared allowed set (`where
         // <param> in (...)`), if one exists. `channel = "P"` on a MOSFET
@@ -1788,6 +1871,7 @@ pub fn validate_constructor_args(
                 Some(name_tok) => {
                     let arg = name_tok.text().to_string();
                     if params.iter().any(|p| p == &arg) {
+                        bound.insert(arg.clone());
                         if let Some(d) = value_diag(&arg, &assign) {
                             out.push(d);
                         }
@@ -1875,11 +1959,39 @@ pub fn validate_constructor_args(
                             ),
                         );
                     } else if let Some(param) = params.get(positional - 1) {
+                        bound.insert(param.clone());
                         // Positional value against the param at this slot's
                         // domain — the SKU aliases pass channel positionally.
                         if let Some(d) = value_diag(param, &assign) {
                             out.push(d);
                         }
+                    }
+                }
+            }
+        }
+
+        // Required-parameter accounting: every declared no-default param
+        // must be bound (the missing-argument mirror of the unknown-arg
+        // check above).
+        if !has_placeholder {
+            if let Some(required) = entity_required_params.get(&entity) {
+                for param in required {
+                    if !bound.contains(param) {
+                        out.push(types::Diagnostic::with_kind(
+                            bhdl_common::DiagnosticKind::MissingConstructorArg {
+                                param: param.clone(),
+                                entity: entity.clone(),
+                            },
+                            format!(
+                                "'{entity}' requires parameter '{param}' (declared with \
+                                 no default) but the instantiation never binds it — the \
+                                 entity's attribute expressions referencing '{param}' \
+                                 would go unevaluated; pass it positionally or as \
+                                 {param} = <value> (declared parameters: {})",
+                                params.join(", ")
+                            ),
+                            inst.syntax().text_range(),
+                        ));
                     }
                 }
             }

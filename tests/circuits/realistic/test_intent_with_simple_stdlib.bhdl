@@ -25,7 +25,7 @@ board IntentDrivenPowerSupply {
     c_in.neg -> GND;
 
     // TOP ZONE: Voltage regulation with intent
-    @filtered_in -> reg: LM7805().VIN; reg.VOUT -> @VCC
+    @filtered_in -> reg: LM7805().VI; reg.VO -> @VCC
         for voltage_regulation(5V, 12V);
     reg.GND -> GND;
 

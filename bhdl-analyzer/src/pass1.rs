@@ -66,6 +66,9 @@ struct Pass1Context {
     // entity's own parameters (e.g. `attribute capacitance = value;`)
     // into the positional argument supplied at instantiation.
     entity_param_index: HashMap<String, Vec<String>>,
+    // Cross-file: per-entity REQUIRED (no-default) constructor params —
+    // the missing-argument mirror of entity_param_index.
+    entity_required_param_index: HashMap<String, Vec<String>>,
     // Cross-file: per-entity parameter value domains (`where <param> in
     // (...)`), accumulated from every imported file so an instantiation
     // validates its argument values against an imported entity's set.
@@ -94,6 +97,7 @@ impl Pass1Context {
             placement_recipes: HashMap::new(),
             entity_attribute_index: HashMap::new(),
             entity_param_index: HashMap::new(),
+            entity_required_param_index: HashMap::new(),
             entity_value_domains: HashMap::new(),
             entity_attr_param_refs: HashMap::new(),
         }
@@ -140,7 +144,7 @@ pub fn populate_global_scope_and_build_definition_scopes_with_base(
     source_file: &SourceFile,
     base_path: &Path
 ) -> (SymbolTable, HashMap<SyntaxNodePtr<BhdlLanguage>, SymbolTable>) {
-    let (registry, _alias_specializations, _expansion_recipes, _symbol_defs, _layout_defs, _placement_recipes, _design_recipes, _stress_recipes, _model_recipes, _entity_attr_index, _entity_param_index, _entity_value_domains, _entity_attr_param_refs) = build_scope_registry_with_base(source_file, base_path);
+    let (registry, _alias_specializations, _expansion_recipes, _symbol_defs, _layout_defs, _placement_recipes, _design_recipes, _stress_recipes, _model_recipes, _entity_attr_index, _entity_param_index, _entity_required_param_index, _entity_value_domains, _entity_attr_param_refs) = build_scope_registry_with_base(source_file, base_path);
     // Extract legacy data structures for backward compatibility
     let global_scope = registry.extract_global_scope();
     let definition_scopes = registry.extract_definition_scopes();
@@ -181,6 +185,9 @@ pub fn build_scope_registry_with_base(
     // Pass1Context::entity_param_index). Threaded into main-file recipe
     // extraction so attribute values referencing a child entity's own
     // parameters resolve to the instantiation's positional arguments.
+    HashMap<String, Vec<String>>,
+    // Cross-file: per-entity REQUIRED (no-default) constructor params
+    // (see Pass1Context::entity_required_param_index).
     HashMap<String, Vec<String>>,
     // Cross-file: per-entity parameter value domains (see
     // Pass1Context::entity_value_domains).
@@ -236,9 +243,10 @@ pub fn build_scope_registry_with_base(
     let model_recipes = context.model_recipes;
     let entity_attribute_index = context.entity_attribute_index;
     let entity_param_index = context.entity_param_index;
+    let entity_required_param_index = context.entity_required_param_index;
     let entity_value_domains = context.entity_value_domains;
     let entity_attr_param_refs = context.entity_attr_param_refs;
-    (context.registry, alias_specializations, expansion_recipes, symbol_definitions, layout_definitions, placement_recipes, design_recipes, stress_recipes, model_recipes, entity_attribute_index, entity_param_index, entity_value_domains, entity_attr_param_refs)
+    (context.registry, alias_specializations, expansion_recipes, symbol_definitions, layout_definitions, placement_recipes, design_recipes, stress_recipes, model_recipes, entity_attribute_index, entity_param_index, entity_required_param_index, entity_value_domains, entity_attr_param_refs)
 }
 
 // Pass 1 recursive helper (takes Pass1Context)
@@ -1155,6 +1163,9 @@ fn process_import(import: &ImportStmt, context: &mut Pass1Context) {
             }
             for (name, params) in crate::extract_entity_param_names(&imported_source) {
                 context.entity_param_index.insert(name, params);
+            }
+            for (name, req) in crate::extract_entity_required_params(&imported_source) {
+                context.entity_required_param_index.insert(name, req);
             }
             for (name, doms) in crate::extract_entity_value_domains(&imported_source) {
                 context.entity_value_domains.insert(name, doms);

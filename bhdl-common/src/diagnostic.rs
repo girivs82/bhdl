@@ -104,6 +104,17 @@ pub enum DiagnosticKind {
         /// Fuzzy-matched declared parameter names ("did you mean").
         suggestions: Vec<String>,
     },
+    /// A required (no-default) constructor parameter was never bound —
+    /// the missing-argument mirror of `UnknownConstructorArg`. Silently
+    /// accepting it left the entity's attribute expressions referencing
+    /// the parameter unevaluated (an ElectrolyticCap with no voltage
+    /// rating shipped as an unratable part).
+    MissingConstructorArg {
+        /// The unbound required parameter.
+        param: String,
+        /// The entity being instantiated.
+        entity: String,
+    },
     /// A parameter was given a value outside its declared allowed set
     /// (`where <param> in (...)`). The name binds fine; the value is wrong.
     ParameterValueNotAllowed {
@@ -180,6 +191,7 @@ impl DiagnosticKind {
             DiagnosticKind::AmbiguousReference { .. } => "E0401",
             DiagnosticKind::UnknownConstructorArg { .. } => "E0402",
             DiagnosticKind::ParameterValueNotAllowed { .. } => "E0403",
+            DiagnosticKind::MissingConstructorArg { .. } => "E0404",
 
             // Electrical errors: E05xx
             DiagnosticKind::ExceededCurrentRating { .. } => "E0500",
@@ -210,6 +222,7 @@ impl DiagnosticKind {
             DiagnosticKind::UndefinedSymbol { .. }
             | DiagnosticKind::AmbiguousReference { .. }
             | DiagnosticKind::UnknownConstructorArg { .. }
+            | DiagnosticKind::MissingConstructorArg { .. }
             | DiagnosticKind::ParameterValueNotAllowed { .. } => "resolution",
 
             DiagnosticKind::ExceededCurrentRating { .. }

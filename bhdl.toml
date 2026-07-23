@@ -1,0 +1,9 @@
+# Project manifest for the bhdl corpus itself: boards under tests/
+# import test-support entities through the `tests` library namespace
+# (e.g. test_model_import_demo's cross-file §5 regulator). Only
+# declared libraries resolve — bhdl-stdlib stays implicit.
+[project]
+name = "bhdl-corpus"
+
+[libraries]
+tests = { version = "0.1.0", path = "tests" }

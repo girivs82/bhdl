@@ -4,7 +4,7 @@
 
 use bhdl_parser::parse;
 use bhdl_ast::{SourceFile, AstNode};
-use bhdl_analyzer::{extract_entity_param_names, extract_entity_value_domains, validate_constructor_args};
+use bhdl_analyzer::{extract_entity_param_names, extract_entity_required_params, extract_entity_value_domains, validate_constructor_args};
 use bhdl_common::DiagnosticKind;
 
 fn source_file(src: &str) -> SourceFile {
@@ -28,7 +28,7 @@ fn accepts_declared_named_and_positional_args() {
         "{RES}\nboard B {{ ground GND; @A -> r: Res(2.5Ohm, wattage=10W).1; r.2 -> @GND; }}"
     ));
     let params = extract_entity_param_names(&sf);
-    let v = validate_constructor_args(&sf, &params, &extract_entity_value_domains(&sf));
+    let v = validate_constructor_args(&sf, &params, &extract_entity_required_params(&sf), &extract_entity_value_domains(&sf));
     assert!(v.is_empty(), "unexpected: {:?}", v.iter().map(|d| &d.message).collect::<Vec<_>>());
 }
 
@@ -38,7 +38,7 @@ fn rejects_unknown_named_arg_with_suggestion() {
         "{RES}\nboard B {{ ground GND; @A -> r: Res(1k, tolernce=1%).1; r.2 -> @GND; }}"
     ));
     let params = extract_entity_param_names(&sf);
-    let v = validate_constructor_args(&sf, &params, &extract_entity_value_domains(&sf));
+    let v = validate_constructor_args(&sf, &params, &extract_entity_required_params(&sf), &extract_entity_value_domains(&sf));
     assert_eq!(v.len(), 1, "{:?}", v);
     match &v[0].kind {
         DiagnosticKind::UnknownConstructorArg { arg, entity, suggestions } => {
@@ -58,7 +58,7 @@ fn alias_inherits_target_params() {
     ));
     let params = extract_entity_param_names(&sf);
     assert!(params.contains_key("Resistor"), "alias not indexed");
-    let v = validate_constructor_args(&sf, &params, &extract_entity_value_domains(&sf));
+    let v = validate_constructor_args(&sf, &params, &extract_entity_required_params(&sf), &extract_entity_value_domains(&sf));
     assert_eq!(v.len(), 1);
     assert!(v[0].message.contains("bogus"));
 }
@@ -73,7 +73,7 @@ fn reserved_synth_attrs_are_exempt() {
          r.2 -> @GND; }}"
     ));
     let params = extract_entity_param_names(&sf);
-    let v = validate_constructor_args(&sf, &params, &extract_entity_value_domains(&sf));
+    let v = validate_constructor_args(&sf, &params, &extract_entity_required_params(&sf), &extract_entity_value_domains(&sf));
     assert!(v.is_empty(), "reserved attrs flagged: {:?}", v.iter().map(|d| &d.message).collect::<Vec<_>>());
 }
 
@@ -83,7 +83,7 @@ fn rejects_excess_positional_arg() {
         "{RES}\nboard B {{ ground GND; @A -> r: Res(1k, 1%, 0.5W, 7).1; r.2 -> @GND; }}"
     ));
     let params = extract_entity_param_names(&sf);
-    let v = validate_constructor_args(&sf, &params, &extract_entity_value_domains(&sf));
+    let v = validate_constructor_args(&sf, &params, &extract_entity_required_params(&sf), &extract_entity_value_domains(&sf));
     assert_eq!(v.len(), 1, "{:?}", v);
     assert!(v[0].message.contains("positional"), "{}", v[0].message);
 }
@@ -104,7 +104,7 @@ fn rejects_value_outside_declared_domain_named() {
         "{FET}\nboard B {{ ground GND; @A -> q: Fet(channel=\"P\").G; }}"
     ));
     let params = extract_entity_param_names(&sf);
-    let v = validate_constructor_args(&sf, &params, &extract_entity_value_domains(&sf));
+    let v = validate_constructor_args(&sf, &params, &extract_entity_required_params(&sf), &extract_entity_value_domains(&sf));
     assert_eq!(v.len(), 1, "{:?}", v);
     match &v[0].kind {
         DiagnosticKind::ParameterValueNotAllowed { param, value, allowed, .. } => {
@@ -124,7 +124,7 @@ fn accepts_value_in_domain_named_and_positional() {
          @A -> q2: Fet(\"BSS84\", \"pmos\").G; }}"
     ));
     let params = extract_entity_param_names(&sf);
-    let v = validate_constructor_args(&sf, &params, &extract_entity_value_domains(&sf));
+    let v = validate_constructor_args(&sf, &params, &extract_entity_required_params(&sf), &extract_entity_value_domains(&sf));
     assert!(v.is_empty(), "unexpected: {:?}", v.iter().map(|d| &d.message).collect::<Vec<_>>());
 }
 
@@ -135,7 +135,7 @@ fn rejects_value_outside_domain_positional() {
         "{FET}\nboard B {{ ground GND; @A -> q: Fet(\"BSS84\", \"P\").G; }}"
     ));
     let params = extract_entity_param_names(&sf);
-    let v = validate_constructor_args(&sf, &params, &extract_entity_value_domains(&sf));
+    let v = validate_constructor_args(&sf, &params, &extract_entity_required_params(&sf), &extract_entity_value_domains(&sf));
     assert_eq!(v.len(), 1, "{:?}", v);
     assert!(matches!(v[0].kind, DiagnosticKind::ParameterValueNotAllowed { .. }));
 }
@@ -147,6 +147,60 @@ fn unknown_entity_not_guessed() {
         "board B { ground GND; @A -> r: Mystery(foo=1, bar=2).1; r.2 -> @GND; }"
     );
     let params = extract_entity_param_names(&sf);
-    let v = validate_constructor_args(&sf, &params, &extract_entity_value_domains(&sf));
+    let v = validate_constructor_args(&sf, &params, &extract_entity_required_params(&sf), &extract_entity_value_domains(&sf));
     assert!(v.is_empty(), "{:?}", v);
+}
+
+// ── Missing required (no-default) parameters: E0404 ─────────────────────
+
+const POLCAP: &str = r#"
+entity PolCap(value: capacitance, voltage: voltage) {
+    pin pos: signal inout;
+    pin neg: signal inout;
+    attribute capacitance = value;
+    attribute voltage_rating = voltage;
+}
+"#;
+
+#[test]
+fn rejects_missing_required_param() {
+    // The board-85 shape: one positional arg binds `value`, `voltage`
+    // (no default) is never bound — used to pass silently, shipping an
+    // unratable part.
+    let sf = source_file(&format!(
+        "{POLCAP}\nboard B {{ ground GND; @A -> c: PolCap(10uF).pos; c.neg -> @GND; }}"
+    ));
+    let params = extract_entity_param_names(&sf);
+    let v = validate_constructor_args(&sf, &params, &extract_entity_required_params(&sf), &extract_entity_value_domains(&sf));
+    assert_eq!(v.len(), 1, "{:?}", v.iter().map(|d| &d.message).collect::<Vec<_>>());
+    match &v[0].kind {
+        DiagnosticKind::MissingConstructorArg { param, entity } => {
+            assert_eq!(param, "voltage");
+            assert_eq!(entity, "PolCap");
+        }
+        other => panic!("expected MissingConstructorArg, got {:?}", other),
+    }
+}
+
+#[test]
+fn accepts_required_params_bound_positionally_and_named() {
+    let sf = source_file(&format!(
+        "{POLCAP}\nboard B {{ ground GND; @A -> c: PolCap(10uF, 16V).pos; c.neg -> @GND; \
+         @A -> d: PolCap(22uF, voltage=25V).pos; d.neg -> @GND; }}"
+    ));
+    let params = extract_entity_param_names(&sf);
+    let v = validate_constructor_args(&sf, &params, &extract_entity_required_params(&sf), &extract_entity_value_domains(&sf));
+    assert!(v.is_empty(), "unexpected: {:?}", v.iter().map(|d| &d.message).collect::<Vec<_>>());
+}
+
+#[test]
+fn defaulted_params_are_not_required() {
+    // Res declares tolerance/wattage WITH defaults — only `value` is
+    // required, and one positional arg satisfies it.
+    let sf = source_file(&format!(
+        "{RES}\nboard B {{ ground GND; @A -> r: Res(1k).1; r.2 -> @GND; }}"
+    ));
+    let params = extract_entity_param_names(&sf);
+    let v = validate_constructor_args(&sf, &params, &extract_entity_required_params(&sf), &extract_entity_value_domains(&sf));
+    assert!(v.is_empty(), "unexpected: {:?}", v.iter().map(|d| &d.message).collect::<Vec<_>>());
 }
