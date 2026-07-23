@@ -189,6 +189,14 @@ pub struct ClearanceIndex {
     rows: usize,
     buckets: Vec<Vec<u32>>,
     items: Vec<Item>,
+    /// Per-item bucketing bbox (parallel to `items`) — always a
+    /// SUPERSET of the item's copper. Used by the conflict scans as a
+    /// cheap axis-gap pre-reject before the exact distance math: a
+    /// conflict of any arm needs copper-to-copper gap < spacing plus a
+    /// bounded drill-rule excess (< 0.35 mm), so an item whose bbox is
+    /// more than `query_half + spacing + 1.0` away on some axis
+    /// PROVABLY cannot conflict — pruning is result-identical.
+    item_bboxes: Vec<(f64, f64, f64, f64)>,
     bw: f64,
     bh: f64,
     edge_clearance: f64,
@@ -203,6 +211,17 @@ pub struct ClearanceIndex {
     /// ships un-punched copper under-clearing the barrel (measured
     /// 0.2573mm vs the 0.30 zone rule).
     plane_zones: Vec<(NetId, (f64, f64, f64, f64))>,
+}
+
+thread_local! {
+    /// Epoch-stamped dedupe scratch for the conflict scans — replaces
+    /// the per-query `seen: Vec` + `contains` linear scan, which goes
+    /// quadratic in the dense buckets around a big QFP (the LQFP-100
+    /// board spent most of its 18-minute route inside first_conflict).
+    /// Iteration order is unchanged — the first occurrence of an id is
+    /// processed at exactly the same point — so results are identical.
+    static SEEN_SCRATCH: std::cell::RefCell<(Vec<u32>, u32)> =
+        std::cell::RefCell::new((Vec::new(), 0));
 }
 
 impl ClearanceIndex {
@@ -221,6 +240,7 @@ impl ClearanceIndex {
             rows,
             buckets: vec![Vec::new(); cols * rows],
             items: Vec::new(),
+            item_bboxes: Vec::new(),
             bw,
             bh,
             edge_clearance: board.config.edge_clearance_mm,
@@ -342,6 +362,7 @@ impl ClearanceIndex {
 
     fn insert_bbox(&mut self, x0: f64, y0: f64, x1: f64, y1: f64) {
         let id = self.items.len() as u32;
+        self.item_bboxes.push((x0, y0, x1, y1));
         let c0 = ((x0 / self.cell).floor().max(0.0) as usize).min(self.cols - 1);
         let c1 = ((x1 / self.cell).ceil().max(0.0) as usize).min(self.cols - 1);
         let r0 = ((y0 / self.cell).floor().max(0.0) as usize).min(self.rows - 1);
@@ -399,17 +420,36 @@ impl ClearanceIndex {
         let c1 = ((x1 / self.cell).ceil().max(0.0) as usize).min(self.cols - 1);
         let r0 = ((y0 / self.cell).floor().max(0.0) as usize).min(self.rows - 1);
         let r1 = ((y1 / self.cell).ceil().max(0.0) as usize).min(self.rows - 1);
-        // Small linear dedupe: the ±2mm window touches a handful of
-        // buckets (dozens of ids) — a Vec scan beats a SipHash set at
-        // this size, and skips the per-query allocation churn.
-        let mut seen: Vec<u32> = Vec::with_capacity(64);
+        // Epoch-stamped dedupe (see SEEN_SCRATCH) + per-item bbox
+        // pre-reject: an item whose bucketing bbox (⊇ its copper) is
+        // more than `half + spacing + 1.0` away on some axis cannot
+        // conflict under any arm below (drill-rule excess over plain
+        // spacing is < 0.35 mm) — skipping it is result-identical.
+        let (qx0, qy0) = (a.0.min(b.0), a.1.min(b.1));
+        let (qx1, qy1) = (a.0.max(b.0), a.1.max(b.1));
+        let m = half + self.spacing + 1.0;
+        SEEN_SCRATCH.with(|s| {
+        let (stamps, epoch) = &mut *s.borrow_mut();
+        if stamps.len() < self.items.len() {
+            stamps.resize(self.items.len(), 0);
+        }
+        *epoch = epoch.wrapping_add(1);
+        if *epoch == 0 {
+            stamps.iter_mut().for_each(|v| *v = 0);
+            *epoch = 1;
+        }
+        let e = *epoch;
         for r in r0..=r1 {
             for c in c0..=c1 {
                 for &id in &self.buckets[r * self.cols + c] {
-                    if seen.contains(&id) {
+                    if stamps[id as usize] == e {
                         continue;
                     }
-                    seen.push(id);
+                    stamps[id as usize] = e;
+                    let bb = self.item_bboxes[id as usize];
+                    if bb.0 > qx1 + m || bb.2 < qx0 - m || bb.1 > qy1 + m || bb.3 < qy0 - m {
+                        continue;
+                    }
                     match &self.items[id as usize] {
                         Item::Seg { net: n, layer: l, a: sa, b: sb, half: sh } => {
                             if *n == net || *l != layer {
@@ -461,6 +501,7 @@ impl ClearanceIndex {
             }
         }
         None
+        })
     }
 }
 
@@ -1071,17 +1112,31 @@ impl ClearanceIndex {
         let c1 = (((x + 2.0) / self.cell).ceil().max(0.0) as usize).min(self.cols - 1);
         let r0 = (((y - 2.0) / self.cell).floor().max(0.0) as usize).min(self.rows - 1);
         let r1 = (((y + 2.0) / self.cell).ceil().max(0.0) as usize).min(self.rows - 1);
-        // Small linear dedupe: the ±2mm window touches a handful of
-        // buckets (dozens of ids) — a Vec scan beats a SipHash set at
-        // this size, and skips the per-query allocation churn.
-        let mut seen: Vec<u32> = Vec::with_capacity(64);
+        // Epoch-stamped dedupe + bbox pre-reject — same machinery as
+        // first_conflict (see SEEN_SCRATCH); result-identical.
+        let m = r + self.spacing + 1.0;
+        SEEN_SCRATCH.with(|s| {
+        let (stamps, epoch) = &mut *s.borrow_mut();
+        if stamps.len() < self.items.len() {
+            stamps.resize(self.items.len(), 0);
+        }
+        *epoch = epoch.wrapping_add(1);
+        if *epoch == 0 {
+            stamps.iter_mut().for_each(|v| *v = 0);
+            *epoch = 1;
+        }
+        let e = *epoch;
         for row in r0..=r1 {
             for col in c0..=c1 {
                 for &id in &self.buckets[row * self.cols + col] {
-                    if seen.contains(&id) {
+                    if stamps[id as usize] == e {
                         continue;
                     }
-                    seen.push(id);
+                    stamps[id as usize] = e;
+                    let bb = self.item_bboxes[id as usize];
+                    if bb.0 > x + m || bb.2 < x - m || bb.1 > y + m || bb.3 < y - m {
+                        continue;
+                    }
                     match &self.items[id as usize] {
                         Item::Seg { net: n, layer: l, a, b, half } => {
                             if *n == net {
@@ -1141,6 +1196,7 @@ impl ClearanceIndex {
             }
         }
         None
+        })
     }
 }
 
