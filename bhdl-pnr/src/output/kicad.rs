@@ -1459,6 +1459,72 @@ pub(crate) fn plane_foreign_holes(
         // the clearance rule.
         holes.push((mh.x_mm, mh.y_mm, (mh.drill_mm + 0.5) / 2.0 + zc + 0.05));
     }
+    // Signal-layer pour (2-layer GND-pour experiment): a pour shares
+    // its layer with routed copper, so it must ALSO void around every
+    // foreign same-layer track and SMD pad — Power-layer planes never
+    // need this (nothing routes there), so this block is a no-op for
+    // them. Tracks are sampled as disc chains (spacing 0.4·r keeps
+    // the union within ~0.01mm of the exact capsule, inside the
+    // +0.05 margin); SMD pads punch from their half-diagonal like the
+    // THT rect rule above. Every consumer of this function — zone
+    // emission, fanout drop siting, completion drops, swallow verify —
+    // sees the same voids, which is the whole point of extending it
+    // HERE rather than at one call site.
+    let pour_layer = board
+        .nets
+        .iter()
+        .find(|n| n.id == net_id)
+        .and_then(|n| n.plane_layer)
+        .filter(|&pl| {
+            board.layer_stack.layers.get(pl).map(|l| l.kind)
+                == Some(crate::types::LayerKind::Signal)
+        });
+    if let Some(pl) = pour_layer {
+        for (rj, r) in routes.iter().enumerate() {
+            if board.nets.get(rj).map(|x| x.id) == Some(net_id) {
+                continue;
+            }
+            for sg in &r.segments {
+                if sg.layer != pl {
+                    continue;
+                }
+                let rr = sg.width_mm / 2.0 + zc + 0.05;
+                let (ax, ay) = sg.start;
+                let (bx, by) = sg.end;
+                let len = (bx - ax).hypot(by - ay);
+                let steps = ((len / (rr * 0.4)).ceil() as usize).max(1);
+                for k in 0..=steps {
+                    let t = k as f64 / steps as f64;
+                    holes.push((ax + t * (bx - ax), ay + t * (by - ay), rr));
+                }
+            }
+        }
+        let pour_side = if pl == 0 {
+            crate::types::BoardSide::Top
+        } else {
+            crate::types::BoardSide::Bottom
+        };
+        for comp in &board.components {
+            if comp.side != pour_side {
+                continue;
+            }
+            let cos_t = comp.theta.cos();
+            let sin_t = comp.theta.sin();
+            for pin in &comp.pins {
+                if pin.unplaced || pin.net == Some(net_id) {
+                    continue;
+                }
+                let Some(pad) = &pin.pad else { continue };
+                if pad.drill_mm.is_some() {
+                    continue; // THT already punched above
+                }
+                let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
+                let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+                let reach = (pad.width_mm / 2.0).hypot(pad.height_mm / 2.0);
+                holes.push((gx, gy, reach + zc + 0.05));
+            }
+        }
+    }
     holes
 }
 

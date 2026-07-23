@@ -791,6 +791,33 @@ pub fn build_board(
                 _ => {}
             }
         }
+
+        // ── Signal-layer GND pour (EXPERIMENT, BHDL_PNR_POUR_GND=1) ──
+        // The classic 2-layer idiom: no dedicated plane layers, so
+        // pour GND on the BOTTOM signal layer — the zone voids around
+        // every foreign same-layer track/pad (plane_foreign_holes'
+        // pour arm), pins connect by contact or drop via, and GND
+        // leaves the routing problem entirely. Default OFF: pours on
+        // a shared layer can fragment (voids isolating islands), and
+        // only the oracle A/B decides whether the trade wins.
+        if std::env::var("BHDL_PNR_POUR_GND").is_ok()
+            && !polygon_board
+            && !layer_stack
+                .layers
+                .iter()
+                .any(|l| matches!(l.kind, LayerKind::Ground | LayerKind::Power))
+        {
+            if let Some(gi) = gnd_idx {
+                if nets[gi].plane_layer.is_none() && layer_stack.layers.len() >= 2 {
+                    let bottom = layer_stack.layers.len() - 1;
+                    nets[gi].plane_layer = Some(bottom);
+                    log::info!(
+                        "pour assignment (experiment): bottom signal layer -> '{}'",
+                        nets[gi].name
+                    );
+                }
+            }
+        }
     }
 
     // 11. Auto-size board outline
