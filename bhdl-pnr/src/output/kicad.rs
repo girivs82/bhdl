@@ -403,26 +403,7 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
         // component with NO same-net barrel (drop via or THT pad)
         // would be an isolated island: dropped, like KiCad's own
         // island removal.
-        let mut anchors: Vec<(f64, f64)> = Vec::new();
-        if let Some(r) = routes.get(ni) {
-            for v in &r.vias {
-                anchors.push((v.x, v.y));
-            }
-        }
-        for comp in &board.components {
-            let cos_t = comp.theta.cos();
-            let sin_t = comp.theta.sin();
-            for pin in &comp.pins {
-                if pin.net == Some(net.id)
-                    && pin.pad.as_ref().and_then(|p| p.drill_mm).is_some()
-                {
-                    anchors.push((
-                        comp.x + pin.dx * cos_t - pin.dy * sin_t,
-                        comp.y + pin.dx * sin_t + pin.dy * cos_t,
-                    ));
-                }
-            }
-        }
+        let anchors = plane_anchor_points(board, routes, ni);
         let polys = match &poly_boundary {
             // Poly outlines ride the SAME raster engine, masked to the
             // inset boundary — one truth for both outline shapes.
@@ -1526,6 +1507,145 @@ pub(crate) fn plane_foreign_holes(
         }
     }
     holes
+}
+
+/// Same-net copper CONTACT points into a plane/pour fill — the
+/// anchors that keep a fill component alive in the fracture's island
+/// removal and the nodes the pour-connectivity check walks from:
+/// drop/stitch vias, same-net THT pads (every plane kind), and — for
+/// SIGNAL-layer pours only — same-net SMD pads on the pour side,
+/// which connect by direct contact (a bottom GND chip pad sitting in
+/// the pour is a legitimate join; before this it wasn't counted and
+/// the fracture DROPPED its island).
+pub(crate) fn plane_anchor_points(
+    board: &Board,
+    routes: &[Route],
+    ni: usize,
+) -> Vec<(f64, f64)> {
+    let net = &board.nets[ni];
+    let mut anchors: Vec<(f64, f64)> = Vec::new();
+    if let Some(r) = routes.get(ni) {
+        for v in &r.vias {
+            anchors.push((v.x, v.y));
+        }
+    }
+    let pour_side = net
+        .plane_layer
+        .filter(|&pl| {
+            board.layer_stack.layers.get(pl).map(|l| l.kind)
+                == Some(crate::types::LayerKind::Signal)
+        })
+        .map(|pl| {
+            if pl == 0 {
+                crate::types::BoardSide::Top
+            } else {
+                crate::types::BoardSide::Bottom
+            }
+        });
+    for comp in &board.components {
+        let cos_t = comp.theta.cos();
+        let sin_t = comp.theta.sin();
+        for pin in &comp.pins {
+            if pin.net != Some(net.id) {
+                continue;
+            }
+            let Some(pad) = &pin.pad else { continue };
+            let tht = pad.drill_mm.is_some();
+            let smd_contact = !tht && pour_side.is_some_and(|s| comp.side == s);
+            if tht || smd_contact {
+                anchors.push((
+                    comp.x + pin.dx * cos_t - pin.dy * sin_t,
+                    comp.y + pin.dx * sin_t + pin.dy * cos_t,
+                ));
+            }
+        }
+    }
+    anchors
+}
+
+/// The pour fill as a LABELED raster: the same grid the emission
+/// fractures (fill_copper_grid over plane_foreign_holes + cutout
+/// rects), with 4-connected copper components labeled 1..n_labels.
+/// Rect-outline boards only (pour assignment already excludes
+/// polygon outlines).
+pub(crate) struct PourRaster {
+    pub x0: f64,
+    pub y0: f64,
+    pub cols: usize,
+    pub rows: usize,
+    pub label: Vec<u32>,
+    pub n_labels: u32,
+}
+
+impl PourRaster {
+    pub fn label_at(&self, x: f64, y: f64) -> u32 {
+        let c = ((x - self.x0) / VOID_CELL).floor() as isize;
+        let r = ((y - self.y0) / VOID_CELL).floor() as isize;
+        if c < 0 || r < 0 || c as usize >= self.cols || r as usize >= self.rows {
+            return 0;
+        }
+        self.label[r as usize * self.cols + c as usize]
+    }
+    pub fn cell_center(&self, r: usize, c: usize) -> (f64, f64) {
+        (
+            self.x0 + (c as f64 + 0.5) * VOID_CELL,
+            self.y0 + (r as f64 + 0.5) * VOID_CELL,
+        )
+    }
+}
+
+pub(crate) fn pour_raster(board: &Board, routes: &[Route], ni: usize) -> Option<PourRaster> {
+    let net = &board.nets[ni];
+    net.plane_layer?;
+    if matches!(&board.config.outline, PnrBoardOutlinePoly(_)) {
+        return None;
+    }
+    let w = board.config.outline.width();
+    let h = board.config.outline.height();
+    let m = 0.5;
+    let (fx0, fy0, fx1, fy1) = match net.plane_region {
+        Some((rx0, ry0, rx1, ry1)) => {
+            (rx0.max(m), ry0.max(m), rx1.min(w - m), ry1.min(h - m))
+        }
+        None => (m, m, w - m, h - m),
+    };
+    let holes = plane_foreign_holes(board, routes, net.id);
+    let rects = plane_cutout_rects(board);
+    let (copper, cols, rows) = fill_copper_grid(fx0, fy0, fx1, fy1, &holes, &rects);
+    // 4-connected component labels (BFS).
+    let mut label = vec![0u32; cols * rows];
+    let mut next = 0u32;
+    let mut queue: std::collections::VecDeque<usize> = std::collections::VecDeque::new();
+    for start in 0..cols * rows {
+        if !copper[start] || label[start] != 0 {
+            continue;
+        }
+        next += 1;
+        label[start] = next;
+        queue.push_back(start);
+        while let Some(i) = queue.pop_front() {
+            let (r, c) = (i / cols, i % cols);
+            let mut push = |j: usize| {
+                if copper[j] && label[j] == 0 {
+                    label[j] = next;
+                    queue.push_back(j);
+                }
+            };
+            if c > 0 {
+                push(i - 1);
+            }
+            if c + 1 < cols {
+                push(i + 1);
+            }
+            if r > 0 {
+                push(i - cols);
+            }
+            if r + 1 < rows {
+                push(i + cols);
+            }
+        }
+    }
+    Some(PourRaster { x0: fx0, y0: fy0, cols, rows, label, n_labels: next })
 }
 
 /// Interior cutout apertures inflated by the zone clearance — punched

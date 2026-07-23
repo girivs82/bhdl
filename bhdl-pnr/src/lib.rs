@@ -1449,6 +1449,25 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         }
     }
 
+    // 5.93. POUR ISLAND STITCH: a signal-layer pour shares its layer
+    // with routed copper, and the emission's voids can sever the fill
+    // into islands whose anchors then ship disconnected (the pour
+    // A/B's 7-unc fragmentation family). Flood-fill the SAME raster
+    // the emission fractures, and when anchors span islands, bridge
+    // each stranded island to the main one with a same-net stitch
+    // track on the pour layer (exact-kernel checked against foreign
+    // copper; same-net contact merges it with both islands). No legal
+    // stitch → honest warn, unc stands.
+    {
+        let stitched = pour_island_stitch(&board, &mut final_routes);
+        if stitched > 0 {
+            info!("pour island stitch: {stitched} bridge(s) added");
+            let mut bv: Vec<(usize, (f64, f64))> = Vec::new();
+            let mut bd: Vec<(usize, (f64, f64))> = Vec::new();
+            validate_and_rip(&board, &mut final_routes, &mut bv, &mut bd);
+        }
+    }
+
     // 5.93. Completion RE-RUN: the recovery loop's final validate can
     // dangle-TRIM copper without counting as a rip (rips are what gate
     // another round), leaving a sink disconnected with no repair.
@@ -6978,6 +6997,190 @@ fn apply_meander(
         }
     }
     Some((si, n_new))
+}
+
+/// Bridge stranded pour islands (see the 5.93 call site). For each
+/// signal-layer pour net: raster the fill exactly as emission will,
+/// label islands, map every same-net anchor (via / THT pad / pour-
+/// side SMD pad) to its island, and stitch each anchored non-main
+/// island to the main one with a straight (or L) same-net track on
+/// the pour layer. Candidate stitch targets are the K nearest main-
+/// island cells to the stranded anchor; legality is the exact kernel
+/// vs foreign copper only (same-net contact at both ends is the
+/// join). Returns the number of bridges added.
+fn pour_island_stitch(board: &Board, final_routes: &mut [Route]) -> usize {
+    let mut stitched = 0usize;
+    for ni in 0..board.nets.len() {
+        let Some(pl) = board.nets[ni].plane_layer else { continue };
+        if board.layer_stack.layers.get(pl).map(|l| l.kind)
+            != Some(crate::types::LayerKind::Signal)
+        {
+            continue;
+        }
+        let Some(raster) = output::kicad::pour_raster(board, final_routes, ni) else {
+            continue;
+        };
+        if raster.n_labels <= 1 {
+            continue;
+        }
+        let anchors = output::kicad::plane_anchor_points(board, final_routes, ni);
+        let mut per_label: std::collections::BTreeMap<u32, Vec<(f64, f64)>> =
+            std::collections::BTreeMap::new();
+        for &(ax, ay) in &anchors {
+            let l = raster.label_at(ax, ay);
+            if l != 0 {
+                per_label.entry(l).or_default().push((ax, ay));
+            }
+        }
+        if per_label.len() <= 1 {
+            continue;
+        }
+        // Main island = most anchors (ties: lowest label — deterministic).
+        let main = per_label
+            .iter()
+            .max_by_key(|(l, v)| (v.len(), std::cmp::Reverse(**l)))
+            .map(|(l, _)| *l)
+            .unwrap();
+        let net_id = board.nets[ni].id;
+        let width = board.nets[ni].required_trace_width_mm.clamp(0.3, 0.5);
+        let cidx = geom::ClearanceIndex::build(board, final_routes, Some(net_id));
+        // Same-net PIN anchors with identity — the router fallback
+        // routes pin-to-pin when the flat stitch is fenced.
+        let pour_side = if pl == 0 { BoardSide::Top } else { BoardSide::Bottom };
+        let mut pin_anchors: Vec<((f64, f64), (ComponentId, PinId))> = Vec::new();
+        for comp in &board.components {
+            let cos_t = comp.theta.cos();
+            let sin_t = comp.theta.sin();
+            for pin in &comp.pins {
+                if pin.net != Some(net_id) {
+                    continue;
+                }
+                let Some(pad) = &pin.pad else { continue };
+                if pad.drill_mm.is_some() || comp.side == pour_side {
+                    pin_anchors.push((
+                        (
+                            comp.x + pin.dx * cos_t - pin.dy * sin_t,
+                            comp.y + pin.dx * sin_t + pin.dy * cos_t,
+                        ),
+                        (comp.id, pin.pin_id),
+                    ));
+                }
+            }
+        }
+        // Union-find over labels so islands merged by an earlier
+        // stitch this round count as main.
+        let mut joined: std::collections::BTreeSet<u32> =
+            std::collections::BTreeSet::new();
+        joined.insert(main);
+        for (&l, island_anchors) in &per_label {
+            if joined.contains(&l) {
+                continue;
+            }
+            let &(ax, ay) = &island_anchors[0];
+            // K nearest main-island cells to the stranded anchor.
+            let mut cands: Vec<(f64, (f64, f64))> = Vec::new();
+            for r in 0..raster.rows {
+                for c in 0..raster.cols {
+                    if raster.label[r * raster.cols + c] == main {
+                        let p = raster.cell_center(r, c);
+                        cands.push(((p.0 - ax).hypot(p.1 - ay), p));
+                    }
+                }
+            }
+            cands.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            cands.truncate(16);
+            let mut done = false;
+            for &(_, (bx, by)) in &cands {
+                // Straight stitch, then the two L-bends.
+                let paths: [Vec<((f64, f64), (f64, f64))>; 3] = [
+                    vec![((ax, ay), (bx, by))],
+                    vec![((ax, ay), (bx, ay)), ((bx, ay), (bx, by))],
+                    vec![((ax, ay), (ax, by)), ((ax, by), (bx, by))],
+                ];
+                for legs in &paths {
+                    if legs
+                        .iter()
+                        .all(|&(a, b)| cidx.first_conflict(a, b, width, pl, net_id).is_none())
+                    {
+                        for &(a, b) in legs {
+                            final_routes[ni].segments.push(crate::types::RouteSegment {
+                                layer: pl,
+                                start: a,
+                                end: b,
+                                width_mm: width,
+                            });
+                        }
+                        info!(
+                            "pour island stitch: '{}' island bridged ({:.1},{:.1})→({:.1},{:.1})",
+                            board.nets[ni].name, ax, ay, bx, by
+                        );
+                        joined.insert(l);
+                        stitched += 1;
+                        done = true;
+                        break;
+                    }
+                }
+                if done {
+                    break;
+                }
+            }
+            if !done {
+                // ROUTER FALLBACK: the island is fenced on the pour
+                // layer (foreign tracks encircle it — the line_buffer
+                // power-header case). Route its PIN anchor to a same-
+                // net pin in the main island with the real router
+                // (vias + escapes), exact-commit-stripped, and MERGE
+                // the copper into the pour net's route.
+                let stranded_pin = pin_anchors
+                    .iter()
+                    .find(|(p, _)| raster.label_at(p.0, p.1) == l)
+                    .map(|(_, id)| *id);
+                let target_pin = pin_anchors
+                    .iter()
+                    .find(|(p, _)| raster.label_at(p.0, p.1) == main)
+                    .map(|(_, id)| *id);
+                if let (Some(sp), Some(tp)) = (stranded_pin, target_pin) {
+                    let synth = PnrNet {
+                        pins: vec![sp, tp],
+                        plane_layer: None,
+                        ..board.nets[ni].clone()
+                    };
+                    let mut grid = RoutingGrid::build(board);
+                    for (j, route) in final_routes.iter().enumerate() {
+                        if j != ni && !route.is_empty() {
+                            pathfinder::block_route_geometry(&mut grid, route, board);
+                        }
+                    }
+                    let mut rebuilt =
+                        pathfinder::route_single_net(&grid, &synth, board, true, None);
+                    if !rebuilt.is_empty() {
+                        let mut bans: Vec<(f64, f64)> = Vec::new();
+                        let kept = exact_commit_strip(
+                            board, final_routes, ni, &mut rebuilt, 0, &mut bans,
+                        );
+                        if kept > 0 {
+                            final_routes[ni].segments.extend(rebuilt.segments);
+                            final_routes[ni].vias.extend(rebuilt.vias);
+                            info!(
+                                "pour island stitch: '{}' fenced island near ({:.1},{:.1}) bridged by ROUTED fallback ({kept} branch(es))",
+                                board.nets[ni].name, ax, ay
+                            );
+                            joined.insert(l);
+                            stitched += 1;
+                            done = true;
+                        }
+                    }
+                }
+            }
+            if !done {
+                log::warn!(
+                    "pour island stitch: no legal bridge for a '{}' island near ({:.1},{:.1}) — unconnected stands (honest)",
+                    board.nets[ni].name, ax, ay
+                );
+            }
+        }
+    }
+    stitched
 }
 
 fn plane_drop_pass(board: &Board, final_routes: &mut [Route]) -> usize {
