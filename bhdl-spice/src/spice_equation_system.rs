@@ -38,7 +38,9 @@ pub enum ComponentEquation {
     TableIV { points: Vec<(f64, f64)> },
 
     /// Optocoupler phototransistor: a current-controlled current source
-    /// with smooth saturation — i = ctr · i(ctrl_edge) · tanh(v_diff/v_knee).
+    /// with smooth saturation — i = ctr · f(IF) · i(ctrl_edge) ·
+    /// tanh(v_diff/v_knee), where f is the CTR-vs-IF curve factor
+    /// (normalized to the rank point; 1.0 when no curve is carried).
     /// `ctrl_edge` is the IRED branch whose solved current controls this
     /// one (it must own a current variable — the converter always emits it
     /// as an LED-class branch, which does). The tanh knee sits at half the
@@ -47,7 +49,37 @@ pub enum ComponentEquation {
     /// operation collapses V_CE toward saturation instead of fighting the
     /// source. The coupling is control-only — no galvanic path is stamped
     /// across the isolation barrier.
-    PhotoCoupled { ctr: f64, v_knee: f64, ctrl_edge: EdgeIndex },
+    PhotoCoupled {
+        ctr: f64,
+        v_knee: f64,
+        ctrl_edge: EdgeIndex,
+        /// (ln IF, factor) points, IF ascending; empty = flat CTR.
+        curve: Vec<(f64, f64)>,
+    },
+}
+
+/// CTR curve factor at forward current `if_a`: piecewise-linear in
+/// ln(IF) between the datasheet points, clamped at the ends (beyond
+/// the characterized range the last published factor holds — no
+/// extrapolated optimism).
+fn ctr_curve_factor(curve: &[(f64, f64)], if_a: f64) -> f64 {
+    if curve.is_empty() {
+        return 1.0;
+    }
+    let l = if_a.max(1e-12).ln();
+    if l <= curve[0].0 {
+        return curve[0].1;
+    }
+    if l >= curve[curve.len() - 1].0 {
+        return curve[curve.len() - 1].1;
+    }
+    for w in curve.windows(2) {
+        if l <= w[1].0 {
+            let t = (l - w[0].0) / (w[1].0 - w[0].0);
+            return w[0].1 + t * (w[1].1 - w[0].1);
+        }
+    }
+    curve[curve.len() - 1].1
 }
 
 /// PWL interpolation shared by the TableIV residual and Jacobian.
@@ -236,9 +268,29 @@ impl SpiceEquationSystem {
                         .get(crate::circuit::META_CTRL_BRANCH)
                         .and_then(|name| self.circuit.get_branch(name))
                         .map(|(idx, _)| idx);
+                    let curve: Vec<(f64, f64)> = branch
+                        .metadata
+                        .get(crate::circuit::META_CTR_CURVE)
+                        .map(|s| {
+                            let mut pts: Vec<(f64, f64)> = s
+                                .split(';')
+                                .filter_map(|p| {
+                                    let (a, b) = p.split_once(':')?;
+                                    Some((
+                                        a.parse::<f64>().ok()?.max(1e-12).ln(),
+                                        b.parse::<f64>().ok()?,
+                                    ))
+                                })
+                                .collect();
+                            pts.sort_by(|x, y| {
+                                x.0.partial_cmp(&y.0).unwrap_or(std::cmp::Ordering::Equal)
+                            });
+                            pts
+                        })
+                        .unwrap_or_default();
                     match (ctr, v_knee, ctrl) {
                         (Some(ctr), Some(v_knee), Some(ctrl_edge)) if v_knee > 0.0 => {
-                            ComponentEquation::PhotoCoupled { ctr, v_knee, ctrl_edge }
+                            ComponentEquation::PhotoCoupled { ctr, v_knee, ctrl_edge, curve }
                         }
                         _ => {
                             warn!(
@@ -507,7 +559,7 @@ impl EquationSystem for SpiceEquationSystem {
                     // i = ctr · i_ctrl · tanh(v/v_knee): KCL only — the
                     // branch owns no current variable; the controlling
                     // (IRED) branch's current variable is read directly.
-                    ComponentEquation::PhotoCoupled { ctr, v_knee, ctrl_edge } => {
+                    ComponentEquation::PhotoCoupled { ctr, v_knee, ctrl_edge, curve } => {
                         let i_ctrl = self
                             .get_current_var(*ctrl_edge)
                             .map(|ci| match variables[ci].space {
@@ -515,7 +567,9 @@ impl EquationSystem for SpiceEquationSystem {
                                 VariableSpace::Linear => x[ci],
                             })
                             .unwrap_or(0.0);
-                        let current = ctr * i_ctrl * (v_diff / v_knee).tanh();
+                        // Curve factor at the CURRENT iterate's IF.
+                        let f = ctr_curve_factor(curve, i_ctrl);
+                        let current = ctr * f * i_ctrl * (v_diff / v_knee).tanh();
                         if let Some(idx) = v1_idx {
                             residual[idx] += current;
                         }
@@ -677,7 +731,7 @@ impl EquationSystem for SpiceEquationSystem {
                     // ∂i/∂v = ctr·i_ctrl·sech²(u)/v_knee on the C/E rows;
                     // ∂i/∂(ctrl var) couples the collector KCL to the IRED
                     // current variable (exp(w)·… in the IRED's log space).
-                    ComponentEquation::PhotoCoupled { ctr, v_knee, ctrl_edge } => {
+                    ComponentEquation::PhotoCoupled { ctr, v_knee, ctrl_edge, curve } => {
                         let ci = self.get_current_var(*ctrl_edge);
                         let (i_ctrl, di_dw) = ci
                             .map(|ci| match variables[ci].space {
@@ -688,6 +742,15 @@ impl EquationSystem for SpiceEquationSystem {
                                 VariableSpace::Linear => (x[ci], 1.0),
                             })
                             .unwrap_or((0.0, 0.0));
+                        // LAGGED COEFFICIENT: the curve factor is
+                        // evaluated at the current iterate and treated
+                        // as constant in the Jacobian (its d/dIF term
+                        // is a mild secondary dependence; Newton with
+                        // source-ramping converges — verified on the
+                        // opto fixture). Residual and Jacobian use the
+                        // SAME factor, so the converged point is exact.
+                        let f = ctr_curve_factor(curve, i_ctrl);
+                        let ctr = ctr * f;
                         let t = (v_diff / v_knee).tanh();
                         let g = ctr * i_ctrl * (1.0 - t * t) / v_knee;
                         if let Some(i) = v1_idx {
@@ -865,14 +928,18 @@ pub fn extract_solution(
                     let v1 = node_voltages.get(&n1).copied().unwrap_or(0.0);
                     let v2 = node_voltages.get(&n2).copied().unwrap_or(0.0);
                     branch_currents.insert(edge_idx, table_iv_interp(points, v1 - v2));
-                } else if let ComponentEquation::PhotoCoupled { ctr, v_knee, ctrl_edge } = equation {
+                } else if let ComponentEquation::PhotoCoupled { ctr, v_knee, ctrl_edge, curve } =
+                    equation
+                {
                     // Controlling IRED currents were extracted in the first
                     // pass (LED branches own current variables).
                     let i_ctrl = branch_currents.get(ctrl_edge).copied().unwrap_or(0.0);
+                    let f = ctr_curve_factor(curve, i_ctrl);
                     let (n1, n2) = system.circuit.branch_nodes(edge_idx).unwrap();
                     let v1 = node_voltages.get(&n1).copied().unwrap_or(0.0);
                     let v2 = node_voltages.get(&n2).copied().unwrap_or(0.0);
-                    branch_currents.insert(edge_idx, ctr * i_ctrl * ((v1 - v2) / v_knee).tanh());
+                    branch_currents
+                        .insert(edge_idx, ctr * f * i_ctrl * ((v1 - v2) / v_knee).tanh());
                 }
             }
         }

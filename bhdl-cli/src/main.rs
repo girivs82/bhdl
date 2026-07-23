@@ -3701,6 +3701,122 @@ async fn cmd_bom(
                         if let Some(stab) = bhdl_synthesizer::signoff::format_stability(&stages) {
                             print!("{stab}");
                         }
+                        // Optocoupler transfer: the consumer for the CTR
+                        // derating chain the entity carries. Solved IF/IC
+                        // come from the decomposed IRED/CE branches; the
+                        // curve factor replicates the solver's log-IF
+                        // interpolation so the report grades the SAME
+                        // operating point the solve produced.
+                        {
+                            let curve_factor = |pts: &[(f64, f64)], if_a: f64| -> f64 {
+                                if pts.is_empty() {
+                                    return 1.0;
+                                }
+                                let l = if_a.max(1e-12).ln();
+                                if l <= pts[0].0 {
+                                    return pts[0].1;
+                                }
+                                if l >= pts[pts.len() - 1].0 {
+                                    return pts[pts.len() - 1].1;
+                                }
+                                for w in pts.windows(2) {
+                                    if l <= w[1].0 {
+                                        let t = (l - w[0].0) / (w[1].0 - w[0].0);
+                                        return w[0].1 + t * (w[1].1 - w[0].1);
+                                    }
+                                }
+                                pts[pts.len() - 1].1
+                            };
+                            let mut rows = Vec::new();
+                            for (_, inst) in netlist.instances.iter() {
+                                let entity = netlist
+                                    .modules
+                                    .get(inst.definition)
+                                    .map(|m| m.name.clone())
+                                    .unwrap_or_default();
+                                let attrs = analysis.entity_attribute_index.get(&entity);
+                                let class = inst
+                                    .attributes
+                                    .get("component_class")
+                                    .cloned()
+                                    .or_else(|| {
+                                        attrs.and_then(|a| a.get("component_class").cloned())
+                                    });
+                                if class.as_deref() != Some("optocoupler") {
+                                    continue;
+                                }
+                                let getf = |name: &str| -> Option<f64> {
+                                    inst.attributes
+                                        .get(name)
+                                        .or_else(|| attrs.and_then(|a| a.get(name)))
+                                        .and_then(|v| {
+                                            v.trim_end_matches(|c: char| c.is_alphabetic())
+                                                .parse::<f64>()
+                                                .ok()
+                                        })
+                                };
+                                let Some(ctr_min) = getf("ctr_min_pct") else { continue };
+                                let bcur = |suffix: &str| -> Option<f64> {
+                                    let (e, _) = circuit_ref
+                                        .get_branch(&format!("{}{suffix}", inst.name))?;
+                                    result.branch_currents.get(&e).copied()
+                                };
+                                let (Some(if_a), Some(ic_a)) =
+                                    (bcur("_ired"), bcur("_ce"))
+                                else {
+                                    continue;
+                                };
+                                let pts: Vec<(f64, f64)> = [
+                                    ("ctr_norm_100ua", 100e-6f64),
+                                    ("ctr_norm_500ua", 500e-6),
+                                    ("ctr_norm_1ma", 1e-3),
+                                    ("ctr_norm_2ma", 2e-3),
+                                    ("ctr_norm_5ma", 5e-3),
+                                    ("ctr_norm_10ma", 10e-3),
+                                ]
+                                .iter()
+                                .filter_map(|&(n, ifp)| {
+                                    getf(n).map(|f| (ifp.max(1e-12).ln(), f))
+                                })
+                                .collect();
+                                let f = curve_factor(&pts, if_a);
+                                let avail = ctr_min / 100.0 * f * if_a;
+                                let temp = getf("ctr_temp_100c");
+                                let aging = getf("ctr_aging_5yr");
+                                let worst =
+                                    avail * temp.unwrap_or(1.0) * aging.unwrap_or(1.0);
+                                let derations = match (temp, aging) {
+                                    (Some(t), Some(g)) => {
+                                        format!("×{t:.2} hot ×{g:.2} aged")
+                                    }
+                                    _ => "no derating data".to_string(),
+                                };
+                                let verdict = if ic_a <= worst {
+                                    "PASS (worst-case)".to_string()
+                                } else if ic_a <= avail * 1.001 {
+                                    "DERATED-FAIL (hot/aged)".to_string()
+                                } else {
+                                    "AT CEILING".to_string()
+                                };
+                                rows.push(bhdl_synthesizer::signoff::OptoTransferRow {
+                                    instance: inst.name.clone(),
+                                    if_ma: if_a * 1e3,
+                                    ctr_min_pct: ctr_min,
+                                    curve_factor: f,
+                                    ic_avail_ma: avail * 1e3,
+                                    ic_solved_ma: ic_a * 1e3,
+                                    ic_worst_ma: worst * 1e3,
+                                    derations,
+                                    verdict,
+                                });
+                            }
+                            rows.sort_by(|a, b| a.instance.cmp(&b.instance));
+                            if let Some(ot) =
+                                bhdl_synthesizer::signoff::format_opto_transfer(&rows)
+                            {
+                                print!("{ot}");
+                            }
+                        }
                     }
                     Err(e) => eprintln!(
                         "  {}",

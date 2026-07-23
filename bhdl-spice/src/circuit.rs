@@ -126,6 +126,11 @@ pub const META_CTR_VKNEE: &str = "ctr_v_knee";
 /// Name of the branch whose solved current CONTROLS this branch (the
 /// optocoupler's IRED branch controlling its phototransistor).
 pub const META_CTRL_BRANCH: &str = "ctrl_branch";
+/// Optocoupler CTR-vs-IF curve, normalized to the rank point:
+/// "if_amps:factor;if_amps:factor;..." sorted by IF ascending (the
+/// datasheet Fig.6 points). The PhotoCoupled equation scales CTR by
+/// the interpolated factor at the solved IF.
+pub const META_CTR_CURVE: &str = "ctr_curve";
 
 /// Electrical node in the circuit
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

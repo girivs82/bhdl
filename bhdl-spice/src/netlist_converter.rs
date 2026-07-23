@@ -1016,6 +1016,32 @@ impl NetlistToSpiceConverter {
             let ctr = ctr_min_pct / 100.0;
             let mut ce_meta = HashMap::new();
             ce_meta.insert(crate::circuit::META_CTR.to_string(), ctr.to_string());
+            // CTR-vs-IF curve (Fig.6 points, normalized to the 5 mA
+            // rank point) — carried when the entity declares them, so
+            // the solve derates/boosts CTR at the ACTUAL operating IF
+            // instead of assuming the rank point.
+            {
+                let curve_attrs: [(&str, f64); 6] = [
+                    ("ctr_norm_100ua", 100e-6),
+                    ("ctr_norm_500ua", 500e-6),
+                    ("ctr_norm_1ma", 1e-3),
+                    ("ctr_norm_2ma", 2e-3),
+                    ("ctr_norm_5ma", 5e-3),
+                    ("ctr_norm_10ma", 10e-3),
+                ];
+                let pts: Vec<String> = curve_attrs
+                    .iter()
+                    .filter_map(|&(name, if_a)| {
+                        attr(name).map(|f| format!("{if_a}:{f}"))
+                    })
+                    .collect();
+                if pts.len() >= 2 {
+                    ce_meta.insert(
+                        crate::circuit::META_CTR_CURVE.to_string(),
+                        pts.join(";"),
+                    );
+                }
+            }
             // Knee at VCE(sat)/2: tanh(2) = 0.96 of full CTR current at the
             // cited saturation voltage.
             ce_meta.insert(crate::circuit::META_CTR_VKNEE.to_string(), (vce_sat / 2.0).to_string());

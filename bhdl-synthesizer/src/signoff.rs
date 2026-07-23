@@ -1712,6 +1712,52 @@ pub struct GateDriveRow {
     pub i_avg_a: f64,
 }
 
+/// One optocoupler's solved transfer point vs its datasheet envelope
+/// — the consumer for the CTR derating chain the entity carries
+/// (rank envelope × Fig.6 curve × temperature × IRED aging).
+pub struct OptoTransferRow {
+    pub instance: String,
+    pub if_ma: f64,
+    pub ctr_min_pct: f64,
+    pub curve_factor: f64,
+    pub ic_avail_ma: f64,
+    pub ic_solved_ma: f64,
+    pub ic_worst_ma: f64,
+    pub derations: String,
+    pub verdict: String,
+}
+
+pub fn format_opto_transfer(rows: &[OptoTransferRow]) -> Option<String> {
+    if rows.is_empty() {
+        return None;
+    }
+    let mut out = String::new();
+    out.push_str("\n### Optocoupler transfer (solved point vs derating chain)\n\n");
+    out.push_str("| Instance | IF | CTR min × curve | IC avail | IC solved | IC worst-case | Verdict |\n");
+    out.push_str("|----------|----|-----------------|----------|-----------|---------------|--------|\n");
+    for r in rows {
+        out.push_str(&format!(
+            "| {} | {:.2}mA | {:.0}% × {:.2} | {:.2}mA | {:.2}mA | {:.2}mA ({}) | {} |\n",
+            r.instance,
+            r.if_ma,
+            r.ctr_min_pct,
+            r.curve_factor,
+            r.ic_avail_ma,
+            r.ic_solved_ma,
+            r.ic_worst_ma,
+            r.derations,
+            r.verdict
+        ));
+    }
+    out.push_str(
+        "\n_IC avail = min-rank CTR × the Fig.6 curve factor at the SOLVED IF. \
+         Worst-case additionally applies the entity's hot (100degC) and IRED-aging \
+         factors — a solved IC above it is the classic opto field failure: works \
+         fresh and cool, dies hot and aged. Order a tighter rank or raise IF._\n",
+    );
+    Some(out)
+}
+
 pub fn compute_gate_drive(
     netlist: &Netlist,
     entity_attrs: &HashMap<String, HashMap<String, String>>,
