@@ -3255,6 +3255,7 @@ pub fn extract_layout_definitions(
         let double_sided = layout_def.double_sided();
         let stackup_material = layout_def.stackup_material();
         let cutouts = layout_def.cutouts();
+        let route_bias = layout_def.route_bias();
 
         definitions.insert(entity_name.clone(), LayoutDefinition {
             entity_name,
@@ -3270,6 +3271,7 @@ pub fn extract_layout_definitions(
             mech_check,
             double_sided,
             stackup_material,
+            route_bias,
         });
     }
 

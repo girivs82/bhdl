@@ -88,6 +88,9 @@ layout ElectrolyticCap { package Radial-P5.00-D10; }
 
 layout Ecc83Srpp {
     layer_stackup 2;
+    // Demo convention: hand-routed THT keeps copper on the solder
+    // side (the reference board has 0mm of F.Cu track).
+    route_bias bottom;
     // Demo board outline (ecc83-pp.kicad_pcb Edge.Cuts bbox).
     outline rect 52 46;
     // Demo's own mounting holes + connector positions (board-local

@@ -2010,6 +2010,20 @@ async fn run_layout(
                     "✓".green()
                 );
             }
+            if let Some(bias) = &lay.route_bias {
+                match bias.as_str() {
+                    "bottom" | "top" => {
+                        sem_config.board_config.route_bias = Some(bias.clone());
+                        println!(
+                            "  {} Route bias: {bias} (lateral routing prefers the {bias} layer)",
+                            "✓".green()
+                        );
+                    }
+                    other => anyhow::bail!(
+                        "unknown route_bias '{other}' — expected 'bottom' or 'top'"
+                    ),
+                }
+            }
             if let Some(dxf) = &lay.mech_check {
                 let outline_pts: Vec<(f64, f64)> =
                     if let Some(pts) = &lay.outline_polygon {

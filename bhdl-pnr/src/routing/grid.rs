@@ -20,6 +20,12 @@ pub struct RoutingGrid {
     pub y_coords: Vec<f64>,            // Row boundaries (mm)
     pub num_layers: usize,
     pub via_cost: f64,
+    /// Per-layer lateral move multiplier (1.0 = neutral). `route_bias
+    /// bottom;` sets >1.0 on every signal layer EXCEPT the preferred
+    /// outer one, so copper collects on the solder side the way
+    /// hand-routed THT boards do. Multiplying by 1.0 is bit-exact, so
+    /// boards without the knob are byte-identical.
+    pub lateral_penalty: Vec<f64>,
     /// Diagonal moves. OFF by default: at pitch-sized cells two nets'
     /// parallel diagonals in adjacent cells sit 0.212mm apart (< the
     /// 0.3mm rule) and opposite diagonals cross — Manhattan-only makes
@@ -121,6 +127,29 @@ impl RoutingGrid {
             // Via cost: base cost + area penalty. Should be modest enough
             // to encourage layer changes when routing is congested on one layer.
             via_cost: 2.0 + board.layer_stack.via_blockage_mm2() * 3.0,
+            lateral_penalty: {
+                let mut pen = vec![1.0; num_layers];
+                if let Some(bias) = board.config.route_bias.as_deref() {
+                    let signals = board.layer_stack.signal_layer_indices();
+                    let preferred = match bias {
+                        "top" => signals.first().copied(),
+                        _ => signals.last().copied(), // "bottom"
+                    };
+                    if let Some(pref) = preferred {
+                        // 4× lateral cost off the preferred layer: two
+                        // via crossings (2×~2.0) stay cheaper than a
+                        // long detour, so short jumper-style hops to
+                        // the other side survive — exactly the demo
+                        // boards' hand-routing idiom.
+                        for &l in &signals {
+                            if l != pref {
+                                pen[l] = 4.0;
+                            }
+                        }
+                    }
+                }
+                pen
+            },
         };
 
         // Set per-layer capacity from stackup

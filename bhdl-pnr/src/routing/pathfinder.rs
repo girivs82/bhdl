@@ -222,6 +222,19 @@ fn shortest_path_3d(
                 BoardSide::Top => 0,
                 BoardSide::Bottom => grid.num_layers - 1,
             };
+            // route_bias: a through-hole pad is attachable on EVERY
+            // layer (any-layer attach), so seed its terminal on the
+            // preferred side — pass 1 runs via-less, and a terminal
+            // pinned to layer 0 forces the whole route onto F.Cu no
+            // matter what the lateral penalty says.
+            let layer = match (
+                board.config.route_bias.as_deref(),
+                pin.pad.as_ref().and_then(|p| p.drill_mm),
+            ) {
+                (Some("bottom"), Some(_)) => grid.num_layers - 1,
+                (Some("top"), Some(_)) => 0,
+                _ => layer,
+            };
 
             let natural = grid.point_to_cell(gx, gy, layer);
             let cell = escape_cell(
@@ -1055,7 +1068,12 @@ fn dijkstra_to_any_inner(
             } else {
                 1.0
             };
-            let new_cost = cost + edge_cost * width_factor * move_cost * attract_factor;
+            let new_cost = cost
+                + edge_cost
+                    * width_factor
+                    * move_cost
+                    * attract_factor
+                    * grid.lateral_penalty[nbr.layer];
 
             if new_cost < s.dist_at(ci(nbr)) {
                 s.set_dist(ci(nbr), new_cost, ci(cell) as u32);
@@ -1556,6 +1574,16 @@ pub(crate) fn extend_route(
             let layer = match comp.side {
                 BoardSide::Top => 0,
                 BoardSide::Bottom => grid.num_layers - 1,
+            };
+            // route_bias: seed THT terminals on the preferred side
+            // (mirrors shortest_path_3d — see comment there).
+            let layer = match (
+                board.config.route_bias.as_deref(),
+                pin.pad.as_ref().and_then(|p| p.drill_mm),
+            ) {
+                (Some("bottom"), Some(_)) => grid.num_layers - 1,
+                (Some("top"), Some(_)) => 0,
+                _ => layer,
             };
             let half = pin
                 .pad

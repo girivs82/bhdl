@@ -183,6 +183,9 @@ layout Cap { package 1206; }
 
 layout MultichannelMixer {
     layer_stackup 2;
+    // Demo convention: THT-era mixer routes bottom-dominant
+    // (reference board: 1768mm B.Cu vs 192mm of F.Cu jumpers).
+    route_bias bottom;
     // Demo geometry verbatim: 110×111 outline, jack row along the
     // top, power entry on the right edge, one pot column per channel
     // (board-local coords read from multichannel_mixer.kicad_pcb;

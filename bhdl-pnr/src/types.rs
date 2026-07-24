@@ -86,6 +86,13 @@ pub struct BoardConfig {
     pub double_sided: bool,
     /// Laminate selection (`layer_stackup N material <name>;`).
     pub stackup_material: Option<String>,
+    /// `route_bias bottom;` — preferred outer signal layer ("bottom" or
+    /// "top"). Lateral routing moves on OTHER signal layers cost extra,
+    /// so copper collects on the preferred side the way hand-routed THT
+    /// boards keep it on the solder side. Vias stay legal — the bias is
+    /// a preference, not a layer rule.
+    #[serde(default)]
+    pub route_bias: Option<String>,
     pub placement_regions: Vec<PlacementRegion>,
     /// IPC-7351B courtyard excess (per side, mm) added to each
     /// component's pad/body extent to form its keepout boundary. Set from
@@ -112,6 +119,7 @@ impl Default for BoardConfig {
             cutouts: Vec::new(),
             double_sided: false,
             stackup_material: None,
+            route_bias: None,
             placement_regions: Vec::new(),
             courtyard_excess_mm: 0.25, // IPC nominal
         }

@@ -1708,6 +1708,23 @@ impl LayoutDef {
         false
     }
 
+    /// `route_bias bottom;` — the router prefers one outer signal
+    /// layer (THT convention: hand-routed boards keep copper on the
+    /// solder side). Returns "bottom" or "top" when declared.
+    pub fn route_bias(&self) -> Option<String> {
+        for n in self
+            .0
+            .children()
+            .filter(|n| n.kind() == SyntaxKind::LAYOUT_KEEPOUT)
+        {
+            let toks = Self::mech_tokens(&n);
+            if toks.first().map(|t| t.as_str()) == Some("route_bias") {
+                return toks.get(1).cloned();
+            }
+        }
+        None
+    }
+
     /// `mech_check "file.dxf";` — MCAD parity gate file reference.
     pub fn mech_check(&self) -> Option<String> {
         // Reuses LAYOUT_PLACE-style token capture: any mech statement
