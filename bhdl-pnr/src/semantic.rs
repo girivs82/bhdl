@@ -1645,6 +1645,12 @@ fn default_package_for_category(category: &str, pin_count: usize) -> String {
     };
     match category {
         "resistor" | "capacitor" | "ferrite_bead" => "0603",
+        // A pot's PCB interface is 3 in-line THT pins (RK09K et al.) —
+        // the parametric pin-header family IS that pad pattern. The IC
+        // fallback gave it an SOIC-8 with 5 phantom no-net pads that
+        // shipped copper_edge_clearance at true panel coordinates
+        // (mixer board 93).
+        "potentiometer" => "PinHeader-1x03",
         "inductor" => "1210",
         "diode" | "led" | "tvs_diode" if pin_count <= 3 => "SOT-23",
         "diode" | "led" | "tvs_diode" => "SOT-23-6",

@@ -79,14 +79,14 @@ layout Ecc83Srpp {
     layer_stackup 2;
     // Demo board outline (ecc83-pp.kicad_pcb Edge.Cuts bbox).
     outline rect 52 46;
-    // Demo has 4 corner mounting holes (M3).
-    mounting_hole at (4, 4) drill 3.2;
-    mounting_hole at (48, 4) drill 3.2;
-    mounting_hole at (4, 42) drill 3.2;
-    mounting_hole at (48, 42) drill 3.2;
-    // Connectors on the board edges like the demo.
-    place J_IN at (4, 23);
-    place J_OUT at (48, 23);
-    place J_PWR at (26, 4);
-    place J_HTR at (26, 42);
+    // Demo's own mounting holes + connector positions (board-local
+    // coords read from ecc83-pp.kicad_pcb footprint origins).
+    mounting_hole at (3.8, 3.8) drill 3.2;
+    mounting_hole at (48.3, 3.8) drill 3.2;
+    mounting_hole at (3.8, 42.5) drill 3.2;
+    mounting_hole at (48.3, 42.5) drill 3.2;
+    place J_IN at (45.1, 15.2) rot 90;
+    place J_OUT at (7.0, 22.6) rot 270;
+    place J_PWR at (7.0, 10.5) rot 270;
+    place J_HTR at (24.3, 41.0) rot 0;
 }
