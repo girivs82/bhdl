@@ -953,6 +953,14 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                     BoardSide::Top => 0,
                     BoardSide::Bottom => nl - 1,
                 };
+                // POUR-SIDE pads live ON the fill's layer: they are
+                // fill anchors (contact merges them; island stitch
+                // bridges stranding) — a stub+via here leaves the
+                // via's far end on a bare signal layer, which ships
+                // as via_dangling (dbl_sided 2v).
+                if Some(stub_layer) == net.plane_layer {
+                    continue;
+                }
                 // AISLE DISCIPLINE: a pre-drop consumes a ~1.4mm
                 // punch swath — parked in a NEIGHBOR's escape lane it
                 // strands that pad instead (s99: the first greedy
@@ -7714,6 +7722,16 @@ fn plane_via_drops(
                 BoardSide::Top => 0,
                 BoardSide::Bottom => n_layers - 1,
             };
+            // POUR-SIDE pads live ON the fill's layer: they are fill
+            // anchors (contact merges them; island stitch bridges
+            // stranding) — a stub+via here leaves the via's far end
+            // on a bare signal layer, which ships as via_dangling
+            // (the dbl_sided 2v family). Power/Ground plane layers
+            // are inner and never a pad's own layer, so this only
+            // fires for the signal-layer pour.
+            if Some(stub_layer) == net.plane_layer {
+                continue;
+            }
             // Repair-pass guard: skip pads that still have a LIVE drop
             // (a stub on the pad's layer touching pad copper whose far
             // end carries a via). The validator can amputate a drop
