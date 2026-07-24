@@ -1,0 +1,30 @@
+// Potentiometer — one physical 3-terminal part (ends 1/3, wiper 2,
+// EIA numbering CCW/W/CW). Value is REQUIRED: pot resistance is
+// SKU-specific and boards must say what they mount (the KiCad
+// multichannel demo ships pots whose Value is literally "Bass" —
+// resistance is a documented absence in that source, so the
+// transcription records its chosen value as a design choice).
+//
+// DC MODEL (netlist converter, class "potentiometer"): decomposed
+// SIM-SIDE into two half-resistances around the wiper at 50%
+// rotation — the mid-travel operating point, a stated modeling
+// choice (wiper position is a user input, not a datum; transient
+// wiper sweeps are out of DC scope). One physical part on the
+// board, two branches in the solve — the optocoupler precedent.
+//
+// SKU identity: Alps Alpine RK09K series, 9mm metal-shaft rotary
+// (the footprint the KiCad demo mounts). Taper/detent variants are
+// ordering-code options; linear taper assumed unless overridden.
+entity Potentiometer(value: resistance) {
+    pin 1: signal inout;   // CCW end
+    pin 2: signal inout;   // wiper
+    pin 3: signal inout;   // CW end
+
+    attribute component_class = "potentiometer";
+    attribute resistance = value;
+    attribute manufacturer = "Alps Alpine";
+    attribute part_number = "RK09K series";
+    attribute physical_package = "RK09K-Vertical";
+    attribute kicad_symbol = "Device:R_Potentiometer";
+    attribute datasheet = "Alps RK09K series catalog";
+}

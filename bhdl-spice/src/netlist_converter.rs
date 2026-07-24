@@ -936,6 +936,80 @@ impl NetlistToSpiceConverter {
         // ranked parts), so the solved operating point is the conservative
         // one — a load the min-rank device can sink is signed off for the
         // whole rank.
+        // Potentiometer: ONE physical part, decomposed SIM-SIDE into two
+        // half-resistances around the wiper at 50% rotation (stated
+        // modeling choice — the wiper is a user input, not a datum; the
+        // mid-travel point is the conventional DC bias). Same one-part/
+        // many-branches pattern as the optocoupler below.
+        if class == "potentiometer" {
+            let pin_info = Self::get_pin_net_info(netlist, instance_id);
+            let net_of = |name: &str| {
+                pin_info
+                    .iter()
+                    .find(|p| p.pin_name.eq_ignore_ascii_case(name))
+                    .map(|p| p.net_name.clone())
+            };
+            let (Some(n1), Some(nw), Some(n3)) =
+                (net_of("1"), net_of("2"), net_of("3"))
+            else {
+                warn!(
+                    "Potentiometer {} missing a resolvable 1/2/3 net — no SPICE branches emitted",
+                    instance.name
+                );
+                return Ok(());
+            };
+            // SI-suffixed value ("10kΩ", "4.7M", "470"): numeric prefix
+            // scaled by the first suffix char (same shape as the opto
+            // block's parse_qty, plus the resistance-side k/M/G).
+            let parse_r = |s: &str| -> Option<f64> {
+                let s = s.trim();
+                let num_end = s
+                    .find(|ch: char| {
+                        !(ch.is_ascii_digit() || ch == '.' || ch == '-' || ch == '+')
+                    })
+                    .unwrap_or(s.len());
+                let v: f64 = s[..num_end].parse().ok()?;
+                Some(v * match s[num_end..].chars().next() {
+                    Some('m') => 1e-3,
+                    Some('k') | Some('K') => 1e3,
+                    Some('M') => 1e6,
+                    Some('G') => 1e9,
+                    _ => 1.0,
+                })
+            };
+            let total: f64 = instance
+                .attributes
+                .get("resistance")
+                .and_then(|s| parse_r(s))
+                .unwrap_or(0.0);
+            if total <= 0.0 {
+                warn!(
+                    "Potentiometer {} has no real resistance — Real-Data Policy: declare it (no branches emitted)",
+                    instance.name
+                );
+                return Ok(());
+            }
+            let half = total / 2.0;
+            for (tag, a, b) in [("_ccw", &n1, &nw), ("_cw", &nw, &n3)] {
+                let mut meta = HashMap::new();
+                meta.insert(META_PARENT_INSTANCE.to_string(), instance.name.clone());
+                circuit.add_branch_with_metadata(
+                    format!("{}{}", instance.name, tag),
+                    a,
+                    b,
+                    "Resistor".to_string(),
+                    half,
+                    Some(instance_id),
+                    meta,
+                );
+            }
+            info!(
+                "Added potentiometer {}: {}Ω split {}—{}—{} at 50% wiper",
+                instance.name, total, n1, nw, n3
+            );
+            return Ok(());
+        }
+
         if class == "optocoupler" {
             let pin_info = Self::get_pin_net_info(netlist, instance_id);
             let net_of = |names: &[&str]| {

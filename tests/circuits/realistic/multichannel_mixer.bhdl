@@ -1,0 +1,187 @@
+// KiCad demo transcription: multichannel_mixer (corpus board 93) —
+// the official 4-channel mixer demo (~/Downloads/demos/multichannel),
+// KiCad's showcase for repeated sub-sheets. Here the repeated sheet
+// becomes what it wants to be: ONE ChannelStrip ENTITY instantiated
+// four times — the bhdl channel-instance idiom.
+//
+// Netlist read from the demo's own .kicad_pcb pad-net bindings
+// (channel A traced component-by-component; B/C/D are the same strip
+// by construction). Topology per strip (single 12V supply, all
+// opamp + inputs on a buffered half-rail vbias):
+//   jack → 2.2µF → 10K → TL072-A inverting unity amp (10K‖100nF fb)
+//   → active Baxandall 3-band stack around TL072-B:
+//       mid:    R–[100nF across pot]–R,  wiper → 100nF → IN−
+//       bass:   R–[100nF across pot]–R,  wiper → 10K  → IN−
+//       treble: R–pot–R,                 wiper → 100nF → IN−
+//       ground leg: 100nF + 10K → IN−
+//   → volume pot as series rheostat → 10K → 2.2µF → MIX BUS
+// The bus is the master amp's VIRTUAL-EARTH summing node (the demo
+// nets it "/CH1/OUT" — it is the mix bus): IC1-A with 10K feedback,
+// output coupled 2.2µF to the master jack. IC1-B buffers the
+// R/R/2.2µF half-rail divider into vbias.
+//
+// Recorded design choices (absent in the source): pot resistance —
+// the demo's pot Values are literally "Bass"/"Mid"/... (generic POT
+// symbol, RK09K footprint); 10kΩ linear chosen, consistent with the
+// all-10K design. Neutrik TS jacks + Cliff DC entry stand in as pin
+// headers (package realism = the uno contract).
+// Every R = 10K 1%, film 2.2µF 35V, MLCC 100nF 50V — the demo's own
+// three part values, verbatim.
+
+import { TL072 } from "bhdl-stdlib/actives/audio_opamps.bhdl";
+import { Potentiometer } from "bhdl-stdlib/passives/potentiometer.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Pin_Header_01x03 } from "bhdl-stdlib/connectors/pin_header.bhdl";
+
+// One channel strip = the demo's repeated sheet, as an entity.
+entity ChannelStrip() {
+    pin IN:    signal in;
+    pin BUS:   signal inout;   // AC-coupled feed into the master's virtual-earth node
+    pin VCC:   power in;
+    pin VBIAS: signal in;
+    pin GND:   ground;
+
+    attribute component_class = "ic"; // composite: expansion carries parts
+
+    expansion {
+        internal ni:   net;   // after input coupling
+        internal a_in: net;   // TL072-A inverting input
+        internal a_out: net;
+        internal b_in: net;   // TL072-B inverting input
+        internal b_out: net;
+        internal mid_t: net;  // mid leg, pot CW end
+        internal mid_b: net;  // mid leg, pot CCW end
+        internal mid_w: net;
+        internal bas_t: net;
+        internal bas_b: net;
+        internal bas_w: net;
+        internal tre_t: net;
+        internal tre_b: net;
+        internal tre_w: net;
+        internal gleg: net;   // ground stability leg
+        internal vol_w: net;  // volume wiper (+ tied CCW end)
+        internal vtap: net;   // after the 10K bus resistor
+
+        // Dual opamp: A = input amp, B = tone amp; both + inputs ride
+        // vbias; single supply (V− to GND like the demo).
+        a_out -> U: TL072().OUT_A;
+        a_in  -> U.IN_A_N;
+        VBIAS -> U.IN_A_P;
+        b_out -> U.OUT_B;
+        b_in  -> U.IN_B_N;
+        VBIAS -> U.IN_B_P;
+        VCC -> U.V_PLUS;
+        U.V_MINUS -> GND;
+        VCC -> c_byp: Cap(100nF).1; c_byp.2 -> GND;
+
+        // Input amp: IN -> 2.2µF -> 10K -> IN−; 10K ‖ 100nF feedback.
+        IN -> c_in: Cap(2.2µF, 35V).1; c_in.2 -> ni;
+        ni -> r_in: Res(10kΩ).1; r_in.2 -> a_in;
+        a_in -> r_fb: Res(10kΩ).1; r_fb.2 -> a_out;
+        a_in -> c_fb: Cap(100nF).1; c_fb.2 -> a_out;
+
+        // Mid leg.
+        a_out -> r_m1: Res(10kΩ).1; r_m1.2 -> mid_t;
+        mid_t -> c_m: Cap(100nF).1; c_m.2 -> mid_b;
+        mid_t -> rv_m: Potentiometer(10kΩ).3;
+        rv_m.1 -> mid_b;
+        rv_m.2 -> mid_w;
+        mid_w -> c_mw: Cap(100nF).1; c_mw.2 -> b_in;
+        mid_b -> r_m2: Res(10kΩ).1; r_m2.2 -> b_out;
+
+        // Bass leg.
+        a_out -> r_b1: Res(10kΩ).1; r_b1.2 -> bas_t;
+        bas_t -> c_b: Cap(100nF).1; c_b.2 -> bas_b;
+        bas_t -> rv_b: Potentiometer(10kΩ).3;
+        rv_b.1 -> bas_b;
+        rv_b.2 -> bas_w;
+        bas_w -> r_bw: Res(10kΩ).1; r_bw.2 -> b_in;
+        bas_b -> r_b2: Res(10kΩ).1; r_b2.2 -> b_out;
+
+        // Treble leg (pot in series, no cap across it).
+        a_out -> r_t1: Res(10kΩ).1; r_t1.2 -> tre_t;
+        tre_t -> rv_t: Potentiometer(10kΩ).3;
+        rv_t.1 -> tre_b;
+        rv_t.2 -> tre_w;
+        tre_w -> c_tw: Cap(100nF).1; c_tw.2 -> b_in;
+        b_out -> r_t2: Res(10kΩ).1; r_t2.2 -> tre_b;
+
+        // Ground stability leg: GND -> 100nF -> 10K -> IN−.
+        GND -> c_g: Cap(100nF).1; c_g.2 -> gleg;
+        gleg -> r_g: Res(10kΩ).1; r_g.2 -> b_in;
+
+        // Volume rheostat into the bus: pot CW at B-out, wiper (tied
+        // to the CCW end like the demo) -> 10K -> 2.2µF -> BUS.
+        b_out -> rv_v: Potentiometer(10kΩ).3;
+        rv_v.1 -> vol_w;
+        rv_v.2 -> vol_w;
+        vol_w -> r_v: Res(10kΩ).1; r_v.2 -> vtap;
+        vtap -> c_v: Cap(2.2µF, 35V).1; c_v.2 -> BUS;
+    }
+}
+
+board MultichannelMixer {
+    power VCC = 12V @ 100mA;
+    ground GND;
+
+    // Input jacks (demo: Neutrik TS; sleeve/normal pads grounded).
+    J_CH1: Pin_Header_01x03();
+    J_CH2: Pin_Header_01x03();
+    J_CH3: Pin_Header_01x03();
+    J_CH4: Pin_Header_01x03();
+    J_OUT: Pin_Header_01x03();
+    J_PWR: Pin_Header_01x03();
+    @VCC -> J_PWR.1; J_PWR.2 -> @GND; J_PWR.3 -> @GND;
+    J_CH1.2 -> @GND; J_CH1.3 -> @GND;
+    J_CH2.2 -> @GND; J_CH2.3 -> @GND;
+    J_CH3.2 -> @GND; J_CH3.3 -> @GND;
+    J_CH4.2 -> @GND; J_CH4.3 -> @GND;
+    J_OUT.2 -> @GND; J_OUT.3 -> @GND;
+
+    // vbias: R/R half-rail + 2.2µF, buffered by IC1-B (follower).
+    u_mst: TL072(erc_waive="ERC002: single-supply vbias follower — every opamp + input rides the buffered half-rail by design; P/N is opamp pin naming, not a differential pair");
+    @VCC -> r_vb1: Res(10kΩ).1; r_vb1.2 -> u_mst.IN_B_P;
+    u_mst.IN_B_P -> r_vb2: Res(10kΩ).1; r_vb2.2 -> @GND;
+    u_mst.IN_B_P -> c_vb1: Cap(2.2µF, 35V).1; c_vb1.2 -> @GND;
+    u_mst.IN_B_N -> u_mst.OUT_B;          // unity follower = vbias
+    u_mst.OUT_B -> c_vb2: Cap(2.2µF, 35V).1; c_vb2.2 -> @GND;
+    @VCC -> u_mst.V_PLUS; u_mst.V_MINUS -> @GND;
+    @VCC -> c_mby: Cap(100nF).1; c_mby.2 -> @GND;
+
+    // The four strips — the channel-instance idiom.
+    ch1: ChannelStrip();
+    ch2: ChannelStrip();
+    ch3: ChannelStrip();
+    ch4: ChannelStrip();
+    J_CH1.1 -> ch1.IN;
+    J_CH2.1 -> ch2.IN;
+    J_CH3.1 -> ch3.IN;
+    J_CH4.1 -> ch4.IN;
+    @VCC -> ch1.VCC; @VCC -> ch2.VCC; @VCC -> ch3.VCC; @VCC -> ch4.VCC;
+    u_mst.OUT_B -> ch1.VBIAS; u_mst.OUT_B -> ch2.VBIAS;
+    u_mst.OUT_B -> ch3.VBIAS; u_mst.OUT_B -> ch4.VBIAS;
+    ch1.GND -> @GND; ch2.GND -> @GND; ch3.GND -> @GND; ch4.GND -> @GND;
+
+    // Master: virtual-earth mix amp (IC1-A) with 10K feedback; every
+    // strip's BUS lands on the summing node.
+    ch1.BUS -> u_mst.IN_A_N;
+    ch2.BUS -> u_mst.IN_A_N;
+    ch3.BUS -> u_mst.IN_A_N;
+    ch4.BUS -> u_mst.IN_A_N;
+    u_mst.OUT_B -> u_mst.IN_A_P;
+    u_mst.IN_A_N -> r_mfb: Res(10kΩ).1; r_mfb.2 -> u_mst.OUT_A;
+    u_mst.OUT_A -> c_mo: Cap(2.2µF, 35V).1; c_mo.2 -> J_OUT.1;
+}
+
+layout MultichannelMixer {
+    layer_stackup 2;
+    // Demo board is 110×111; jacks along the edges like the original.
+    outline rect 110 111;
+    place J_CH1 at (4, 20);
+    place J_CH2 at (4, 44);
+    place J_CH3 at (4, 68);
+    place J_CH4 at (4, 92);
+    place J_OUT at (106, 55);
+    place J_PWR at (55, 4);
+}
