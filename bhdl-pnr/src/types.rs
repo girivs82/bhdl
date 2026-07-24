@@ -906,6 +906,11 @@ pub struct PnrMetrics {
     pub max_congestion: f64,
     pub routability_pct: f64,
     pub iterations: usize,
+    /// Pour (signal-layer plane) defects the sink counter can't see:
+    /// off-side SMD plane pads with no live drop via + pour islands
+    /// the stitch pass could not bridge. Always 0 with the pour
+    /// experiment off — trial selection stays byte-identical there.
+    pub pour_defects: usize,
 }
 
 #[derive(Clone, Debug)]

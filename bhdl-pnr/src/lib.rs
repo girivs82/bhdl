@@ -93,6 +93,14 @@ fn trial_dominated(result: &PnrResult, best: &PnrResult, has_measured: bool) -> 
     if r_conn != b_conn {
         return r_conn < b_conn;
     }
+    // Pour defects (stranded islands, un-dropped plane pads) are
+    // connectivity the sink counter can't see — same currency, same
+    // rank. Always 0 without the pour experiment (byte-identical).
+    let r_pd = result.metrics.pour_defects;
+    let b_pd = best.metrics.pour_defects;
+    if r_pd != b_pd {
+        return r_pd > b_pd;
+    }
     if has_measured {
         let rn = measured_noise_mv(result).unwrap_or(0.0);
         let bn = measured_noise_mv(best).unwrap_or(0.0);
@@ -159,6 +167,7 @@ pub fn place_and_route_best_of(
                 .map(|n| n.pins.len())
                 .sum();
             let perfect = result.metrics.connected_sinks >= total_sinks
+                && result.metrics.pour_defects == 0
                 && result.drc_violations.is_empty()
                 && r_over == 0;
             best = Some(result);
@@ -188,6 +197,7 @@ pub fn place_and_route_best_of(
             .map(|n| n.pins.len())
             .sum();
         b.metrics.connected_sinks < total_sinks
+            || b.metrics.pour_defects > 0
             || !b.drc_violations.is_empty()
             || legalization::residual_pad_overlaps(&b.board) > 0
     });
@@ -215,6 +225,7 @@ pub fn place_and_route_best_of(
                     .map(|n| n.pins.len())
                     .sum();
                 let perfect = result.metrics.connected_sinks >= total_sinks
+                    && result.metrics.pour_defects == 0
                     && result.drc_violations.is_empty()
                     && r_over == 0;
                 best = Some(result);
@@ -240,6 +251,7 @@ pub fn place_and_route_best_of(
             .map(|n| n.pins.len())
             .sum();
         b.metrics.connected_sinks < total_sinks
+            || b.metrics.pour_defects > 0
             || !b.drc_violations.is_empty()
             || legalization::residual_pad_overlaps(&b.board) > 0
     });
@@ -272,6 +284,7 @@ pub fn place_and_route_best_of(
                     .sum();
                 let r_over = legalization::residual_pad_overlaps(&result.board);
                 let perfect = result.metrics.connected_sinks >= total_sinks
+                    && result.metrics.pour_defects == 0
                     && result.drc_violations.is_empty()
                     && r_over == 0;
                 best = Some(result);
@@ -302,6 +315,7 @@ pub fn place_and_route_best_of(
             .map(|n| n.pins.len())
             .sum();
         b.metrics.connected_sinks < total_sinks
+            || b.metrics.pour_defects > 0
             || !b.drc_violations.is_empty()
             || legalization::residual_pad_overlaps(&b.board) > 0
     });
@@ -335,6 +349,7 @@ pub fn place_and_route_best_of(
                     .sum();
                 let r_over = legalization::residual_pad_overlaps(&result.board);
                 let perfect = result.metrics.connected_sinks >= total_sinks
+                    && result.metrics.pour_defects == 0
                     && result.drc_violations.is_empty()
                     && r_over == 0;
                 best = Some(result);
@@ -3093,6 +3108,11 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         }
     }
 
+    let pour_defects = pour_defect_count(&board, &final_routes);
+    if pour_defects > 0 {
+        info!("pour defects (trial currency): {pour_defects}");
+    }
+
     Ok(PnrResult {
         board,
         routes: final_routes,
@@ -3108,9 +3128,113 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                 100.0
             },
             iterations: config.max_iterations,
+            pour_defects,
         },
         drc_violations,
     })
+}
+
+/// Count the pour failures the sink counter can't see — the trial
+/// scorer's blind spot the pour saga exposed: a trial reported "fully
+/// connected" while the oracle found stranded pour islands and
+/// un-dropped plane pads (drops/stitch run AFTER routing, so
+/// connected_sinks never prices their failures, and best-of never
+/// selects against them). Read-only, measured on the FINAL copper.
+/// Boards without a signal-layer pour count 0 → selection unchanged.
+fn pour_defect_count(board: &Board, final_routes: &[Route]) -> usize {
+    let mut defects = 0usize;
+    let n_layers = board.layer_stack.layers.len();
+    for (ni, net) in board.nets.iter().enumerate() {
+        let Some(pl) = net.plane_layer else { continue };
+        if board.layer_stack.layers.get(pl).map(|l| l.kind)
+            != Some(crate::types::LayerKind::Signal)
+        {
+            continue;
+        }
+        // (a) Stranded islands: anchors spread over >1 raster label
+        // after all stitching (a routed bridge merges labels because
+        // the raster is rebuilt from the final routes).
+        if let Some(raster) = output::kicad::pour_raster(board, final_routes, ni) {
+            if raster.n_labels > 1 {
+                let anchors = output::kicad::plane_anchor_points(board, final_routes, ni);
+                let labels: std::collections::BTreeSet<u32> = anchors
+                    .iter()
+                    .map(|&(ax, ay)| raster.label_at(ax, ay))
+                    .filter(|&l| l != 0)
+                    .collect();
+                defects += labels.len().saturating_sub(1);
+            }
+            // (c) DANGLING drops: a via whose pour-layer end lands in
+            // a void (label 0 — e.g. an opposite-side SMD pad's punch)
+            // and has no same-net pour-layer track either — connected
+            // on one layer only, the oracle's via_dangling.
+            for v in &final_routes[ni].vias {
+                if raster.label_at(v.x, v.y) != 0 {
+                    continue;
+                }
+                let tracked = final_routes[ni].segments.iter().any(|sg| {
+                    sg.layer == pl
+                        && ((v.x - sg.start.0).hypot(v.y - sg.start.1) < 0.01
+                            || (v.x - sg.end.0).hypot(v.y - sg.end.1) < 0.01)
+                });
+                if !tracked {
+                    defects += 1;
+                }
+            }
+        }
+        // (b) Off-side SMD pads with no live drop (stub on the pad's
+        // layer touching pad copper with a via at its far end — the
+        // drop pass's own liveness test).
+        let comp_idx: std::collections::HashMap<ComponentId, usize> = board
+            .components
+            .iter()
+            .enumerate()
+            .map(|(k, c)| (c.id, k))
+            .collect();
+        for &(comp_id, pin_id) in &net.pins {
+            let Some(&ci) = comp_idx.get(&comp_id) else { continue };
+            let comp = &board.components[ci];
+            let Some(pin) = comp.pins.iter().find(|p| p.pin_id == pin_id) else {
+                continue;
+            };
+            if pin.unplaced || pin.pad.as_ref().and_then(|p| p.drill_mm).is_some() {
+                continue;
+            }
+            let pad_layer = match comp.side {
+                BoardSide::Top => 0,
+                BoardSide::Bottom => n_layers - 1,
+            };
+            if pad_layer == pl {
+                continue; // pour-side pad contacts the fill directly
+            }
+            let cos_t = comp.theta.cos();
+            let sin_t = comp.theta.sin();
+            let px = comp.x + pin.dx * cos_t - pin.dy * sin_t;
+            let py = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+            let half = pin
+                .pad
+                .as_ref()
+                .map(|p| p.width_mm.min(p.height_mm) / 2.0)
+                .unwrap_or(0.25);
+            let has_live_drop = final_routes[ni].segments.iter().any(|sg| {
+                if sg.layer != pad_layer {
+                    return false;
+                }
+                if segment_point_too_close(sg.start, sg.end, (px, py), sg.width_mm / 2.0 + half - 0.001) {
+                    final_routes[ni].vias.iter().any(|v| {
+                        (v.x - sg.start.0).hypot(v.y - sg.start.1) < 0.01
+                            || (v.x - sg.end.0).hypot(v.y - sg.end.1) < 0.01
+                    })
+                } else {
+                    false
+                }
+            });
+            if !has_live_drop {
+                defects += 1;
+            }
+        }
+    }
+    defects
 }
 
 /// Env-gated diagnostic: sample every route segment against every
