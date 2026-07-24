@@ -132,6 +132,19 @@ pub const META_CTRL_BRANCH: &str = "ctrl_branch";
 /// the interpolated factor at the solved IF.
 pub const META_CTR_CURVE: &str = "ctr_curve";
 
+/// Koren triode parameters on a "KorenTriode" plate→cathode branch —
+/// the DC equation path's view of a triode (the multi-terminal
+/// DeviceKind::Triode device serves the production/AC/transient
+/// solvers; the branch serves SpiceEquationSystem, which stamps
+/// branches only). The grid enters through META_TRIODE_GRID_NODE
+/// (net name, resolved to a node at equation-build time).
+pub const META_TRIODE_MU: &str = "triode_mu";
+pub const META_TRIODE_EX: &str = "triode_ex";
+pub const META_TRIODE_KG1: &str = "triode_kg1";
+pub const META_TRIODE_KP: &str = "triode_kp";
+pub const META_TRIODE_KVB: &str = "triode_kvb";
+pub const META_TRIODE_GRID_NODE: &str = "triode_grid_node";
+
 /// Electrical node in the circuit
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Node {

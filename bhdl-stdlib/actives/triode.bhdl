@@ -33,6 +33,38 @@ entity Triode() {
     attribute kicad_symbol = "Device:Triode";
 }
 
+// ECC83 / 12AX7 — high-µ dual triode, the classic preamp tube. One
+// entity = ONE SECTION (the envelope holds two); heater is carried as
+// data (see heater_* attrs) and modelled at board level as its V/I-
+// derived load. Koren parameters from the FETCHED Norman Koren
+// article Table 1 ("Improved vacuum tube models for SPICE",
+// i-t.com mirror; normankoren.com bot-walls direct fetch):
+//   12AX7: MU=100 EX=1.4 KG1=1060 KP=600 KVB=300.
+// Same per-tube-calibration caveat as the entities above.
+entity TriodeECC83() {
+    pin P: signal inout;  // Plate (anode)
+    pin G: signal in;     // Grid
+    pin K: signal inout;  // Cathode
+
+    attribute component_class = "triode";
+    attribute part_number = "ECC83";
+
+    attribute mu = 100.0;
+    attribute ex = 1.4;
+    attribute kg1 = 1060.0;
+    attribute kp = 600.0;
+    attribute kvb = 300.0;
+
+    // Heater ratings (ECC83 datasheet standard): 6.3V/300mA with the
+    // two heater halves in PARALLEL (whole envelope), 12.6V/150mA in
+    // series. Board-level heater load derives from these.
+    attribute heater_v = 6.3;
+    attribute heater_i_a = 0.3;
+
+    attribute kicad_symbol = "Device:Triode";
+    attribute datasheet = "Koren Table 1 (i-t.com mirror) + ECC83 heater std";
+}
+
 // Nominal 12AU7 / ECC82 — medium-µ dual triode, a common roll-in alternative.
 entity Triode12AU7() {
     pin P: signal inout;  // Plate (anode)

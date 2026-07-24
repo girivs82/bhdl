@@ -1154,9 +1154,19 @@ impl NetlistToSpiceConverter {
                 // connectivity) stamps into the solve. Without this, an
                 // imported stdlib LDO/buck was silently skipped and its output
                 // rail was never driven. Other logical modules stay skipped.
-                if extracted_model.component_type
-                    == crate::components::ComponentType::VoltageRegulator
-                {
+                //
+                // TRIODES too: a STANDALONE `v: TriodeECC83();` instance
+                // arrives as a logical Module and was silently dropped from
+                // the solve — every earlier tube fixture happened to
+                // instantiate INLINE (`V1: Triode().P`) or via an expansion
+                // recipe, which land as Component. Flushed by the ecc83-pp
+                // demo transcription (SRPP solved as a pure resistor
+                // network, converged in 1 iteration with no tube current).
+                if matches!(
+                    extracted_model.component_type,
+                    crate::components::ComponentType::VoltageRegulator
+                        | crate::components::ComponentType::Triode
+                ) {
                     self.add_physical_component(
                         circuit,
                         netlist,
@@ -1629,6 +1639,35 @@ impl NetlistToSpiceConverter {
                 &[plate.as_str(), grid.as_str(), cathode.as_str()],
                 Some(instance_id),
             );
+            // ALSO stamp a "KorenTriode" plate→cathode BRANCH: the DC
+            // path (SpiceEquationSystem) solves branches only and
+            // silently ignores multi-terminal devices — without this
+            // the ecc83-pp SRPP solved as a pure resistor network
+            // (both triodes present, zero plate current). The device
+            // above serves glacier_production (AC/transient/bias);
+            // each side ignores the other's representation, so
+            // nothing double-stamps.
+            let mut tri_meta = HashMap::new();
+            tri_meta.insert(META_PARENT_INSTANCE.to_string(), instance_name.to_string());
+            let DeviceKind::Triode { mu, ex, kg1, kp, kvb } = kind;
+            tri_meta.insert(crate::circuit::META_TRIODE_MU.to_string(), mu.to_string());
+            tri_meta.insert(crate::circuit::META_TRIODE_EX.to_string(), ex.to_string());
+            tri_meta.insert(crate::circuit::META_TRIODE_KG1.to_string(), kg1.to_string());
+            tri_meta.insert(crate::circuit::META_TRIODE_KP.to_string(), kp.to_string());
+            tri_meta.insert(crate::circuit::META_TRIODE_KVB.to_string(), kvb.to_string());
+            tri_meta.insert(
+                crate::circuit::META_TRIODE_GRID_NODE.to_string(),
+                grid.clone(),
+            );
+            circuit.add_branch_with_metadata(
+                format!("{}_plate", instance_name),
+                &plate,
+                &cathode,
+                "KorenTriode".to_string(),
+                0.0,
+                Some(instance_id),
+                tri_meta,
+            );
             info!(
                 "Added triode {}: plate={}, grid={}, cathode={}",
                 instance_name, plate, grid, cathode
@@ -1923,9 +1962,24 @@ mod tests {
         let mut converter = NetlistToSpiceConverter::new();
         let circuit = converter.convert(&netlist).unwrap();
 
-        // Exactly one device; the triode is not also stamped as a branch.
+        // Exactly one device (glacier_production's view) AND exactly one
+        // KorenTriode plate branch (SpiceEquationSystem's view — the DC
+        // path stamps branches only; without it the ecc83-pp SRPP solved
+        // as a resistor network). Each solver ignores the other's
+        // representation, so nothing double-stamps.
         assert_eq!(circuit.devices().len(), 1, "expected one triode device");
-        assert_eq!(circuit.branches().count(), 0, "triode must not emit branches");
+        let branches: Vec<_> = circuit.branches().collect();
+        assert_eq!(branches.len(), 1, "expected the KorenTriode plate branch");
+        let (_, plate_branch) = branches[0];
+        assert_eq!(plate_branch.component_type, "KorenTriode");
+        assert_eq!(
+            plate_branch
+                .metadata
+                .get(crate::circuit::META_TRIODE_GRID_NODE)
+                .map(String::as_str),
+            Some("GRID_NET"),
+            "grid net must ride the branch metadata"
+        );
 
         let device = &circuit.devices()[0];
         assert_eq!(device.name, "V1");

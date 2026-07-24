@@ -56,6 +56,68 @@ pub enum ComponentEquation {
         /// (ln IF, factor) points, IF ascending; empty = flat CTR.
         curve: Vec<(f64, f64)>,
     },
+
+    /// Koren vacuum triode, plate→cathode branch: i_p = 2·E1^EX/KG1
+    /// for E1 > 0 (the PWR+PWRS form), where
+    ///   E1 = (V_pk/KP)·ln(1 + exp(KP·(1/MU + V_gk/√(KVB + V_pk²))))
+    /// (Norman Koren's SPICE-standard model). The grid enters as a
+    /// THIRD node — control only, no grid current (negative-grid
+    /// small-signal operation; grid conduction is out of DC scope).
+    /// Jacobian entries are exact partials by central difference on
+    /// the law itself — same converged-point-exactness argument as
+    /// PhotoCoupled's lagged factor.
+    Triode {
+        mu: f64,
+        ex: f64,
+        kg1: f64,
+        kp: f64,
+        kvb: f64,
+        grid_node: NodeIndex,
+    },
+}
+
+/// Koren plate current. Softplus is guarded against overflow (z>40 →
+/// z, exact to double precision); V_pk ≤ 0 conducts nothing.
+fn koren_plate_current(
+    vpk: f64,
+    vgk: f64,
+    mu: f64,
+    ex: f64,
+    kg1: f64,
+    kp: f64,
+    kvb: f64,
+) -> f64 {
+    if vpk <= 0.0 {
+        return 0.0;
+    }
+    let z = kp * (1.0 / mu + vgk / (kvb + vpk * vpk).sqrt());
+    let softplus = if z > 40.0 { z } else { z.exp().ln_1p() };
+    let e1 = (vpk / kp) * softplus;
+    if e1 <= 0.0 {
+        0.0
+    } else {
+        2.0 * e1.powf(ex) / kg1
+    }
+}
+
+/// Central-difference partials of the Koren law wrt (V_pk, V_gk).
+fn koren_partials(
+    vpk: f64,
+    vgk: f64,
+    mu: f64,
+    ex: f64,
+    kg1: f64,
+    kp: f64,
+    kvb: f64,
+) -> (f64, f64) {
+    let h = 1e-6;
+    let dip = (koren_plate_current(vpk + h, vgk, mu, ex, kg1, kp, kvb)
+        - koren_plate_current(vpk - h, vgk, mu, ex, kg1, kp, kvb))
+        / (2.0 * h);
+    let dig = (koren_plate_current(vpk, vgk + h, mu, ex, kg1, kp, kvb)
+        - koren_plate_current(vpk, vgk - h, mu, ex, kg1, kp, kvb))
+        / (2.0 * h);
+    (dip, dig)
 }
 
 /// CTR curve factor at forward current `if_a`: piecewise-linear in
@@ -295,6 +357,36 @@ impl SpiceEquationSystem {
                         _ => {
                             warn!(
                                 "PhotoCoupled branch {} missing ctr/v_knee/ctrl_branch metadata — open circuit",
+                                branch.name
+                            );
+                            ComponentEquation::Linear { conductance: 1e-9 }
+                        }
+                    }
+                }
+                // Koren triode plate branch — grid resolved to a node
+                // here so the residual/Jacobian passes need no name
+                // lookups (PhotoCoupled precedent). Missing metadata
+                // is a converter bug: warn loudly, stamp open.
+                "KorenTriode" => {
+                    let mu = meta_f64(branch, crate::circuit::META_TRIODE_MU);
+                    let ex = meta_f64(branch, crate::circuit::META_TRIODE_EX);
+                    let kg1 = meta_f64(branch, crate::circuit::META_TRIODE_KG1);
+                    let kp = meta_f64(branch, crate::circuit::META_TRIODE_KP);
+                    let kvb = meta_f64(branch, crate::circuit::META_TRIODE_KVB);
+                    let grid = branch
+                        .metadata
+                        .get(crate::circuit::META_TRIODE_GRID_NODE)
+                        .and_then(|name| self.circuit.get_node(name))
+                        .map(|(idx, _)| idx);
+                    match (mu, ex, kg1, kp, kvb, grid) {
+                        (Some(mu), Some(ex), Some(kg1), Some(kp), Some(kvb), Some(grid_node))
+                            if kg1 > 0.0 && kp > 0.0 =>
+                        {
+                            ComponentEquation::Triode { mu, ex, kg1, kp, kvb, grid_node }
+                        }
+                        _ => {
+                            warn!(
+                                "KorenTriode branch {} missing mu/ex/kg1/kp/kvb/grid metadata — open circuit",
                                 branch.name
                             );
                             ComponentEquation::Linear { conductance: 1e-9 }
@@ -578,6 +670,25 @@ impl EquationSystem for SpiceEquationSystem {
                         }
                     }
 
+                    // Koren triode: plate(v1)→cathode(v2) current set by
+                    // V_pk (= v_diff) and V_gk (grid node − cathode).
+                    // The grid carries no current (control only).
+                    ComponentEquation::Triode { mu, ex, kg1, kp, kvb, grid_node } => {
+                        let vg = self
+                            .get_voltage_var(*grid_node)
+                            .map(|i| x[i])
+                            .unwrap_or(0.0);
+                        let vgk = vg - v2;
+                        let current =
+                            koren_plate_current(v_diff, vgk, *mu, *ex, *kg1, *kp, *kvb);
+                        if let Some(idx) = v1_idx {
+                            residual[idx] += current;
+                        }
+                        if let Some(idx) = v2_idx {
+                            residual[idx] -= current;
+                        }
+                    }
+
                     ComponentEquation::Exponential { is, n, vt } => {
                         if let Some(idx) = i_idx {
                             let var = &variables[idx];
@@ -772,7 +883,37 @@ impl EquationSystem for SpiceEquationSystem {
                             }
                         }
                     }
-                    
+
+                    // Koren triode: i = f(V_pk, V_gk) with V_pk = vp−vk,
+                    // V_gk = vg−vk. With f1 = ∂i/∂V_pk, f2 = ∂i/∂V_gk:
+                    //   ∂i/∂vp = f1, ∂i/∂vg = f2, ∂i/∂vk = −(f1+f2).
+                    // Plate row gets +those, cathode row −those.
+                    ComponentEquation::Triode { mu, ex, kg1, kp, kvb, grid_node } => {
+                        let g_idx = self.get_voltage_var(*grid_node);
+                        let vg = g_idx.map(|i| x[i]).unwrap_or(0.0);
+                        let vgk = vg - v2;
+                        let (f1, f2) =
+                            koren_partials(v_diff, vgk, *mu, *ex, *kg1, *kp, *kvb);
+                        if let Some(i) = v1_idx {
+                            jacobian[(i, i)] += f1;
+                            if let Some(g) = g_idx {
+                                jacobian[(i, g)] += f2;
+                            }
+                            if let Some(j) = v2_idx {
+                                jacobian[(i, j)] -= f1 + f2;
+                            }
+                        }
+                        if let Some(j) = v2_idx {
+                            if let Some(i) = v1_idx {
+                                jacobian[(j, i)] -= f1;
+                            }
+                            if let Some(g) = g_idx {
+                                jacobian[(j, g)] -= f2;
+                            }
+                            jacobian[(j, j)] += f1 + f2;
+                        }
+                    }
+
                     ComponentEquation::Exponential { is, n, vt } => {
                         if let Some(idx) = i_idx {
                             let var = &variables[idx];
@@ -928,6 +1069,17 @@ pub fn extract_solution(
                     let v1 = node_voltages.get(&n1).copied().unwrap_or(0.0);
                     let v2 = node_voltages.get(&n2).copied().unwrap_or(0.0);
                     branch_currents.insert(edge_idx, table_iv_interp(points, v1 - v2));
+                } else if let ComponentEquation::Triode { mu, ex, kg1, kp, kvb, grid_node } =
+                    equation
+                {
+                    let (n1, n2) = system.circuit.branch_nodes(edge_idx).unwrap();
+                    let v1 = node_voltages.get(&n1).copied().unwrap_or(0.0);
+                    let v2 = node_voltages.get(&n2).copied().unwrap_or(0.0);
+                    let vg = node_voltages.get(grid_node).copied().unwrap_or(0.0);
+                    branch_currents.insert(
+                        edge_idx,
+                        koren_plate_current(v1 - v2, vg - v2, *mu, *ex, *kg1, *kp, *kvb),
+                    );
                 } else if let ComponentEquation::PhotoCoupled { ctr, v_knee, ctrl_edge, curve } =
                     equation
                 {
