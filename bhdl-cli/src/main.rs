@@ -2010,14 +2010,50 @@ async fn run_layout(
                     "✓".green()
                 );
             }
+            if let Some(w) = lay.track_width {
+                if !(w > 0.0 && w < 10.0) {
+                    anyhow::bail!("track_width {w} out of range (0, 10) mm");
+                }
+                // Both: min_trace_width_mm is the routing quantum
+                // (clearance-by-construction pitch = width + spacing,
+                // exactly right when EVERY net is this wide), and the
+                // design floor keeps tapers/derived widths at the rule.
+                sem_config.board_config.min_trace_width_mm = w;
+                sem_config.board_config.design_track_width_mm = Some(w);
+                println!("  {} Track width: {w}mm (declared design rule)", "✓".green());
+            }
+            if let Some(c) = lay.clearance {
+                if !(c > 0.0 && c < 10.0) {
+                    anyhow::bail!("clearance {c} out of range (0, 10) mm");
+                }
+                sem_config.board_config.min_spacing_mm = c;
+                println!("  {} Clearance: {c}mm (declared design rule)", "✓".green());
+            }
             if let Some(bias) = &lay.route_bias {
-                match bias.as_str() {
+                let mut words = bias.split_whitespace();
+                let side = words.next().unwrap_or("");
+                let strict = match words.next() {
+                    Some("strict") => true,
+                    None => false,
+                    Some(other) => anyhow::bail!(
+                        "unknown route_bias modifier '{other}' — expected 'strict'"
+                    ),
+                };
+                match side {
                     "bottom" | "top" => {
-                        sem_config.board_config.route_bias = Some(bias.clone());
-                        println!(
-                            "  {} Route bias: {bias} (lateral routing prefers the {bias} layer)",
-                            "✓".green()
-                        );
+                        sem_config.board_config.route_bias = Some(side.to_string());
+                        sem_config.board_config.route_bias_strict = strict;
+                        if strict {
+                            println!(
+                                "  {} Route bias: {side} STRICT (signal copper confined to the {side} layer)",
+                                "✓".green()
+                            );
+                        } else {
+                            println!(
+                                "  {} Route bias: {side} (lateral routing prefers the {side} layer)",
+                                "✓".green()
+                            );
+                        }
                     }
                     other => anyhow::bail!(
                         "unknown route_bias '{other}' — expected 'bottom' or 'top'"

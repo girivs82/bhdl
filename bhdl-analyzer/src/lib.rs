@@ -3256,6 +3256,8 @@ pub fn extract_layout_definitions(
         let stackup_material = layout_def.stackup_material();
         let cutouts = layout_def.cutouts();
         let route_bias = layout_def.route_bias();
+        let track_width = layout_def.track_width();
+        let clearance = layout_def.clearance();
 
         definitions.insert(entity_name.clone(), LayoutDefinition {
             entity_name,
@@ -3272,6 +3274,8 @@ pub fn extract_layout_definitions(
             double_sided,
             stackup_material,
             route_bias,
+            track_width,
+            clearance,
         });
     }
 

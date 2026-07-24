@@ -38,4 +38,8 @@ pub struct LayoutDefinition {
     /// `route_bias bottom;` — preferred outer signal layer ("bottom"
     /// or "top"); the router penalizes lateral moves elsewhere.
     pub route_bias: Option<String>,
+    /// `track_width 0.8;` — default trace width (mm) design rule.
+    pub track_width: Option<f64>,
+    /// `clearance 0.635;` — copper-to-copper spacing (mm) design rule.
+    pub clearance: Option<f64>,
 }

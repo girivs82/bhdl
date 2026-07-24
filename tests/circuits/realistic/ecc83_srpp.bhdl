@@ -89,8 +89,19 @@ layout ElectrolyticCap { package Radial-P5.00-D10; }
 layout Ecc83Srpp {
     layer_stackup 2;
     // Demo convention: hand-routed THT keeps copper on the solder
-    // side (the reference board has 0mm of F.Cu track).
+    // side (the reference board has 0mm of F.Cu track). Soft tier
+    // here: STRICT completes only with the GND pour absorbing the
+    // ground routing (BHDL_PNR_POUR_GND=1 → 0/0, 0 vias, 212.3mm
+    // B.Cu vs the demo's 211mm) — without the pour the G2 horseshoe
+    // loses its corridor to GND tracks (1 unc). Strict-by-default
+    // lands when pours become a layout statement.
     route_bias bottom;
+    // NOT yet declared: the demo's 0.8/0.4 design rules. At that
+    // width the routing lattice (pitch = width + clearance = 1.22mm)
+    // has too few corridors around the pinned valve ring — 3 sinks
+    // die under every bias tier and seed while the hand-routed demo
+    // threads exact 0.4mm gaps the lattice can't represent. Routing
+    // at demo rules = the exact-geometry long-haul arc.
     // Demo board outline (ecc83-pp.kicad_pcb Edge.Cuts bbox).
     outline rect 52 46;
     // Demo's own mounting holes + connector positions (board-local

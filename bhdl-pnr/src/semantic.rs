@@ -551,7 +551,13 @@ pub fn build_board(
             &pnr_class,
             &net_name,
             simulation,
-            config.board_config.min_trace_width_mm,
+            // Declared design rule floors every net's width; the grid
+            // quantum (min_trace_width_mm) stays fine so the wide
+            // tracks ride the clear-ring machinery.
+            config
+                .board_config
+                .design_track_width_mm
+                .unwrap_or(config.board_config.min_trace_width_mm),
         );
 
         let intent = extract_net_intent(net, netlist, &id_map);
@@ -1132,6 +1138,51 @@ pub fn build_board(
                 n.name, allowed
             );
             n.allowed_layers = Some(allowed);
+        }
+    }
+
+    // `route_bias <side> strict;` — the single-sided idiom: every net
+    // is confined to the preferred layer, so the router detours around
+    // obstacles the way the hand-routed demo boards do (the ecc83 demo
+    // routes a grid link 50mm AROUND the valve socket rather than
+    // jumper across — zero vias on the whole board). Explicit layer
+    // rules win; SMD pad layers are relaxed in (pads live where they
+    // live); plane-connected nets keep their drop machinery untouched.
+    if board_config.route_bias_strict {
+        if let Some(bias) = board_config.route_bias.as_deref() {
+            let n_layers = layer_stack.layers.len();
+            let pref = match bias {
+                "top" => 0,
+                _ => n_layers - 1, // "bottom"
+            };
+            for n in nets.iter_mut() {
+                if n.allowed_layers.is_some() || n.plane_layer.is_some() {
+                    continue;
+                }
+                let mut allowed = vec![pref];
+                for &(comp_id, pin_id) in &n.pins {
+                    let Some(comp) = components.iter().find(|c| c.id == comp_id)
+                    else {
+                        continue;
+                    };
+                    if comp.pins.iter().any(|p| {
+                        p.pin_id == pin_id
+                            && p.pad.as_ref().and_then(|pd| pd.drill_mm).is_some()
+                    }) {
+                        continue; // THT reaches every layer
+                    }
+                    let pad_layer = match comp.side {
+                        BoardSide::Top => 0,
+                        BoardSide::Bottom => n_layers - 1,
+                    };
+                    if !allowed.contains(&pad_layer) {
+                        allowed.push(pad_layer);
+                    }
+                }
+                allowed.sort_unstable();
+                allowed.dedup();
+                n.allowed_layers = Some(allowed);
+            }
         }
     }
 

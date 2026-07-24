@@ -93,6 +93,22 @@ pub struct BoardConfig {
     /// a preference, not a layer rule.
     #[serde(default)]
     pub route_bias: Option<String>,
+    /// `route_bias bottom strict;` — signal copper is CONFINED to the
+    /// preferred layer (per-net allowed_layers), the way the hand-
+    /// routed single-sided demos work: the router detours around
+    /// obstacles instead of jumping layers. SMD pad layers are always
+    /// relaxed in (pads live where they live).
+    #[serde(default)]
+    pub route_bias_strict: bool,
+    /// `track_width X;` — declared design-rule trace width (mm). This
+    /// is a PER-NET width floor, NOT the routing quantum: the grid
+    /// pitch stays min_trace + min_spacing, and wide tracks ride the
+    /// existing clear-ring machinery. Folding the design width into
+    /// min_trace_width_mm instead coarsened the ecc83 lattice to
+    /// 1.435mm — few enough corridors that congestion never resolved
+    /// (two nets shipped sharing a cell center; validator ripped both).
+    #[serde(default)]
+    pub design_track_width_mm: Option<f64>,
     pub placement_regions: Vec<PlacementRegion>,
     /// IPC-7351B courtyard excess (per side, mm) added to each
     /// component's pad/body extent to form its keepout boundary. Set from
@@ -120,6 +136,8 @@ impl Default for BoardConfig {
             double_sided: false,
             stackup_material: None,
             route_bias: None,
+            route_bias_strict: false,
+            design_track_width_mm: None,
             placement_regions: Vec::new(),
             courtyard_excess_mm: 0.25, // IPC nominal
         }

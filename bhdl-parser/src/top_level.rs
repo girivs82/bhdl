@@ -3436,6 +3436,8 @@ impl<'t> Parser<'t> {
                         Some("mech_check") => SyntaxKind::LAYOUT_KEEPOUT, // token capture; AST reads first token
                         Some("assembly") => SyntaxKind::LAYOUT_KEEPOUT, // token capture; AST reads first token
                         Some("route_bias") => SyntaxKind::LAYOUT_KEEPOUT, // token capture; AST reads first token
+                        Some("track_width") => SyntaxKind::LAYOUT_KEEPOUT, // token capture; AST reads first token
+                        Some("clearance") => SyntaxKind::LAYOUT_KEEPOUT, // token capture; AST reads first token
                         _ => {
                             self.error(
                                 "Expected 'package', 'layer_stackup', 'place', \

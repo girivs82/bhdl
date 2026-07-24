@@ -99,7 +99,16 @@ impl RoutingGrid {
         // emitted multiple tracks at the SAME cell center (overlapping
         // copper), the dominant violation family in the P0 oracle
         // baseline.
-        let pitch = (board.config.min_trace_width_mm + board.config.min_spacing_mm).max(0.25);
+        let pitch = (board.config.min_trace_width_mm + board.config.min_spacing_mm).max(0.25)
+            // Declared design rule: adjacent-cell tracks sit at EXACTLY
+            // the clearance — a knife-edge tie the oracle lands an ulp
+            // on either side of (the KiCad 10.0.5 zone-refill lesson).
+            // 0.02mm is fab-invisible and kills the tie.
+            + if board.config.design_track_width_mm.is_some() {
+                0.02
+            } else {
+                0.0
+            };
         Self::build_uniform(board, pitch)
     }
 

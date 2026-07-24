@@ -401,6 +401,12 @@ fn shortest_path_3d(
         let ratio = extra_half / pitch;
         let clear_ring = if extra_half >= 0.5 {
             ratio.ceil() as usize
+        } else if board.config.design_track_width_mm.is_some() && extra_half > 0.0 {
+            // Declared design rule: EVERY net is wide, so the mid-width
+            // "floor and let the validator judge" heuristic (tuned for
+            // the occasional fat power net) mass-rips the whole board —
+            // the partial cell holds real copper on every single route.
+            ratio.ceil() as usize
         } else {
             ratio.floor() as usize
         };
@@ -605,7 +611,7 @@ fn shortest_path_3d(
                 share * downstream[p][w + 1] as f64
             };
             let width = crate::stackup::trace_width_for_current(seg_current, 1.0, 10.0)
-                .max(0.15)
+                .max(board.config.design_track_width_mm.unwrap_or(board.config.min_trace_width_mm))
                 .min(net.required_trace_width_mm);
             let (segs, vias) =
                 path_to_segments(grid, &[a, b], width);
@@ -622,7 +628,7 @@ fn shortest_path_3d(
                             start: (cx, cy),
                             end: (px, py),
                             width_mm: crate::stackup::trace_width_for_current(share, 1.0, 10.0)
-                                .max(0.15)
+                                .max(board.config.design_track_width_mm.unwrap_or(board.config.min_trace_width_mm))
                                 .min(net.required_trace_width_mm),
                         });
                     }
@@ -659,7 +665,7 @@ fn shortest_path_3d(
                     // Escape stubs carry the pin's own share, not the
                     // rail trunk width.
                     width_mm: crate::stackup::trace_width_for_current(share, 1.0, 10.0)
-                        .max(0.15)
+                        .max(board.config.design_track_width_mm.unwrap_or(board.config.min_trace_width_mm))
                         .min(net.required_trace_width_mm),
                 });
             }
@@ -1736,7 +1742,7 @@ pub(crate) fn extend_route(
             1.0,
             10.0,
         )
-        .max(0.15)
+        .max(board.config.design_track_width_mm.unwrap_or(board.config.min_trace_width_mm))
         .min(net.required_trace_width_mm)
     };
 

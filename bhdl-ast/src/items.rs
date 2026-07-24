@@ -1719,7 +1719,36 @@ impl LayoutDef {
         {
             let toks = Self::mech_tokens(&n);
             if toks.first().map(|t| t.as_str()) == Some("route_bias") {
-                return toks.get(1).cloned();
+                // "bottom" | "top" | "bottom strict" | "top strict"
+                return Some(toks[1..].join(" "));
+            }
+        }
+        None
+    }
+
+    /// `track_width 0.8;` — board design rule: default trace width in
+    /// mm (the demo-era boards route 0.5-0.8mm; modern fab minimums
+    /// are the 0.15mm default).
+    pub fn track_width(&self) -> Option<f64> {
+        self.mech_f64_stmt("track_width")
+    }
+
+    /// `clearance 0.635;` — board design rule: copper-to-copper
+    /// spacing in mm.
+    pub fn clearance(&self) -> Option<f64> {
+        self.mech_f64_stmt("clearance")
+    }
+
+    /// Shared reader for `<keyword> <f64>;` token-captured statements.
+    fn mech_f64_stmt(&self, kw: &str) -> Option<f64> {
+        for n in self
+            .0
+            .children()
+            .filter(|n| n.kind() == SyntaxKind::LAYOUT_KEEPOUT)
+        {
+            let toks = Self::mech_tokens(&n);
+            if toks.first().map(|t| t.as_str()) == Some(kw) {
+                return toks.get(1).and_then(|t| t.parse::<f64>().ok());
             }
         }
         None

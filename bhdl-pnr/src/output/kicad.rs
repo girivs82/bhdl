@@ -347,7 +347,12 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
         // default (thermal-relief) setting makes KiCad's DRC demand
         // spokes our geometry doesn't have (starved_thermal on every
         // same-net header pin of a band fixture).
-        out.push_str("    (connect_pads yes (clearance 0.3))\n");
+        // Clearance mirrors plane_foreign_holes' zc — the header rule
+        // and the shipped fill geometry MUST agree.
+        out.push_str(&format!(
+            "    (connect_pads yes (clearance {}))\n",
+            0.3f64.max(board.config.min_spacing_mm)
+        ));
         out.push_str("    (min_thickness 0.25) (filled_areas_thickness no)\n");
         out.push_str("    (fill yes (thermal_gap 0.3) (thermal_bridge_width 0.4))\n");
         // Edge margin: edge_clearance + 0.05mm. An inset of EXACTLY
@@ -1399,7 +1404,11 @@ pub(crate) fn plane_foreign_holes(
     net_id: NetId,
 ) -> Vec<(f64, f64, f64)> {
     let via_r = board.layer_stack.via.pad_mm / 2.0;
-    let zc = 0.3;
+    // Zone clearance: 0.3 floor (the historical constant — default
+    // boards stay byte-identical), raised to the board's declared
+    // spacing rule so the carved fill honors `clearance X;` (the
+    // netclass rule KiCad checks the fill against is min_spacing).
+    let zc = 0.3f64.max(board.config.min_spacing_mm);
     let mut holes: Vec<(f64, f64, f64)> = Vec::new();
     for (rj, r) in routes.iter().enumerate() {
         if board.nets.get(rj).map(|x| x.id) == Some(net_id) {
