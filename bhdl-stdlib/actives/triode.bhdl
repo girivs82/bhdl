@@ -65,6 +65,82 @@ entity TriodeECC83() {
     attribute datasheet = "Koren Table 1 (i-t.com mirror) + ECC83 heater std";
 }
 
+// The ECC83 ENVELOPE — the physical 9-pin noval bottle the PCB
+// actually solders (or sockets). Electrically transparent: the two
+// TriodeECC83 SECTIONS carry the model (see ECC83Dual below), and
+// this carrier holds the B9A footprint. Standard 12AX7 basing:
+// 1=a1 2=g1 3=k1, 4+5=heater (parallel side), 6=a2 7=g2 8=k2,
+// 9=heater center tap.
+entity ValveECC83_Noval() {
+    pin 1: signal inout;
+    pin 2: signal inout;
+    pin 3: signal inout;
+    pin 4: signal inout;
+    pin 5: signal inout;
+    pin 6: signal inout;
+    pin 7: signal inout;
+    pin 8: signal inout;
+    pin 9: signal inout;
+
+    // SPICE-transparent (the tube_socket class marker): sections
+    // provide the electrical model, the envelope provides the pads.
+    attribute component_class = "tube_socket";
+    attribute part_number = "ECC83";
+    attribute kicad_symbol = "Valve:ECC83";
+}
+
+// `package` is a layout keyword, not an attribute name (the
+// keyword-collision saga) — the entity's footprint binds here.
+layout ValveECC83_Noval { package Valve-Noval; }
+
+// One ECC83 bottle = one 9-pin footprint + TWO Koren sections, wired
+// per the 12AX7 basing. The socket-composition machinery (see
+// SocketedTriode_Octal below) suppresses the sections' own footprints
+// — the envelope's B9A ring is the only copper. Heater pins are
+// exposed as H45 (pins 4+5 tied: 6.3V parallel wiring) and H9; the
+// heater element itself is inside the bottle (6.3V/300mA data rides
+// the section attrs) and is not a board part.
+entity ECC83Dual() {
+    pin A1: signal inout virtual;
+    pin G1: signal in    virtual;
+    pin K1: signal inout virtual;
+    pin A2: signal inout virtual;
+    pin G2: signal in    virtual;
+    pin K2: signal inout virtual;
+    pin H45: signal inout virtual;
+    pin H9:  signal inout virtual;
+
+    attribute component_class = "tube_socketed_assembly";
+
+    expansion {
+        // Outer pins ARE the nets — no internal relay nets. (A relay
+        // net merges in the PnR connectivity walk but NOT in the
+        // SPICE netlist builder: the first cut put the sections on
+        // u1_a1n while the board passives sat on auto_u1_A1, and the
+        // SRPP silently solved as a resistor network — the
+        // "converged in 1 iteration" tell, again.)
+        A1 -> V: ValveECC83_Noval().1;
+        G1 -> V.2;
+        K1 -> V.3;
+        H45 -> V.4;
+        H45 -> V.5;
+        A2 -> V.6;
+        G2 -> V.7;
+        K2 -> V.8;
+        H9 -> V.9;
+
+        A1 -> S1: TriodeECC83().P;
+        G1 -> S1.G;
+        K1 -> S1.K;
+        A2 -> S2: TriodeECC83().P;
+        G2 -> S2.G;
+        K2 -> S2.K;
+
+        socket S1 in V;
+        socket S2 in V;
+    }
+}
+
 // Nominal 12AU7 / ECC82 — medium-µ dual triode, a common roll-in alternative.
 entity Triode12AU7() {
     pin P: signal inout;  // Plate (anode)

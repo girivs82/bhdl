@@ -679,15 +679,21 @@ impl NetlistGenerator {
                 };
                 let Some(pkg) = lay.package.clone() else { continue };
                 if let Some(inst) = self.netlist.instances.get_mut(id) {
-                    inst.attributes
-                        .entry("package".to_string())
-                        .or_insert_with(|| {
-                            log::debug!(
-                                "package from layout block: '{}' -> {}",
-                                module.name, pkg
-                            );
-                            pkg.clone()
-                        });
+                    // OVERWRITE, don't or_insert: a `layout X { package … }`
+                    // block is an explicit declaration (the datasheet's or
+                    // the board author's), and it must beat the part
+                    // chooser's auto "smallest adequate package" stamp —
+                    // the ecc83 THT board shipped 0603s because the
+                    // chooser's SMD pick had already filled the slot.
+                    let prev = inst
+                        .attributes
+                        .insert("package".to_string(), pkg.clone());
+                    if prev.as_deref() != Some(pkg.as_str()) {
+                        log::debug!(
+                            "package from layout block: '{}' -> {} (was {:?})",
+                            module.name, pkg, prev
+                        );
+                    }
                 }
             }
         }

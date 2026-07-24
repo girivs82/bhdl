@@ -158,7 +158,13 @@ pub fn apply_glacier_physical_selection(
                 ) {
                     // Write attributes back to the instance
                     let inst_mut = &mut netlist.instances[inst_id];
-                    inst_mut.attributes.insert("package".to_string(), result.package.clone());
+                    // Fill, never override: an existing package attribute is a
+                    // DECLARATION (entity/board layout block, user arg) and the
+                    // chooser's "smallest adequate" pick is a default — the ecc83
+                    // THT board shipped 0603s because this insert clobbered its
+                    // `layout Res { package Axial-P7.62; }`.
+                    inst_mut.attributes.entry("package".to_string())
+                        .or_insert_with(|| result.package.clone());
                     if let Some(ref pr) = result.power_rating {
                         inst_mut.attributes.insert("power_rating".to_string(), pr.clone());
                     }
@@ -208,7 +214,13 @@ pub fn apply_glacier_physical_selection(
                         inst_mut.attributes.insert("value".to_string(), per_unit_str.clone());
                         inst_mut.attributes.insert("bank_count".to_string(), count.to_string());
                         inst_mut.attributes.insert("bank_total".to_string(), total_str);
-                        inst_mut.attributes.insert("package".to_string(), result.package.clone());
+                        // Fill, never override: an existing package attribute is a
+                    // DECLARATION (entity/board layout block, user arg) and the
+                    // chooser's "smallest adequate" pick is a default — the ecc83
+                    // THT board shipped 0603s because this insert clobbered its
+                    // `layout Res { package Axial-P7.62; }`.
+                    inst_mut.attributes.entry("package".to_string())
+                        .or_insert_with(|| result.package.clone());
                         if let Some(ref vr) = result.voltage_rating {
                             inst_mut.attributes.insert("voltage_rating".to_string(), vr.clone());
                         }
@@ -245,7 +257,13 @@ pub fn apply_glacier_physical_selection(
                     } else {
                         // Normal single-cap path
                         let inst_mut = &mut netlist.instances[inst_id];
-                        inst_mut.attributes.insert("package".to_string(), result.package.clone());
+                        // Fill, never override: an existing package attribute is a
+                    // DECLARATION (entity/board layout block, user arg) and the
+                    // chooser's "smallest adequate" pick is a default — the ecc83
+                    // THT board shipped 0603s because this insert clobbered its
+                    // `layout Res { package Axial-P7.62; }`.
+                    inst_mut.attributes.entry("package".to_string())
+                        .or_insert_with(|| result.package.clone());
                         if let Some(ref vr) = result.voltage_rating {
                             inst_mut.attributes.insert("voltage_rating".to_string(), vr.clone());
                         }
@@ -266,7 +284,13 @@ pub fn apply_glacier_physical_selection(
                     netlist,
                 ) {
                     let inst_mut = &mut netlist.instances[inst_id];
-                    inst_mut.attributes.insert("package".to_string(), result.package.clone());
+                    // Fill, never override: an existing package attribute is a
+                    // DECLARATION (entity/board layout block, user arg) and the
+                    // chooser's "smallest adequate" pick is a default — the ecc83
+                    // THT board shipped 0603s because this insert clobbered its
+                    // `layout Res { package Axial-P7.62; }`.
+                    inst_mut.attributes.entry("package".to_string())
+                        .or_insert_with(|| result.package.clone());
                     if let Some(ref pr) = result.power_rating {
                         inst_mut.attributes.insert("power_rating".to_string(), pr.clone());
                     }

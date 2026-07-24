@@ -174,6 +174,13 @@ board MultichannelMixer {
     u_mst.OUT_A -> c_mo: Cap(2.2µF, 35V).1; c_mo.2 -> J_OUT.1;
 }
 
+// Demo passives are 1206 (R1206_10K / CC1206_100NF) — retarget the
+// class default. The 2.2µF are radial box films (CAPPRB254) in the
+// demo; they share the Cap entity here so they render 1206 too —
+// recorded fidelity gap (needs per-instance package overrides).
+layout Res { package 1206; }
+layout Cap { package 1206; }
+
 layout MultichannelMixer {
     layer_stackup 2;
     // Demo geometry verbatim: 110×111 outline, jack row along the

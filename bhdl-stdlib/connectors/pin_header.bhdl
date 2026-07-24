@@ -261,3 +261,24 @@ layout Pin_Header_01x17 {
 layout Pin_Header_02x18 {
     package PinHeader-2x18;
 }
+
+// Screw terminal blocks — Altech AK300 series (the part the KiCad
+// ecc83 demo mounts). Data from the FETCHED Altech catalog p.138:
+// 5.00mm pin spacing, 1.0×0.8mm solder pins, 0.5-2.5mm² wire,
+// 16A/250V IEC. Footprint derives from the pin dims (see the
+// TerminalBlock family in ipc7351) — identity with any conforming
+// layout follows from mounting the same part.
+entity TerminalBlock_1x02() {
+    pin 1: signal inout;
+    pin 2: signal inout;
+    attribute component_class = "connector";
+    attribute connector_type  = "terminal_block";
+    attribute manufacturer    = "Altech";
+    attribute part_number     = "AK300/2";
+    attribute kicad_symbol    = "Connector_Generic:Conn_01x02";
+    attribute datasheet       = "Altech catalog p.138 (AK300, fetched)";
+    attribute current_a       = 16.0;
+    attribute voltage_v       = 250.0;
+}
+
+layout TerminalBlock_1x02 { package TerminalBlock-P5.00-1x02; }

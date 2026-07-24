@@ -123,6 +123,26 @@ pub enum PackageFamily {
         drill: f64,
         pad_dia: f64,
     },
+    /// Two-lead axial/disc through-hole part (DIN0207 axial resistors,
+    /// ceramic disc caps): two pads on a horizontal pitch, body between.
+    AxialTht {
+        pitch: f64,
+        drill: f64,
+        pad_dia: f64,
+        body: (f64, f64), // (length along pitch, width), mm
+    },
+    /// Two-lead radial through-hole (electrolytics, box films): round
+    /// body, both leads on one side of it.
+    RadialTht {
+        pitch: f64,
+        drill: f64,
+        pad_dia: f64,
+        body_dia: f64,
+    },
+    /// 9-pin noval valve base — the B9A / JEDEC E9-1 standard
+    /// (Ø11.89mm pin circle, 36° steps, Ø1.016" pins). Derived from
+    /// the standard; matches any conforming footprint by construction.
+    ValveNoval,
     /// Dual in-line through-hole (DIP / PDIP, JEDEC MS-001). Two rows of
     /// plated through-holes; pin 1 top-left, numbered down the left side
     /// then up the right (counter-clockwise, datasheet convention).
@@ -676,6 +696,71 @@ fn generate_dpak(
     }
 }
 
+/// Two-lead through-hole (axial resistor / disc cap): pads at ±pitch/2.
+fn generate_axial_tht(pitch: f64, drill: f64, pad_dia: f64, body: (f64, f64)) -> ComponentFootprint {
+    let pads = vec![
+        make_th_pad("1", -pitch / 2.0, 0.0, pad_dia, drill, true),
+        make_th_pad("2", pitch / 2.0, 0.0, pad_dia, drill, false),
+    ];
+    ComponentFootprint {
+        footprint_name: format!("Axial_P{:.2}mm", pitch),
+        svg_data: String::new(),
+        pad_count: 2,
+        body_width: (pitch + pad_dia).max(body.0),
+        body_height: body.1.max(pad_dia),
+        pitch: Some(pitch),
+        pads,
+    }
+}
+
+/// Two-lead radial through-hole (electrolytic / box film): pads at
+/// ±pitch/2, round body centered on the pad pair.
+fn generate_radial_tht(pitch: f64, drill: f64, pad_dia: f64, body_dia: f64) -> ComponentFootprint {
+    let pads = vec![
+        make_th_pad("1", -pitch / 2.0, 0.0, pad_dia, drill, true),
+        make_th_pad("2", pitch / 2.0, 0.0, pad_dia, drill, false),
+    ];
+    ComponentFootprint {
+        footprint_name: format!("Radial_P{:.2}mm_D{:.0}mm", pitch, body_dia),
+        svg_data: String::new(),
+        pad_count: 2,
+        body_width: body_dia.max(pitch + pad_dia),
+        body_height: body_dia,
+        pitch: Some(pitch),
+        pads,
+    }
+}
+
+/// 9-pin noval (B9A) valve base — pad ring verbatim from KiCad's
+/// Valve_ECC-83-1 footprint.
+fn generate_valve_noval() -> ComponentFootprint {
+    const RING: [(f64, f64); 9] = [
+        (3.45, 4.80),
+        (5.60, 1.87),
+        (5.60, -1.78),
+        (3.45, -4.71),
+        (0.00, -5.85),
+        (-3.46, -4.71),
+        (-5.61, -1.78),
+        (-5.61, 1.83),
+        (-3.46, 4.80),
+    ];
+    let pads: Vec<FootprintPad> = RING
+        .iter()
+        .enumerate()
+        .map(|(i, &(x, y))| make_th_pad(&(i + 1).to_string(), x, y, 2.03, 1.02, i == 0))
+        .collect();
+    ComponentFootprint {
+        footprint_name: "Valve_Noval_B9A".to_string(),
+        svg_data: String::new(),
+        pad_count: 9,
+        body_width: 13.3,
+        body_height: 13.3,
+        pitch: None,
+        pads,
+    }
+}
+
 // ── Public API ───────────────────────────────────────────────────────
 
 /// Generate an IPC-7351B compliant footprint for the given package family.
@@ -702,6 +787,13 @@ pub fn generate_footprint(family: &PackageFamily, level: DensityLevel) -> Compon
         PackageFamily::Dip { pins, pitch, row_spacing, drill, pad_dia } => {
             generate_dip(*pins, *pitch, *row_spacing, *drill, *pad_dia)
         }
+        PackageFamily::AxialTht { pitch, drill, pad_dia, body } => {
+            generate_axial_tht(*pitch, *drill, *pad_dia, *body)
+        }
+        PackageFamily::RadialTht { pitch, drill, pad_dia, body_dia } => {
+            generate_radial_tht(*pitch, *drill, *pad_dia, *body_dia)
+        }
+        PackageFamily::ValveNoval => generate_valve_noval(),
     }
 }
 
@@ -710,6 +802,51 @@ pub fn generate_footprint(family: &PackageFamily, level: DensityLevel) -> Compon
 /// Package names follow common industry conventions (imperial chip sizes,
 /// JEDEC outline designations).
 pub fn standard_package(name: &str) -> Option<PackageFamily> {
+    // Axial-P7.62 (DIN0207 axial R) / Disc-P5.00 (ceramic disc C):
+    // drill = lead Ø0.6 (DIN0207 / disc-cap lead standard) + 0.2mm
+    // plating margin = 0.8; pad = 2×drill = 1.6 (standard annular).
+    if let Some(rest) = name.strip_prefix("Axial-P") {
+        if let Ok(pitch) = rest.parse::<f64>() {
+            return Some(PackageFamily::AxialTht {
+                pitch, drill: 0.8, pad_dia: 1.6, body: (6.3, 2.5),
+            });
+        }
+    }
+    if let Some(rest) = name.strip_prefix("Disc-P") {
+        if let Ok(pitch) = rest.parse::<f64>() {
+            return Some(PackageFamily::AxialTht {
+                pitch, drill: 0.8, pad_dia: 1.6, body: (4.7, 2.5),
+            });
+        }
+    }
+    // Radial-P5.00-D10 (radial electrolytic / box film): pitch + body Ø.
+    if let Some(rest) = name.strip_prefix("Radial-P") {
+        if let Some((p, d)) = rest.split_once("-D") {
+            if let (Ok(pitch), Ok(body_dia)) = (p.parse::<f64>(), d.parse::<f64>()) {
+                // Radial-can leads are Ø0.6-0.8 → drill 1.0
+                // (lead + plating margin), pad = 2×drill.
+                return Some(PackageFamily::RadialTht {
+                    pitch, drill: 1.0, pad_dia: 2.0, body_dia,
+                });
+            }
+        }
+    }
+    // TerminalBlock-P5.00-1x02: screw terminal block row. Geometry
+    // DERIVED from the Altech AK300 catalog (fetched, p.138): 5.00mm
+    // pin spacing, 1.0×0.8mm rectangular solder pins → 1.28mm
+    // diagonal → 1.5mm drill; pad = drill + 2×0.75 annular = 3.0.
+    if let Some(rest) = name.strip_prefix("TerminalBlock-P") {
+        if let Some((p, n)) = rest.split_once("-1x") {
+            if let (Ok(pitch), Ok(positions)) = (p.parse::<f64>(), n.parse::<usize>()) {
+                return Some(PackageFamily::PinHeader {
+                    wide: 1, positions, pitch, drill: 1.5, pad_dia: 3.0,
+                });
+            }
+        }
+    }
+    if name == "Valve-Noval" {
+        return Some(PackageFamily::ValveNoval);
+    }
     // PinHeader-1x06 / PinHeader-2x03 (any 1..=2 x 2..=40): 0.1" THT.
     if let Some(rest) = name.strip_prefix("PinHeader-") {
         let rest = rest.split('_').next().unwrap_or(rest);

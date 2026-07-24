@@ -189,6 +189,14 @@ pub fn build_board(
             continue;
         }
 
+        // SOCKETED instances have no footprint of their own — the socket
+        // (or valve envelope) carries the copper. The `socket X in S`
+        // declaration stamps this attribute; without the skip the ecc83
+        // board grew two phantom SOIC-8s for its tube SECTIONS.
+        if instance.attributes.contains_key("socketed_in") {
+            continue;
+        }
+
         // Pin count drives the default-package fit (computed before the
         // full pin_defs vec because package resolution needs it first).
         let pin_defs_count = module_def
@@ -202,6 +210,14 @@ pub fn build_board(
                     .unwrap_or(false)
             })
             .count();
+
+        // An ALL-VIRTUAL entity (a composition parent like ECC83Dual —
+        // every outer pin is a relay) owns no copper: its expansion
+        // children are the physical parts. Without the skip the parent
+        // itself landed as an 8-pad SOIC-8.
+        if pin_defs_count == 0 && !module_def.pins.is_empty() {
+            continue;
+        }
 
         // Resolve package string
         let package = config
