@@ -350,7 +350,13 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
         out.push_str("    (connect_pads yes (clearance 0.3))\n");
         out.push_str("    (min_thickness 0.25) (filled_areas_thickness no)\n");
         out.push_str("    (fill yes (thermal_gap 0.3) (thermal_bridge_width 0.4))\n");
-        let m = 0.5;
+        // Edge margin: edge_clearance + 0.05mm. An inset of EXACTLY
+        // the clearance is a knife-edge tie — KiCad's zone refill is
+        // threaded and lands an ulp on either side run to run, so the
+        // SAME .kicad_pcb flapped between 0 and 2 copper_edge_clearance
+        // violations (uno inner planes, measured 2026-07-24). The
+        // 0.05mm is fab-invisible and kills the tie.
+        let m = board.config.edge_clearance_mm + 0.05;
         let (zx0, zy0, zx1, zy1) = match net.plane_region {
             Some((rx0, ry0, rx1, ry1)) => {
                 (rx0.max(m), ry0.max(m), rx1.min(w - m), ry1.min(h - m))
@@ -1652,7 +1658,13 @@ pub(crate) fn pour_raster(board: &Board, routes: &[Route], ni: usize) -> Option<
 /// from plane fills as exact RECTS (the old enclosing-circle punch
 /// wasted a half-diagonal disc of copper on elongated slots).
 pub(crate) fn plane_cutout_rects(board: &Board) -> Vec<(f64, f64, f64, f64)> {
-    let m = 0.3 + 0.05;
+    // Interior cutouts are BOARD EDGE (Edge.Cuts) — fills must clear
+    // them by the EDGE clearance, not the zone clearance. KiCad
+    // ≤10.0.4 didn't grade zone fill against interior Edge.Cuts;
+    // 10.0.5 does (lvds/poly_dense/poly_planes flagged at the old
+    // 0.35 inflation). Same +0.05 anti-tie margin as the outline
+    // inset.
+    let m = board.config.edge_clearance_mm + 0.05;
     board
         .config
         .cutouts
