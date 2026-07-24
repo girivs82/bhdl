@@ -2677,6 +2677,88 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
 
 
 
+    // 5.997. SINGLE-LAYER VIA SWEEP: rips and dangle-trims can take a
+    // via's far-layer copper without taking the via — it then bridges
+    // nothing and ships as the oracle's via_dangling (buck s99: an
+    // F.Cu track junction sat on a via whose B.Cu leg was long gone).
+    // A via touching copper on <2 layers is electrically inert, so
+    // removal can never disconnect. Plane nets are EXCLUDED: their
+    // drops connect to fill copper the segment scan can't see.
+    {
+        let via_r = board.layer_stack.via.pad_mm / 2.0;
+        let last_cu = board.layer_stack.layers.len().saturating_sub(1);
+        let mut trimmed = 0usize;
+        for i in 0..board.nets.len() {
+            if board.nets[i].plane_layer.is_some() || final_routes[i].is_empty() {
+                continue;
+            }
+            // Same-net pads: THT anchors every layer, SMD its surface.
+            let mut pads: Vec<(f64, f64, f64, f64, Option<usize>)> = Vec::new();
+            for comp in &board.components {
+                let cos_t = comp.theta.cos();
+                let sin_t = comp.theta.sin();
+                let quarter = ((comp.theta / std::f64::consts::FRAC_PI_2).round()
+                    as i64)
+                    .rem_euclid(2);
+                let surf = match comp.side {
+                    BoardSide::Top => 0usize,
+                    BoardSide::Bottom => last_cu,
+                };
+                for pin in &comp.pins {
+                    if pin.net != Some(board.nets[i].id) || pin.unplaced {
+                        continue;
+                    }
+                    let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
+                    let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+                    let (pw, ph, tht) = match &pin.pad {
+                        Some(p) => (p.width_mm, p.height_mm, p.drill_mm.is_some()),
+                        None => (0.5, 0.5, false),
+                    };
+                    let (pw, ph) = if quarter == 1 { (ph, pw) } else { (pw, ph) };
+                    pads.push((
+                        gx,
+                        gy,
+                        pw / 2.0,
+                        ph / 2.0,
+                        if tht { None } else { Some(surf) },
+                    ));
+                }
+            }
+            let segs = final_routes[i].segments.clone();
+            final_routes[i].vias.retain(|v| {
+                let mut layers: std::collections::BTreeSet<usize> =
+                    std::collections::BTreeSet::new();
+                for sg in &segs {
+                    for e in [sg.start, sg.end] {
+                        if (e.0 - v.x).hypot(e.1 - v.y) <= via_r {
+                            layers.insert(sg.layer);
+                        }
+                    }
+                }
+                for &(gx, gy, hx, hy, layer) in &pads {
+                    if (v.x - gx).abs() < hx + via_r && (v.y - gy).abs() < hy + via_r
+                    {
+                        match layer {
+                            None => return true, // THT barrel: all layers
+                            Some(l) => {
+                                layers.insert(l);
+                            }
+                        }
+                    }
+                }
+                if layers.len() >= 2 {
+                    true
+                } else {
+                    trimmed += 1;
+                    false
+                }
+            });
+        }
+        if trimmed > 0 {
+            info!("single-layer via sweep: {trimmed} inert via(s) removed");
+        }
+    }
+
     via_anchor_check(&board, &final_routes, "final");
 
     let connected_sinks = pathfinder::count_connected_sinks(&board, &final_routes);
