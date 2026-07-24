@@ -7,6 +7,13 @@
 # P0 gate: every board produces a loadable .kicad_pcb and every
 # violation class is understood. P1 gate: zero violations, zero
 # unconnected (see docs/spec/PnR_Professional_Architecture.md).
+#
+# Usage: sweep_layout_drc.sh [outdir] [seed]
+# With no seed the layout runs at the engine default (the "@42"
+# baseline) and behavior is unchanged. A seed (2nd arg, or
+# BHDL_SWEEP_SEED) is passed to `layout --seed` for the multi-seed
+# audits, and the DEFAULT outdir moves to /tmp/bhdl_layout_drc_s<seed>
+# so audit artifacts never clobber the baseline's.
 set -u
 cd "$(dirname "$0")/.." || exit 1
 KICAD_CLI=${KICAD_CLI:-/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli}
@@ -14,7 +21,12 @@ if [ ! -x "$KICAD_CLI" ]; then
   echo "kicad-cli not found ($KICAD_CLI) — set KICAD_CLI" >&2
   exit 1
 fi
-outdir=${1:-/tmp/bhdl_layout_drc}
+seed=${2:-${BHDL_SWEEP_SEED:-}}
+if [ -n "$seed" ]; then
+  outdir=${1:-/tmp/bhdl_layout_drc_s$seed}
+else
+  outdir=${1:-/tmp/bhdl_layout_drc}
+fi
 mkdir -p "$outdir"
 total_v=0; total_u=0; boards=0; failed=0
 for f in tests/circuits/realistic/*.bhdl; do
@@ -24,7 +36,8 @@ for f in tests/circuits/realistic/*.bhdl; do
   # slowest at ~6.5 min after the conflict-scan perf arc (was 18 min
   # before the epoch-stamp dedupe + bbox pre-reject in geom.rs).
   if ! BHDL_JLCPARTS_DB=/nonexistent RUST_LOG=off timeout 900 \
-      ./target/release/bhdl-cli "$f" layout -o "$pcb" >"$outdir/$b.layout.log" 2>&1; then
+      ./target/release/bhdl-cli "$f" layout -o "$pcb" ${seed:+--seed "$seed"} \
+      >"$outdir/$b.layout.log" 2>&1; then
     echo "$b: LAYOUT-FAILED"
     failed=$((failed+1))
     continue
@@ -59,4 +72,4 @@ PYEOF
   printf '%-40s v=%-4s unc=%-4s %s\n' "$b" "$v" "$u" "$cls"
 done
 ./scripts/sweep_cleanup.sh
-echo "── oracle baseline: $boards boards, $total_v violations, $total_u unconnected, $failed failed"
+echo "── oracle baseline${seed:+ (seed $seed)}: $boards boards, $total_v violations, $total_u unconnected, $failed failed"
