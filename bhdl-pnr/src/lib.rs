@@ -3339,6 +3339,18 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         info!("pour defects (trial currency): {pour_defects}");
     }
 
+    let (detour_p50, detour_p90, detour_nets) = detour_stats(&board, &final_routes);
+    if detour_nets > 0 {
+        let verdict = if detour_p50 <= 1.3 && detour_p90 <= 1.9 {
+            "PASS"
+        } else {
+            "WATCH"
+        };
+        info!(
+            "detour envelope: p50={detour_p50:.2} p90={detour_p90:.2} over {detour_nets} net(s) — {verdict} (pro bar 1.30/1.90, 14-board demo survey)"
+        );
+    }
+
     Ok(PnrResult {
         board,
         routes: final_routes,
@@ -3355,9 +3367,99 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
             },
             iterations: config.max_iterations,
             pour_defects,
+            detour_p50,
+            detour_p90,
+            detour_nets,
         },
         drc_violations,
     })
+}
+
+/// DETOUR ENVELOPE: per-net routed-length / pad-MST ratio percentiles
+/// over the final copper. The pad MST (Euclidean, Prim) is the
+/// placement-implied lower bound; the ratio measures pure routing
+/// quality independent of scale — the demo survey found professionals
+/// hold p50 1.05-1.28 / p90 1.36-1.85 on EVERY board from 15fp to
+/// 1508fp/12-layer. Read-only.
+fn detour_stats(board: &Board, final_routes: &[Route]) -> (f64, f64, usize) {
+    let comp_idx: std::collections::HashMap<ComponentId, usize> = board
+        .components
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.id, i))
+        .collect();
+    let mut ratios: Vec<f64> = Vec::new();
+    for (i, net) in board.nets.iter().enumerate() {
+        if net.pins.len() < 2 || net.plane_layer.is_some() {
+            continue;
+        }
+        let routed: f64 = final_routes
+            .get(i)
+            .map(|r| {
+                r.segments
+                    .iter()
+                    .map(|s| (s.end.0 - s.start.0).hypot(s.end.1 - s.start.1))
+                    .sum()
+            })
+            .unwrap_or(0.0);
+        if routed < 0.5 {
+            continue;
+        }
+        let mut pts: Vec<(f64, f64)> = Vec::new();
+        for &(cid, pid) in &net.pins {
+            let Some(&ci) = comp_idx.get(&cid) else { continue };
+            let comp = &board.components[ci];
+            let Some(pin) = comp.pins.iter().find(|p| p.pin_id == pid) else { continue };
+            if pin.unplaced {
+                continue;
+            }
+            let (c, s) = (comp.theta.cos(), comp.theta.sin());
+            pts.push((
+                comp.x + pin.dx * c - pin.dy * s,
+                comp.y + pin.dx * s + pin.dy * c,
+            ));
+        }
+        // Big fanout nets (headers, rails) get O(n^2) Prim — cap like
+        // the survey did; beyond it the MST bound is dominated by the
+        // pour/trunk anyway.
+        if pts.len() < 2 || pts.len() > 60 {
+            continue;
+        }
+        let n = pts.len();
+        let mut in_t = vec![false; n];
+        in_t[0] = true;
+        let mut count = 1;
+        let mut mst = 0.0;
+        while count < n {
+            let mut best = (f64::INFINITY, 0);
+            for a in 0..n {
+                if !in_t[a] {
+                    continue;
+                }
+                for b in 0..n {
+                    if in_t[b] {
+                        continue;
+                    }
+                    let d = (pts[a].0 - pts[b].0).hypot(pts[a].1 - pts[b].1);
+                    if d < best.0 {
+                        best = (d, b);
+                    }
+                }
+            }
+            mst += best.0;
+            in_t[best.1] = true;
+            count += 1;
+        }
+        if mst > 1.0 {
+            ratios.push(routed / mst);
+        }
+    }
+    if ratios.is_empty() {
+        return (0.0, 0.0, 0);
+    }
+    ratios.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let pick = |q: f64| ratios[((q * ratios.len() as f64) as usize).min(ratios.len() - 1)];
+    (pick(0.5), pick(0.9), ratios.len())
 }
 
 /// Count the pour failures the sink counter can't see — the trial

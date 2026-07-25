@@ -937,6 +937,15 @@ pub struct PnrMetrics {
     /// the stitch pass could not bridge. Always 0 with the pour
     /// experiment off — trial selection stays byte-identical there.
     pub pour_defects: usize,
+    /// DETOUR ENVELOPE: per-net routed-length / pad-MST percentiles.
+    /// The 14-board demo survey measured the professional bar as
+    /// SCALE-FREE — p50 1.05-1.28, p90 1.36-1.85 from a 15fp tube amp
+    /// to a 1508fp 12-layer VME board. Read-only metric (no trial
+    /// influence yet); 0.0 when no net qualifies.
+    pub detour_p50: f64,
+    pub detour_p90: f64,
+    /// Nets in the detour sample (>=2 pads, non-plane, MST > 1mm).
+    pub detour_nets: usize,
 }
 
 #[derive(Clone, Debug)]
