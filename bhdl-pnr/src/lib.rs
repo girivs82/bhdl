@@ -609,6 +609,62 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
     } else {
         Vec::new()
     };
+    // RIGID-BODY GROUP MOVES (BHDL_PNR_RIGID=1, fidelity): the third
+    // formulation of the channel-coherence experiment — freeze each
+    // sibling group's internal geometry from the init-stamp and move
+    // the group as ONE body (averaged forces + per-iteration snap).
+    // The force formulation was basin-blind (105mm residual,
+    // k-insensitive); rigidity makes divergence impossible instead of
+    // penalized. (leader, members(ci, dx, dy from leader)) per group.
+    let rigid_groups: Vec<(usize, Vec<(usize, f64, f64)>)> = if std::env::var(
+        "BHDL_PNR_RIGID",
+    )
+    .is_ok()
+        && (board.config.route_bias.is_some()
+            || board.config.design_track_width_mm.is_some())
+    {
+        let stamped = stamp_sibling_groups(&mut board);
+        let classes = sibling_suffix_classes(&board);
+        // Regroup suffix classes by sibling: class[k] = one member per
+        // sibling in sorted-group order, so column k across classes =
+        // sibling k's members.
+        let mut groups: Vec<Vec<usize>> = Vec::new();
+        if let Some(first) = classes.first() {
+            groups = vec![Vec::new(); first.len()];
+            for class in &classes {
+                if class.len() != groups.len() {
+                    continue;
+                }
+                for (k, &(ci, _)) in class.iter().enumerate() {
+                    groups[k].push(ci);
+                }
+            }
+        }
+        let out: Vec<(usize, Vec<(usize, f64, f64)>)> = groups
+            .into_iter()
+            .filter(|g| g.len() >= 2)
+            .map(|g| {
+                let leader = g[0];
+                let (lx, ly) = (board.components[leader].x, board.components[leader].y);
+                let members = g
+                    .into_iter()
+                    .map(|ci| {
+                        (ci, board.components[ci].x - lx, board.components[ci].y - ly)
+                    })
+                    .collect();
+                (leader, members)
+            })
+            .collect();
+        info!(
+            "rigid groups: {} sibling block(s), {} part(s) init-stamped",
+            out.len(),
+            stamped
+        );
+        out
+    } else {
+        Vec::new()
+    };
+
     if !mirror_classes.is_empty() {
         // INIT-STAMP: replicate the reference sibling's INITIAL layout
         // before any optimization — at init there is no coherence to
@@ -782,6 +838,20 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
             );
         }
 
+        // RIGID: each sibling block feels ONE force — the mean over
+        // its members (identical forces + identical Adam state =
+        // identical trajectories; the snap below catches everything
+        // else that touches positions).
+        for (_, members) in &rigid_groups {
+            let n_m = members.len() as f64;
+            let fx = members.iter().map(|&(ci, ..)| forces.dx[ci]).sum::<f64>() / n_m;
+            let fy = members.iter().map(|&(ci, ..)| forces.dy[ci]).sum::<f64>() / n_m;
+            for &(ci, ..) in members {
+                forces.dx[ci] = fx;
+                forces.dy[ci] = fy;
+            }
+        }
+
         // Update positions (constraint-aware, skip frozen components)
         optimizer::adam_step(
             &mut board,
@@ -842,6 +912,16 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                         }
                     }
                 }
+            }
+        }
+
+        // RIGID: re-freeze internal geometry after anything that
+        // moved members individually (mini-legalization above).
+        for (leader, members) in &rigid_groups {
+            let (lx, ly) = (board.components[*leader].x, board.components[*leader].y);
+            for &(ci, dx, dy) in members {
+                board.components[ci].x = lx + dx;
+                board.components[ci].y = ly + dy;
             }
         }
 
@@ -970,6 +1050,23 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         info!("mirror snap: max displacement {max_disp:.2}mm");
     }
 
+    // RIGID: final snap, then hold the blocks FIXED through
+    // legalization + detailed refine (both move parts individually —
+    // the legalizer resolves any block overlap by moving the free
+    // neighbors instead; residual overlaps grade in trial dominance).
+    let mut rigid_restore: Vec<(usize, PlacementConstraint)> = Vec::new();
+    for (leader, members) in &rigid_groups {
+        let (lx, ly) = (board.components[*leader].x, board.components[*leader].y);
+        for &(ci, dx, dy) in members {
+            board.components[ci].x = lx + dx;
+            board.components[ci].y = ly + dy;
+            let c = &board.components[ci];
+            rigid_restore.push((ci, c.placement.clone()));
+            let (x, y, theta) = (c.x, c.y, c.theta);
+            board.components[ci].placement = PlacementConstraint::Fixed { x, y, theta };
+        }
+    }
+
     // 4. Legalization
     info!("Legalizing placement...");
     legalization::legalize(&mut board, 0.1);
@@ -981,6 +1078,9 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
     if wl1 < wl0 - 1e-9 {
         info!("Detailed placement: HPWL {:.1} -> {:.1}mm ({:.1}%)",
             wl0, wl1, (wl0 - wl1) / wl0 * 100.0);
+    }
+    for (ci, orig) in rigid_restore {
+        board.components[ci].placement = orig;
     }
 
     // 4.7 Split-plane regions: several rails can share one Power layer;
