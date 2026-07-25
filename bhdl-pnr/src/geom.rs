@@ -405,6 +405,18 @@ impl ClearanceIndex {
                     return Some(Conflict::Edge);
                 }
             }
+            // Endpoint checks miss a MID-SPAN pass near a concave
+            // vertex (the ladder committed a 0.3mm stub whose ends
+            // were legal but whose body crossed the band —
+            // copper_edge_clearance on test_poly_dense). Segment vs
+            // every outline edge, exactly.
+            let n = pts.len();
+            for k in 0..n {
+                let (p, q) = (pts[k], pts[(k + 1) % n]);
+                if segment_segment_dist(a, b, p, q) < self.edge_clearance + half - EPS {
+                    return Some(Conflict::Edge);
+                }
+            }
         }
         for &(cx0, cy0, cx1, cy1) in &self.cutouts {
             if segment_rect_dist(a, b, cx0, cy0, cx1, cy1)

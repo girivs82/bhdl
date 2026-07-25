@@ -186,12 +186,14 @@ layout MultichannelMixer {
     // Demo convention: THT-era mixer routes bottom-dominant
     // (reference board: 1768mm B.Cu vs 192mm of F.Cu jumpers).
     route_bias bottom;
-    // NOT yet declared: the demo's 0.5/0.2 design rules (netclass in
-    // multichannel_mixer.kicad_pro; the 1.5mm power tier is the
-    // solved-current machinery's job). At 0.5mm width the routing
-    // lattice coarsens to 0.72mm pitch and 17 sinks die — same
-    // corridor-scarcity wall as ecc83 at 0.8/0.4. Routing at demo
-    // rules = the exact-geometry long-haul arc.
+    // NOT yet declared: the demo's 0.5/0.2 design rules. The
+    // long-haul arc cut the wide-rules tail 17 -> 1 unc (the ladder's
+    // empty-same-layer-attach early exit abandoned every off-side
+    // pad); the last sink = a vbias pin-row knot from the classic
+    // pad-fenced family (same-layer track 0.7mm away, gap filled by a
+    // foreign run, shove ladder exhausted). Declaring waits on that
+    // knot: the corpus gate is 0/0.
+    // track_width 0.5; clearance 0.2;
     // Demo geometry verbatim: 110×111 outline, jack row along the
     // top, power entry on the right edge, one pot column per channel
     // (board-local coords read from multichannel_mixer.kicad_pcb;

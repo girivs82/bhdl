@@ -96,12 +96,9 @@ layout Ecc83Srpp {
     // loses its corridor to GND tracks (1 unc). Strict-by-default
     // lands when pours become a layout statement.
     route_bias bottom;
-    // NOT yet declared: the demo's 0.8/0.4 design rules. At that
-    // width the routing lattice (pitch = width + clearance = 1.22mm)
-    // has too few corridors around the pinned valve ring — 3 sinks
-    // die under every bias tier and seed while the hand-routed demo
-    // threads exact 0.4mm gaps the lattice can't represent. Routing
-    // at demo rules = the exact-geometry long-haul arc.
+    // Demo design rules (ecc83-pp.kicad_pro Default netclass).
+    track_width 0.8;
+    clearance 0.4;
     // Demo board outline (ecc83-pp.kicad_pcb Edge.Cuts bbox).
     outline rect 52 46;
     // Demo's own mounting holes + connector positions (board-local

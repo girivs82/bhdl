@@ -5861,6 +5861,98 @@ pub fn bootstrap_empty_route(board: &Board, final_routes: &mut Vec<Route>, i: us
             return true;
         }
     }
+    // 3) LONG-HAUL EXACT MAZE: the shapes above are short-range
+    // (direct / L / via-hop a few mm) — a whole-net rip whose pads
+    // face each other ACROSS an obstacle field (the ecc83 SRPP ring
+    // link at THT-era widths) needs the wandering (x, y, layer) maze
+    // with a board-sized window. Legality is exact per-edge, so the
+    // seeded span ships validator-free like every ladder commit.
+    {
+        let signal_layers: Vec<usize> = {
+            let all = board.layer_stack.signal_layer_indices();
+            match &net.allowed_layers {
+                Some(a) => all.into_iter().filter(|l| a.contains(l)).collect(),
+                None => all,
+            }
+        };
+        if !signal_layers.is_empty() {
+            // A pad whose side-layer is masked off (strict bias) or
+            // drilled starts on a legal layer instead.
+            let eff = |l: usize, thru: bool| -> usize {
+                if signal_layers.contains(&l) {
+                    l
+                } else if thru {
+                    *signal_layers.last().unwrap()
+                } else {
+                    l
+                }
+            };
+            let board_dim = board
+                .config
+                .outline
+                .width()
+                .max(board.config.outline.height());
+            for &(tgt, tgt_layer, tgt_thru) in targets.iter().take(3) {
+                let sl = eff(seed_layer, seed_thru);
+                let tl = eff(tgt_layer, tgt_thru);
+                if !signal_layers.contains(&sl) || !signal_layers.contains(&tl) {
+                    continue;
+                }
+                let idx = geom::ClearanceIndex::build(board, final_routes, Some(net_id));
+                // 25mm window first (cheap, usually enough), then the
+                // full board — the maze's node cap arbitrates cost.
+                let way = geom::route_tunnel_ml(
+                    &idx, seed, sl, tgt, tl, width, via_r, &signal_layers, net_id, 25.0,
+                )
+                .or_else(|| {
+                    geom::route_tunnel_ml(
+                        &idx, seed, sl, tgt, tl, width, via_r, &signal_layers, net_id,
+                        board_dim,
+                    )
+                });
+                let Some(way) = way else { continue };
+                let route = &mut final_routes[i];
+                let seg_start = route.segments.len();
+                let via_start = route.vias.len();
+                let n_l = board.layer_stack.layers.len() - 1;
+                for w in way.windows(2) {
+                    let (a, b) = (w[0], w[1]);
+                    if a.2 == b.2 {
+                        if (a.0 - b.0).hypot(a.1 - b.1) > 1e-9 {
+                            route.segments.push(RouteSegment {
+                                layer: a.2,
+                                start: (a.0, a.1),
+                                end: (b.0, b.1),
+                                width_mm: width,
+                            });
+                        }
+                    } else {
+                        let dup = route
+                            .vias
+                            .iter()
+                            .any(|v| (v.x - a.0).hypot(v.y - a.1) < 1e-6);
+                        if !dup {
+                            route.vias.push(RouteVia {
+                                x: a.0,
+                                y: a.1,
+                                from_layer: 0,
+                                to_layer: n_l,
+                            });
+                        }
+                    }
+                }
+                let n_vias = route.vias.len() - via_start;
+                route.path_spans.push((seg_start, route.segments.len() - seg_start));
+                route.path_parents.push(None);
+                route.via_spans.push((via_start, n_vias));
+                info!(
+                    "bootstrap: whole-net '{}' seeded by LONG-HAUL maze ({} via(s))",
+                    net.name, n_vias
+                );
+                return true;
+            }
+        }
+    }
     false
 }
 
@@ -6006,9 +6098,13 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
         }
         attach.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         attach.truncate(5);
-        if attach.is_empty() {
-            return gained;
-        }
+        // NO early return on an empty same-layer attach set: under
+        // route_bias the ENTIRE tree can sit on the far side. The
+        // any-layer rung (THT pads), the M2b via-hop (SMD pads) and
+        // the mazes below all build their own cross-layer candidate
+        // sets — the old `return gained` here abandoned every biased
+        // off-side pin before those rungs ever ran (ecc83 3 unc /
+        // mixer 14-of-17 unc at demo design rules, all this exit).
         let cidx = geom::ClearanceIndex::build(board, final_routes, Some(net.id));
         let mut connected = false;
         // Same-layer attempts first.
@@ -6455,6 +6551,22 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
                     geom::route_tunnel_ml(
                         &cidx5, (px, py), layer, q, ql, width, via_r, &signal_layers,
                         net.id, 12.0,
+                    )
+                })
+                .or_else(|| {
+                    // LONG-HAUL tier: fires only where both bounded
+                    // windows found nothing (evolution-preserving) —
+                    // at THT-era track widths whole regions wall off
+                    // and the detour swings board-scale. The maze's
+                    // node cap arbitrates cost on big boards.
+                    let dim = board
+                        .config
+                        .outline
+                        .width()
+                        .max(board.config.outline.height());
+                    geom::route_tunnel_ml(
+                        &cidx5, (px, py), layer, q, ql, width, via_r, &signal_layers,
+                        net.id, dim,
                     )
                 }) else {
                     debug!(
@@ -8652,6 +8764,20 @@ fn validate_and_rip(
                         for (si, sg) in final_routes[i].segments.iter().enumerate() {
                             let m = edge + sg.width_mm / 2.0;
                             if [sg.start, sg.end].iter().any(|p| edge_bad(*p, m)) {
+                                hit = Some(si);
+                                break;
+                            }
+                            // Interior cutouts, SEGMENT-exact: the
+                            // grid band gates cell centers, but a
+                            // mitered diagonal sweeping a cutout
+                            // CORNER passes the center check while
+                            // its copper dips inside the band
+                            // (oracle copper_edge_clearance vs the
+                            // Edge.Cuts rect on test_poly_dense).
+                            if board.config.cutouts.iter().any(|&(x0, y0, x1, y1)| {
+                                geom::segment_rect_dist(sg.start, sg.end, x0, y0, x1, y1)
+                                    < m
+                            }) {
                                 hit = Some(si);
                                 break;
                             }
