@@ -2130,7 +2130,19 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                         let hairpin = !collinear
                             && dot < 0.0
                             && sin_ang < 0.42
-                            && la.min(lb) > 0.5;
+                            && la.min(lb) > 0.5
+                            // Fidelity mode: the collapse chord must
+                            // read as hand routing (H/V/45) — it was
+                            // the source of the long arbitrary-angle
+                            // runs the comparison review flagged.
+                            && (!(board.config.route_bias.is_some()
+                                || board.config.design_track_width_mm.is_some())
+                                || {
+                                    let (cs, ce) = (a.start, b.end);
+                                    let (dx, dy) =
+                                        ((ce.0 - cs.0).abs(), (ce.1 - cs.1).abs());
+                                    dx < 1e-9 || dy < 1e-9 || (dx - dy).abs() < 1e-9
+                                });
                         if collinear || hairpin {
                             // A via AT the retrace tip rides that
                             // copper — collapsing orphans it (final

@@ -211,6 +211,11 @@ pub struct ClearanceIndex {
     /// ships un-punched copper under-clearing the barrel (measured
     /// 0.2573mm vs the 0.30 zone rule).
     plane_zones: Vec<(NetId, (f64, f64, f64, f64))>,
+    /// Fidelity mode (route_bias or declared design rules): exact
+    /// legs must read as hand routing — H/V/45 only. Arbitrary-angle
+    /// directs are skipped, 45-dogleg shapes replace them, and the
+    /// string-pull only collapses to H/V/45 segments.
+    pub ortho: bool,
 }
 
 thread_local! {
@@ -252,6 +257,8 @@ impl ClearanceIndex {
             cutouts: board.config.cutouts.clone(),
             spacing: board.config.min_spacing_mm,
             via_drill: board.layer_stack.via.drill_mm,
+            ortho: board.config.route_bias.is_some()
+                || board.config.design_track_width_mm.is_some(),
             plane_zones: board
                 .nets
                 .iter()
@@ -298,6 +305,26 @@ impl ClearanceIndex {
                 idx.insert_bbox(v.x - via_r, v.y - via_r, v.x + via_r, v.y + via_r);
                 idx.items.push(Item::Via { net, x: v.x, y: v.y, r: via_r });
             }
+        }
+        // Mounting holes: NPTH barrels pierce every layer and carry no
+        // net — copper may NEVER cross one (the exporter emits a
+        // drill+0.5 NPTH pad; the oracle reports shorting_items +
+        // solder_mask_bridge). Absent from the index, ladder legs
+        // routed straight over H1 (ecc83 strict horseshoe, measured).
+        for mh in &board.config.mounting_holes {
+            let r = (mh.drill_mm + 0.5) / 2.0;
+            idx.insert_bbox(mh.x_mm - 2.0 * r, mh.y_mm - 2.0 * r, mh.x_mm + 2.0 * r, mh.y_mm + 2.0 * r);
+            idx.items.push(Item::Pad {
+                net: None,
+                layer_top: true,
+                layer_bot: true,
+                cx: mh.x_mm,
+                cy: mh.y_mm,
+                hx: r,
+                hy: r,
+                corner_r: r, // circle
+                drill_r: mh.drill_mm / 2.0,
+            });
         }
         for comp in &board.components {
             let cos_t = comp.theta.cos();
@@ -524,6 +551,12 @@ impl ClearanceIndex {
 /// every leg exact-checked against the index. Returns the polyline on
 /// success. This is the last-mile router for sinks the grid walls in:
 /// the pad's CELL is blocked but a skinny off-grid corridor exists.
+/// H, V, or exact 45 — the hand-routing angle set.
+fn is_hv45(a: (f64, f64), b: (f64, f64)) -> bool {
+    let (dx, dy) = ((b.0 - a.0).abs(), (b.1 - a.1).abs());
+    dx < 1e-9 || dy < 1e-9 || (dx - dy).abs() < 1e-9
+}
+
 pub fn route_escape(
     idx: &ClearanceIndex,
     from: (f64, f64),
@@ -536,14 +569,39 @@ pub fn route_escape(
         (a.0 - b.0).hypot(a.1 - b.1) < 1e-9
             || idx.first_conflict(a, b, width, layer, net).is_none()
     };
-    // Direct.
-    if clear(from, to) {
+    // Direct — in fidelity mode only when it reads as hand routing.
+    if (!idx.ortho || is_hv45(from, to)) && clear(from, to) {
         return Some(vec![from, to]);
     }
     // L-bends.
     for corner in [(from.0, to.1), (to.0, from.1)] {
         if clear(from, corner) && clear(corner, to) {
             return Some(vec![from, corner, to]);
+        }
+    }
+    // 45-doglegs (fidelity mode): the shapes hand routing actually
+    // uses where an arbitrary direct would otherwise fire.
+    if idx.ortho {
+        let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+        let (adx, ady) = (dx.abs(), dy.abs());
+        if adx > 1e-9 && ady > 1e-9 && (adx - ady).abs() > 1e-9 {
+            let (sx, sy) = (dx.signum(), dy.signum());
+            let cands = if adx > ady {
+                [
+                    (from.0 + sx * (adx - ady), from.1), // H then 45
+                    (from.0 + sx * ady, from.1 + sy * ady), // 45 then H
+                ]
+            } else {
+                [
+                    (from.0, from.1 + sy * (ady - adx)), // V then 45
+                    (from.0 + sx * adx, from.1 + sy * adx), // 45 then V
+                ]
+            };
+            for c in cands {
+                if clear(from, c) && clear(c, to) {
+                    return Some(vec![from, c, to]);
+                }
+            }
         }
     }
     // Z-paths: middle leg at sampled coordinate ± offsets, both
@@ -791,7 +849,9 @@ fn route_tunnel_phase(
     let mut i = 0usize;
     while i + 1 < path.len() {
         let mut j = path.len() - 1;
-        while j > i + 1 && !clear(path[i], path[j]) {
+        while j > i + 1
+            && (!clear(path[i], path[j]) || (idx.ortho && !is_hv45(path[i], path[j])))
+        {
             j -= 1;
         }
         pulled.push(path[j]);
@@ -844,6 +904,30 @@ pub fn route_tunnel_ml(
             idx, from, from_layer, to, to_layer, width, via_r, layers, net, margin, true,
         )
     })
+    .or_else(|| {
+        // FINE-STEP RETRY: at THT-era widths the standard lattice
+        // (step = width + spacing = 1.2mm at 0.8/0.4) aliases whole
+        // pockets shut — the ecc83 valve pad-7 pocket probed entry
+        // 8/8 / exit 8/8 open yet the search died at ~206 nodes.
+        // Legality is exact per-edge, so a half-step lattice is pure
+        // extra freedom; it runs only where both standard-step
+        // passes found nothing (evolution-preserving), and only when
+        // the standard step is coarse enough for halving to matter.
+        if (width + idx.spacing) * 0.5 >= 0.25 {
+            route_tunnel_ml_phase_scaled(
+                idx, from, from_layer, to, to_layer, width, via_r, layers, net, margin,
+                false, 0.5,
+            )
+            .or_else(|| {
+                route_tunnel_ml_phase_scaled(
+                    idx, from, from_layer, to, to_layer, width, via_r, layers, net,
+                    margin, true, 0.5,
+                )
+            })
+        } else {
+            None
+        }
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -860,9 +944,30 @@ fn route_tunnel_ml_phase(
     margin: f64,
     phase_snap: bool,
 ) -> Option<Vec<(f64, f64, usize)>> {
+    route_tunnel_ml_phase_scaled(
+        idx, from, from_layer, to, to_layer, width, via_r, layers, net, margin,
+        phase_snap, 1.0,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn route_tunnel_ml_phase_scaled(
+    idx: &ClearanceIndex,
+    from: (f64, f64),
+    from_layer: usize,
+    to: (f64, f64),
+    to_layer: usize,
+    width: f64,
+    via_r: f64,
+    layers: &[usize],
+    net: NetId,
+    margin: f64,
+    phase_snap: bool,
+    step_scale: f64,
+) -> Option<Vec<(f64, f64, usize)>> {
     use std::cmp::Reverse;
     use std::collections::{BinaryHeap, HashMap};
-    let step = (width + idx.spacing).max(0.25);
+    let step = ((width + idx.spacing) * step_scale).max(0.25);
     let margin = margin.max(1.0);
     let (x0, y0) = if phase_snap {
         (
@@ -1045,7 +1150,11 @@ fn route_tunnel_ml_phase(
         out.push((run[0].0, run[0].1, l));
         while k + 1 < run.len() {
             let mut m = run.len() - 1;
-            while m > k + 1 && !clear(run[k], run[m], l) {
+            // Fidelity mode: pulled chords stay H/V/45 (this pull was
+            // the source of the long arbitrary-angle wanders).
+            while m > k + 1
+                && (!clear(run[k], run[m], l) || (idx.ortho && !is_hv45(run[k], run[m])))
+            {
                 m -= 1;
             }
             out.push((run[m].0, run[m].1, l));
