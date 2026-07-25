@@ -1141,6 +1141,54 @@ pub fn build_board(
         }
     }
 
+    // HARD-NET-FIRST (fidelity mode): the A/B study against the
+    // hand-routed ecc83 demo — the human routes the topologically
+    // hard net (the ring-internal grid link, valve pad 1 <-> pad 7)
+    // FIRST, around the empty board's perimeter, then routes
+    // everything else dead straight. Our power-first order walled
+    // the board before that net's turn (maze reached 821 of ~1600
+    // nodes). A net with TWO drilled pads on the SAME >=5-pin
+    // package must round the package body — route it before the
+    // straight-shot nets spend the corridors.
+    if board_config.route_bias.is_some() || board_config.design_track_width_mm.is_some() {
+        for n in nets.iter_mut() {
+            let mut per_comp: std::collections::HashMap<ComponentId, usize> =
+                std::collections::HashMap::new();
+            for &(comp_id, pin_id) in &n.pins {
+                let Some(comp) = components.iter().find(|c| c.id == comp_id) else {
+                    continue;
+                };
+                if comp.pins.len() < 5 {
+                    continue;
+                }
+                if comp.pins.iter().any(|p| {
+                    p.pin_id == pin_id
+                        && p.pad.as_ref().and_then(|pd| pd.drill_mm).is_some()
+                }) {
+                    *per_comp.entry(comp_id).or_insert(0) += 1;
+                }
+            }
+            // Graded: a ring-INTERNAL link (2 pads on one package)
+            // must round the body — hardest; any net entering a ring
+            // pocket still needs the pocket's scarce corridors before
+            // board-crossing power spends them.
+            let max_on_one = per_comp.values().copied().max().unwrap_or(0);
+            if max_on_one >= 2 {
+                n.weight += 20.0;
+                log::info!(
+                    "hard-net-first: '{}' is a ring-internal link — routing before power",
+                    n.name
+                );
+            } else if max_on_one == 1 {
+                n.weight += 10.0;
+                log::info!(
+                    "hard-net-first: '{}' enters a ring pocket — routing before power",
+                    n.name
+                );
+            }
+        }
+    }
+
     // `route_bias <side> strict;` — the single-sided idiom: every net
     // is confined to the preferred layer, so the router detours around
     // obstacles the way the hand-routed demo boards do (the ecc83 demo
