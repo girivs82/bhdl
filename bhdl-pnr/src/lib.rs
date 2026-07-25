@@ -108,6 +108,24 @@ fn trial_dominated(result: &PnrResult, best: &PnrResult, has_measured: bool) -> 
             return rn > bn;
         }
     }
+    // DETOUR ENVELOPE (fidelity boards only): equally-connected,
+    // equally-quiet trials compete on routing quality against the
+    // scale-free professional bar (p90 first — the tail is what
+    // separates us from the hand-routed demos — then p50). Gated on
+    // fidelity mode so every other board keeps the exact
+    // legality/connectivity/HPWL chain (byte-identical).
+    if result.board.config.route_bias.is_some()
+        || result.board.config.design_track_width_mm.is_some()
+    {
+        let (r90, b90) = (result.metrics.detour_p90, best.metrics.detour_p90);
+        if (r90 - b90).abs() > 1e-6 {
+            return r90 > b90;
+        }
+        let (r50, b50) = (result.metrics.detour_p50, best.metrics.detour_p50);
+        if (r50 - b50).abs() > 1e-6 {
+            return r50 > b50;
+        }
+    }
     result.metrics.hpwl_mm >= best.metrics.hpwl_mm
 }
 
