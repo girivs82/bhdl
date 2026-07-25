@@ -5157,7 +5157,18 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
             // reaches same-net copper on ANY signal layer.
             if !connected {
                 let via_r = board.layer_stack.via.pad_mm / 2.0;
-                let signal_layers = board.layer_stack.signal_layer_indices();
+                // Strict route_bias: rungs stay inside the net's layer mask.
+                let signal_layers: Vec<usize> = board
+                    .layer_stack
+                    .signal_layer_indices()
+                    .into_iter()
+                    .filter(|l| {
+                        board.nets[i]
+                            .allowed_layers
+                            .as_ref()
+                            .map_or(true, |a| a.contains(l))
+                    })
+                    .collect();
                 let r = &final_routes[i];
                 use crate::routing::pathfinder::route_components;
                 let comps3 = route_components(r);
@@ -5699,6 +5710,14 @@ pub fn bootstrap_empty_route(board: &Board, final_routes: &mut Vec<Route>, i: us
             BoardSide::Bottom => n_layers - 1,
         };
         let thru = pin.pad.as_ref().map(|p| p.drill_mm.is_some()).unwrap_or(false);
+        // route_bias: a THT pad works on the preferred side (mirrors
+        // the grid router's terminal seeding) — the side-based layer
+        // put ladder stubs on F.Cu under `route_bias bottom`.
+        let layer = match (board.config.route_bias.as_deref(), thru) {
+            (Some("bottom"), true) => n_layers - 1,
+            (Some("top"), true) => 0,
+            _ => layer,
+        };
         pads.push(((px, py), layer, thru));
     }
     if pads.len() < 2 {
@@ -5756,7 +5775,14 @@ pub fn bootstrap_empty_route(board: &Board, final_routes: &mut Vec<Route>, i: us
         // 2) tunnel: via(s) + far-layer leg. Same-layer pair =
         // cross-under (two vias); mixed pair = single-via hop.
         let mut budget = 6usize;
-        for l2 in board.layer_stack.signal_layer_indices() {
+        // Strict route_bias: tunnels stay inside the net's layer mask.
+        let tunnel_layers: Vec<usize> = board
+            .layer_stack
+            .signal_layer_indices()
+            .into_iter()
+            .filter(|l| net.allowed_layers.as_ref().map_or(true, |a| a.contains(l)))
+            .collect();
+        for l2 in tunnel_layers {
             if Some(l2) == common {
                 continue;
             }
@@ -6040,6 +6066,15 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
                 BoardSide::Bottom => n_layers - 1,
             };
             let thru = pin.pad.as_ref().map(|p| p.drill_mm.is_some()).unwrap_or(false);
+            // route_bias: a THT pad works on the preferred side
+            // (mirrors the grid router's terminal seeding) — the
+            // side-based layer routed via-hop stubs and same-layer
+            // attaches on F.Cu under `route_bias bottom`.
+            let pin_layer = match (board.config.route_bias.as_deref(), thru) {
+                (Some("bottom"), true) => n_layers - 1,
+                (Some("top"), true) => 0,
+                _ => pin_layer,
+            };
             // LAYER-AWARE: copper on another layer does not reach an
             // SMD pad (an inner run passing under an F.Cu pad counted
             // as touched — the pad was never repaired).
@@ -6126,7 +6161,13 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
         // ring, so a via-hop cannot serve a header pin). Real boards
         // reach edge headers from the back side exactly like this.
         if !connected && thru {
-            let signal_layers = board.layer_stack.signal_layer_indices();
+            // Strict route_bias: rungs stay inside the net's layer mask.
+            let signal_layers: Vec<usize> = board
+                .layer_stack
+                .signal_layer_indices()
+                .into_iter()
+                .filter(|l| net.allowed_layers.as_ref().map_or(true, |a| a.contains(l)))
+                .collect();
             'tht: for &l2 in signal_layers.iter().filter(|&&l| l != layer) {
                 let route = &final_routes[i];
                 let mut attach2: Vec<((f64, f64), f64)> = route
@@ -6184,7 +6225,13 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
         // copper THERE.
         if !connected {
             let via_r = board.layer_stack.via.pad_mm / 2.0;
-            let signal_layers = board.layer_stack.signal_layer_indices();
+            // Strict route_bias: rungs stay inside the net's layer mask.
+            let signal_layers: Vec<usize> = board
+                .layer_stack
+                .signal_layer_indices()
+                .into_iter()
+                .filter(|l| net.allowed_layers.as_ref().map_or(true, |a| a.contains(l)))
+                .collect();
             'hop: for &l2 in signal_layers.iter().filter(|&&l| l != layer) {
                 // Attach candidates on the far layer.
                 let route = &final_routes[i];
@@ -6360,7 +6407,13 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
         if !connected {
             let via_r = board.layer_stack.via.pad_mm / 2.0;
             let hole_gap = board.layer_stack.via.drill_mm + 0.25;
-            let signal_layers = board.layer_stack.signal_layer_indices();
+            // Strict route_bias: rungs stay inside the net's layer mask.
+            let signal_layers: Vec<usize> = board
+                .layer_stack
+                .signal_layer_indices()
+                .into_iter()
+                .filter(|l| net.allowed_layers.as_ref().map_or(true, |a| a.contains(l)))
+                .collect();
             let mut budget = 8usize;
             'under: for &l2 in signal_layers.iter().filter(|&&l| l != layer) {
                 for &(q, _) in attach.iter().take(3) {
@@ -6504,7 +6557,13 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
         // signal layer (tree segments, any component == tree).
         if !connected {
             let via_r = board.layer_stack.via.pad_mm / 2.0;
-            let signal_layers = board.layer_stack.signal_layer_indices();
+            // Strict route_bias: rungs stay inside the net's layer mask.
+            let signal_layers: Vec<usize> = board
+                .layer_stack
+                .signal_layer_indices()
+                .into_iter()
+                .filter(|l| net.allowed_layers.as_ref().map_or(true, |a| a.contains(l)))
+                .collect();
             // Attach candidates across all signal layers.
             let route = &final_routes[i];
             let mut attach_ml: Vec<((f64, f64), usize, f64)> = route

@@ -89,12 +89,11 @@ layout ElectrolyticCap { package Radial-P5.00-D10; }
 layout Ecc83Srpp {
     layer_stackup 2;
     // Demo convention: hand-routed THT keeps copper on the solder
-    // side (the reference board has 0mm of F.Cu track). Soft tier
-    // here: STRICT completes only with the GND pour absorbing the
-    // ground routing (BHDL_PNR_POUR_GND=1 → 0/0, 0 vias, 212.3mm
-    // B.Cu vs the demo's 211mm) — without the pour the G2 horseshoe
-    // loses its corridor to GND tracks (1 unc). Strict-by-default
-    // lands when pours become a layout statement.
+    // side. Soft tier ships (0/0 at the demo design rules below);
+    // STRICT now keeps the top layer perfectly clean (0 F.Cu segs,
+    // 0 vias after the ladder layer-mask fixes) but completion on
+    // ONE layer at 0.8mm width still strands 3 sinks — single-layer
+    // completion power + rectilinear ladder legs = next arc.
     route_bias bottom;
     // Demo design rules (ecc83-pp.kicad_pro Default netclass).
     track_width 0.8;
