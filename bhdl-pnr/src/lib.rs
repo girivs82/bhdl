@@ -828,6 +828,25 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         }
     }
 
+    // 3.9 CHANNEL STAMPING — LANDED DORMANT (BHDL_PNR_STAMP=1). The
+    // mixer demo solves one channel and stamps it x4 (its 4 worst
+    // nets are IDENTICAL 2.5013x); ours re-solves each channel
+    // (tre_t across ch1-4 measured 1.35/1.34/4.97/1.34). This
+    // post-placement translate MEASURED WORSE (mixer total copper
+    // 3244 -> 4730mm, family spread 1.23 -> 5.31 mean): teleporting
+    // after the placer optimized globally breaks coherence, and the
+    // reference channel's layout does not fit the edge column (parts
+    // land off-board, the legalizer scatters). The real lever is a
+    // MIRROR CONSTRAINT inside the optimizer — counterpart offsets
+    // attracted across siblings during the solve, so ONE channel
+    // layout emerges that fits every column. Kept for that arc.
+    if std::env::var("BHDL_PNR_STAMP").is_ok() {
+        let stamped = stamp_sibling_groups(&mut board);
+        if stamped > 0 {
+            info!("channel stamping: {stamped} part(s) aligned to their reference sibling");
+        }
+    }
+
     // 4. Legalization
     info!("Legalizing placement...");
     legalization::legalize(&mut board, 0.1);
@@ -5330,6 +5349,111 @@ fn total_unreached(board: &Board, final_routes: &[Route]) -> usize {
 /// pass re-sites them), re-route greedily under the exact commit
 /// gate, re-run the ladder — and accept ONLY a strict drop in total
 /// unreached sinks. Everything else reverts wholesale.
+/// CHANNEL STAMPING: find families of sibling functional groups
+/// (identical member-suffix multisets — repeated entity instances),
+/// pick the lexicographically-first group as the reference, and move
+/// every FREE sibling member to the reference counterpart's position
+/// plus the sibling's translation (derived from FIXED counterpart
+/// pairs — the pinned pots/jacks of the mechanical contract; groups
+/// with no fixed members use member centroids). Returns parts moved.
+fn stamp_sibling_groups(board: &mut Board) -> usize {
+    use std::collections::HashMap;
+    let comp_pos: HashMap<ComponentId, usize> = board
+        .components
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.id, i))
+        .collect();
+    // Group -> (suffix -> component index), keyed by suffix multiset.
+    let mut families: HashMap<Vec<String>, Vec<(String, HashMap<String, usize>)>> =
+        HashMap::new();
+    for g in &board.groups {
+        let prefix = format!("{}_", g.name);
+        let mut by_suffix: HashMap<String, usize> = HashMap::new();
+        let mut ok = true;
+        for &mid in &g.members {
+            let Some(&ci) = comp_pos.get(&mid) else { ok = false; break };
+            let name = &board.components[ci].name;
+            if name == &g.name {
+                continue; // the parent pseudo-component itself
+            }
+            let Some(suf) = name.strip_prefix(&prefix) else { ok = false; break };
+            if by_suffix.insert(suf.to_string(), ci).is_some() {
+                ok = false; // duplicate suffix — ambiguous
+                break;
+            }
+        }
+        if !ok || by_suffix.len() < 2 {
+            continue;
+        }
+        let mut key: Vec<String> = by_suffix.keys().cloned().collect();
+        key.sort();
+        families.entry(key).or_default().push((g.name.clone(), by_suffix));
+    }
+    let mut moved = 0usize;
+    for (_, mut sibs) in families {
+        if sibs.len() < 2 {
+            continue;
+        }
+        sibs.sort_by(|a, b| a.0.cmp(&b.0));
+        let (ref_name, ref_map) = sibs[0].clone();
+        // Snapshot positions/fixedness BEFORE mutating.
+        let pos: Vec<(f64, f64, f64, BoardSide, bool)> = board
+            .components
+            .iter()
+            .map(|c| (c.x, c.y, c.theta, c.side, c.placement.is_fixed()))
+            .collect();
+        // Reference anchor = centroid of its FIXED members (fall back
+        // to all members).
+        let anchor = |m: &HashMap<String, usize>,
+                      fixed_only: bool,
+                      pos: &Vec<(f64, f64, f64, BoardSide, bool)>|
+         -> Option<(f64, f64)> {
+            let pts: Vec<(f64, f64)> = m
+                .values()
+                .filter(|&&ci| !fixed_only || pos[ci].4)
+                .map(|&ci| (pos[ci].0, pos[ci].1))
+                .collect();
+            if pts.is_empty() {
+                return None;
+            }
+            let n = pts.len() as f64;
+            Some((
+                pts.iter().map(|p| p.0).sum::<f64>() / n,
+                pts.iter().map(|p| p.1).sum::<f64>() / n,
+            ))
+        };
+        let use_fixed = ref_map.values().any(|&ci| pos[ci].4);
+        let Some(ra) = anchor(&ref_map, use_fixed, &pos) else { continue };
+        for (sib_name, sib_map) in &sibs[1..] {
+            let Some(sa) = anchor(sib_map, use_fixed, &pos) else { continue };
+            let (tx, ty) = (sa.0 - ra.0, sa.1 - ra.1);
+            for (suf, &sci) in sib_map {
+                if pos[sci].4 {
+                    continue; // the mechanical contract wins
+                }
+                let Some(&rci) = ref_map.get(suf) else { continue };
+                let (nx, ny) = (pos[rci].0 + tx, pos[rci].1 + ty);
+                let (theta, side) = (pos[rci].2, pos[rci].3);
+                let c = &mut board.components[sci];
+                if (c.x - nx).hypot(c.y - ny) > 1e-9
+                    || (c.theta - theta).abs() > 1e-9
+                {
+                    c.x = nx;
+                    c.y = ny;
+                    c.theta = theta;
+                    c.side = side;
+                    moved += 1;
+                }
+            }
+            log::debug!(
+                "channel stamping: '{sib_name}' aligned to '{ref_name}' (t = {tx:.2},{ty:.2})"
+            );
+        }
+    }
+    moved
+}
+
 fn part_nudge_pass(board: &mut Board, final_routes: &mut Vec<Route>) -> usize {
     let mut before = total_unreached(board, final_routes);
     if before == 0 {
