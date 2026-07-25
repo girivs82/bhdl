@@ -6056,7 +6056,8 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
                 .map(|(c, _)| c)
         };
         // First unreached pad.
-        let mut target: Option<((f64, f64), usize, bool)> = None; // (pad, layer, thru)
+        // (pad, layer, thru, component center — for the radial-escape rung)
+        let mut target: Option<((f64, f64), usize, bool, (f64, f64))> = None;
         for &(cid, pid) in &net.pins {
             let Some(&ci) = comp_idx.get(&cid) else { continue };
             let comp = &board.components[ci];
@@ -6101,11 +6102,11 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
                     .iter()
                     .any(|f| (f.0 - px).hypot(f.1 - py) < 1e-6)
             {
-                target = Some(((px, py), pin_layer, thru));
+                target = Some(((px, py), pin_layer, thru, (comp.x, comp.y)));
                 break;
             }
         }
-        let Some(((px, py), layer, thru)) = target else { return gained };
+        let Some(((px, py), layer, thru, (ccx, ccy))) = target else { return gained };
         // Candidate attach points: projections onto same-layer tree
         // segments, nearest first, top 5.
         let mut attach: Vec<((f64, f64), f64)> = route
@@ -6639,6 +6640,59 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
                         &cidx5, (px, py), layer, q, ql, width, via_r, &signal_layers,
                         net.id, dim,
                     )
+                })
+                .or_else(|| {
+                    // RADIAL ESCAPE (fidelity, THT): ring-package pads
+                    // exit AWAY from the package center — the one
+                    // corridor out of a lattice-sealed pocket (the
+                    // demo's hand idiom; the pad-7 probe showed entry
+                    // 8/8 open yet the search dead at ~206 nodes: no
+                    // lattice node sits ON the radial line). Stub
+                    // outward along the H/V/45-snapped radial
+                    // (exact-checked), then maze from OUTSIDE the
+                    // pocket; the stub ships as the way's first leg.
+                    if !cidx5.ortho || !thru {
+                        return None;
+                    }
+                    let (vx, vy) = (px - ccx, py - ccy);
+                    if vx.hypot(vy) < 1e-6 {
+                        return None;
+                    }
+                    let step = std::f64::consts::FRAC_PI_4;
+                    let snapped = (vy.atan2(vx) / step).round() * step;
+                    let (dx, dy) = (snapped.cos(), snapped.sin());
+                    let dim = board
+                        .config
+                        .outline
+                        .width()
+                        .max(board.config.outline.height());
+                    for l in [2.0f64, 3.0, 4.5, 6.0] {
+                        let pout = (px + dx * l, py + dy * l);
+                        if let Some(c) =
+                            cidx5.first_conflict((px, py), pout, width, layer, net.id)
+                        {
+                            debug!(
+                                "radial: '{}' stub ({px:.2},{py:.2})+{l:.1} blocked by {c:?}",
+                                net.name
+                            );
+                            continue;
+                        }
+                        for m in [12.0, dim] {
+                            if let Some(mut way) = geom::route_tunnel_ml(
+                                &cidx5, pout, layer, q, ql, width, via_r,
+                                &signal_layers, net.id, m,
+                            ) {
+                                way.insert(0, (px, py, layer));
+                                let _ = m;
+                                info!(
+                                    "completion: RADIAL escape freed a '{}' pad at ({px:.2},{py:.2}) (stub {l:.1}mm)",
+                                    net.name
+                                );
+                                return Some(way);
+                            }
+                        }
+                    }
+                    None
                 }) else {
                     debug!(
                         "ml-maze: '{}' ({px:.2},{py:.2})l{layer} -> ({:.2},{:.2})l{ql} found no corridor",
@@ -6707,6 +6761,127 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
                 gained += 1;
                 connected = true;
                 break;
+            }
+            // RADIAL PAD-PAIR: the missing link can be pad-to-pad
+            // between TWO lattice-sealed ring pockets (ecc83 G2:
+            // valve pad 1 <-> pad 7 — the demo's horseshoe with a
+            // radial stub at EACH end). Stub both pads outward along
+            // their H/V/45-snapped radials (exact-checked), maze
+            // between the two escape points, ship stubs + way as one
+            // span.
+            if !connected && cidx5.ortho && thru {
+                let step45 = std::f64::consts::FRAC_PI_4;
+                let snap_dir = |vx: f64, vy: f64| -> Option<(f64, f64)> {
+                    if vx.hypot(vy) < 1e-6 {
+                        return None;
+                    }
+                    let a = (vy.atan2(vx) / step45).round() * step45;
+                    Some((a.cos(), a.sin()))
+                };
+                // Other same-net THT pads not reached by the tree.
+                let mut peers: Vec<((f64, f64), (f64, f64))> = Vec::new(); // (pad, center)
+                for &(cid2, pid2) in &net.pins {
+                    let Some(&ci2) = comp_idx.get(&cid2) else { continue };
+                    let comp2 = &board.components[ci2];
+                    let Some(pin2) = comp2.pins.iter().find(|p| p.pin_id == pid2) else {
+                        continue;
+                    };
+                    if pin2.unplaced
+                        || pin2.pad.as_ref().and_then(|p| p.drill_mm).is_none()
+                    {
+                        continue;
+                    }
+                    let cos2 = comp2.theta.cos();
+                    let sin2 = comp2.theta.sin();
+                    let qx = comp2.x + pin2.dx * cos2 - pin2.dy * sin2;
+                    let qy = comp2.y + pin2.dx * sin2 + pin2.dy * cos2;
+                    if (qx - px).hypot(qy - py) < 1e-6 {
+                        continue;
+                    }
+                    peers.push(((qx, qy), (comp2.x, comp2.y)));
+                }
+                let dim = board
+                    .config
+                    .outline
+                    .width()
+                    .max(board.config.outline.height());
+                'pair: for &((qx, qy), (qcx, qcy)) in &peers {
+                    let Some((dax, day)) = snap_dir(px - ccx, py - ccy) else { continue };
+                    let Some((dbx, dby)) = snap_dir(qx - qcx, qy - qcy) else { continue };
+                    for la in [2.0f64, 3.0, 4.5] {
+                        let pa = (px + dax * la, py + day * la);
+                        if cidx5
+                            .first_conflict((px, py), pa, width, layer, net.id)
+                            .is_some()
+                        {
+                            continue;
+                        }
+                        for lb in [2.0f64, 3.0, 4.5] {
+                            let pb = (qx + dbx * lb, qy + dby * lb);
+                            if cidx5
+                                .first_conflict((qx, qy), pb, width, layer, net.id)
+                                .is_some()
+                            {
+                                continue;
+                            }
+                            let way = geom::route_tunnel_ml(
+                                &cidx5, pa, layer, pb, layer, width, via_r,
+                                &signal_layers, net.id, 12.0,
+                            )
+                            .or_else(|| {
+                                geom::route_tunnel_ml(
+                                    &cidx5, pa, layer, pb, layer, width, via_r,
+                                    &signal_layers, net.id, dim,
+                                )
+                            });
+                            let Some(mut way) = way else { continue };
+                            way.insert(0, (px, py, layer));
+                            way.push((qx, qy, layer));
+                            let route = &mut final_routes[i];
+                            let seg_start = route.segments.len();
+                            let via_start = route.vias.len();
+                            let n_l = board.layer_stack.layers.len() - 1;
+                            for w in way.windows(2) {
+                                let (a, b) = (w[0], w[1]);
+                                if a.2 == b.2 {
+                                    if (a.0 - b.0).hypot(a.1 - b.1) > 1e-9 {
+                                        route.segments.push(RouteSegment {
+                                            layer: a.2,
+                                            start: (a.0, a.1),
+                                            end: (b.0, b.1),
+                                            width_mm: width,
+                                        });
+                                    }
+                                } else {
+                                    let dup = route.vias.iter().any(|v| {
+                                        (v.x - a.0).hypot(v.y - a.1) < 1e-6
+                                    });
+                                    if !dup {
+                                        route.vias.push(RouteVia {
+                                            x: a.0,
+                                            y: a.1,
+                                            from_layer: 0,
+                                            to_layer: n_l,
+                                        });
+                                    }
+                                }
+                            }
+                            let n_vias = route.vias.len() - via_start;
+                            route
+                                .path_spans
+                                .push((seg_start, route.segments.len() - seg_start));
+                            route.path_parents.push(None);
+                            route.via_spans.push((via_start, n_vias));
+                            info!(
+                                "completion: RADIAL PAD-PAIR joined '{}' ({px:.2},{py:.2})<->({qx:.2},{qy:.2}) ({n_vias} via(s))",
+                                net.name
+                            );
+                            gained += 1;
+                            connected = true;
+                            break 'pair;
+                        }
+                    }
+                }
             }
             // MAZE RIP LADDER: the entry-edge probe showed the last
             // knots' endpoints sealed by ONE net's copper threading a
