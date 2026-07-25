@@ -2,6 +2,118 @@
 
 use crate::types::*;
 
+/// BLOCK-AWARE legalization: alternate the standard legalizer with a
+/// mean-displacement re-coherence of each rigid block (members carry
+/// fixed offsets from a virtual leader; after members get pushed
+/// individually, the block re-forms at the MEAN implied leader
+/// position — the resolution intent survives as a whole-block
+/// translation, Jacobi-style). Completes rigid group moves: holding
+/// members Fixed made block overlaps unresolvable (mixer measured
+/// 144v/41unc), while plain legalization sheared the blocks apart.
+pub fn legalize_with_blocks(
+    board: &mut Board,
+    snap_grid_mm: f64,
+    blocks: &[Vec<(usize, f64, f64)>],
+) {
+    if blocks.is_empty() {
+        return legalize(board, snap_grid_mm);
+    }
+    let member_of: std::collections::HashMap<usize, usize> = blocks
+        .iter()
+        .enumerate()
+        .flat_map(|(bi, b)| b.iter().map(move |&(ci, ..)| (ci, bi)))
+        .collect();
+    for _round in 0..12 {
+        legalize(board, snap_grid_mm);
+        // Re-cohere (mean-implied leader). Dilution warning: one pushed
+        // member moves the block 1/N of the push — the block-level
+        // pass below carries the real resolution.
+        let mut max_moved = 0.0f64;
+        for block in blocks {
+            let n = block.len() as f64;
+            let (mut lx, mut ly) = (0.0, 0.0);
+            for &(ci, dx, dy) in block {
+                lx += board.components[ci].x - dx;
+                ly += board.components[ci].y - dy;
+            }
+            lx /= n;
+            ly /= n;
+            for &(ci, dx, dy) in block {
+                let (nx, ny) = (lx + dx, ly + dy);
+                let c = &mut board.components[ci];
+                max_moved = max_moved.max((c.x - nx).hypot(c.y - ny));
+                c.x = nx;
+                c.y = ny;
+            }
+        }
+        // BLOCK-LEVEL RESOLUTION, member-exact: detect overlaps with
+        // MEMBER envelopes (a union bbox claims the pot gaps members
+        // legitimately nestle into — it evicted blocks from their own
+        // columns, 99 unc), but respond with BLOCK translations at
+        // FULL push strength (the member-level path dilutes by 1/N).
+        let translate = |board: &mut Board, bi: usize, tx: f64, ty: f64| {
+            for &(ci, ..) in &blocks[bi] {
+                board.components[ci].x += tx;
+                board.components[ci].y += ty;
+            }
+        };
+        for _pass in 0..40 {
+            let mut any = false;
+            for bi in 0..blocks.len() {
+                for mi in 0..blocks[bi].len() {
+                    let ci = blocks[bi][mi].0;
+                    for cj in 0..board.components.len() {
+                        if cj == ci {
+                            continue;
+                        }
+                        let same_block =
+                            member_of.get(&cj).map_or(false, |&obi| obi == bi);
+                        if same_block {
+                            continue; // internal geometry is frozen truth
+                        }
+                        if !board.components[ci].shares_surface(&board.components[cj]) {
+                            continue;
+                        }
+                        let (cxi, cyi, hwi, hhi) = board.components[ci].envelope();
+                        let (cxj, cyj, hwj, hhj) = board.components[cj].envelope();
+                        let (dx, dy) = (cxj - cxi, cyj - cyi);
+                        let (mdx, mdy) = (hwi + hwj + 0.5, hhi + hhj + 0.5);
+                        if dx.abs() >= mdx || dy.abs() >= mdy {
+                            continue;
+                        }
+                        any = true;
+                        let other_block = member_of.get(&cj).copied();
+                        let j_fixed = board.components[cj].placement.is_fixed();
+                        if mdx - dx.abs() < mdy - dy.abs() {
+                            let push = (mdx - dx.abs()) * 0.6 + 0.2;
+                            let sx = if dx >= 0.0 { 1.0 } else { -1.0 };
+                            match other_block {
+                                Some(obi) => translate(board, obi, sx * push, 0.0),
+                                None if !j_fixed => board.components[cj].x += sx * push,
+                                None => translate(board, bi, -sx * push, 0.0),
+                            }
+                        } else {
+                            let push = (mdy - dy.abs()) * 0.6 + 0.2;
+                            let sy = if dy >= 0.0 { 1.0 } else { -1.0 };
+                            match other_block {
+                                Some(obi) => translate(board, obi, 0.0, sy * push),
+                                None if !j_fixed => board.components[cj].y += sy * push,
+                                None => translate(board, bi, 0.0, -sy * push),
+                            }
+                        }
+                    }
+                }
+            }
+            if !any {
+                break;
+            }
+        }
+        if max_moved < 1e-6 {
+            break;
+        }
+    }
+}
+
 /// Legalize placement after global optimization.
 pub fn legalize(board: &mut Board, snap_grid_mm: f64) {
     // 0. Verify fixed components haven't drifted (defensive)

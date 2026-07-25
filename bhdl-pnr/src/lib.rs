@@ -1050,26 +1050,38 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         info!("mirror snap: max displacement {max_disp:.2}mm");
     }
 
-    // RIGID: final snap, then hold the blocks FIXED through
-    // legalization + detailed refine (both move parts individually —
-    // the legalizer resolves any block overlap by moving the free
-    // neighbors instead; residual overlaps grade in trial dominance).
-    let mut rigid_restore: Vec<(usize, PlacementConstraint)> = Vec::new();
+    // RIGID: final snap, then BLOCK-AWARE legalization — the
+    // legalizer alternates with mean-displacement re-coherence so
+    // block overlaps resolve as whole-block translations (Fixed
+    // members were unresolvable: mixer 144v/41unc). Members are held
+    // Fixed only through detailed refine (below).
     for (leader, members) in &rigid_groups {
         let (lx, ly) = (board.components[*leader].x, board.components[*leader].y);
         for &(ci, dx, dy) in members {
             board.components[ci].x = lx + dx;
             board.components[ci].y = ly + dy;
+        }
+    }
+
+    // 4. Legalization
+    info!("Legalizing placement...");
+    if rigid_groups.is_empty() {
+        legalization::legalize(&mut board, 0.1);
+    } else {
+        let blocks: Vec<Vec<(usize, f64, f64)>> =
+            rigid_groups.iter().map(|(_, m)| m.clone()).collect();
+        legalization::legalize_with_blocks(&mut board, 0.1, &blocks);
+    }
+    // Refine must not move block members individually.
+    let mut rigid_restore: Vec<(usize, PlacementConstraint)> = Vec::new();
+    for (_, members) in &rigid_groups {
+        for &(ci, ..) in members {
             let c = &board.components[ci];
             rigid_restore.push((ci, c.placement.clone()));
             let (x, y, theta) = (c.x, c.y, c.theta);
             board.components[ci].placement = PlacementConstraint::Fixed { x, y, theta };
         }
     }
-
-    // 4. Legalization
-    info!("Legalizing placement...");
-    legalization::legalize(&mut board, 0.1);
 
     // 4.5 Detailed placement: greedy swap/rotate HPWL refinement on the
     // legal placement. Every accepted move is legality-checked, so no
