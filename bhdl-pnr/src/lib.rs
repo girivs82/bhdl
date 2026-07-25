@@ -563,6 +563,50 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
     placement::initialize(&mut board, seed, &recipes);
     let anchor_idx = placement::find_anchor(&board);
 
+    // 1.5 MIRROR CLASSES (fidelity mode): repeated-entity siblings —
+    // each suffix class holds one free counterpart per sibling group
+    // plus that group's FIXED-member anchor. The mirror force below
+    // attracts every counterpart toward (anchor + family-mean offset)
+    // DURING the solve, so ONE channel layout emerges that fits every
+    // column (the post-placement stamp teleport measured worse:
+    // copper 3244 -> 4730mm — coherence must come from the optimizer,
+    // not a paste-over).
+    // MIRROR CONSTRAINT — LANDED DORMANT (BHDL_PNR_MIRROR=1). Three
+    // formulations measured on the mixer, none beat baseline:
+    //   post-placement stamp: teleport breaks coherence (3244->4730mm)
+    //   mirror force k=2 + init-stamp + snap: solve tears the stamp
+    //     apart (snap residual 109mm)
+    //   k=30: residual 105mm — k-INSENSITIVE, Adam normalizes
+    //     gradients so force magnitude cannot cross obstacle basins.
+    // Next formulation = RIGID-BODY group moves: freeze sibling
+    // groups' internal offsets from the init-stamp and move each
+    // group by its AVERAGED force (an optimizer mode, not a force
+    // term); skip detailed-refine for rigid members.
+    let mirror_classes: Vec<Vec<(usize, (f64, f64))>> = if std::env::var("BHDL_PNR_MIRROR")
+        .is_ok()
+        && (board.config.route_bias.is_some()
+            || board.config.design_track_width_mm.is_some())
+    {
+        sibling_suffix_classes(&board)
+    } else {
+        Vec::new()
+    };
+    if !mirror_classes.is_empty() {
+        // INIT-STAMP: replicate the reference sibling's INITIAL layout
+        // before any optimization — at init there is no coherence to
+        // break (the post-placement stamp teleport measured worse for
+        // exactly that reason), and it makes the family-mean offset
+        // meaningful from iteration 0. The mirror force then HOLDS
+        // counterparts together while the optimizer negotiates one
+        // channel layout that fits every column.
+        let stamped = stamp_sibling_groups(&mut board);
+        info!(
+            "mirror constraint: {} counterpart class(es), {} part(s) init-stamped",
+            mirror_classes.len(),
+            stamped
+        );
+    }
+
     // 2. Set up optimizer state + progressive freezer
     let mut adam = AdamState::new(n);
     let mut freezer = placement::ProgressiveFreezer::new(n);
@@ -648,6 +692,32 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
             let ramp = 0.5 + 1.5 * (iteration as f64 / config.max_iterations.max(1) as f64);
             forces.accumulate(&prox_forces, config.placement.lambda_proximity * ramp);
             forces.accumulate(&loop_forces, config.placement.lambda_loop_area);
+        }
+
+        // MIRROR FORCE: counterparts pull toward their family-mean
+        // offset (ramped like proximity — tightens as placement
+        // settles). Fixed members are anchors, never pulled.
+        if !mirror_classes.is_empty() {
+            let ramp = 0.5 + 1.5 * (iteration as f64 / config.max_iterations.max(1) as f64);
+            // Strong: the mirror must OUTVOTE per-column wirelength
+            // preferences or the solve tears the init-stamp apart
+            // (k=2 measured a 109mm snap residual — pure noise
+            // against density/HPWL).
+            let k = 30.0 * ramp;
+            for class in &mirror_classes {
+                let n_c = class.len() as f64;
+                let (mut mx, mut my) = (0.0, 0.0);
+                for &(ci, (ax, ay)) in class {
+                    mx += board.components[ci].x - ax;
+                    my += board.components[ci].y - ay;
+                }
+                mx /= n_c;
+                my /= n_c;
+                for &(ci, (ax, ay)) in class {
+                    forces.dx[ci] += k * ((ax + mx) - board.components[ci].x);
+                    forces.dy[ci] += k * ((ay + my) - board.components[ci].y);
+                }
+            }
         }
 
         // Add routing feedback forces (ramp up after routing starts)
@@ -845,6 +915,41 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         if stamped > 0 {
             info!("channel stamping: {stamped} part(s) aligned to their reference sibling");
         }
+    }
+
+    // 3.95 MIRROR SNAP: once converged, counterparts sit NEAR their
+    // family-mean offset — snap them exactly onto it (sub-mm, coherent
+    // displacements, nothing like the stamp teleport) so sibling
+    // channels ship with identical internal geometry.
+    if !mirror_classes.is_empty() {
+        let mut snapped = 0usize;
+        let mut max_disp = 0.0f64;
+        for class in &mirror_classes {
+            let n_c = class.len() as f64;
+            let (mut mx, mut my) = (0.0, 0.0);
+            for &(ci, (ax, ay)) in class {
+                mx += board.components[ci].x - ax;
+                my += board.components[ci].y - ay;
+            }
+            mx /= n_c;
+            my /= n_c;
+            for &(ci, (ax, ay)) in class {
+                let (nx, ny) = (ax + mx, ay + my);
+                let c = &mut board.components[ci];
+                let d = (c.x - nx).hypot(c.y - ny);
+                if d > 1e-9 {
+                    max_disp = max_disp.max(d);
+                    c.x = nx;
+                    c.y = ny;
+                    snapped += 1;
+                }
+            }
+        }
+        if snapped > 0 {
+            info!("mirror snap: {snapped} counterpart(s) onto the family-mean offset");
+        }
+        let _ = &max_disp;
+        info!("mirror snap: max displacement {max_disp:.2}mm");
     }
 
     // 4. Legalization
@@ -5349,6 +5454,92 @@ fn total_unreached(board: &Board, final_routes: &[Route]) -> usize {
 /// pass re-sites them), re-route greedily under the exact commit
 /// gate, re-run the ladder — and accept ONLY a strict drop in total
 /// unreached sinks. Everything else reverts wholesale.
+/// MIRROR CLASSES: suffix classes across sibling functional groups
+/// (repeated entity instances). Each class = one FREE counterpart per
+/// sibling, paired with its group's FIXED-member centroid anchor.
+/// Families need >=2 siblings and every sibling needs >=1 fixed
+/// member (the anchors must be solve-constant).
+fn sibling_suffix_classes(board: &Board) -> Vec<Vec<(usize, (f64, f64))>> {
+    use std::collections::HashMap;
+    let comp_pos: HashMap<ComponentId, usize> = board
+        .components
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.id, i))
+        .collect();
+    let mut families: HashMap<Vec<String>, Vec<(String, HashMap<String, usize>)>> =
+        HashMap::new();
+    for g in &board.groups {
+        let prefix = format!("{}_", g.name);
+        let mut by_suffix: HashMap<String, usize> = HashMap::new();
+        let mut ok = true;
+        for &mid in &g.members {
+            let Some(&ci) = comp_pos.get(&mid) else { ok = false; break };
+            let name = &board.components[ci].name;
+            if name == &g.name {
+                continue;
+            }
+            let Some(suf) = name.strip_prefix(&prefix) else { ok = false; break };
+            if by_suffix.insert(suf.to_string(), ci).is_some() {
+                ok = false;
+                break;
+            }
+        }
+        if !ok || by_suffix.len() < 2 {
+            continue;
+        }
+        let mut key: Vec<String> = by_suffix.keys().cloned().collect();
+        key.sort();
+        families.entry(key).or_default().push((g.name.clone(), by_suffix));
+    }
+    let mut classes: Vec<Vec<(usize, (f64, f64))>> = Vec::new();
+    for (key, mut sibs) in families {
+        if sibs.len() < 2 {
+            continue;
+        }
+        sibs.sort_by(|a, b| a.0.cmp(&b.0));
+        // Per-sibling anchor from FIXED members only.
+        let anchors: Vec<Option<(f64, f64)>> = sibs
+            .iter()
+            .map(|(_, m)| {
+                let pts: Vec<(f64, f64)> = m
+                    .values()
+                    .filter(|&&ci| board.components[ci].placement.is_fixed())
+                    .map(|&ci| (board.components[ci].x, board.components[ci].y))
+                    .collect();
+                if pts.is_empty() {
+                    None
+                } else {
+                    let n = pts.len() as f64;
+                    Some((
+                        pts.iter().map(|p| p.0).sum::<f64>() / n,
+                        pts.iter().map(|p| p.1).sum::<f64>() / n,
+                    ))
+                }
+            })
+            .collect();
+        if anchors.iter().any(|a| a.is_none()) {
+            continue;
+        }
+        for suf in &key {
+            let mut class: Vec<(usize, (f64, f64))> = Vec::new();
+            let mut all_free = true;
+            for ((_, m), a) in sibs.iter().zip(&anchors) {
+                let Some(&ci) = m.get(suf) else { all_free = false; break };
+                if board.components[ci].placement.is_fixed() {
+                    all_free = false; // fixed counterparts ARE the anchors
+                    break;
+                }
+                class.push((ci, a.unwrap()));
+            }
+            if all_free && class.len() == sibs.len() {
+                classes.push(class);
+            }
+        }
+    }
+    classes
+}
+
 /// CHANNEL STAMPING: find families of sibling functional groups
 /// (identical member-suffix multisets — repeated entity instances),
 /// pick the lexicographically-first group as the reference, and move
