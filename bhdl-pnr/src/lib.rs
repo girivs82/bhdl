@@ -6041,14 +6041,49 @@ fn solve_channel_miniboard_attempt(
     }
     // Nets: keep pins on included comps; nets that also leave the
     // channel get a boundary pad on the nearest vertical region edge.
+    // KEY COLLISION GUARD: a fresh SlotMap mints (index 0, version 1)
+    // — IDENTICAL to the original board's first-inserted keys. A
+    // boundary pad's ComponentId collided with a real component
+    // (measured: '__edge_GND' resolved as a pin of auto_J_CH1_1 —
+    // the invariant 65/70 residual + the Spacing were ID corruption,
+    // not geometry). Pre-fill the mints past the existing key space.
     let mut key_mint: slotmap::SlotMap<ComponentId, ()> = slotmap::SlotMap::with_key();
+    for _ in 0..board.components.len() + 64 {
+        let _ = key_mint.insert(());
+    }
     let mut pin_mint: slotmap::SlotMap<PinId, ()> = slotmap::SlotMap::with_key();
+    let total_board_pins: usize = board.components.iter().map(|c| c.pins.len()).sum();
+    for _ in 0..total_board_pins + 64 {
+        let _ = pin_mint.insert(());
+    }
     let pos_of: HashMap<ComponentId, usize> = board
         .components
         .iter()
         .enumerate()
         .map(|(i, c)| (c.id, i))
         .collect();
+    // STRADDLER PADS: a fixed part intersecting the region edge keeps
+    // pads OUTSIDE the mini outline — the router can never reach them
+    // (measured: J_CH1 GND pads at local x=-6.3..-1.3 counted
+    // mandatory and missed in EVERY attempt). Such pads are external:
+    // stripped from the mini netlist, and their net exits through a
+    // boundary pad projected from the actual crossing point.
+    let mut outside_pins: HashSet<(ComponentId, PinId)> = HashSet::new();
+    let mut outside_pos: HashMap<(ComponentId, PinId), (f64, f64)> = HashMap::new();
+    for c in comps.iter() {
+        if !c.placement.is_fixed() {
+            continue;
+        }
+        let (co, sn) = (c.theta.cos(), c.theta.sin());
+        for pin in &c.pins {
+            let px = c.x + pin.dx * co - pin.dy * sn;
+            let py = c.y + pin.dx * sn + pin.dy * co;
+            if px < 0.0 || px > rw || py < 0.0 || py > rh {
+                outside_pins.insert((c.id, pin.pin_id));
+                outside_pos.insert((c.id, pin.pin_id), (px + rx0, py + ry0));
+            }
+        }
+    }
     // A net belongs to the CHANNEL only if it touches a FREE member.
     // Foreign fixed parts inside the region (a neighbor channel's
     // jack living in this column band) are OBSTACLES, not netlist —
@@ -6064,7 +6099,9 @@ fn solve_channel_miniboard_attempt(
     for c in comps.iter_mut() {
         if c.placement.is_fixed() {
             for pin in c.pins.iter_mut() {
-                if pin.net.map_or(false, |nid| !eligible.contains(&nid)) {
+                if pin.net.map_or(false, |nid| !eligible.contains(&nid))
+                    || outside_pins.contains(&(c.id, pin.pin_id))
+                {
                     pin.net = None; // obstacle copper, no net demand
                 }
             }
@@ -6097,18 +6134,26 @@ fn solve_channel_miniboard_attempt(
         let inside_pins: Vec<usize> = net
             .pins
             .iter()
-            .filter(|(cid, _)| included.contains(cid))
+            .filter(|(cid, pid)| {
+                included.contains(cid) && !outside_pins.contains(&(*cid, *pid))
+            })
             .filter_map(|(cid, _)| pos_of.get(cid).copied())
             .collect();
         if inside_pins.is_empty() || net.pins.len() == inside_pins.len() {
             continue;
         }
         let (mut ox, mut oy, mut on) = (0.0f64, 0.0f64, 0usize);
-        for &(cid, _) in &net.pins {
-            if included.contains(&cid) {
+        for &(cid, pid) in &net.pins {
+            if included.contains(&cid) && !outside_pins.contains(&(cid, pid)) {
                 continue;
             }
-            if let Some(&pi) = pos_of.get(&cid) {
+            // Straddler pads know their exact crossing geometry —
+            // better exit projection than the owning part's centroid.
+            if let Some(&(px, py)) = outside_pos.get(&(cid, pid)) {
+                ox += px;
+                oy += py;
+                on += 1;
+            } else if let Some(&pi) = pos_of.get(&cid) {
                 ox += board.components[pi].x;
                 oy += board.components[pi].y;
                 on += 1;
@@ -6155,8 +6200,27 @@ fn solve_channel_miniboard_attempt(
         }
     }
     // Collision sweep per edge (deterministic: sort by projection,
-    // stable on insertion order).
+    // stable on insertion order). Fixed parts hugging an edge BLOCK
+    // their y-interval: a straddling jack sits ON the exit rail, and
+    // an exit pad dropped at its row was the last hard Spacing
+    // (measured: J3 at y=27.8, exit slot at (rw-2, 27.8)).
+    let edge_block = |is_left: bool| -> Vec<(f64, f64)> {
+        let mut iv: Vec<(f64, f64)> = Vec::new();
+        for c in comps.iter() {
+            if !c.placement.is_fixed() {
+                continue;
+            }
+            let (cx, cy, hw, hh) = c.envelope();
+            let near = if is_left { cx - hw < 4.0 } else { cx + hw > rw - 4.0 };
+            if near {
+                iv.push((cy - hh - 1.5, cy + hh + 1.5));
+            }
+        }
+        iv.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        iv
+    };
     for is_left in [true, false] {
+        let blocked = edge_block(is_left);
         let mut idxs: Vec<usize> = (0..leaving.len())
             .filter(|&i| leaving[i].left == is_left)
             .collect();
@@ -6168,7 +6232,12 @@ fn solve_channel_miniboard_attempt(
         });
         let mut cursor = 2.0f64;
         for i in idxs {
-            let want = leaving[i].proj.max(cursor);
+            let mut want = leaving[i].proj.max(cursor);
+            for &(b0, b1) in &blocked {
+                if want > b0 && want < b1 {
+                    want = b1;
+                }
+            }
             let slot = want.min(rh - 2.0);
             leaving[i].slot = slot;
             cursor = slot + pad_sep;
@@ -6182,7 +6251,9 @@ fn solve_channel_miniboard_attempt(
             .pins
             .iter()
             .copied()
-            .filter(|(cid, _)| included.contains(cid))
+            .filter(|(cid, pid)| {
+                included.contains(cid) && !outside_pins.contains(&(*cid, *pid))
+            })
             .collect();
         if inside.is_empty() {
             continue;
@@ -6313,6 +6384,10 @@ fn solve_channel_miniboard_attempt(
             });
             if !touched {
                 missed += 1;
+                debug!(
+                    "  mini-miss: '{}' pad '{}' at ({px:.1},{py:.1})",
+                    n.name, comp.name
+                );
             }
         }
     }
@@ -6344,7 +6419,10 @@ fn solve_channel_miniboard_attempt(
             }
         }
         for v in result.drc_violations.iter().take(3) {
-            debug!("  mini-solve drc: {:?}", v.kind);
+            debug!(
+                "  mini-solve drc: {:?} at ({:.2},{:.2}) — {}",
+                v.kind, v.location.0, v.location.1, v.description
+            );
         }
     }
     if !certified {
