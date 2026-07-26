@@ -640,6 +640,138 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                 }
             }
         }
+        // COLUMN-FEASIBLE STRIP SYNTHESIS: the init-stamp froze the
+        // analytical-init blob, which is wider than the inter-anchor
+        // pitch — no legalizer can fit four copies of the wrong shape
+        // (measured trail 144v -> 22v, residual = shape). Rigid
+        // internals are FROZEN, so the shape must be right at birth:
+        // synthesize the reference channel as a single-file vertical
+        // strip at its anchor x (the demo's channel-strip idiom),
+        // skipping the y-intervals its column's FIXED parts occupy,
+        // then stamp the strip to every sibling.
+        let anchors: Vec<(f64, f64)> = classes
+            .first()
+            .map(|c| c.iter().map(|&(_, a)| a).collect())
+            .unwrap_or_default();
+        if !groups.is_empty() && anchors.len() == groups.len() {
+            // Column half-width from the tightest anchor separation
+            // on the dominant axis.
+            let xs: Vec<f64> = anchors.iter().map(|a| a.0).collect();
+            let ys: Vec<f64> = anchors.iter().map(|a| a.1).collect();
+            let spread = |v: &Vec<f64>| {
+                v.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
+                    - v.iter().cloned().fold(f64::INFINITY, f64::min)
+            };
+            let x_major = spread(&xs) >= spread(&ys);
+            let coords = if x_major { &xs } else { &ys };
+            let mut sorted = coords.clone();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let min_sep = sorted
+                .windows(2)
+                .map(|w| w[1] - w[0])
+                .fold(f64::INFINITY, f64::min);
+            let half_w = (min_sep / 2.0 - 1.0).max(2.0);
+            let (ax, ay) = anchors[0];
+            let _ = ay;
+            // Fixed parts whose envelope intersects the reference
+            // column: their cross-axis intervals are unplaceable.
+            let axis_lo = if x_major { ax - half_w } else { anchors[0].1 - half_w };
+            let axis_hi = if x_major { ax + half_w } else { anchors[0].1 + half_w };
+            let mut blocked: Vec<(f64, f64)> = Vec::new();
+            for c in &board.components {
+                if !c.placement.is_fixed() {
+                    continue;
+                }
+                let (cx, cy, hw, hh) = c.envelope();
+                let (on_axis, cross, cross_h) = if x_major {
+                    (cx, cy, hh)
+                } else {
+                    (cy, cx, hw)
+                };
+                let on_h = if x_major { hw } else { hh };
+                if on_axis + on_h > axis_lo && on_axis - on_h < axis_hi {
+                    blocked.push((cross - cross_h - 0.75, cross + cross_h + 0.75));
+                }
+            }
+            blocked.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            // Stack the reference group's free members single-file
+            // along the cross axis, ordered by their solved cross
+            // coordinate (keeps net affinity), skipping blocked
+            // intervals.
+            let cross_extent = if x_major {
+                board.config.outline.height()
+            } else {
+                board.config.outline.width()
+            };
+            let mut order: Vec<usize> = groups[0].clone();
+            order.sort_by(|&a, &b| {
+                let ka = if x_major { board.components[a].y } else { board.components[a].x };
+                let kb = if x_major { board.components[b].y } else { board.components[b].x };
+                ka.partial_cmp(&kb).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            // MULTI-FILE: a 21-part single file (~90mm) overflows the
+            // cross space left beside the pot rows (measured: tail
+            // piled at the board edge, 86v/76unc). Fit as many files
+            // as the column width allows and fill them in parallel.
+            let max_w = order
+                .iter()
+                .map(|&ci| {
+                    let (_, _, hw, hh) = board.components[ci].envelope();
+                    2.0 * if x_major { hw } else { hh }
+                })
+                .fold(0.0f64, f64::max);
+            let file_pitch = max_w + 1.0;
+            let n_files = ((2.0 * half_w / file_pitch).floor() as usize).clamp(1, 3);
+            let mut cursors = vec![board.config.edge_clearance_mm + 2.0; n_files];
+            for &ci in &order {
+                let (_, _, hw, hh) = board.components[ci].envelope();
+                let ch = if x_major { hh } else { hw };
+                // Shortest file first (keeps files balanced).
+                let f = (0..n_files)
+                    .min_by(|&a, &b| cursors[a].partial_cmp(&cursors[b]).unwrap())
+                    .unwrap();
+                loop {
+                    let (lo, hi) = (cursors[f], cursors[f] + 2.0 * ch);
+                    if let Some(&(_, b1)) = blocked
+                        .iter()
+                        .find(|&&(b0, b1)| hi > b0 && lo < b1)
+                    {
+                        cursors[f] = b1;
+                        continue;
+                    }
+                    break;
+                }
+                let center = (cursors[f] + ch).min(cross_extent - 2.0);
+                let file_off =
+                    (f as f64 - (n_files as f64 - 1.0) / 2.0) * file_pitch;
+                if x_major {
+                    board.components[ci].x = ax + file_off;
+                    board.components[ci].y = center;
+                } else {
+                    board.components[ci].x = center;
+                    board.components[ci].y = anchors[0].1 + file_off;
+                }
+                cursors[f] += 2.0 * ch + 1.0;
+            }
+            // Stamp the strip to every sibling (anchor translation).
+            for k in 1..groups.len() {
+                let (tx, ty) = (anchors[k].0 - ax, anchors[k].1 - anchors[0].1);
+                for (m, &rci) in groups[0].iter().enumerate() {
+                    let sci = groups[k][m];
+                    board.components[sci].x = board.components[rci].x + tx;
+                    board.components[sci].y = board.components[rci].y + ty;
+                    board.components[sci].theta = board.components[rci].theta;
+                }
+            }
+            info!(
+                "channel strip synthesis: reference column at {}={:.1} half-width {:.1}mm, {} part(s) stacked, {} sibling(s) stamped",
+                if x_major { "x" } else { "y" },
+                if x_major { ax } else { anchors[0].1 },
+                half_w,
+                groups[0].len(),
+                groups.len() - 1
+            );
+        }
         let out: Vec<(usize, Vec<(usize, f64, f64)>)> = groups
             .into_iter()
             .filter(|g| g.len() >= 2)
