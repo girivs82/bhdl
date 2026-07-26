@@ -452,15 +452,36 @@ fn place_reference_labels(board: &Board, routes: &[Route]) -> Vec<(f64, f64, f64
     let bh = board.config.outline.height();
     let edge = 0.5; // silk-to-edge rule
 
-    // Obstacles: copper envelopes (offset-aware — asymmetric packages
-    // have pads the origin-centered bbox misses), track segments, vias.
-    let mut obstacles: Vec<(f64, f64, f64, f64)> = Vec::new();
+    // Obstacles in two tiers. HARD = exposed copper the oracle
+    // actually flags (pads, F.Cu tracks, vias) plus cutouts; SOFT =
+    // component bodies (silk over a neighbor's soldermask is legal).
+    // The zero-overlap test uses both; the least-bad fallback weighs
+    // hard overlap 1000x — a saturated frozen channel put C34's
+    // label on C38's PAD when a body slot cost the same (measured:
+    // the 1 silk_over_copper on the per-column-certificate mixer).
+    let mut hard: Vec<(f64, f64, f64, f64)> = Vec::new();
+    let mut soft: Vec<(f64, f64, f64, f64)> = Vec::new();
     for &(x0, y0, x1, y1) in &board.config.cutouts {
-        obstacles.push((x0 - 0.5, y0 - 0.5, x1 + 0.5, y1 + 0.5));
+        hard.push((x0 - 0.5, y0 - 0.5, x1 + 0.5, y1 + 0.5));
     }
     for c in &board.components {
         let (cx, cy, hw, hh) = c.envelope();
-        obstacles.push((cx - hw - 0.15, cy - hh - 0.15, cx + hw + 0.15, cy + hh + 0.15));
+        soft.push((cx - hw - 0.15, cy - hh - 0.15, cx + hw + 0.15, cy + hh + 0.15));
+        // Pad copper is HARD: front-side SMD pads and every THT
+        // annular ring (drilled pads land copper on F.Cu regardless
+        // of the part's side).
+        let (co, sn) = (c.theta.cos(), c.theta.sin());
+        for p in &c.pins {
+            let Some(pad) = &p.pad else { continue };
+            if pad.drill_mm.is_none() && c.side != BoardSide::Top {
+                continue;
+            }
+            let px = c.x + p.dx * co - p.dy * sn;
+            let py = c.y + p.dx * sn + p.dy * co;
+            let rw = (pad.width_mm * co.abs() + pad.height_mm * sn.abs()) / 2.0;
+            let rh = (pad.width_mm * sn.abs() + pad.height_mm * co.abs()) / 2.0;
+            hard.push((px - rw - 0.15, py - rh - 0.15, px + rw + 0.15, py + rh + 0.15));
+        }
     }
     let via_r = board.layer_stack.via.pad_mm / 2.0;
     for r in routes {
@@ -471,11 +492,11 @@ fn place_reference_labels(board: &Board, routes: &[Route]) -> Vec<(f64, f64, f64
             let (x0, x1) = (s.start.0.min(s.end.0), s.start.0.max(s.end.0));
             let (y0, y1) = (s.start.1.min(s.end.1), s.start.1.max(s.end.1));
             let m = s.width_mm / 2.0 + 0.15;
-            obstacles.push((x0 - m, y0 - m, x1 + m, y1 + m));
+            hard.push((x0 - m, y0 - m, x1 + m, y1 + m));
         }
         for v in &r.vias {
             let m = via_r + 0.15;
-            obstacles.push((v.x - m, v.y - m, v.x + m, v.y + m));
+            hard.push((v.x - m, v.y - m, v.x + m, v.y + m));
         }
     }
 
@@ -543,13 +564,17 @@ fn place_reference_labels(board: &Board, routes: &[Route]) -> Vec<(f64, f64, f64
                     if !inside {
                         continue;
                     }
-                    let area =
-                        overlap_area(rect, &obstacles) + overlap_area(rect, &placed);
-                    if area <= 0.0 {
+                    // Placed labels are HARD (silk_overlap is a DRC).
+                    let area_hard =
+                        overlap_area(rect, &hard) + overlap_area(rect, &placed);
+                    let area_soft = overlap_area(rect, &soft);
+                    if area_hard + area_soft <= 0.0 {
                         best = Some((0.0, cand, font));
                         break 'fonts;
                     }
-                    // Least-bad fallback: smallest overlap wins.
+                    // Least-bad fallback: body overlap is legal silk,
+                    // copper overlap is a violation — weigh 1000x.
+                    let area = 1000.0 * area_hard + area_soft;
                     if best.map_or(true, |(a, _, _)| area < a) {
                         best = Some((area, cand, font));
                     }

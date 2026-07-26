@@ -732,62 +732,94 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                 let kb = if x_major { board.components[b].y } else { board.components[b].x };
                 ka.partial_cmp(&kb).unwrap_or(std::cmp::Ordering::Equal)
             });
-            // CERTIFIED SOLVE FIRST (settled formulation): the
-            // reference channel becomes its own mini-board — free
-            // members + the column's fixed parts + boundary pads for
-            // the nets that leave — solved with the full engine and
-            // accepted only when it ROUTES clean. A stacking
-            // heuristic is placement-legal but routability-blind
-            // (the strip lesson). Fallback: the multi-file stack.
-            // REGION WIDENING: the outer negotiation tier. When pad
-            // moves exhaust (the inner ladder), the block asks the
-            // floorplan for more room — the column margin against
-            // the neighbor anchors shrinks 1.0 -> 0.25mm and the
-            // solve retries (the invariant residual was an input
-            // exit fenced in the crowded bottom band; width buys
-            // routing room around the obstacle jack).
-            let mut certified = None;
-            for (tier, margin) in [1.0f64, 0.25].iter().enumerate() {
-                let hw = (min_sep / 2.0 - margin).max(2.0);
-                let region = if x_major {
-                    (
-                        ax - hw,
-                        board.config.edge_clearance_mm,
-                        2.0 * hw,
-                        cross_extent - 2.0 * board.config.edge_clearance_mm,
-                    )
-                } else {
-                    (
-                        board.config.edge_clearance_mm,
-                        anchors[0].1 - hw,
-                        cross_extent - 2.0 * board.config.edge_clearance_mm,
-                        2.0 * hw,
-                    )
-                };
-                certified = solve_channel_miniboard(
-                    &board,
-                    &groups[0],
-                    region,
-                    &config,
-                    seed ^ 0x5eed_c0de ^ (tier as u64) << 32,
-                );
-                if certified.is_some() {
-                    if tier > 0 {
-                        info!(
-                            "channel mini-solve: certified after region widening (margin {margin}mm)"
-                        );
+            // PER-COLUMN CERTIFICATES (settled formulation): EVERY
+            // sibling column becomes its own mini-board — free
+            // members + that column's OWN fixed parts + boundary
+            // pads for the nets that leave — solved with the full
+            // engine and accepted only when it ROUTES clean.
+            // Translating the reference certificate to siblings was
+            // measured unlicensed: columns have DIFFERENT foreign
+            // obstacle patterns (ch1's band holds ch2's jack, ch4's
+            // none) — 4 shorts + 5 unc. Certified columns FREEZE at
+            // their solve and stamp their own copper; the region is
+            // clamped to the board margin so certified placements
+            // are edge-legal BY CONSTRUCTION (the old post-hoc
+            // edge clamp is gone). REGION WIDENING per column: the
+            // margin against neighbor anchors shrinks 1.0 -> 0.25mm
+            // when the inner pad ladder exhausts.
+            let ec = board.config.edge_clearance_mm;
+            let mut col_cert: Vec<bool> = vec![false; groups.len()];
+            for k in 0..groups.len() {
+                let (akx, aky) = anchors[k];
+                let mut certified = None;
+                for (tier, margin) in [1.0f64, 0.25].iter().enumerate() {
+                    let hw = (min_sep / 2.0 - margin).max(2.0);
+                    let region = if x_major {
+                        let x0 = (akx - hw).max(ec);
+                        let x1 =
+                            (akx + hw).min(board.config.outline.width() - ec);
+                        (x0, ec, x1 - x0, cross_extent - 2.0 * ec)
+                    } else {
+                        let y0 = (aky - hw).max(ec);
+                        let y1 =
+                            (aky + hw).min(board.config.outline.height() - ec);
+                        (ec, y0, cross_extent - 2.0 * ec, y1 - y0)
+                    };
+                    certified = solve_channel_miniboard(
+                        &board,
+                        &groups[k],
+                        region,
+                        &config,
+                        seed ^ 0x5eed_c0de
+                            ^ ((tier as u64) << 32)
+                            ^ ((k as u64) << 40),
+                    );
+                    if certified.is_some() {
+                        if tier > 0 {
+                            info!(
+                                "channel mini-solve: column {k} certified after region widening (margin {margin}mm)"
+                            );
+                        }
+                        break;
                     }
-                    break;
+                }
+                if let Some(cert) = certified {
+                    for &(ci, x, y, theta) in &cert.placements {
+                        board.components[ci].x = x;
+                        board.components[ci].y = y;
+                        board.components[ci].theta = theta;
+                    }
+                    // Freeze the certificate in its own frame.
+                    for &ci in &groups[k] {
+                        let c = &mut board.components[ci];
+                        c.placement = PlacementConstraint::Fixed {
+                            x: c.x,
+                            y: c.y,
+                            theta: c.theta,
+                        };
+                    }
+                    stamped_channels.push(StampedChannel {
+                        ref_members: groups[k].clone(),
+                        ref_stamp_pos: groups[k]
+                            .iter()
+                            .map(|&ci| {
+                                (board.components[ci].x, board.components[ci].y)
+                            })
+                            .collect(),
+                        groups: vec![groups[k].clone()],
+                        expect: vec![(0.0, 0.0)],
+                        frozen: vec![true],
+                        routes: cert.routes,
+                    });
+                    col_cert[k] = true;
                 }
             }
-            if let Some(cert) = &certified {
-                for &(ci, x, y, theta) in &cert.placements {
-                    board.components[ci].x = x;
-                    board.components[ci].y = y;
-                    board.components[ci].theta = theta;
-                }
-            }
-            let solved = certified.is_some();
+            info!(
+                "channel certificates: {}/{} column(s) certified+frozen",
+                col_cert.iter().filter(|&&c| c).count(),
+                col_cert.len()
+            );
+            let solved = col_cert[0];
 
             // MULTI-FILE (fallback): a 21-part single file (~90mm) overflows the
             // cross space left beside the pot rows (measured: tail
@@ -833,8 +865,14 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                 }
                 cursors[f] += 2.0 * ch + 1.0;
             }
-            // Stamp the strip to every sibling (anchor translation).
+            // UNCERTIFIED siblings fall back to the anchor-translated
+            // copy of the reference layout (mobile — they stay on the
+            // rigid machinery; certified columns are already frozen
+            // in their own frames and must not be overwritten).
             for k in 1..groups.len() {
+                if col_cert[k] {
+                    continue;
+                }
                 let (tx, ty) = (anchors[k].0 - ax, anchors[k].1 - anchors[0].1);
                 for (m, &rci) in groups[0].iter().enumerate() {
                     let sci = groups[k][m];
@@ -842,127 +880,6 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                     board.components[sci].y = board.components[rci].y + ty;
                     board.components[sci].theta = board.components[rci].theta;
                 }
-            }
-            info!(
-                "channel strip synthesis: reference column at {}={:.1} half-width {:.1}mm, {} part(s) stacked, {} sibling(s) stamped",
-                if x_major { "x" } else { "y" },
-                if x_major { ax } else { anchors[0].1 },
-                half_w,
-                groups[0].len(),
-                groups.len() - 1
-            );
-            if let Some(cert) = certified {
-                // FREEZE the certificate: the mini-solve placed the
-                // members AROUND the column's fixed pots/jacks — the
-                // certificate is only valid in that exact frame.
-                // Letting the optimizer drag the block afterwards
-                // (measured: 5-21mm drift) keeps the internal shape
-                // but destroys registration with the fixed parts —
-                // every fixed-pin net pad-missed and the pure-member
-                // copper stamped into UNCERTIFIED territory (17
-                // shorts). Certified members are Fixed from here on.
-                // A sibling only freezes if its TRANSLATED pads stay
-                // edge-legal — the reference was certified inside the
-                // board, a translated copy isn't automatically
-                // (measured: ch4 pads in the edge margin, 4
-                // copper_edge_clearance). Unfrozen groups stay on the
-                // rigid machinery.
-                let ec = board.config.edge_clearance_mm;
-                let (bw, bh) =
-                    (board.config.outline.width(), board.config.outline.height());
-                let edge_ok = |g: &Vec<usize>| {
-                    g.iter().all(|&ci| {
-                        let c = &board.components[ci];
-                        let (co, sn) = (c.theta.cos(), c.theta.sin());
-                        c.pins.iter().all(|p| {
-                            let px = c.x + p.dx * co - p.dy * sn;
-                            let py = c.y + p.dx * sn + p.dy * co;
-                            let half = p
-                                .pad
-                                .as_ref()
-                                .map(|g| g.width_mm.max(g.height_mm) / 2.0)
-                                .unwrap_or(0.5);
-                            px - half >= ec
-                                && px + half <= bw - ec
-                                && py - half >= ec
-                                && py + half <= bh - ec
-                        })
-                    })
-                };
-                // Edge-unsafe groups don't stay mobile — a wandering
-                // rigid block measured WORSE (10v/2unc) than a frozen
-                // one with edge nicks (5v/0unc). Instead the whole
-                // block CLAMPS inward by the minimum shift that
-                // clears the margin, then freezes. The clamped group
-                // keeps its certified internal shape but loses exact
-                // pot registration — so it never stamps copper
-                // (frozen[k]=false); its nets route at top level.
-                let clamp_shift = |g: &Vec<usize>| -> (f64, f64) {
-                    let (mut sx, mut sy) = (0.0f64, 0.0f64);
-                    for &ci in g {
-                        let c = &board.components[ci];
-                        let (co, sn) = (c.theta.cos(), c.theta.sin());
-                        for p in &c.pins {
-                            let px = c.x + p.dx * co - p.dy * sn;
-                            let py = c.y + p.dx * sn + p.dy * co;
-                            let half = p
-                                .pad
-                                .as_ref()
-                                .map(|g| g.width_mm.max(g.height_mm) / 2.0)
-                                .unwrap_or(0.5);
-                            sx = sx.max(ec - (px - half)).min(bw); // push right
-                            sy = sy.max(ec - (py - half)).min(bh);
-                            if px + half > bw - ec {
-                                sx = sx.min(bw - ec - (px + half));
-                            }
-                            if py + half > bh - ec {
-                                sy = sy.min(bh - ec - (py + half));
-                            }
-                        }
-                    }
-                    (sx, sy)
-                };
-                let frozen: Vec<bool> = groups.iter().map(edge_ok).collect();
-                let shifts: Vec<(f64, f64)> = groups
-                    .iter()
-                    .zip(&frozen)
-                    .map(|(g, &ok)| if ok { (0.0, 0.0) } else { clamp_shift(g) })
-                    .collect();
-                for (g, &(sx, sy)) in groups.iter().zip(&shifts) {
-                    for &ci in g {
-                        let c = &mut board.components[ci];
-                        c.x += sx;
-                        c.y += sy;
-                        c.placement = PlacementConstraint::Fixed {
-                            x: c.x,
-                            y: c.y,
-                            theta: c.theta,
-                        };
-                    }
-                }
-                if frozen.iter().any(|f| !f) {
-                    info!(
-                        "channel freeze: {}/{} group(s) at certified frame, {} edge-clamped (frozen, unstamped)",
-                        frozen.iter().filter(|&&f| f).count(),
-                        frozen.len(),
-                        frozen.iter().filter(|&&f| !f).count()
-                    );
-                }
-                stamped_channels.push(StampedChannel {
-                    ref_members: groups[0].clone(),
-                    ref_stamp_pos: groups[0]
-                        .iter()
-                        .map(|&ci| (board.components[ci].x, board.components[ci].y))
-                        .collect(),
-                    groups: groups.clone(),
-                    expect: (0..groups.len())
-                        .map(|k| {
-                            (anchors[k].0 - ax, anchors[k].1 - anchors[0].1)
-                        })
-                        .collect(),
-                    frozen,
-                    routes: cert.routes,
-                });
             }
         }
         let out: Vec<(usize, Vec<(usize, f64, f64)>)> = groups
@@ -1712,17 +1629,6 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
             for (k, grp) in ch.groups.iter().enumerate() {
                 if !ch.frozen[k] {
                     continue; // stayed on the rigid machinery, no certificate
-                }
-                // v1 SCOPE: only the REFERENCE column's copper is
-                // licensed. Sibling columns have DIFFERENT foreign
-                // obstacle patterns (ch1's band holds ch2's jack;
-                // ch4's holds none) — translated copper certified
-                // against the reference obstacles measured 4 shorts +
-                // 5 unc in sibling columns. Sibling stamping needs
-                // per-column certificates (mini-solve per channel —
-                // the recorded next arc).
-                if k > 0 {
-                    continue;
                 }
                 let deltas: Vec<(f64, f64)> = grp
                     .iter()
@@ -6592,7 +6498,7 @@ fn solve_channel_miniboard_attempt(
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         let mut cursor = 2.0f64;
-        for i in idxs {
+        for &i in &idxs {
             let mut want = leaving[i].proj.max(cursor);
             for &(b0, b1) in &blocked {
                 if want > b0 && want < b1 {
@@ -6602,6 +6508,23 @@ fn solve_channel_miniboard_attempt(
             let slot = want.min(rh - 2.0);
             leaving[i].slot = slot;
             cursor = slot + pad_sep;
+        }
+        // BACKWARD RELAX: when the forward cursor runs past the rail
+        // end, every remaining exit clamps onto rh-2 — the SAME point
+        // (measured: __edge_ch4_ni and __edge_ch4_gleg coincident at
+        // y=108, a self-inflicted Spacing that failed ch4's
+        // certification on every attempt). Sweep back from the top
+        // pushing earlier pads down to restore pad_sep.
+        let mut cursor = rh - 2.0;
+        for &i in idxs.iter().rev() {
+            let mut slot = leaving[i].slot.min(cursor);
+            for &(b0, b1) in blocked.iter().rev() {
+                if slot > b0 && slot < b1 {
+                    slot = b0;
+                }
+            }
+            leaving[i].slot = slot.max(2.0);
+            cursor = leaving[i].slot - pad_sep;
         }
     }
     for net in &board.nets {
