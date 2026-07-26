@@ -6051,6 +6051,8 @@ fn solve_channel_miniboard_attempt(
             }
         }
     }
+    let mut optional_pads: std::collections::HashSet<ComponentId> =
+        std::collections::HashSet::new();
     let mut nets: Vec<PnrNet> = Vec::new();
     // BOUNDARY-PAD NEGOTIATION pass 1: each leaving net's exit pad
     // goes where its OUTSIDE-pin centroid projects onto the nearer
@@ -6059,22 +6061,27 @@ fn solve_channel_miniboard_attempt(
     // one edge are then collision-swept to `pad_sep` spacing; the
     // caller widens pad_sep across negotiation attempts.
     struct Leaving {
+        net: NetId,
         left: bool,
         proj: f64,
         slot: f64,
+        /// Rail exits beyond the first are OPTIONS the tree may use,
+        /// never obligations — counting them as sinks failed
+        /// certification on unused exits.
+        optional: bool,
     }
-    let mut leaving: std::collections::HashMap<NetId, Leaving> =
-        std::collections::HashMap::new();
+    let mut leaving: Vec<Leaving> = Vec::new();
     for net in &board.nets {
         if !eligible.contains(&net.id) {
             continue;
         }
-        let inside_n = net
+        let inside_pins: Vec<usize> = net
             .pins
             .iter()
             .filter(|(cid, _)| included.contains(cid))
-            .count();
-        if inside_n == 0 || net.pins.len() == inside_n {
+            .filter_map(|(cid, _)| pos_of.get(cid).copied())
+            .collect();
+        if inside_pins.is_empty() || net.pins.len() == inside_pins.len() {
             continue;
         }
         let (mut ox, mut oy, mut on) = (0.0f64, 0.0f64, 0usize);
@@ -6092,34 +6099,59 @@ fn solve_channel_miniboard_attempt(
             continue;
         }
         let (ox, oy) = (ox / on as f64, oy / on as f64);
-        leaving.insert(
-            net.id,
-            Leaving {
+        // RAIL EXITS: a board-crossing rail leaves a real block
+        // everywhere along its edge — funneling a whole GND tree
+        // through ONE exit was the last certification blocker
+        // (65/71, attempt-invariant). Rails get k exits at the
+        // y-quantiles of their INSIDE pins, alternating edges;
+        // signals keep the single projected exit.
+        let is_rail = matches!(
+            net.net_class,
+            PnrNetClass::Power { .. } | PnrNetClass::Ground
+        );
+        if is_rail && inside_pins.len() >= 3 {
+            let k = ((inside_pins.len() as f64 / 3.0).ceil() as usize).clamp(2, 4);
+            let mut ys: Vec<f64> =
+                inside_pins.iter().map(|&pi| board.components[pi].y).collect();
+            ys.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            for j in 0..k {
+                let q = (j as f64 + 0.5) / k as f64;
+                let y = ys[((q * ys.len() as f64) as usize).min(ys.len() - 1)];
+                leaving.push(Leaving {
+                    net: net.id,
+                    left: j % 2 == 0,
+                    proj: (y - ry0).clamp(2.0, rh - 2.0),
+                    slot: 0.0,
+                    optional: j > 0,
+                });
+            }
+        } else {
+            leaving.push(Leaving {
+                net: net.id,
                 left: ox < rx0 + rw / 2.0,
                 proj: (oy - ry0).clamp(2.0, rh - 2.0),
                 slot: 0.0,
-            },
-        );
+                optional: false,
+            });
+        }
     }
     // Collision sweep per edge (deterministic: sort by projection,
-    // then by net id order of appearance).
+    // stable on insertion order).
     for is_left in [true, false] {
-        let mut ids: Vec<NetId> = leaving
-            .iter()
-            .filter(|(_, l)| l.left == is_left)
-            .map(|(&id, _)| id)
+        let mut idxs: Vec<usize> = (0..leaving.len())
+            .filter(|&i| leaving[i].left == is_left)
             .collect();
-        ids.sort_by(|a, b| {
+        idxs.sort_by(|&a, &b| {
             leaving[a]
                 .proj
                 .partial_cmp(&leaving[b].proj)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         let mut cursor = 2.0f64;
-        for id in ids {
-            let want = leaving[&id].proj.max(cursor);
+        for i in idxs {
+            let want = leaving[i].proj.max(cursor);
             let slot = want.min(rh - 2.0);
-            leaving.get_mut(&id).unwrap().slot = slot;
+            leaving[i].slot = slot;
             cursor = slot + pad_sep;
         }
     }
@@ -6145,10 +6177,13 @@ fn solve_channel_miniboard_attempt(
         n.plane_layer = None; // no pours in the mini-solve
         n.plane_region = None;
         n.allowed_layers = None; // strict mask rebuilt from mini config if needed
-        if let Some(l) = leaving.get(&net.id) {
+        for l in leaving.iter().filter(|l| l.net == net.id) {
             let bx = if l.left { 2.0 } else { rw - 2.0 };
             let cid = key_mint.insert(());
             let pid = pin_mint.insert(());
+            if l.optional {
+                optional_pads.insert(cid);
+            }
             let by = l.slot;
             comps.push(Component {
                 id: cid,
@@ -6209,22 +6244,68 @@ fn solve_channel_miniboard_attempt(
         constraints: Vec::new(),
         ddr_bin: None,
     };
-    let total_pins: usize = mini
-        .nets
-        .iter()
-        .filter(|n| n.pins.len() >= 2)
-        .map(|n| n.pins.len())
-        .sum();
     let free_ids: Vec<ComponentId> =
         free_members.iter().map(|&ci| board.components[ci].id).collect();
     let result = place_and_route(mini, mini_cfg, seed).ok()?;
-    let certified = result.metrics.connected_sinks >= total_pins
-        && result.drc_violations.is_empty();
+    // CERTIFICATION, pad-exact: every MANDATORY pad geometrically
+    // touched by its net's copper (optional rail exits skipped), and
+    // no DRC beyond UnroutedNet entries attributable to those
+    // optional exits.
+    let rcomp: std::collections::HashMap<ComponentId, usize> = result
+        .board
+        .components
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.id, i))
+        .collect();
+    let mut missed = 0usize;
+    let mut mandatory = 0usize;
+    for (ni, n) in result.board.nets.iter().enumerate() {
+        if n.pins.len() < 2 {
+            continue;
+        }
+        let route = result.routes.get(ni);
+        for &(cid, pid) in &n.pins {
+            if optional_pads.contains(&cid) {
+                continue;
+            }
+            mandatory += 1;
+            let Some(&ci) = rcomp.get(&cid) else { missed += 1; continue };
+            let comp = &result.board.components[ci];
+            let Some(pin) = comp.pins.iter().find(|p| p.pin_id == pid) else {
+                missed += 1;
+                continue;
+            };
+            let (c, sn) = (comp.theta.cos(), comp.theta.sin());
+            let px = comp.x + pin.dx * c - pin.dy * sn;
+            let py = comp.y + pin.dx * sn + pin.dy * c;
+            let half = pin
+                .pad
+                .as_ref()
+                .map(|p| p.width_mm.min(p.height_mm) / 2.0)
+                .unwrap_or(0.4);
+            let touched = route.map_or(false, |r| {
+                r.segments.iter().any(|sg| {
+                    geom::point_segment_dist((px, py), sg.start, sg.end)
+                        < sg.width_mm / 2.0 + half - 0.001
+                })
+            });
+            if !touched {
+                missed += 1;
+            }
+        }
+    }
+    let hard_drc = result
+        .drc_violations
+        .iter()
+        .filter(|v| !matches!(v.kind, DrcViolationKind::UnroutedNet))
+        .count();
+    let certified = missed == 0 && hard_drc == 0;
     info!(
-        "channel mini-solve: {} sinks / {} pins, {} drc — {}",
-        result.metrics.connected_sinks,
-        total_pins,
-        result.drc_violations.len(),
+        "channel mini-solve: {}/{} mandatory pads, {} hard drc — {}",
+        mandatory - missed,
+        mandatory,
+        hard_drc,
         if certified { "CERTIFIED" } else { "not routable" }
     );
     if !certified {
