@@ -5952,12 +5952,42 @@ fn sibling_suffix_classes(board: &Board) -> Vec<Vec<(usize, (f64, f64))>> {
 /// certified placement is what gets stamped; a stacking heuristic
 /// can be placement-legal yet unroutable (the strip-synthesis
 /// lesson). Region-local coordinates; caller translates back.
+/// NEGOTIATION: certification failures retry with wider exit-pad
+/// separation and a fresh seed — moving the virtual boundary pads is
+/// exactly the degree of freedom a hierarchical block owns.
 fn solve_channel_miniboard(
+    board: &Board,
+    free_members: &[usize],
+    region: (f64, f64, f64, f64),
+    config: &PnrConfig,
+    seed: u64,
+) -> Option<Vec<(usize, f64, f64, f64)>> {
+    for (attempt, pad_sep) in [3.0f64, 5.0, 8.0].iter().enumerate() {
+        let got = solve_channel_miniboard_attempt(
+            board,
+            free_members,
+            region,
+            config,
+            seed.wrapping_add(attempt as u64),
+            *pad_sep,
+        );
+        if got.is_some() {
+            if attempt > 0 {
+                info!("channel mini-solve: certified on negotiation attempt {}", attempt + 1);
+            }
+            return got;
+        }
+    }
+    None
+}
+
+fn solve_channel_miniboard_attempt(
     board: &Board,
     free_members: &[usize],
     region: (f64, f64, f64, f64), // x0, y0, w, h
     config: &PnrConfig,
     seed: u64,
+    pad_sep: f64,
 ) -> Option<Vec<(usize, f64, f64, f64)>> {
     use std::collections::{HashMap, HashSet};
     let (rx0, ry0, rw, rh) = region;
@@ -6000,9 +6030,103 @@ fn solve_channel_miniboard(
         .enumerate()
         .map(|(i, c)| (c.id, i))
         .collect();
+    // A net belongs to the CHANNEL only if it touches a FREE member.
+    // Foreign fixed parts inside the region (a neighbor channel's
+    // jack living in this column band) are OBSTACLES, not netlist —
+    // their nets dragged 2-sink unroutables into every attempt.
+    let free_ids_set: std::collections::HashSet<ComponentId> =
+        free_members.iter().map(|&ci| board.components[ci].id).collect();
+    let eligible: std::collections::HashSet<NetId> = board
+        .nets
+        .iter()
+        .filter(|n| n.pins.iter().any(|(cid, _)| free_ids_set.contains(cid)))
+        .map(|n| n.id)
+        .collect();
+    for c in comps.iter_mut() {
+        if c.placement.is_fixed() {
+            for pin in c.pins.iter_mut() {
+                if pin.net.map_or(false, |nid| !eligible.contains(&nid)) {
+                    pin.net = None; // obstacle copper, no net demand
+                }
+            }
+        }
+    }
     let mut nets: Vec<PnrNet> = Vec::new();
-    let mut boundary_y = 4.0f64;
+    // BOUNDARY-PAD NEGOTIATION pass 1: each leaving net's exit pad
+    // goes where its OUTSIDE-pin centroid projects onto the nearer
+    // vertical edge (v1's even spacing put exits nowhere near where
+    // nets wanted to leave — certification refused 63/91). Pads on
+    // one edge are then collision-swept to `pad_sep` spacing; the
+    // caller widens pad_sep across negotiation attempts.
+    struct Leaving {
+        left: bool,
+        proj: f64,
+        slot: f64,
+    }
+    let mut leaving: std::collections::HashMap<NetId, Leaving> =
+        std::collections::HashMap::new();
     for net in &board.nets {
+        if !eligible.contains(&net.id) {
+            continue;
+        }
+        let inside_n = net
+            .pins
+            .iter()
+            .filter(|(cid, _)| included.contains(cid))
+            .count();
+        if inside_n == 0 || net.pins.len() == inside_n {
+            continue;
+        }
+        let (mut ox, mut oy, mut on) = (0.0f64, 0.0f64, 0usize);
+        for &(cid, _) in &net.pins {
+            if included.contains(&cid) {
+                continue;
+            }
+            if let Some(&pi) = pos_of.get(&cid) {
+                ox += board.components[pi].x;
+                oy += board.components[pi].y;
+                on += 1;
+            }
+        }
+        if on == 0 {
+            continue;
+        }
+        let (ox, oy) = (ox / on as f64, oy / on as f64);
+        leaving.insert(
+            net.id,
+            Leaving {
+                left: ox < rx0 + rw / 2.0,
+                proj: (oy - ry0).clamp(2.0, rh - 2.0),
+                slot: 0.0,
+            },
+        );
+    }
+    // Collision sweep per edge (deterministic: sort by projection,
+    // then by net id order of appearance).
+    for is_left in [true, false] {
+        let mut ids: Vec<NetId> = leaving
+            .iter()
+            .filter(|(_, l)| l.left == is_left)
+            .map(|(&id, _)| id)
+            .collect();
+        ids.sort_by(|a, b| {
+            leaving[a]
+                .proj
+                .partial_cmp(&leaving[b].proj)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let mut cursor = 2.0f64;
+        for id in ids {
+            let want = leaving[&id].proj.max(cursor);
+            let slot = want.min(rh - 2.0);
+            leaving.get_mut(&id).unwrap().slot = slot;
+            cursor = slot + pad_sep;
+        }
+    }
+    for net in &board.nets {
+        if !eligible.contains(&net.id) {
+            continue;
+        }
         let inside: Vec<(ComponentId, PinId)> = net
             .pins
             .iter()
@@ -6021,24 +6145,11 @@ fn solve_channel_miniboard(
         n.plane_layer = None; // no pours in the mini-solve
         n.plane_region = None;
         n.allowed_layers = None; // strict mask rebuilt from mini config if needed
-        if leaves {
-            // Which edge? Centroid of the OUTSIDE pins decides.
-            let (mut ox, mut on) = (0.0f64, 0usize);
-            for &(cid, _) in &net.pins {
-                if included.contains(&cid) {
-                    continue;
-                }
-                if let Some(&pi) = pos_of.get(&cid) {
-                    ox += board.components[pi].x;
-                    on += 1;
-                }
-            }
-            let left = on > 0 && (ox / on as f64) < rx0 + rw / 2.0;
-            let bx = if left { 2.0 } else { rw - 2.0 };
+        if let Some(l) = leaving.get(&net.id) {
+            let bx = if l.left { 2.0 } else { rw - 2.0 };
             let cid = key_mint.insert(());
             let pid = pin_mint.insert(());
-            let by = boundary_y.min(rh - 2.0);
-            boundary_y += 3.0;
+            let by = l.slot;
             comps.push(Component {
                 id: cid,
                 name: format!("__edge_{}", n.name),
@@ -6116,6 +6227,24 @@ fn solve_channel_miniboard(
         result.drc_violations.len(),
         if certified { "CERTIFIED" } else { "not routable" }
     );
+    if !certified {
+        for (i, n) in result.board.nets.iter().enumerate() {
+            if n.pins.len() < 2 {
+                continue;
+            }
+            let unreached = pathfinder::unreached_sink_count(
+                n,
+                &result.board,
+                result.routes.get(i).unwrap_or(&Route::empty(n.id)),
+            );
+            if unreached > 0 {
+                debug!("  mini-solve unreached: '{}' {} sink(s)", n.name, unreached);
+            }
+        }
+        for v in result.drc_violations.iter().take(3) {
+            debug!("  mini-solve drc: {:?}", v.kind);
+        }
+    }
     if !certified {
         return None;
     }
