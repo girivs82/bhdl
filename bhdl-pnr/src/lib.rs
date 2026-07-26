@@ -709,7 +709,45 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                 let kb = if x_major { board.components[b].y } else { board.components[b].x };
                 ka.partial_cmp(&kb).unwrap_or(std::cmp::Ordering::Equal)
             });
-            // MULTI-FILE: a 21-part single file (~90mm) overflows the
+            // CERTIFIED SOLVE FIRST (settled formulation): the
+            // reference channel becomes its own mini-board — free
+            // members + the column's fixed parts + boundary pads for
+            // the nets that leave — solved with the full engine and
+            // accepted only when it ROUTES clean. A stacking
+            // heuristic is placement-legal but routability-blind
+            // (the strip lesson). Fallback: the multi-file stack.
+            let region = if x_major {
+                (
+                    ax - half_w,
+                    board.config.edge_clearance_mm,
+                    2.0 * half_w,
+                    cross_extent - 2.0 * board.config.edge_clearance_mm,
+                )
+            } else {
+                (
+                    board.config.edge_clearance_mm,
+                    anchors[0].1 - half_w,
+                    cross_extent - 2.0 * board.config.edge_clearance_mm,
+                    2.0 * half_w,
+                )
+            };
+            let certified = solve_channel_miniboard(
+                &board,
+                &groups[0],
+                region,
+                &config,
+                seed ^ 0x5eed_c0de,
+            );
+            if let Some(placed) = &certified {
+                for &(ci, x, y, theta) in placed {
+                    board.components[ci].x = x;
+                    board.components[ci].y = y;
+                    board.components[ci].theta = theta;
+                }
+            }
+            let solved = certified.is_some();
+
+            // MULTI-FILE (fallback): a 21-part single file (~90mm) overflows the
             // cross space left beside the pot rows (measured: tail
             // piled at the board edge, 86v/76unc). Fit as many files
             // as the column width allows and fill them in parallel.
@@ -723,7 +761,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
             let file_pitch = max_w + 1.0;
             let n_files = ((2.0 * half_w / file_pitch).floor() as usize).clamp(1, 3);
             let mut cursors = vec![board.config.edge_clearance_mm + 2.0; n_files];
-            for &ci in &order {
+            for &ci in order.iter().filter(|_| !solved) {
                 let (_, _, hw, hh) = board.components[ci].envelope();
                 let ch = if x_major { hh } else { hw };
                 // Shortest file first (keeps files balanced).
@@ -5902,6 +5940,203 @@ fn sibling_suffix_classes(board: &Board) -> Vec<Vec<(usize, (f64, f64))>> {
         }
     }
     classes
+}
+
+/// CHANNEL MINI-BOARD SOLVE: extract ONE sibling channel as its own
+/// board — the group's free members (Free), every fixed component
+/// whose envelope intersects the column region (Fixed, e.g. the
+/// pinned pots and jack), and a virtual boundary pad on the region
+/// edge for each net that leaves the channel (IN/BUS/VCC/VBIAS/GND
+/// see realistic exits) — then solve it with the FULL engine and
+/// certify routability (connected sinks == pins, no DRC). The
+/// certified placement is what gets stamped; a stacking heuristic
+/// can be placement-legal yet unroutable (the strip-synthesis
+/// lesson). Region-local coordinates; caller translates back.
+fn solve_channel_miniboard(
+    board: &Board,
+    free_members: &[usize],
+    region: (f64, f64, f64, f64), // x0, y0, w, h
+    config: &PnrConfig,
+    seed: u64,
+) -> Option<Vec<(usize, f64, f64, f64)>> {
+    use std::collections::{HashMap, HashSet};
+    let (rx0, ry0, rw, rh) = region;
+    let member_set: HashSet<usize> = free_members.iter().copied().collect();
+    let mut comps: Vec<Component> = Vec::new();
+    let mut included: HashSet<ComponentId> = HashSet::new();
+    // Free members, region-local.
+    for &ci in free_members {
+        let mut c = board.components[ci].clone();
+        c.x -= rx0;
+        c.y -= ry0;
+        c.placement = PlacementConstraint::Free;
+        c.group = None;
+        included.insert(c.id);
+        comps.push(c);
+    }
+    // Fixed parts intersecting the region.
+    for (ci, c) in board.components.iter().enumerate() {
+        if member_set.contains(&ci) || !c.placement.is_fixed() {
+            continue;
+        }
+        let (cx, cy, hw, hh) = c.envelope();
+        if cx + hw > rx0 && cx - hw < rx0 + rw && cy + hh > ry0 && cy - hh < ry0 + rh {
+            let mut m = c.clone();
+            m.x -= rx0;
+            m.y -= ry0;
+            m.placement = PlacementConstraint::Fixed { x: m.x, y: m.y, theta: m.theta };
+            m.group = None;
+            included.insert(m.id);
+            comps.push(m);
+        }
+    }
+    // Nets: keep pins on included comps; nets that also leave the
+    // channel get a boundary pad on the nearest vertical region edge.
+    let mut key_mint: slotmap::SlotMap<ComponentId, ()> = slotmap::SlotMap::with_key();
+    let mut pin_mint: slotmap::SlotMap<PinId, ()> = slotmap::SlotMap::with_key();
+    let pos_of: HashMap<ComponentId, usize> = board
+        .components
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.id, i))
+        .collect();
+    let mut nets: Vec<PnrNet> = Vec::new();
+    let mut boundary_y = 4.0f64;
+    for net in &board.nets {
+        let inside: Vec<(ComponentId, PinId)> = net
+            .pins
+            .iter()
+            .copied()
+            .filter(|(cid, _)| included.contains(cid))
+            .collect();
+        if inside.is_empty() {
+            continue;
+        }
+        let leaves = net.pins.len() > inside.len();
+        if inside.len() < 2 && !leaves {
+            continue;
+        }
+        let mut n = net.clone();
+        n.pins = inside;
+        n.plane_layer = None; // no pours in the mini-solve
+        n.plane_region = None;
+        n.allowed_layers = None; // strict mask rebuilt from mini config if needed
+        if leaves {
+            // Which edge? Centroid of the OUTSIDE pins decides.
+            let (mut ox, mut on) = (0.0f64, 0usize);
+            for &(cid, _) in &net.pins {
+                if included.contains(&cid) {
+                    continue;
+                }
+                if let Some(&pi) = pos_of.get(&cid) {
+                    ox += board.components[pi].x;
+                    on += 1;
+                }
+            }
+            let left = on > 0 && (ox / on as f64) < rx0 + rw / 2.0;
+            let bx = if left { 2.0 } else { rw - 2.0 };
+            let cid = key_mint.insert(());
+            let pid = pin_mint.insert(());
+            let by = boundary_y.min(rh - 2.0);
+            boundary_y += 3.0;
+            comps.push(Component {
+                id: cid,
+                name: format!("__edge_{}", n.name),
+                refdes: String::new(),
+                width_mm: 1.7,
+                height_mm: 1.7,
+                bbox_dx: 0.0,
+                bbox_dy: 0.0,
+                pins: vec![PinPosition {
+                    pin_id: pid,
+                    name: "1".into(),
+                    dx: 0.0,
+                    dy: 0.0,
+                    net: Some(n.id),
+                    pad: Some(PadGeom {
+                        width_mm: 1.7,
+                        height_mm: 1.7,
+                        shape: PadShapeKind::Circle,
+                        drill_mm: Some(1.0),
+                    }),
+                    unplaced: false,
+                }],
+                side: BoardSide::Top,
+                group: None,
+                thermal_power_w: 0.0,
+                solved_current_a: None,
+                package: "__edge".into(),
+                placement: PlacementConstraint::Fixed { x: bx, y: by, theta: 0.0 },
+                x: bx,
+                y: by,
+                theta: 0.0,
+                density_inflation: 1.0,
+                layout_intents: Vec::new(),
+            });
+            included.insert(cid);
+            n.pins.push((cid, pid));
+        }
+        if n.pins.len() >= 2 {
+            nets.push(n);
+        }
+    }
+    let mut mini_cfg = config.clone();
+    mini_cfg.board.outline = BoardOutline::Rectangle { width_mm: rw, height_mm: rh };
+    mini_cfg.board.fixed_placements = Vec::new();
+    mini_cfg.board.mounting_holes = Vec::new();
+    mini_cfg.board.keepout_zones = Vec::new();
+    mini_cfg.board.cutouts = Vec::new();
+    mini_cfg.board.placement_regions = Vec::new();
+    mini_cfg.max_iterations = mini_cfg.max_iterations.min(400);
+    let mini = Board {
+        config: mini_cfg.board.clone(),
+        layer_stack: board.layer_stack.clone(),
+        components: comps,
+        nets,
+        groups: Vec::new(),
+        placement_recipes: Default::default(),
+        constraints: Vec::new(),
+        ddr_bin: None,
+    };
+    let total_pins: usize = mini
+        .nets
+        .iter()
+        .filter(|n| n.pins.len() >= 2)
+        .map(|n| n.pins.len())
+        .sum();
+    let free_ids: Vec<ComponentId> =
+        free_members.iter().map(|&ci| board.components[ci].id).collect();
+    let result = place_and_route(mini, mini_cfg, seed).ok()?;
+    let certified = result.metrics.connected_sinks >= total_pins
+        && result.drc_violations.is_empty();
+    info!(
+        "channel mini-solve: {} sinks / {} pins, {} drc — {}",
+        result.metrics.connected_sinks,
+        total_pins,
+        result.drc_violations.len(),
+        if certified { "CERTIFIED" } else { "not routable" }
+    );
+    if !certified {
+        return None;
+    }
+    let id_pos: HashMap<ComponentId, usize> = result
+        .board
+        .components
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.id, i))
+        .collect();
+    Some(
+        free_members
+            .iter()
+            .zip(&free_ids)
+            .filter_map(|(&ci, id)| {
+                let &mi = id_pos.get(id)?;
+                let m = &result.board.components[mi];
+                Some((ci, m.x + rx0, m.y + ry0, m.theta))
+            })
+            .collect(),
+    )
 }
 
 /// CHANNEL STAMPING: find families of sibling functional groups
