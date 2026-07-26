@@ -716,28 +716,47 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
             // accepted only when it ROUTES clean. A stacking
             // heuristic is placement-legal but routability-blind
             // (the strip lesson). Fallback: the multi-file stack.
-            let region = if x_major {
-                (
-                    ax - half_w,
-                    board.config.edge_clearance_mm,
-                    2.0 * half_w,
-                    cross_extent - 2.0 * board.config.edge_clearance_mm,
-                )
-            } else {
-                (
-                    board.config.edge_clearance_mm,
-                    anchors[0].1 - half_w,
-                    cross_extent - 2.0 * board.config.edge_clearance_mm,
-                    2.0 * half_w,
-                )
-            };
-            let certified = solve_channel_miniboard(
-                &board,
-                &groups[0],
-                region,
-                &config,
-                seed ^ 0x5eed_c0de,
-            );
+            // REGION WIDENING: the outer negotiation tier. When pad
+            // moves exhaust (the inner ladder), the block asks the
+            // floorplan for more room — the column margin against
+            // the neighbor anchors shrinks 1.0 -> 0.25mm and the
+            // solve retries (the invariant residual was an input
+            // exit fenced in the crowded bottom band; width buys
+            // routing room around the obstacle jack).
+            let mut certified = None;
+            for (tier, margin) in [1.0f64, 0.25].iter().enumerate() {
+                let hw = (min_sep / 2.0 - margin).max(2.0);
+                let region = if x_major {
+                    (
+                        ax - hw,
+                        board.config.edge_clearance_mm,
+                        2.0 * hw,
+                        cross_extent - 2.0 * board.config.edge_clearance_mm,
+                    )
+                } else {
+                    (
+                        board.config.edge_clearance_mm,
+                        anchors[0].1 - hw,
+                        cross_extent - 2.0 * board.config.edge_clearance_mm,
+                        2.0 * hw,
+                    )
+                };
+                certified = solve_channel_miniboard(
+                    &board,
+                    &groups[0],
+                    region,
+                    &config,
+                    seed ^ 0x5eed_c0de ^ (tier as u64) << 32,
+                );
+                if certified.is_some() {
+                    if tier > 0 {
+                        info!(
+                            "channel mini-solve: certified after region widening (margin {margin}mm)"
+                        );
+                    }
+                    break;
+                }
+            }
             if let Some(placed) = &certified {
                 for &(ci, x, y, theta) in placed {
                     board.components[ci].x = x;
@@ -6233,7 +6252,9 @@ fn solve_channel_miniboard_attempt(
     mini_cfg.board.keepout_zones = Vec::new();
     mini_cfg.board.cutouts = Vec::new();
     mini_cfg.board.placement_regions = Vec::new();
-    mini_cfg.max_iterations = mini_cfg.max_iterations.min(400);
+    // Small board, cheap iterations — a bigger budget beats an early
+    // stall (the mini is the certification oracle; spend here).
+    mini_cfg.max_iterations = mini_cfg.max_iterations.min(700);
     let mini = Board {
         config: mini_cfg.board.clone(),
         layer_stack: board.layer_stack.clone(),
