@@ -609,6 +609,29 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
     } else {
         Vec::new()
     };
+    // ROUTE-STAMP bookkeeping: a certified channel solve carries its
+    // copper forward to routing time. Recorded at init-stamp; consumed
+    // after placement settles (blocks translate rigidly, so the copper
+    // translates with them — verified, never assumed).
+    struct StampedChannel {
+        /// Reference group's parent component indices (group order).
+        ref_members: Vec<usize>,
+        /// Their positions at stamp time (board coords) — the frame
+        /// the routes were certified in.
+        ref_stamp_pos: Vec<(f64, f64)>,
+        /// All sibling groups, reference at [0], member-parallel.
+        groups: Vec<Vec<usize>>,
+        /// Expected block delta per group vs the reference frame (the
+        /// anchor translation) — the frame each sibling's copper is
+        /// licensed in.
+        expect: Vec<(f64, f64)>,
+        /// Whether the group was frozen (edge-safe); unfrozen groups
+        /// stay on the rigid machinery and never stamp.
+        frozen: Vec<bool>,
+        /// Certified copper in stamp-time board coords, parent NetIds.
+        routes: Vec<(NetId, Route)>,
+    }
+    let mut stamped_channels: Vec<StampedChannel> = Vec::new();
     // RIGID-BODY GROUP MOVES (BHDL_PNR_RIGID=1, fidelity): the third
     // formulation of the channel-coherence experiment — freeze each
     // sibling group's internal geometry from the init-stamp and move
@@ -757,8 +780,8 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                     break;
                 }
             }
-            if let Some(placed) = &certified {
-                for &(ci, x, y, theta) in placed {
+            if let Some(cert) = &certified {
+                for &(ci, x, y, theta) in &cert.placements {
                     board.components[ci].x = x;
                     board.components[ci].y = y;
                     board.components[ci].theta = theta;
@@ -828,10 +851,129 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                 groups[0].len(),
                 groups.len() - 1
             );
+            if let Some(cert) = certified {
+                // FREEZE the certificate: the mini-solve placed the
+                // members AROUND the column's fixed pots/jacks — the
+                // certificate is only valid in that exact frame.
+                // Letting the optimizer drag the block afterwards
+                // (measured: 5-21mm drift) keeps the internal shape
+                // but destroys registration with the fixed parts —
+                // every fixed-pin net pad-missed and the pure-member
+                // copper stamped into UNCERTIFIED territory (17
+                // shorts). Certified members are Fixed from here on.
+                // A sibling only freezes if its TRANSLATED pads stay
+                // edge-legal — the reference was certified inside the
+                // board, a translated copy isn't automatically
+                // (measured: ch4 pads in the edge margin, 4
+                // copper_edge_clearance). Unfrozen groups stay on the
+                // rigid machinery.
+                let ec = board.config.edge_clearance_mm;
+                let (bw, bh) =
+                    (board.config.outline.width(), board.config.outline.height());
+                let edge_ok = |g: &Vec<usize>| {
+                    g.iter().all(|&ci| {
+                        let c = &board.components[ci];
+                        let (co, sn) = (c.theta.cos(), c.theta.sin());
+                        c.pins.iter().all(|p| {
+                            let px = c.x + p.dx * co - p.dy * sn;
+                            let py = c.y + p.dx * sn + p.dy * co;
+                            let half = p
+                                .pad
+                                .as_ref()
+                                .map(|g| g.width_mm.max(g.height_mm) / 2.0)
+                                .unwrap_or(0.5);
+                            px - half >= ec
+                                && px + half <= bw - ec
+                                && py - half >= ec
+                                && py + half <= bh - ec
+                        })
+                    })
+                };
+                // Edge-unsafe groups don't stay mobile — a wandering
+                // rigid block measured WORSE (10v/2unc) than a frozen
+                // one with edge nicks (5v/0unc). Instead the whole
+                // block CLAMPS inward by the minimum shift that
+                // clears the margin, then freezes. The clamped group
+                // keeps its certified internal shape but loses exact
+                // pot registration — so it never stamps copper
+                // (frozen[k]=false); its nets route at top level.
+                let clamp_shift = |g: &Vec<usize>| -> (f64, f64) {
+                    let (mut sx, mut sy) = (0.0f64, 0.0f64);
+                    for &ci in g {
+                        let c = &board.components[ci];
+                        let (co, sn) = (c.theta.cos(), c.theta.sin());
+                        for p in &c.pins {
+                            let px = c.x + p.dx * co - p.dy * sn;
+                            let py = c.y + p.dx * sn + p.dy * co;
+                            let half = p
+                                .pad
+                                .as_ref()
+                                .map(|g| g.width_mm.max(g.height_mm) / 2.0)
+                                .unwrap_or(0.5);
+                            sx = sx.max(ec - (px - half)).min(bw); // push right
+                            sy = sy.max(ec - (py - half)).min(bh);
+                            if px + half > bw - ec {
+                                sx = sx.min(bw - ec - (px + half));
+                            }
+                            if py + half > bh - ec {
+                                sy = sy.min(bh - ec - (py + half));
+                            }
+                        }
+                    }
+                    (sx, sy)
+                };
+                let frozen: Vec<bool> = groups.iter().map(edge_ok).collect();
+                let shifts: Vec<(f64, f64)> = groups
+                    .iter()
+                    .zip(&frozen)
+                    .map(|(g, &ok)| if ok { (0.0, 0.0) } else { clamp_shift(g) })
+                    .collect();
+                for (g, &(sx, sy)) in groups.iter().zip(&shifts) {
+                    for &ci in g {
+                        let c = &mut board.components[ci];
+                        c.x += sx;
+                        c.y += sy;
+                        c.placement = PlacementConstraint::Fixed {
+                            x: c.x,
+                            y: c.y,
+                            theta: c.theta,
+                        };
+                    }
+                }
+                if frozen.iter().any(|f| !f) {
+                    info!(
+                        "channel freeze: {}/{} group(s) at certified frame, {} edge-clamped (frozen, unstamped)",
+                        frozen.iter().filter(|&&f| f).count(),
+                        frozen.len(),
+                        frozen.iter().filter(|&&f| !f).count()
+                    );
+                }
+                stamped_channels.push(StampedChannel {
+                    ref_members: groups[0].clone(),
+                    ref_stamp_pos: groups[0]
+                        .iter()
+                        .map(|&ci| (board.components[ci].x, board.components[ci].y))
+                        .collect(),
+                    groups: groups.clone(),
+                    expect: (0..groups.len())
+                        .map(|k| {
+                            (anchors[k].0 - ax, anchors[k].1 - anchors[0].1)
+                        })
+                        .collect(),
+                    frozen,
+                    routes: cert.routes,
+                });
+            }
         }
         let out: Vec<(usize, Vec<(usize, f64, f64)>)> = groups
             .into_iter()
-            .filter(|g| g.len() >= 2)
+            // A frozen (certified) family needs no rigid machinery —
+            // every member is Fixed; rigid moves would fight the
+            // certificate.
+            .filter(|g| {
+                g.len() >= 2
+                    && !g.iter().all(|&ci| board.components[ci].placement.is_fixed())
+            })
             .map(|g| {
                 let leader = g[0];
                 let (lx, ly) = (board.components[leader].x, board.components[leader].y);
@@ -1297,7 +1439,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
     info!("Final routing pass 1 (single-layer, no vias)...");
     // Plane-assigned nets don't route as trees: their copper is the
     // emitted zone FILL; surface pads get via drops after routing.
-    let routing_nets: Vec<PnrNet> = board
+    let mut routing_nets: Vec<PnrNet> = board
         .nets
         .iter()
         .map(|n| {
@@ -1529,6 +1671,214 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         pathfinder::block_route_geometry(&mut final_grid, r, &board);
     }
 
+    // ROUTE STAMPING: certified channel copper re-enters the top-level
+    // solve as pre-routes. Per sibling group: verify the rigid block
+    // survived placement as a PURE TRANSLATION of the stamp frame
+    // (deformed → skip, honest fallback), map reference nets to
+    // sibling nets through member-parallel pin order, translate the
+    // copper, and REVALIDATE pad-exact against the parent board —
+    // a net stamps only when EVERY one of its parent pins is touched
+    // by the translated copper (leaving nets fail this and route
+    // normally; so does any net whose fixed environment doesn't
+    // translate with the block, e.g. off-pitch jacks).
+    let mut stamped_pre: Vec<(usize, Route)> = Vec::new();
+    if !stamped_channels.is_empty() {
+        let net_pos: std::collections::HashMap<NetId, usize> = board
+            .nets
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.id, i))
+            .collect();
+        let comp_pos: std::collections::HashMap<ComponentId, usize> = board
+            .components
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (c.id, i))
+            .collect();
+        let mut taken: std::collections::HashSet<usize> = Default::default();
+        let (mut n_deform, mut n_unmap, mut n_miss) = (0usize, 0usize, 0usize);
+        for ch in &stamped_channels {
+            let hits = ch
+                .routes
+                .iter()
+                .filter(|(nid, _)| net_pos.contains_key(nid))
+                .count();
+            debug!(
+                "  route-stamp: channel with {} route(s), {} resolve to parent nets, {} group(s)",
+                ch.routes.len(),
+                hits,
+                ch.groups.len()
+            );
+            for (k, grp) in ch.groups.iter().enumerate() {
+                if !ch.frozen[k] {
+                    continue; // stayed on the rigid machinery, no certificate
+                }
+                // v1 SCOPE: only the REFERENCE column's copper is
+                // licensed. Sibling columns have DIFFERENT foreign
+                // obstacle patterns (ch1's band holds ch2's jack;
+                // ch4's holds none) — translated copper certified
+                // against the reference obstacles measured 4 shorts +
+                // 5 unc in sibling columns. Sibling stamping needs
+                // per-column certificates (mini-solve per channel —
+                // the recorded next arc).
+                if k > 0 {
+                    continue;
+                }
+                let deltas: Vec<(f64, f64)> = grp
+                    .iter()
+                    .zip(&ch.ref_stamp_pos)
+                    .map(|(&ci, &(sx, sy))| {
+                        (board.components[ci].x - sx, board.components[ci].y - sy)
+                    })
+                    .collect();
+                if deltas.is_empty() {
+                    continue;
+                }
+                let n = deltas.len() as f64;
+                let (dx, dy) = (
+                    deltas.iter().map(|d| d.0).sum::<f64>() / n,
+                    deltas.iter().map(|d| d.1).sum::<f64>() / n,
+                );
+                let dev = deltas
+                    .iter()
+                    .map(|d| (d.0 - dx).abs().max((d.1 - dy).abs()))
+                    .fold(0.0f64, f64::max);
+                if dev > 0.1 {
+                    n_deform += 1;
+                    debug!(
+                        "  route-stamp: group {k} deformed (max member deviation {dev:.2}mm) — skipped"
+                    );
+                    continue;
+                }
+                // Copper is only certified in its own column FRAME —
+                // the reference frame for k=0, the anchor translation
+                // for siblings. A block that drifted off its frame
+                // keeps pure-member nets pad-consistent but lands the
+                // copper in UNCERTIFIED territory (measured: 17
+                // shorts from 17mm-drifted stamps).
+                let (ex, ey) = ch.expect[k];
+                if (dx - ex).abs() > 0.25 || (dy - ey).abs() > 0.25 {
+                    n_deform += 1;
+                    debug!(
+                        "  route-stamp: group {k} at delta ({dx:.2},{dy:.2}) vs licensed frame ({ex:.2},{ey:.2}) — skipped"
+                    );
+                    continue;
+                }
+                for (nid, route) in &ch.routes {
+                    let Some(&ri) = net_pos.get(nid) else { continue };
+                    // Map the reference net to this sibling's net via
+                    // member-parallel pin order (k=0 maps to itself).
+                    let target = if k == 0 {
+                        Some(ri)
+                    } else {
+                        let mut mapped: Option<usize> = None;
+                        let mut ok = true;
+                        for &(cid, pid) in &board.nets[ri].pins {
+                            let Some(m) = ch
+                                .ref_members
+                                .iter()
+                                .position(|&mi| board.components[mi].id == cid)
+                            else {
+                                continue; // pin on a fixed/foreign part
+                            };
+                            let refc = &board.components[ch.ref_members[m]];
+                            let Some(j) =
+                                refc.pins.iter().position(|p| p.pin_id == pid)
+                            else {
+                                ok = false;
+                                break;
+                            };
+                            let sib = &board.components[grp[m]];
+                            let Some(snid) = sib.pins.get(j).and_then(|p| p.net)
+                            else {
+                                ok = false;
+                                break;
+                            };
+                            let Some(&si) = net_pos.get(&snid) else {
+                                ok = false;
+                                break;
+                            };
+                            if mapped.map_or(false, |mm| mm != si) {
+                                ok = false;
+                                break;
+                            }
+                            mapped = Some(si);
+                        }
+                        if ok { mapped } else { None }
+                    };
+                    let Some(ti) = target else {
+                        n_unmap += 1;
+                        continue;
+                    };
+                    let tnet = &board.nets[ti];
+                    if tnet.pins.len() < 2
+                        || tnet.plane_layer.is_some()
+                        || tnet.is_plane_connected(&board.layer_stack)
+                        || taken.contains(&ti)
+                    {
+                        continue;
+                    }
+                    let mut t = route.clone();
+                    t.net_id = tnet.id;
+                    for sg in t.segments.iter_mut() {
+                        sg.start.0 += dx;
+                        sg.start.1 += dy;
+                        sg.end.0 += dx;
+                        sg.end.1 += dy;
+                    }
+                    for v in t.vias.iter_mut() {
+                        v.x += dx;
+                        v.y += dy;
+                    }
+                    // Pad-exact revalidation on the PARENT board.
+                    let all_touched = tnet.pins.iter().all(|&(cid, pid)| {
+                        let Some(&ci) = comp_pos.get(&cid) else { return false };
+                        let comp = &board.components[ci];
+                        let Some(pin) = comp.pins.iter().find(|p| p.pin_id == pid)
+                        else {
+                            return false;
+                        };
+                        let (c, sn) = (comp.theta.cos(), comp.theta.sin());
+                        let px = comp.x + pin.dx * c - pin.dy * sn;
+                        let py = comp.y + pin.dx * sn + pin.dy * c;
+                        let half = pin
+                            .pad
+                            .as_ref()
+                            .map(|p| p.width_mm.min(p.height_mm) / 2.0)
+                            .unwrap_or(0.4);
+                        t.segments.iter().any(|sg| {
+                            geom::point_segment_dist((px, py), sg.start, sg.end)
+                                < sg.width_mm / 2.0 + half - 0.001
+                        })
+                    });
+                    if !all_touched {
+                        n_miss += 1;
+                        debug!(
+                            "  route-stamp miss: '{}' (group {k}, delta {dx:.2},{dy:.2})",
+                            tnet.name
+                        );
+                        continue;
+                    }
+                    taken.insert(ti);
+                    stamped_pre.push((ti, t));
+                }
+            }
+        }
+        if !stamped_pre.is_empty() || n_deform + n_unmap + n_miss > 0 {
+            info!(
+                "route stamping: {} net(s) pre-routed from certified channel copper ({} group(s) deformed, {} unmapped, {} pad-miss)",
+                stamped_pre.len(),
+                n_deform,
+                n_unmap,
+                n_miss
+            );
+        }
+        for (i, r) in &stamped_pre {
+            pathfinder::block_route_geometry(&mut final_grid, r, &board);
+            routing_nets[*i].pins = Vec::new();
+        }
+    }
+
     let mut final_routes = pathfinder::pathfinder_route(
         &mut final_grid,
         &routing_nets,
@@ -1539,6 +1889,9 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         false, // no vias
     );
     for (i, r) in fanout_drops {
+        final_routes[i] = r;
+    }
+    for (i, r) in stamped_pre {
         final_routes[i] = r;
     }
 
@@ -5974,13 +6327,21 @@ fn sibling_suffix_classes(board: &Board) -> Vec<Vec<(usize, (f64, f64))>> {
 /// NEGOTIATION: certification failures retry with wider exit-pad
 /// separation and a fresh seed — moving the virtual boundary pads is
 /// exactly the degree of freedom a hierarchical block owns.
+/// A certified channel solve, in BOARD coordinates: the reference
+/// members' placements AND the certified copper. Parent NetIds are
+/// preserved (mini nets are clones of parent nets).
+struct CertifiedChannel {
+    placements: Vec<(usize, f64, f64, f64)>,
+    routes: Vec<(NetId, Route)>,
+}
+
 fn solve_channel_miniboard(
     board: &Board,
     free_members: &[usize],
     region: (f64, f64, f64, f64),
     config: &PnrConfig,
     seed: u64,
-) -> Option<Vec<(usize, f64, f64, f64)>> {
+) -> Option<CertifiedChannel> {
     for (attempt, pad_sep) in [3.0f64, 5.0, 8.0].iter().enumerate() {
         let got = solve_channel_miniboard_attempt(
             board,
@@ -6007,7 +6368,7 @@ fn solve_channel_miniboard_attempt(
     config: &PnrConfig,
     seed: u64,
     pad_sep: f64,
-) -> Option<Vec<(usize, f64, f64, f64)>> {
+) -> Option<CertifiedChannel> {
     use std::collections::{HashMap, HashSet};
     let (rx0, ry0, rw, rh) = region;
     let member_set: HashSet<usize> = free_members.iter().copied().collect();
@@ -6435,8 +6796,31 @@ fn solve_channel_miniboard_attempt(
         .enumerate()
         .map(|(i, c)| (c.id, i))
         .collect();
-    Some(
-        free_members
+    // Certified copper, translated to board coords. Boundary-pad
+    // stubs stay in (they're real copper of LEAVING nets — those
+    // nets fail the caller's all-pins-touched revalidation and route
+    // normally at top level; interior nets never had exit pads).
+    let mut routes: Vec<(NetId, Route)> = Vec::new();
+    for (i, n) in result.board.nets.iter().enumerate() {
+        let Some(r) = result.routes.get(i) else { continue };
+        if r.is_empty() {
+            continue;
+        }
+        let mut t = r.clone();
+        for sg in t.segments.iter_mut() {
+            sg.start.0 += rx0;
+            sg.start.1 += ry0;
+            sg.end.0 += rx0;
+            sg.end.1 += ry0;
+        }
+        for v in t.vias.iter_mut() {
+            v.x += rx0;
+            v.y += ry0;
+        }
+        routes.push((n.id, t));
+    }
+    Some(CertifiedChannel {
+        placements: free_members
             .iter()
             .zip(&free_ids)
             .filter_map(|(&ci, id)| {
@@ -6445,7 +6829,8 @@ fn solve_channel_miniboard_attempt(
                 Some((ci, m.x + rx0, m.y + ry0, m.theta))
             })
             .collect(),
-    )
+        routes,
+    })
 }
 
 /// CHANNEL STAMPING: find families of sibling functional groups
