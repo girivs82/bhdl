@@ -1614,6 +1614,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
             .collect();
         let mut taken: std::collections::HashSet<usize> = Default::default();
         let (mut n_deform, mut n_unmap, mut n_miss) = (0usize, 0usize, 0usize);
+        let mut n_partial = 0usize;
         for ch in &stamped_channels {
             let hits = ch
                 .routes
@@ -1720,10 +1721,20 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                     if tnet.pins.len() < 2
                         || tnet.plane_layer.is_some()
                         || tnet.is_plane_connected(&board.layer_stack)
-                        || taken.contains(&ti)
                     {
                         continue;
                     }
+                    // A net already stamped by another channel MERGES
+                    // its copper in (rails cross every channel — each
+                    // column's certified GND/VCC tree becomes an
+                    // ISLAND of one Route; completion treats non-main
+                    // components' pads as unreached and stitches the
+                    // islands through them).
+                    let merge_into: Option<usize> = if taken.contains(&ti) {
+                        stamped_pre.iter().position(|(i, _)| *i == ti)
+                    } else {
+                        None
+                    };
                     let mut t = route.clone();
                     t.net_id = tnet.id;
                     for sg in t.segments.iter_mut() {
@@ -1737,43 +1748,75 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                         v.y += dy;
                     }
                     // Pad-exact revalidation on the PARENT board.
-                    let all_touched = tnet.pins.iter().all(|&(cid, pid)| {
-                        let Some(&ci) = comp_pos.get(&cid) else { return false };
-                        let comp = &board.components[ci];
-                        let Some(pin) = comp.pins.iter().find(|p| p.pin_id == pid)
-                        else {
-                            return false;
-                        };
-                        let (c, sn) = (comp.theta.cos(), comp.theta.sin());
-                        let px = comp.x + pin.dx * c - pin.dy * sn;
-                        let py = comp.y + pin.dx * sn + pin.dy * c;
-                        let half = pin
-                            .pad
-                            .as_ref()
-                            .map(|p| p.width_mm.min(p.height_mm) / 2.0)
-                            .unwrap_or(0.4);
-                        t.segments.iter().any(|sg| {
-                            geom::point_segment_dist((px, py), sg.start, sg.end)
-                                < sg.width_mm / 2.0 + half - 0.001
+                    let touched = tnet
+                        .pins
+                        .iter()
+                        .filter(|&&(cid, pid)| {
+                            let Some(&ci) = comp_pos.get(&cid) else {
+                                return false;
+                            };
+                            let comp = &board.components[ci];
+                            let Some(pin) =
+                                comp.pins.iter().find(|p| p.pin_id == pid)
+                            else {
+                                return false;
+                            };
+                            let (c, sn) = (comp.theta.cos(), comp.theta.sin());
+                            let px = comp.x + pin.dx * c - pin.dy * sn;
+                            let py = comp.y + pin.dx * sn + pin.dy * c;
+                            let half = pin
+                                .pad
+                                .as_ref()
+                                .map(|p| p.width_mm.min(p.height_mm) / 2.0)
+                                .unwrap_or(0.4);
+                            t.segments.iter().any(|sg| {
+                                geom::point_segment_dist((px, py), sg.start, sg.end)
+                                    < sg.width_mm / 2.0 + half - 0.001
+                            })
                         })
-                    });
-                    if !all_touched {
+                        .count();
+                    // Full stamp, partial stamp (leaving net keeps its
+                    // certified in-column copper; completion bridges
+                    // from the exit stub instead of the top-level
+                    // router re-deriving the whole net around the
+                    // frozen blocks — the F.Cu sprawl), or miss.
+                    if touched < 2 {
                         n_miss += 1;
                         debug!(
-                            "  route-stamp miss: '{}' (group {k}, delta {dx:.2},{dy:.2})",
-                            tnet.name
+                            "  route-stamp miss: '{}' ({touched}/{} pins, group {k}, delta {dx:.2},{dy:.2})",
+                            tnet.name,
+                            tnet.pins.len()
                         );
                         continue;
                     }
-                    taken.insert(ti);
-                    stamped_pre.push((ti, t));
+                    if touched < tnet.pins.len() {
+                        n_partial += 1;
+                    }
+                    if let Some(mi) = merge_into {
+                        let dst = &mut stamped_pre[mi].1;
+                        let seg_off = dst.segments.len();
+                        let via_off = dst.vias.len();
+                        let span_off = dst.path_spans.len();
+                        dst.segments.extend(t.segments);
+                        dst.vias.extend(t.vias);
+                        dst.path_spans
+                            .extend(t.path_spans.iter().map(|&(s, l)| (s + seg_off, l)));
+                        dst.path_parents
+                            .extend(t.path_parents.iter().map(|p| p.map(|x| x + span_off)));
+                        dst.via_spans
+                            .extend(t.via_spans.iter().map(|&(s, l)| (s + via_off, l)));
+                    } else {
+                        taken.insert(ti);
+                        stamped_pre.push((ti, t));
+                    }
                 }
             }
         }
         if !stamped_pre.is_empty() || n_deform + n_unmap + n_miss > 0 {
             info!(
-                "route stamping: {} net(s) pre-routed from certified channel copper ({} group(s) deformed, {} unmapped, {} pad-miss)",
+                "route stamping: {} net(s) pre-routed from certified channel copper ({} partial, {} group(s) deformed, {} unmapped, {} pad-miss)",
                 stamped_pre.len(),
+                n_partial,
                 n_deform,
                 n_unmap,
                 n_miss
@@ -1797,6 +1840,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
     for (i, r) in fanout_drops {
         final_routes[i] = r;
     }
+    let stamped_idx: Vec<usize> = stamped_pre.iter().map(|(i, _)| *i).collect();
     for (i, r) in stamped_pre {
         final_routes[i] = r;
     }
@@ -1892,6 +1936,93 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
     // incomplete forever, and recovery only touches RIPPED nets.
     // Extend every incomplete non-plane net with vias allowed.
     completion_pass(&board, &mut final_routes);
+
+    // 5.45. Prune UNUSED exit stubs on stamped nets: a certified
+    // boundary stub completion didn't adopt ends in bare copper (the
+    // oracle's track_dangling). Iteratively drop segments with a FREE
+    // end — an endpoint touching no same-net pad, no via, and no
+    // other segment of the route. Pruning invalidates span indices,
+    // so a pruned route's span structure is cleared (validator
+    // semantics: empty spans = rip-whole on damage).
+    {
+        let comp_pos: std::collections::HashMap<ComponentId, usize> = board
+            .components
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (c.id, i))
+            .collect();
+        let mut pruned_total = 0usize;
+        for &i in &stamped_idx {
+            let net = &board.nets[i];
+            let pads: Vec<(f64, f64, f64)> = net
+                .pins
+                .iter()
+                .filter_map(|&(cid, pid)| {
+                    let &ci = comp_pos.get(&cid)?;
+                    let comp = &board.components[ci];
+                    let pin = comp.pins.iter().find(|p| p.pin_id == pid)?;
+                    let (c, sn) = (comp.theta.cos(), comp.theta.sin());
+                    let half = pin
+                        .pad
+                        .as_ref()
+                        .map(|p| p.width_mm.min(p.height_mm) / 2.0)
+                        .unwrap_or(0.4);
+                    Some((
+                        comp.x + pin.dx * c - pin.dy * sn,
+                        comp.y + pin.dx * sn + pin.dy * c,
+                        half,
+                    ))
+                })
+                .collect();
+            let r = &mut final_routes[i];
+            let mut pruned_here = 0usize;
+            loop {
+                let mut drop: Option<usize> = None;
+                'seg: for (si, sg) in r.segments.iter().enumerate() {
+                    for &pt in &[sg.start, sg.end] {
+                        let on_pad = pads.iter().any(|&(px, py, half)| {
+                            (px - pt.0).hypot(py - pt.1) < half + sg.width_mm / 2.0
+                        });
+                        if on_pad {
+                            continue;
+                        }
+                        let on_via = r
+                            .vias
+                            .iter()
+                            .any(|v| (v.x - pt.0).hypot(v.y - pt.1) < 0.4);
+                        if on_via {
+                            continue;
+                        }
+                        let attached = r.segments.iter().enumerate().any(|(sj, s2)| {
+                            sj != si
+                                && geom::point_segment_dist(pt, s2.start, s2.end)
+                                    < s2.width_mm / 2.0 + 0.01
+                        });
+                        if !attached {
+                            drop = Some(si);
+                            break 'seg;
+                        }
+                    }
+                }
+                match drop {
+                    Some(si) => {
+                        r.segments.remove(si);
+                        pruned_here += 1;
+                    }
+                    None => break,
+                }
+            }
+            if pruned_here > 0 {
+                r.path_spans.clear();
+                r.path_parents.clear();
+                r.via_spans.clear();
+                pruned_total += pruned_here;
+            }
+        }
+        if pruned_total > 0 {
+            info!("route stamping: {pruned_total} unused exit-stub segment(s) pruned");
+        }
+    }
 
     // 5.5. Via drops for plane-assigned nets: through-hole barrels
     // pierce their plane directly; each SURFACE pad gets a short stub
