@@ -2533,12 +2533,28 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         // the local check missed), that net reverts to its pre-miter
         // route wholesale — validated copper we already had.
         let saved = final_routes.clone();
+        // Fidelity-tier polish: staircases are the ortho discipline's
+        // grid artifact, so the pass runs where that discipline does.
+        // Ungated it measured 7v/1unc on non-fidelity corpus boards —
+        // the oracle sees conflict families the kernel pre-check
+        // doesn't; the transactional guard only covers what the
+        // INTERNAL validator objects to.
+        let fidelity = board.config.route_bias.is_some()
+            || board.config.design_track_width_mm.is_some();
+        let staired = if !fidelity || std::env::var("BHDL_PNR_NO_MITER").is_ok() {
+            0
+        } else {
+            staircase_pass(&board, &mut final_routes)
+        };
+        if staired > 0 {
+            info!("staircase pass: {staired} chain(s) canonicalized");
+        }
         let mitered = if std::env::var("BHDL_PNR_NO_MITER").is_ok() {
             0
         } else {
             miter_pass(&board, &mut final_routes)
         };
-        if mitered > 0 {
+        if mitered + staired > 0 {
             info!("45° miter pass: {} corners cut", mitered);
             let post: Vec<usize> =
                 final_routes.iter().map(|r| r.segments.len()).collect();
@@ -4484,6 +4500,193 @@ fn debug_check_foreign_pads(board: &Board, routes: &[Route], tag: &str) {
 /// cells: parallel adjacent diagonals sit 0.212mm apart). Every miter
 /// is validated against foreign copper before applying, and the
 /// final validate_and_rip round remains the shipping guarantee.
+/// STAIRCASE CANONICALIZATION: a monotone chain that alternates
+/// between two compass directions (the grid's rendering of an
+/// off-45 diagonal — measured: K2 on the ecc83 descending in three
+/// 1.2mm 45° steps interleaved with verticals) is replaced by its
+/// TWO maximal legs (diagonal first, then straight — or the reverse
+/// when the first order conflicts), and a single-direction chain of
+/// grid-cell stubs merges into one segment. Same H/V/45 discipline,
+/// same endpoints, fewer bends — the hand-router's canonical form.
+/// Legality is exact-kernel checked against foreign copper; the
+/// caller wraps the pass in the miter block's transactional
+/// save/validate/revert.
+fn staircase_pass(board: &Board, final_routes: &mut [Route]) -> usize {
+    let mut collapsed = 0usize;
+    let dir8 = |a: (f64, f64), b: (f64, f64)| -> Option<(i8, i8)> {
+        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+        let len = dx.hypot(dy);
+        if len < 1e-6 {
+            return None;
+        }
+        let (ux, uy) = (dx / len, dy / len);
+        let sx = if ux > 0.4 {
+            1
+        } else if ux < -0.4 {
+            -1
+        } else {
+            0
+        };
+        let sy = if uy > 0.4 {
+            1
+        } else if uy < -0.4 {
+            -1
+        } else {
+            0
+        };
+        // Reject non-H/V/45 (a 26-degree leg snaps to a wrong dir).
+        let (ex, ey) = (sx as f64, sy as f64);
+        let elen = ex.hypot(ey);
+        if elen < 0.5 || (ux * ex + uy * ey) / elen < 0.999 {
+            return None;
+        }
+        Some((sx, sy))
+    };
+    for ni in 0..final_routes.len() {
+        let net_id = final_routes[ni].net_id;
+        if final_routes[ni].segments.is_empty() {
+            continue;
+        }
+        let mut cidx: Option<geom::ClearanceIndex> = None;
+        let n_spans = final_routes[ni].path_spans.len();
+        for sp in 0..n_spans {
+            'rescan: loop {
+                let (s0, sl) = final_routes[ni].path_spans[sp];
+                if sl < 2 {
+                    break;
+                }
+                let segs = &final_routes[ni].segments;
+                // Find the first window [i0, i1] of chained segments
+                // (same layer/width, end==next start) using <=2 dirs
+                // where a collapse would shed at least one segment.
+                let mut found: Option<(usize, usize, Vec<(i8, i8)>)> = None;
+                let mut i0 = s0;
+                while i0 + 1 < s0 + sl {
+                    let base = &segs[i0];
+                    let Some(d0) = dir8(base.start, base.end) else {
+                        i0 += 1;
+                        continue;
+                    };
+                    let mut dirs = vec![d0];
+                    let mut i1 = i0;
+                    while i1 + 1 < s0 + sl {
+                        let a = &segs[i1];
+                        let b = &segs[i1 + 1];
+                        if a.layer != b.layer
+                            || (a.width_mm - b.width_mm).abs() > 1e-6
+                            || (a.end.0 - b.start.0).hypot(a.end.1 - b.start.1)
+                                > 1e-4
+                        {
+                            break;
+                        }
+                        let Some(d) = dir8(b.start, b.end) else { break };
+                        let mut set = dirs.clone();
+                        if !set.contains(&d) {
+                            set.push(d);
+                        }
+                        if set.len() > 2 {
+                            break;
+                        }
+                        dirs = set;
+                        i1 += 1;
+                    }
+                    let n_win = i1 - i0 + 1;
+                    let worthwhile = (dirs.len() == 1 && n_win >= 2)
+                        || (dirs.len() == 2 && n_win >= 3);
+                    if worthwhile {
+                        found = Some((i0, i1, dirs));
+                        break;
+                    }
+                    i0 += 1;
+                }
+                let Some((i0, i1, dirs)) = found else { break 'rescan };
+                let segs = &final_routes[ni].segments;
+                let layer = segs[i0].layer;
+                let width = segs[i0].width_mm;
+                let a0 = segs[i0].start;
+                let b1 = segs[i1].end;
+                // Total run per direction.
+                let mut run: std::collections::HashMap<(i8, i8), (f64, f64)> =
+                    std::collections::HashMap::new();
+                for s in &segs[i0..=i1] {
+                    if let Some(d) = dir8(s.start, s.end) {
+                        let e = run.entry(d).or_insert((0.0, 0.0));
+                        e.0 += s.end.0 - s.start.0;
+                        e.1 += s.end.1 - s.start.1;
+                    }
+                }
+                let legs: Vec<(f64, f64)> =
+                    dirs.iter().map(|d| run[d]).collect();
+                // Candidate orders: as-entered, then reversed.
+                let orders: Vec<Vec<(f64, f64)>> = if legs.len() == 1 {
+                    vec![legs.clone()]
+                } else {
+                    vec![legs.clone(), legs.iter().rev().copied().collect()]
+                };
+                let idx = cidx.get_or_insert_with(|| {
+                    geom::ClearanceIndex::build(board, final_routes_view(final_routes), Some(net_id))
+                });
+                let mut replacement: Option<Vec<RouteSegment>> = None;
+                'orders: for ord in &orders {
+                    let mut pts = vec![a0];
+                    for &(vx, vy) in ord {
+                        let last = *pts.last().unwrap();
+                        pts.push((last.0 + vx, last.1 + vy));
+                    }
+                    let end = *pts.last().unwrap();
+                    if (end.0 - b1.0).hypot(end.1 - b1.1) > 1e-4 {
+                        continue;
+                    }
+                    for w in pts.windows(2) {
+                        if idx
+                            .first_conflict(w[0], w[1], width, layer, net_id)
+                            .is_some()
+                        {
+                            continue 'orders;
+                        }
+                    }
+                    replacement = Some(
+                        pts.windows(2)
+                            .filter(|w| {
+                                (w[0].0 - w[1].0).hypot(w[0].1 - w[1].1) > 1e-6
+                            })
+                            .map(|w| RouteSegment {
+                                layer,
+                                start: w[0],
+                                end: w[1],
+                                width_mm: width,
+                            })
+                            .collect(),
+                    );
+                    break;
+                }
+                let Some(newsegs) = replacement else { break 'rescan };
+                let removed = (i1 - i0 + 1) - newsegs.len();
+                if removed == 0 {
+                    break 'rescan;
+                }
+                let r = &mut final_routes[ni];
+                r.segments.splice(i0..=i1, newsegs);
+                r.path_spans[sp].1 -= removed;
+                for (q, spq) in r.path_spans.iter_mut().enumerate() {
+                    if q != sp && spq.0 > i0 {
+                        spq.0 -= removed;
+                    }
+                }
+                cidx = None; // own copper changed — rebuild lazily
+                collapsed += 1;
+                continue 'rescan;
+            }
+        }
+    }
+    collapsed
+}
+
+/// Identity view helper: ClearanceIndex::build takes &[Route].
+fn final_routes_view(r: &mut [Route]) -> &[Route] {
+    r
+}
+
 fn miter_pass(board: &Board, final_routes: &mut [Route]) -> usize {
     let clearance = board.config.min_spacing_mm;
     let bw = board.config.outline.width();
