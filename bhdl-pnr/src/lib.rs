@@ -313,6 +313,66 @@ pub fn place_and_route_best_of(
         }
     }
 
+    // CHEAP-AMPUTATION TIER: still imperfect → retry with the
+    // validator choosing amputees by REPAIR COST instead of net
+    // weight. Cures the whole-net-in-disguise rip class (ecc83
+    // strict: one bad corner cost K2 26/27 segments and recovery was
+    // walled by the survivor) but shifts every later rip — measured
+    // both fixing and breaking boards, so it only runs where
+    // dominance can police it.
+    let still_imperfect2 = best.as_ref().map_or(true, |b| {
+        let total_sinks: usize = b
+            .board
+            .nets
+            .iter()
+            .filter(|n| n.pins.len() >= 2)
+            .map(|n| n.pins.len())
+            .sum();
+        b.metrics.connected_sinks < total_sinks
+            || b.metrics.pour_defects > 0
+            || !b.drc_violations.is_empty()
+            || legalization::residual_pad_overlaps(&b.board) > 0
+    });
+    if still_imperfect2 {
+        for trial in 0..trials {
+            info!("=== Cheap-amputation trial {}/{} ===", trial + 1, trials);
+            let mut trial_board = board.clone();
+            trial_board.config.cheap_amputation = true;
+            let result = place_and_route(
+                trial_board,
+                config.clone(),
+                base_seed.wrapping_add(trial as u64),
+            )?;
+            let dominated = best
+                .as_ref()
+                .map_or(false, |b| trial_dominated(&result, b, has_measured));
+            if !dominated {
+                info!(
+                    "Cheap-amputation trial {} is new best: {} connected sink(s), HPWL={:.1}mm",
+                    trial + 1,
+                    result.metrics.connected_sinks,
+                    result.metrics.hpwl_mm
+                );
+                let total_sinks: usize = result
+                    .board
+                    .nets
+                    .iter()
+                    .filter(|n| n.pins.len() >= 2)
+                    .map(|n| n.pins.len())
+                    .sum();
+                let r_over = legalization::residual_pad_overlaps(&result.board);
+                let perfect = result.metrics.connected_sinks >= total_sinks
+                    && result.metrics.pour_defects == 0
+                    && result.drc_violations.is_empty()
+                    && r_over == 0;
+                best = Some(result);
+                if perfect {
+                    break;
+                }
+            }
+        }
+    }
+
     // ESCAPE-DEMAND TIER: still imperfect after the fanout tier →
     // re-place with IC pin rows projecting fanout-corridor demand
     // into the density map (scale 2.0) AND fanout-first pre-drops.
@@ -1847,6 +1907,21 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
 
     if std::env::var("BHDL_PNR_DEBUG_CLEARANCE").is_ok() {
         debug_check_foreign_pads(&board, &final_routes, "after-pass1");
+    }
+    if std::env::var("BHDL_PNR_DEBUG_STAGES").is_ok() {
+        for (i, n) in board.nets.iter().enumerate() {
+            if n.pins.len() < 2 || n.plane_layer.is_some() {
+                continue;
+            }
+            let r = &final_routes[i];
+            let unr = pathfinder::unreached_sink_count(n, &board, r);
+            debug!(
+                "  [pass1] '{}': {} seg(s), {} unreached",
+                n.name,
+                r.segments.len(),
+                unr
+            );
+        }
     }
     let routed_pass1 = final_routes.iter().filter(|r| !r.is_empty()).count();
     let needs_via: Vec<usize> = final_routes.iter().enumerate()
@@ -6364,6 +6439,50 @@ fn sibling_suffix_classes(board: &Board) -> Vec<Vec<(usize, (f64, f64))>> {
 /// NEGOTIATION: certification failures retry with wider exit-pad
 /// separation and a fresh seed — moving the virtual boundary pads is
 /// exactly the degree of freedom a hierarchical block owns.
+/// Segments that WOULD be amputated if the branch containing
+/// `seg_idx` were cut (the span-subtree closure the validator's
+/// amputation performs) — its repair-cost estimate for choosing WHICH
+/// of two offenders to rip. Routes without span structure rip whole:
+/// cost = every segment.
+fn amputation_cost(route: &Route, seg_idx: usize) -> usize {
+    let Some((s, _)) = route
+        .path_spans
+        .iter()
+        .copied()
+        .find(|(ps, pl)| seg_idx >= *ps && seg_idx < *ps + *pl)
+    else {
+        return route.segments.len();
+    };
+    let root = route
+        .path_spans
+        .iter()
+        .position(|&(ps, _)| ps == s)
+        .unwrap_or(0);
+    let n = route.path_spans.len();
+    let mut doomed = vec![false; n];
+    doomed[root] = true;
+    loop {
+        let mut grew = false;
+        for i in 0..n {
+            if !doomed[i] {
+                if let Some(Some(pp)) = route.path_parents.get(i) {
+                    if doomed[*pp] {
+                        doomed[i] = true;
+                        grew = true;
+                    }
+                }
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    (0..n)
+        .filter(|&i| doomed[i])
+        .map(|i| route.path_spans[i].1)
+        .sum()
+}
+
 /// A certified channel solve, in BOARD coordinates: the reference
 /// members' placements AND the certified copper. Parent NetIds are
 /// preserved (mini nets are clones of parent nets).
@@ -11032,13 +11151,30 @@ fn validate_and_rip(
                             ) {
                                 let wi = board.nets.get(i).map(|n| n.weight).unwrap_or(1.0);
                                 let wj = board.nets.get(j).map(|n| n.weight).unwrap_or(1.0);
-                                // Amputate the offending BRANCH of the
-                                // lighter net, not its whole tree — the
-                                // recovery loop then extends it back with
-                                // vias. Whole-net rips threw away good
-                                // copper and the from-scratch reroute
-                                // often failed where an extension
-                                // succeeds.
+                                // Amputee choice: net WEIGHT by default
+                                // (lighter loses). Under the
+                                // cheap_amputation trial knob: repair
+                                // COST (smaller span subtree loses,
+                                // weight breaks ties). The knob variant
+                                // cures the whole-net-in-disguise class
+                                // (ecc83 strict: one bad corner cost K2
+                                // 26/27 segments, recovery walled) but
+                                // shifts the rip cascade — measured both
+                                // fixing and breaking boards, so
+                                // dominance polices it per board.
+                                // Milder gates (4x-asymmetry, 80%
+                                // whole-net) measured NO effect: the win
+                                // comes from early-round divergence, not
+                                // the big amputation itself.
+                                let rip_j = if board.config.cheap_amputation {
+                                    let ci =
+                                        amputation_cost(&final_routes[i], sai);
+                                    let cj =
+                                        amputation_cost(&final_routes[j], sbi);
+                                    if ci != cj { cj < ci } else { wj <= wi }
+                                } else {
+                                    wj <= wi
+                                };
                                 log::debug!(
                                     "validator: track-vs-track offender '{}' seg ({:.2},{:.2})-({:.2},{:.2}) w={:.2} vs '{}' seg ({:.2},{:.2})-({:.2},{:.2}) w={:.2}",
                                     board.nets[i].name, sa.start.0, sa.start.1, sa.end.0, sa.end.1, sa.width_mm,
@@ -11046,7 +11182,7 @@ fn validate_and_rip(
                                 );
                                 // Ban the ripped side's site (same
                                 // ping-pong argument as track-vs-pad).
-                                let (bi, bseg) = if wj <= wi {
+                                let (bi, bseg) = if rip_j {
                                     (j, sb)
                                 } else {
                                     (i, sa)
@@ -11058,7 +11194,7 @@ fn validate_and_rip(
                                         (bseg.start.1 + bseg.end.1) / 2.0,
                                     ),
                                 ));
-                                offender = Some(if wj <= wi {
+                                offender = Some(if rip_j {
                                     (j, Some(sbi))
                                 } else {
                                     (i, Some(sai))

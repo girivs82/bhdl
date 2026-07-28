@@ -64,6 +64,14 @@ pub struct BoardConfig {
     /// runs only as a best-of FALLBACK tier, never by default.
     #[serde(default)]
     pub fanout_first: bool,
+    /// Validator amputee choice by REPAIR COST (smaller span subtree
+    /// loses) instead of net weight. Cures the whole-net-in-disguise
+    /// amputation class (ecc83 strict: one bad corner cost K2 26 of
+    /// 27 segments and recovery was walled) but the changed rip
+    /// cascade measured 4 unc on other boards — a knife-edge knob
+    /// that runs only as a best-of FALLBACK tier under dominance.
+    #[serde(default)]
+    pub cheap_amputation: bool,
     /// Escape-demand density scale: >0 makes IC pin rows project
     /// fanout-corridor demand into the placer's density map (s99's
     /// conserved congestion debt cleared at 2.0 — the row finally
@@ -126,6 +134,7 @@ impl Default for BoardConfig {
             min_trace_width_mm: 0.15,
             si_return_cost: false,
             fanout_first: false,
+            cheap_amputation: false,
             escape_demand: 0.0,
             min_spacing_mm: 0.15,
             edge_clearance_mm: 0.5,
