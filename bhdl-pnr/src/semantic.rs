@@ -1204,7 +1204,15 @@ pub fn build_board(
                 _ => n_layers - 1, // "bottom"
             };
             for n in nets.iter_mut() {
-                if n.allowed_layers.is_some() || n.plane_layer.is_some() {
+                // Plane nets whose pour lives on ANOTHER layer keep
+                // their multi-layer drop machinery untouched; a pour
+                // ON the preferred layer confines its tracked copper
+                // (pocket sub-nets, island stitches) like any net —
+                // an unmasked GND stitch measured a via + F.Cu jog on
+                // a strict board, which the validator then ripped.
+                if n.allowed_layers.is_some()
+                    || (n.plane_layer.is_some() && n.plane_layer != Some(pref))
+                {
                     continue;
                 }
                 let mut allowed = vec![pref];

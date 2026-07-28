@@ -1421,7 +1421,96 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         .iter()
         .map(|n| {
             if n.plane_layer.is_some() {
-                PnrNet { pins: Vec::new(), ..n.clone() }
+                // A pour is an OPTIMIZATION, not a connectivity
+                // guarantee: a drilled pad tucked inside its own
+                // package's pin ring (the hard-net-first pocket
+                // predicate) has structurally poor pour reach — the
+                // fill must thread the ring gaps and every signal
+                // escape fences it further (measured: the ecc83
+                // valve's H9/GND pad stranded on every seed; the
+                // hand-routed demo serves that pad with a TRACK
+                // claimed early). Signal-layer pours therefore keep
+                // their POCKET pads as ROUTED sinks — paired with the
+                // nearest same-net pad as the tree's far anchor — and
+                // the pour serves everything else; same-net contact
+                // merges track and fill. Decided from geometry alone.
+                let on_signal = n
+                    .plane_layer
+                    .and_then(|pl| board.layer_stack.layers.get(pl))
+                    .map(|l| l.kind == crate::types::LayerKind::Signal)
+                    .unwrap_or(false);
+                let mut keep: Vec<(ComponentId, PinId)> = Vec::new();
+                if on_signal {
+                    let pos_of = |cid: ComponentId, pid: PinId| -> Option<(f64, f64)> {
+                        let comp = board.components.iter().find(|c| c.id == cid)?;
+                        let pin = comp.pins.iter().find(|p| p.pin_id == pid)?;
+                        let (co, sn) = (comp.theta.cos(), comp.theta.sin());
+                        Some((
+                            comp.x + pin.dx * co - pin.dy * sn,
+                            comp.y + pin.dx * sn + pin.dy * co,
+                        ))
+                    };
+                    let pockets: Vec<(ComponentId, PinId)> = n
+                        .pins
+                        .iter()
+                        .copied()
+                        .filter(|&(cid, pid)| {
+                            board.components.iter().any(|c| {
+                                c.id == cid
+                                    && c.pins.len() >= 5
+                                    && c.pins.iter().any(|p| {
+                                        p.pin_id == pid
+                                            && p.pad
+                                                .as_ref()
+                                                .and_then(|pd| pd.drill_mm)
+                                                .is_some()
+                                    })
+                            })
+                        })
+                        .collect();
+                    for &(cid, pid) in &pockets {
+                        keep.push((cid, pid));
+                        // Nearest same-net pad on ANOTHER component =
+                        // the routed tree's far anchor (pour-reachable
+                        // open copper).
+                        if let Some(pp) = pos_of(cid, pid) {
+                            if let Some(&far) = n
+                                .pins
+                                .iter()
+                                .filter(|&&(c2, _)| c2 != cid)
+                                .min_by(|&&(c2, p2), &&(c3, p3)| {
+                                    let d2 = pos_of(c2, p2)
+                                        .map(|q| (q.0 - pp.0).hypot(q.1 - pp.1))
+                                        .unwrap_or(f64::MAX);
+                                    let d3 = pos_of(c3, p3)
+                                        .map(|q| (q.0 - pp.0).hypot(q.1 - pp.1))
+                                        .unwrap_or(f64::MAX);
+                                    d2.partial_cmp(&d3)
+                                        .unwrap_or(std::cmp::Ordering::Equal)
+                                })
+                            {
+                                if !keep.contains(&far) {
+                                    keep.push(far);
+                                }
+                            }
+                        }
+                    }
+                }
+                if keep.len() >= 2 {
+                    info!(
+                        "pour/track split: '{}' keeps {} pocket sink(s) as ROUTED (pour serves the rest)",
+                        n.name,
+                        keep.len()
+                    );
+                }
+                if keep.len() >= 2 {
+                    // plane_layer cleared on the ROUTING clone only —
+                    // pathfinder would skip a plane net; the pour
+                    // machinery reads board.nets, which is untouched.
+                    PnrNet { pins: keep, plane_layer: None, ..n.clone() }
+                } else {
+                    PnrNet { pins: Vec::new(), ..n.clone() }
+                }
             } else {
                 n.clone()
             }

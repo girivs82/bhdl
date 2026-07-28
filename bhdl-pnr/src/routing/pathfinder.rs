@@ -85,6 +85,47 @@ pub fn pathfinder_route(
         .map(|(i, c)| (c.id, i))
         .collect();
 
+    // POUR-ANCHOR APRON (fidelity boards with a signal-layer pour):
+    // the hand-routed demos never crowd a plane-net pad — the pour
+    // must reach every anchor, and a signal lane hugging one fences
+    // it into an island no same-layer stitch can repair. Seed history
+    // cost in a 2-cell apron around every plane-net pad ON THE POUR
+    // LAYER so signals with alternatives keep the anchor's pour
+    // neighborhood open; terminals still enter via the sink
+    // exception.
+    if board.config.route_bias.is_some() || board.config.design_track_width_mm.is_some()
+    {
+        let mut apron: BTreeSet<CellCoord> = BTreeSet::new();
+        for net in &board.nets {
+            let Some(pl) = net.plane_layer else { continue };
+            if board.layer_stack.layers.get(pl).map(|l| l.kind)
+                != Some(crate::types::LayerKind::Signal)
+            {
+                continue;
+            }
+            for &(cid, pid) in &net.pins {
+                let Some(&ci) = comp_idx.get(&cid) else { continue };
+                let comp = &board.components[ci];
+                let Some(pin) = comp.pins.iter().find(|p| p.pin_id == pid) else {
+                    continue;
+                };
+                let (co, sn) = (comp.theta.cos(), comp.theta.sin());
+                let px = comp.x + pin.dx * co - pin.dy * sn;
+                let py = comp.y + pin.dx * sn + pin.dy * co;
+                let c0 = grid.point_to_cell(px, py, pl);
+                let mut ring: Vec<CellCoord> = vec![c0];
+                ring.extend(grid.ring8(c0));
+                for r1 in ring.clone() {
+                    ring.extend(grid.ring8(r1));
+                }
+                apron.extend(ring);
+            }
+        }
+        for cell in apron {
+            grid.get_mut(cell).history += 2.0;
+        }
+    }
+
     for _iteration in 0..max_iterations {
         grid.reset_demand();
 
