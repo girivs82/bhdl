@@ -4542,6 +4542,46 @@ fn staircase_pass(board: &Board, final_routes: &mut [Route]) -> usize {
         }
         Some((sx, sy))
     };
+    // Orientation-agnostic span polyline: segments within a span may
+    // be stored source-ward OR sink-ward (measured: the K2 chain is
+    // reverse-chained and a forward-only walk never even sees it).
+    let close = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).hypot(a.1 - b.1) < 1e-4;
+    let span_polyline = |segs: &[RouteSegment]| -> Option<Vec<(f64, f64)>> {
+        let n = segs.len();
+        if n == 0 {
+            return None;
+        }
+        let (l0, w0) = (segs[0].layer, segs[0].width_mm);
+        if segs
+            .iter()
+            .any(|s| s.layer != l0 || (s.width_mm - w0).abs() > 1e-6)
+        {
+            return None;
+        }
+        if n == 1 {
+            return Some(vec![segs[0].start, segs[0].end]);
+        }
+        let (a, b) = (&segs[0], &segs[1]);
+        let (p0, p1) = if close(a.end, b.start) || close(a.end, b.end) {
+            (a.start, a.end)
+        } else if close(a.start, b.start) || close(a.start, b.end) {
+            (a.end, a.start)
+        } else {
+            return None;
+        };
+        let mut pts = vec![p0, p1];
+        for s in &segs[1..] {
+            let cur = *pts.last().unwrap();
+            if close(s.start, cur) {
+                pts.push(s.end);
+            } else if close(s.end, cur) {
+                pts.push(s.start);
+            } else {
+                return None;
+            }
+        }
+        Some(pts)
+    };
     for ni in 0..final_routes.len() {
         let net_id = final_routes[ni].net_id;
         if final_routes[ni].segments.is_empty() {
@@ -4550,36 +4590,33 @@ fn staircase_pass(board: &Board, final_routes: &mut [Route]) -> usize {
         let mut cidx: Option<geom::ClearanceIndex> = None;
         let n_spans = final_routes[ni].path_spans.len();
         for sp in 0..n_spans {
+            let mut scan_start = 0usize;
             'rescan: loop {
                 let (s0, sl) = final_routes[ni].path_spans[sp];
                 if sl < 2 {
                     break;
                 }
                 let segs = &final_routes[ni].segments;
-                // Find the first window [i0, i1] of chained segments
-                // (same layer/width, end==next start) using <=2 dirs
+                let Some(pts_all) = span_polyline(&segs[s0..s0 + sl]) else {
+                    break 'rescan;
+                };
+                // Find the first EDGE window [e0, e1] using <=2 dirs
                 // where a collapse would shed at least one segment.
+                let edge_dir: Vec<Option<(i8, i8)>> = pts_all
+                    .windows(2)
+                    .map(|w| dir8(w[0], w[1]))
+                    .collect();
                 let mut found: Option<(usize, usize, Vec<(i8, i8)>)> = None;
-                let mut i0 = s0;
-                while i0 + 1 < s0 + sl {
-                    let base = &segs[i0];
-                    let Some(d0) = dir8(base.start, base.end) else {
-                        i0 += 1;
+                let mut e0 = scan_start.min(sl.saturating_sub(1));
+                while e0 + 1 < sl {
+                    let Some(d0) = edge_dir[e0] else {
+                        e0 += 1;
                         continue;
                     };
                     let mut dirs = vec![d0];
-                    let mut i1 = i0;
-                    while i1 + 1 < s0 + sl {
-                        let a = &segs[i1];
-                        let b = &segs[i1 + 1];
-                        if a.layer != b.layer
-                            || (a.width_mm - b.width_mm).abs() > 1e-6
-                            || (a.end.0 - b.start.0).hypot(a.end.1 - b.start.1)
-                                > 1e-4
-                        {
-                            break;
-                        }
-                        let Some(d) = dir8(b.start, b.end) else { break };
+                    let mut e1 = e0;
+                    while e1 + 1 < sl {
+                        let Some(d) = edge_dir[e1 + 1] else { break };
                         let mut set = dirs.clone();
                         if !set.contains(&d) {
                             set.push(d);
@@ -4588,65 +4625,92 @@ fn staircase_pass(board: &Board, final_routes: &mut [Route]) -> usize {
                             break;
                         }
                         dirs = set;
-                        i1 += 1;
+                        e1 += 1;
                     }
-                    let n_win = i1 - i0 + 1;
+                    let n_win = e1 - e0 + 1;
                     let worthwhile = (dirs.len() == 1 && n_win >= 2)
                         || (dirs.len() == 2 && n_win >= 3);
                     if worthwhile {
-                        found = Some((i0, i1, dirs));
+                        found = Some((e0, e1, dirs));
                         break;
                     }
-                    i0 += 1;
+                    e0 += 1;
                 }
-                let Some((i0, i1, dirs)) = found else { break 'rescan };
+                let Some((e0, e1_max, _)) = found else { break 'rescan };
                 let segs = &final_routes[ni].segments;
-                let layer = segs[i0].layer;
-                let width = segs[i0].width_mm;
-                let a0 = segs[i0].start;
-                let b1 = segs[i1].end;
-                // Total run per direction.
-                let mut run: std::collections::HashMap<(i8, i8), (f64, f64)> =
-                    std::collections::HashMap::new();
-                for s in &segs[i0..=i1] {
-                    if let Some(d) = dir8(s.start, s.end) {
-                        let e = run.entry(d).or_insert((0.0, 0.0));
-                        e.0 += s.end.0 - s.start.0;
-                        e.1 += s.end.1 - s.start.1;
-                    }
-                }
-                let legs: Vec<(f64, f64)> =
-                    dirs.iter().map(|d| run[d]).collect();
-                // Candidate orders: as-entered, then reversed.
-                let orders: Vec<Vec<(f64, f64)>> = if legs.len() == 1 {
-                    vec![legs.clone()]
-                } else {
-                    vec![legs.clone(), legs.iter().rev().copied().collect()]
-                };
+                let layer = segs[s0 + e0].layer;
+                let width = segs[s0 + e0].width_mm;
                 let idx = cidx.get_or_insert_with(|| {
                     geom::ClearanceIndex::build(board, final_routes_view(final_routes), Some(net_id))
                 });
-                let mut replacement: Option<Vec<RouteSegment>> = None;
-                'orders: for ord in &orders {
-                    let mut pts = vec![a0];
-                    for &(vx, vy) in ord {
-                        let last = *pts.last().unwrap();
-                        pts.push((last.0 + vx, last.1 + vy));
-                    }
-                    let end = *pts.last().unwrap();
-                    if (end.0 - b1.0).hypot(end.1 - b1.1) > 1e-4 {
-                        continue;
-                    }
-                    for w in pts.windows(2) {
-                        if idx
-                            .first_conflict(w[0], w[1], width, layer, net_id)
-                            .is_some()
-                        {
-                            continue 'orders;
+                // BACK-OFF: the maximal two-dir window often spans
+                // half the board (its two-leg chord slashes occupied
+                // space — never legal). Shrink from the right until a
+                // sub-window collapses; the greedy break here left
+                // the ACTUAL staircases untouched (measured: K2's
+                // window swallowed the long exit runs and failed).
+                let mut applied: Option<(usize, usize, Vec<RouteSegment>)> = None;
+                let mut e1 = e1_max;
+                'shrink: while e1 > e0 {
+                    let mut dirs: Vec<(i8, i8)> = Vec::new();
+                    for e in e0..=e1 {
+                        if let Some(d) = edge_dir[e] {
+                            if !dirs.contains(&d) {
+                                dirs.push(d);
+                            }
                         }
                     }
-                    replacement = Some(
-                        pts.windows(2)
+                    let n_win = e1 - e0 + 1;
+                    let worthwhile = (dirs.len() == 1 && n_win >= 2)
+                        || (dirs.len() == 2 && n_win >= 3);
+                    if !worthwhile {
+                        e1 -= 1;
+                        continue;
+                    }
+                    let a0 = pts_all[e0];
+                    let b1 = pts_all[e1 + 1];
+                    let mut run: std::collections::HashMap<(i8, i8), (f64, f64)> =
+                        std::collections::HashMap::new();
+                    for e in e0..=e1 {
+                        if let Some(d) = edge_dir[e] {
+                            let en = run.entry(d).or_insert((0.0, 0.0));
+                            en.0 += pts_all[e + 1].0 - pts_all[e].0;
+                            en.1 += pts_all[e + 1].1 - pts_all[e].1;
+                        }
+                    }
+                    let legs: Vec<(f64, f64)> =
+                        dirs.iter().map(|d| run[d]).collect();
+                    let orders: Vec<Vec<(f64, f64)>> = if legs.len() == 1 {
+                        vec![legs.clone()]
+                    } else {
+                        vec![legs.clone(), legs.iter().rev().copied().collect()]
+                    };
+                    'orders: for ord in &orders {
+                        let mut pts = vec![a0];
+                        for &(vx, vy) in ord {
+                            let last = *pts.last().unwrap();
+                            pts.push((last.0 + vx, last.1 + vy));
+                        }
+                        let end = *pts.last().unwrap();
+                        if (end.0 - b1.0).hypot(end.1 - b1.1) > 1e-4 {
+                            continue;
+                        }
+                        for w in pts.windows(2) {
+                            // Probe 0.2mm FAT: a hair-thin clearance
+                            // passes the kernel but not the guarantee
+                            // validator (measured 1.51mm vs the 1.6mm
+                            // limit — chosen, objected, reverted).
+                            if idx
+                                .first_conflict(
+                                    w[0], w[1], width + 0.2, layer, net_id,
+                                )
+                                .is_some()
+                            {
+                                continue 'orders;
+                            }
+                        }
+                        let newsegs: Vec<RouteSegment> = pts
+                            .windows(2)
                             .filter(|w| {
                                 (w[0].0 - w[1].0).hypot(w[0].1 - w[1].1) > 1e-6
                             })
@@ -4656,15 +4720,21 @@ fn staircase_pass(board: &Board, final_routes: &mut [Route]) -> usize {
                                 end: w[1],
                                 width_mm: width,
                             })
-                            .collect(),
-                    );
-                    break;
+                            .collect();
+                        if (e1 - e0 + 1) > newsegs.len() {
+                            applied = Some((s0 + e0, s0 + e1, newsegs));
+                            break 'shrink;
+                        }
+                        break;
+                    }
+                    e1 -= 1;
                 }
-                let Some(newsegs) = replacement else { break 'rescan };
+                let Some((i0, i1, newsegs)) = applied else {
+                    // Nothing legal at this start — scan further along.
+                    scan_start = e0 + 1;
+                    continue 'rescan;
+                };
                 let removed = (i1 - i0 + 1) - newsegs.len();
-                if removed == 0 {
-                    break 'rescan;
-                }
                 let r = &mut final_routes[ni];
                 r.segments.splice(i0..=i1, newsegs);
                 r.path_spans[sp].1 -= removed;
@@ -4675,6 +4745,7 @@ fn staircase_pass(board: &Board, final_routes: &mut [Route]) -> usize {
                 }
                 cidx = None; // own copper changed — rebuild lazily
                 collapsed += 1;
+                scan_start = 0; // indices shifted — rescan the span
                 continue 'rescan;
             }
         }
