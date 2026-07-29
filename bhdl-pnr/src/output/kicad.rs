@@ -300,7 +300,19 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
             .unwrap_or("In1.Cu");
         let n = net_no(net.id);
 
-        let holes = plane_foreign_holes(board, routes, net.id);
+        let mut holes = plane_foreign_holes(board, routes, net.id);
+        // Signal-layer pours get thermal-relief pad connections (the
+        // hand-routed-demo idiom); dedicated Power planes stay solid.
+        let thermal = board
+            .layer_stack
+            .layers
+            .get(plane_layer)
+            .map(|l| l.kind == crate::types::LayerKind::Signal)
+            .unwrap_or(false);
+        if thermal {
+            let th = thermal_relief_holes(board, net.id, plane_layer, &holes);
+            holes.extend(th);
+        }
         // A region with NO same-net barrel inside would be an isolated
         // dead island — skip its zone entirely (the rail's unc stays
         // honest).
@@ -342,17 +354,21 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
             "  (zone (net {}) (net_name \"{}\") (layer \"{}\") (hatch edge 0.5)\n",
             n, net.name, layer_name
         ));
-        // SOLID pad connections: we emit the saved fill geometry
-        // ourselves and it touches same-net THT pads solidly — the
-        // default (thermal-relief) setting makes KiCad's DRC demand
-        // spokes our geometry doesn't have (starved_thermal on every
-        // same-net header pin of a band fixture).
-        // Clearance mirrors plane_foreign_holes' zc — the header rule
-        // and the shipped fill geometry MUST agree.
-        out.push_str(&format!(
-            "    (connect_pads yes (clearance {}))\n",
-            0.3f64.max(board.config.min_spacing_mm)
-        ));
+        // Header MUST agree with the shipped fill geometry (the
+        // starved_thermal lesson): SOLID for dedicated Power planes
+        // (fill floods the pads), THERMAL for signal-layer pours
+        // (fill now carries real gap rings + diagonal spoke necks).
+        if thermal {
+            out.push_str(&format!(
+                "    (connect_pads (clearance {}))\n",
+                0.3f64.max(board.config.min_spacing_mm)
+            ));
+        } else {
+            out.push_str(&format!(
+                "    (connect_pads yes (clearance {}))\n",
+                0.3f64.max(board.config.min_spacing_mm)
+            ));
+        }
         out.push_str("    (min_thickness 0.25) (filled_areas_thickness no)\n");
         out.push_str("    (fill yes (thermal_gap 0.3) (thermal_bridge_width 0.4))\n");
         // Edge margin: edge_clearance + 0.05mm. An inset of EXACTLY
@@ -1423,6 +1439,74 @@ fn punch_interior_rings(poly: &mut Vec<(f64, f64)>, rings: Vec<RingKind>) {
 /// barrel + zone clearance. Shared by the exporter (fracture) and the
 /// via-drop verifier in lib.rs — the two MUST agree or drops verified
 /// as connected can still be swallowed by the emitted fill.
+/// THERMAL RELIEF gap circles for a signal-layer pour: four gap
+/// voids at N/S/E/W on each same-net drilled pad's annulus midline,
+/// leaving four DIAGONAL necks in the fill as the spokes (the
+/// hand-solder idiom the demo boards use — a solid flood wicks heat
+/// and makes the joint miserable). Emission-only: the internal
+/// raster/connectivity model keeps solid semantics because the necks
+/// guarantee the connection by construction. Sized from the declared
+/// zone parameters (gap 0.3 / bridge 0.4).
+pub(crate) fn thermal_relief_holes(
+    board: &Board,
+    net_id: NetId,
+    plane_layer: usize,
+    foreign: &[(f64, f64, f64)],
+) -> Vec<(f64, f64, f64)> {
+    let gap = 0.3f64;
+    let bridge = 0.4f64;
+    let pour_side = if plane_layer == 0 {
+        BoardSide::Top
+    } else {
+        BoardSide::Bottom
+    };
+    let mut out: Vec<(f64, f64, f64)> = Vec::new();
+    for comp in &board.components {
+        let cos_t = comp.theta.cos();
+        let sin_t = comp.theta.sin();
+        for pin in &comp.pins {
+            if pin.unplaced || pin.net != Some(net_id) {
+                continue;
+            }
+            let Some(pad) = &pin.pad else { continue };
+            // Reliefs for every SOLDERED pad the pour touches: THT
+            // (any side — the barrel lands on the pour layer) and
+            // same-side SMD (a flooded SMD pad wicks heat AND
+            // tombstones small parts in reflow). Vias stay solid —
+            // nobody solders a via.
+            let tht = pad.drill_mm.is_some();
+            let smd_on_pour = pad.drill_mm.is_none() && comp.side == pour_side;
+            if !tht && !smd_on_pour {
+                continue;
+            }
+            let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
+            let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+            let r_pad = pad.width_mm.max(pad.height_mm) / 2.0;
+            // Gap circles on the annulus midline; radius chosen so
+            // the diagonal necks come out ~bridge wide AFTER the void
+            // engine's hole inflation (each hole grows by 1/cos22.5x
+            // + 0.15 + 0.75 cells ≈ +0.19mm — uncompensated, adjacent
+            // gap circles OVERLAP and sever the pad: measured 7 unc).
+            let d = r_pad + gap / 2.0 + 0.02;
+            let inflate = 0.19;
+            let rg = (((d * std::f64::consts::SQRT_2 - bridge) / 2.0 - inflate)
+                / 1.082)
+                .max(0.12)
+                .min(d);
+            // NO solid fallback: under a thermal header KiCad counts
+            // spoke SHAPES — a solid-flooded pad reads as ZERO spokes
+            // and fires starved_thermal (measured: the fallback took
+            // ecc83 0->1 and the mixer 1->6). A crowded pad keeps its
+            // petals; partially-eaten spokes still count.
+            let _ = foreign;
+            for (ux, uy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+                out.push((gx + d * ux, gy + d * uy, rg));
+            }
+        }
+    }
+    out
+}
+
 pub(crate) fn plane_foreign_holes(
     board: &Board,
     routes: &[Route],
