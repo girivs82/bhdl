@@ -301,6 +301,17 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
         let n = net_no(net.id);
 
         let mut holes = plane_foreign_holes(board, routes, net.id);
+        // COMPENSATE the void engine's hole inflation (x1.082 +
+        // 0.19mm) at the EMISSION only: uncompensated, every keepout
+        // renders ~0.28mm fatter than the declared clearance — wide
+        // enough to swallow the thermal relief rings (user report;
+        // KiCad carves its declared clearance nearly exactly). The
+        // stored radii already carry clearance + 0.05 knife-edge
+        // margin; siting consumers elsewhere keep the uncompensated
+        // list.
+        for h in holes.iter_mut() {
+            h.2 = ((h.2 - 0.1875) / 1.082).max(0.1);
+        }
         // Signal-layer pours get thermal-relief pad connections (the
         // hand-routed-demo idiom); dedicated Power planes stay solid.
         let thermal = board
@@ -1095,9 +1106,42 @@ fn fracture_fill_spoked(
     // hole loops via the keyhole forest. See fill_copper_grid.
     let (mut copper, cols, rows) = fill_copper_grid_masked(x0, y0, x1, y1, holes, rects, mask);
     if !spokes.is_empty() && mask.is_none() {
-        let hw = 0.2f64; // spoke half-width (bridge 0.4)
+        let hw = 0.25f64; // spoke half-width (bridge 0.5 — the demo's own)
         let s2 = std::f64::consts::SQRT_2;
+        // Pre-paint snapshot: spoke tips must land in REAL fill. An
+        // unconditional bar bites into neighboring keepout space and
+        // strands orphan arc chips between the voids (user report:
+        // awkward small pour shapes at a crowded valve pin).
+        let base = copper.clone();
+        let tip_ok = |cx: f64, cy: f64, ux: f64, uy: f64, ro: f64| -> bool {
+            for t in [ro + 0.05, ro + 0.15] {
+                let (px, py) = (cx + ux * t, cy + uy * t);
+                let c = ((px - x0) / VOID_CELL) as isize;
+                let r = ((py - y0) / VOID_CELL) as isize;
+                if r < 0 || c < 0 || r >= rows as isize || c >= cols as isize {
+                    return false;
+                }
+                if !base[r as usize * cols + c as usize] {
+                    return false;
+                }
+            }
+            true
+        };
         for &(cx, cy, ro) in spokes {
+            // The four diagonal half-bars, each gated on its tip.
+            let dirs = [
+                (1.0 / s2, 1.0 / s2),
+                (-1.0 / s2, -1.0 / s2),
+                (1.0 / s2, -1.0 / s2),
+                (-1.0 / s2, 1.0 / s2),
+            ];
+            let live: Vec<bool> = dirs
+                .iter()
+                .map(|&(ux, uy)| tip_ok(cx, cy, ux, uy, ro))
+                .collect();
+            if !live.iter().any(|&l| l) {
+                continue;
+            }
             let ca = (((cx - ro - x0) / VOID_CELL).floor().max(0.0) as usize).min(cols - 1);
             let cb = (((cx + ro - x0) / VOID_CELL).ceil().max(0.0) as usize).min(cols - 1);
             let ra = (((cy - ro - y0) / VOID_CELL).floor().max(0.0) as usize).min(rows - 1);
@@ -1109,8 +1153,12 @@ fn fracture_fill_spoked(
                     let (dx, dy) = (px - cx, py - cy);
                     let u = (dx + dy) / s2;
                     let v = (dy - dx) / s2;
-                    let in_bar = (u.abs() <= ro && v.abs() <= hw)
-                        || (v.abs() <= ro && u.abs() <= hw);
+                    // Which half-bar is this cell in (u axis = dirs
+                    // 0/1, v axis = dirs 2/3)? Paint only live bars.
+                    let in_u = u.abs() <= ro && v.abs() <= hw;
+                    let in_v = v.abs() <= ro && u.abs() <= hw;
+                    let in_bar = (in_u && if u >= 0.0 { live[0] } else { live[1] })
+                        || (in_v && if v >= 0.0 { live[3] } else { live[2] });
                     if !in_bar {
                         continue;
                     }
@@ -1132,6 +1180,53 @@ fn fracture_fill_spoked(
                 }
             }
         }
+        // POST-PAINT OPEN: a relief ring intersecting a foreign
+        // keepout leaves thin useless pour crescents wedged between
+        // the voids ("awkward small shapes" — user report); KiCad's
+        // min-thickness smoothing eats them. Erode+dilate with a
+        // EUCLIDEAN disc (0.10mm): a square kernel measures a 45
+        // bar's width /sqrt2 and ATE the diagonal spokes (measured
+        // 7 unc); a disc is rotation-fair — 0.5mm spokes survive,
+        // sub-0.2 crescents don't. Runs only on spoked (signal-pour)
+        // fills — Power planes byte-identical.
+        let rad = 2isize;
+        let disc: Vec<(isize, isize)> = (-rad..=rad)
+            .flat_map(|dr| (-rad..=rad).map(move |dc| (dr, dc)))
+            .filter(|&(dr, dc)| dr * dr + dc * dc <= rad * rad)
+            .collect();
+        let mut eroded = vec![false; rows * cols];
+        for r in 0..rows {
+            for c in 0..cols {
+                if !copper[r * cols + c] {
+                    continue;
+                }
+                let keep = disc.iter().all(|&(dr, dc)| {
+                    let (rr, cc) = (r as isize + dr, c as isize + dc);
+                    rr >= 0
+                        && cc >= 0
+                        && rr < rows as isize
+                        && cc < cols as isize
+                        && copper[rr as usize * cols + cc as usize]
+                });
+                eroded[r * cols + c] = keep;
+            }
+        }
+        let mut dilated = vec![false; rows * cols];
+        for r in 0..rows {
+            for c in 0..cols {
+                if !eroded[r * cols + c] {
+                    continue;
+                }
+                for &(dr, dc) in &disc {
+                    let (rr, cc) = (r as isize + dr, c as isize + dc);
+                    if rr >= 0 && cc >= 0 && rr < rows as isize && cc < cols as isize
+                    {
+                        dilated[rr as usize * cols + cc as usize] = true;
+                    }
+                }
+            }
+        }
+        copper = dilated;
     }
     // Label copper components (4-connectivity), row-major BFS.
     let mut label = vec![0u32; rows * cols];
