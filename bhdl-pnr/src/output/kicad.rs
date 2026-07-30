@@ -1129,16 +1129,38 @@ fn fracture_fill_spoked(
         };
         for &(cx, cy, ro) in spokes {
             // The four diagonal half-bars, each gated on its tip.
-            let dirs = [
+            let dirs_d = [
                 (1.0 / s2, 1.0 / s2),
                 (-1.0 / s2, -1.0 / s2),
                 (1.0 / s2, -1.0 / s2),
                 (-1.0 / s2, 1.0 / s2),
             ];
-            let live: Vec<bool> = dirs
+            let live_d: Vec<bool> = dirs_d
                 .iter()
                 .map(|&(ux, uy)| tip_ok(cx, cy, ux, uy, ro))
                 .collect();
+            // STARVED fallback: when fewer than 2 diagonal tips find
+            // fill (KiCad's starved-thermal threshold), try the
+            // ORTHOGONAL orientation — in a crowded region the open
+            // fill often lies along the pad row axis, not the
+            // diagonals (mixer anti-bias: 3 starved pads, all with
+            // H/V fill corridors). Healthy pads keep the demo-shape
+            // diagonals, so clean boards are byte-identical.
+            let nd = live_d.iter().filter(|&&l| l).count();
+            let (live, diag) = if nd >= 2 {
+                (live_d, true)
+            } else {
+                let dirs_o = [(1.0, 0.0), (-1.0, 0.0), (0.0, -1.0), (0.0, 1.0)];
+                let live_o: Vec<bool> = dirs_o
+                    .iter()
+                    .map(|&(ux, uy)| tip_ok(cx, cy, ux, uy, ro))
+                    .collect();
+                if live_o.iter().filter(|&&l| l).count() > nd {
+                    (live_o, false)
+                } else {
+                    (live_d, true)
+                }
+            };
             if !live.iter().any(|&l| l) {
                 continue;
             }
@@ -1151,8 +1173,13 @@ fn fracture_fill_spoked(
                     let px = x0 + (c as f64 + 0.5) * VOID_CELL;
                     let py = y0 + (r as f64 + 0.5) * VOID_CELL;
                     let (dx, dy) = (px - cx, py - cy);
-                    let u = (dx + dy) / s2;
-                    let v = (dy - dx) / s2;
+                    // Basis follows the chosen orientation; index
+                    // mapping (u+:0 u-:1 v-:2 v+:3) is shared.
+                    let (u, v) = if diag {
+                        ((dx + dy) / s2, (dy - dx) / s2)
+                    } else {
+                        (dx, dy)
+                    };
                     // Which half-bar is this cell in (u axis = dirs
                     // 0/1, v axis = dirs 2/3)? Paint only live bars.
                     let in_u = u.abs() <= ro && v.abs() <= hw;

@@ -157,6 +157,23 @@ impl RoutingGrid {
                         }
                     }
                 }
+                // A SIGNAL-layer pour is a layout statement: every
+                // lateral mm routed there both costs the signal AND
+                // carves the plane (voids that strand anchor pads).
+                // 8×: a hop across stays affordable (2 vias + a short
+                // land), a long traverse doesn't — the hand-routed
+                // demo keeps 3% of its copper on the pour face.
+                for net in &board.nets {
+                    if let Some(pl) = net.plane_layer {
+                        if board.layer_stack.layers.get(pl).map(|l| l.kind)
+                            == Some(LayerKind::Signal)
+                        {
+                            if pen[pl] < 8.0 {
+                                pen[pl] = 8.0;
+                            }
+                        }
+                    }
+                }
                 pen
             },
         };

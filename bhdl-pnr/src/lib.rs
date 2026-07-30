@@ -809,8 +809,53 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
             // when the inner pad ladder exhausts.
             let ec = board.config.edge_clearance_mm;
             let mut col_cert: Vec<bool> = vec![false; groups.len()];
+            let mut ref_cert_routes: Vec<(NetId, Route)> = Vec::new();
             for k in 0..groups.len() {
                 let (akx, aky) = anchors[k];
+                // TRANSLATE-VERIFY first (uniformity doctrine): the
+                // demo ships IDENTICAL strips. Try the reference
+                // certificate translated to this column; geometry
+                // verification decides per column, independent solve
+                // stays as the fallback.
+                if k > 0 && col_cert[0] && !ref_cert_routes.is_empty() {
+                    let delta =
+                        (anchors[k].0 - anchors[0].0, anchors[k].1 - anchors[0].1);
+                    if let Some(routes) = try_channel_transfer(
+                        &mut board,
+                        &groups[0],
+                        &groups[k],
+                        delta,
+                        &ref_cert_routes,
+                    ) {
+                        for &ci in &groups[k] {
+                            let c = &mut board.components[ci];
+                            c.placement = PlacementConstraint::Fixed {
+                                x: c.x,
+                                y: c.y,
+                                theta: c.theta,
+                            };
+                        }
+                        info!(
+                            "channel transfer: column {k} = translated reference certificate ({} route(s) verified)",
+                            routes.len()
+                        );
+                        stamped_channels.push(StampedChannel {
+                            ref_members: groups[k].clone(),
+                            ref_stamp_pos: groups[k]
+                                .iter()
+                                .map(|&ci| {
+                                    (board.components[ci].x, board.components[ci].y)
+                                })
+                                .collect(),
+                            groups: vec![groups[k].clone()],
+                            expect: vec![(0.0, 0.0)],
+                            frozen: vec![true],
+                            routes,
+                        });
+                        col_cert[k] = true;
+                        continue;
+                    }
+                }
                 let mut certified = None;
                 for (tier, margin) in [1.0f64, 0.25].iter().enumerate() {
                     let hw = (min_sep / 2.0 - margin).max(2.0);
@@ -857,6 +902,9 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                             y: c.y,
                             theta: c.theta,
                         };
+                    }
+                    if k == 0 {
+                        ref_cert_routes = cert.routes.clone();
                     }
                     stamped_channels.push(StampedChannel {
                         ref_members: groups[k].clone(),
@@ -1450,20 +1498,33 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                             comp.y + pin.dx * sn + pin.dy * co,
                         ))
                     };
+                    // Pocketed = pad on a >=5-pin package that the
+                    // fill must thread the package's own pin punches
+                    // to reach: a DRILLED pad always (barrels punch
+                    // every layer), and an SMD pad when the pour is
+                    // ON its own face — same-side SMD neighbors punch
+                    // the fill too, and a mid-row GND pad sits inside
+                    // their chain-merged void (mixer anti-bias: every
+                    // opamp V_MINUS stranded exactly so).
+                    let last_cu = board.layer_stack.layers.len() - 1;
                     let pockets: Vec<(ComponentId, PinId)> = n
                         .pins
                         .iter()
                         .copied()
                         .filter(|&(cid, pid)| {
                             board.components.iter().any(|c| {
+                                let surf = match c.side {
+                                    BoardSide::Top => 0,
+                                    BoardSide::Bottom => last_cu,
+                                };
                                 c.id == cid
                                     && c.pins.len() >= 5
                                     && c.pins.iter().any(|p| {
                                         p.pin_id == pid
-                                            && p.pad
-                                                .as_ref()
-                                                .and_then(|pd| pd.drill_mm)
-                                                .is_some()
+                                            && p.pad.as_ref().map_or(false, |pd| {
+                                                pd.drill_mm.is_some()
+                                                    || Some(surf) == n.plane_layer
+                                            })
                                     })
                             })
                         })
@@ -6098,7 +6159,7 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
             .max(0.15)
             .min(board.nets[i].required_trace_width_mm);
         // Pads not touching ANY same-net copper.
-        let mut todo: Vec<((f64, f64), usize, Option<usize>)> = Vec::new();
+        let mut todo: Vec<((f64, f64), usize, Option<usize>, bool)> = Vec::new();
         for &(cid, pid) in &board.nets[i].pins {
             let Some(&ci) = comp_idx.get(&cid) else { continue };
             let comp = &board.components[ci];
@@ -6126,6 +6187,21 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
                     continue;
                 }
             }
+            // POUR-SIDE pads live ON the fill's layer: connected by
+            // contact/relief, so the island-has-via test below is
+            // wrong for them (it "rescued" fill-connected pads with a
+            // stub + via whose far end is bare — the mixer anti-bias
+            // 4× via_dangling family). Their stranded test is fill
+            // REACH: a pad inside a merged foreign punch (a void
+            // pocket in the dense region) gets no relief and needs a
+            // surface join; one outside is a fill anchor — skip.
+            let pour_side = {
+                let surf = match comp.side {
+                    BoardSide::Top => 0,
+                    BoardSide::Bottom => n_layers - 1,
+                };
+                Some(surf) == board.nets[i].plane_layer
+            };
             let half = pin
                 .pad
                 .as_ref()
@@ -6173,19 +6249,24 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
                         })
                 })
             });
-            if pad_comp.is_none() || !island_has_via {
+            let stranded = if pour_side {
+                output::kicad::plane_swallows(board, &merged, px, py, half, region)
+            } else {
+                pad_comp.is_none() || !island_has_via
+            };
+            if stranded {
                 let layer = match comp.side {
                     BoardSide::Top => 0,
                     BoardSide::Bottom => n_layers - 1,
                 };
                 debug!(
-                    "surface rescue queue: '{}' pad ({px:.2},{py:.2}) island={:?} has_via={island_has_via}",
+                    "surface rescue queue: '{}' pad ({px:.2},{py:.2}) island={:?} has_via={island_has_via} pour_side={pour_side}",
                     board.nets[i].name, pad_comp
                 );
-                todo.push(((px, py), layer, pad_comp));
+                todo.push(((px, py), layer, pad_comp, pour_side));
             }
         }
-        for ((px, py), layer, pad_comp) in todo {
+        for ((px, py), layer, pad_comp, pour_side) in todo {
             // Candidates: projections onto same-net same-layer copper
             // + drop via centers — EXCLUDING the pad's own dead
             // island (attaching to it connects nothing).
@@ -6430,6 +6511,16 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
             // stub, commit stub + via. The grid-based routed-drop
             // fallback failed exactly here (grid fully blocked); the
             // continuous router threads what the grid cannot.
+            // POUR-SIDE: a stub + via is structurally dangling (the
+            // far end lands on a bare signal layer) — surface joins
+            // are the only legal rescue; if they all failed, the pad
+            // stays honestly unconnected.
+            if !connected && pour_side {
+                for (jj, old) in snaps.drain(..).rev() {
+                    final_routes[jj] = old;
+                }
+                continue;
+            }
             if !connected {
                 // Stage 1's failed shove deformations must not ship —
                 // they opened corridors nothing uses (a stranded BOOT
@@ -6844,6 +6935,215 @@ fn amputation_cost(route: &Route, seg_idx: usize) -> usize {
         .filter(|&i| doomed[i])
         .map(|i| route.path_spans[i].1)
         .sum()
+}
+
+/// TRANSLATE-VERIFY (uniformity doctrine): the hand-routed demos ship
+/// IDENTICAL channel strips; independent per-column solves are
+/// correct but non-uniform. Try the reference column's certificate on
+/// a sibling: apply anchor-translated placements, map each reference
+/// net to its sibling (member-parallel pin order), translate the
+/// copper, and verify — conflict-free against the parent board's pads
+/// at EXACT widths (relations to the sibling's own members replicate
+/// the certified reference frame; only the column's FIXED environment
+/// differs) and pad-exact on every sibling member pin. Any failure
+/// restores positions and returns None → the caller falls back to an
+/// independent solve. Organic: geometry decides, per column.
+fn try_channel_transfer(
+    board: &mut Board,
+    ref_members: &[usize],
+    sib_members: &[usize],
+    delta: (f64, f64),
+    ref_routes: &[(NetId, Route)],
+) -> Option<Vec<(NetId, Route)>> {
+    let (tx, ty) = delta;
+    let prior: Vec<(usize, f64, f64, f64)> = sib_members
+        .iter()
+        .map(|&ci| {
+            let c = &board.components[ci];
+            (ci, c.x, c.y, c.theta)
+        })
+        .collect();
+    for (m, &sci) in sib_members.iter().enumerate() {
+        let rci = ref_members[m];
+        let (rx, ry, rt) = (
+            board.components[rci].x,
+            board.components[rci].y,
+            board.components[rci].theta,
+        );
+        let c = &mut board.components[sci];
+        c.x = rx + tx;
+        c.y = ry + ty;
+        c.theta = rt;
+    }
+    let restore = |board: &mut Board| {
+        for &(ci, x, y, t) in &prior {
+            let c = &mut board.components[ci];
+            c.x = x;
+            c.y = y;
+            c.theta = t;
+        }
+    };
+    let empty: Vec<Route> = board.nets.iter().map(|n| Route::empty(n.id)).collect();
+    let net_pos: std::collections::HashMap<NetId, usize> = board
+        .nets
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.id, i))
+        .collect();
+    let via_r = board.layer_stack.via.pad_mm / 2.0;
+    // Probe kernel = the MINI's world: members + FIXED environment.
+    // Free non-participant parts sit at meaningless init positions
+    // (the master section false-failed transfers); making them
+    // invisible matches the solved-certificate semantics exactly —
+    // a per-conflict free-pad filter measured 3 violations (unsound:
+    // it also admitted real conflicts).
+    let probe = {
+        let mut b = board.clone();
+        let keep: std::collections::HashSet<usize> = ref_members
+            .iter()
+            .chain(sib_members.iter())
+            .copied()
+            .collect();
+        for (ci, c) in b.components.iter_mut().enumerate() {
+            if !keep.contains(&ci) && !c.placement.is_fixed() {
+                c.pins.clear();
+            }
+        }
+        b
+    };
+    let cidx = geom::ClearanceIndex::build(&probe, &empty, None);
+    let sib_ids: Vec<ComponentId> =
+        sib_members.iter().map(|&ci| board.components[ci].id).collect();
+    let mut out: Vec<(NetId, Route)> = Vec::new();
+    for (nid, route) in ref_routes {
+        let Some(&ri) = net_pos.get(nid) else {
+            restore(board);
+            return None;
+        };
+        let mut mapped: Option<usize> = None;
+        for &(cid, pid) in &board.nets[ri].pins {
+            let Some(m) = ref_members
+                .iter()
+                .position(|&mi| board.components[mi].id == cid)
+            else {
+                continue; // pin on a fixed/foreign part
+            };
+            let refc = &board.components[ref_members[m]];
+            let Some(j) = refc.pins.iter().position(|p| p.pin_id == pid) else {
+                restore(board);
+                return None;
+            };
+            let sib = &board.components[sib_members[m]];
+            let Some(snid) = sib.pins.get(j).and_then(|p| p.net) else {
+                restore(board);
+                return None;
+            };
+            let Some(&si) = net_pos.get(&snid) else {
+                restore(board);
+                return None;
+            };
+            if mapped.map_or(false, |mm| mm != si) {
+                restore(board);
+                return None;
+            }
+            mapped = Some(si);
+        }
+        let Some(si) = mapped else { continue }; // pure-fixed net: no transfer
+        let snet_id = board.nets[si].id;
+        let mut t = route.clone();
+        t.net_id = snet_id;
+        for sg in t.segments.iter_mut() {
+            sg.start.0 += tx;
+            sg.start.1 += ty;
+            sg.end.0 += tx;
+            sg.end.1 += ty;
+        }
+        for v in t.vias.iter_mut() {
+            v.x += tx;
+            v.y += ty;
+        }
+        // DIFFERENTIAL verification: the kernel probe is stricter
+        // than the oracle's margins, and the certificate already
+        // proved its near-margin relations acceptable (measured: a
+        // congruent foreign-jack pad flagged on every transfer). A
+        // conflict is only DISQUALIFYING when the congruent query in
+        // the REFERENCE frame is clean — i.e. the translation created
+        // a NEW relation. Reference-replicated relations pass; the
+        // stamp-time revalidation, validator, and oracle still gate
+        // the final copper.
+        for (sg, rsg) in t.segments.iter().zip(route.segments.iter()) {
+            if cidx
+                .first_conflict(sg.start, sg.end, sg.width_mm, sg.layer, snet_id)
+                .is_some()
+            {
+                let ref_hit = cidx
+                    .first_conflict(
+                        rsg.start,
+                        rsg.end,
+                        rsg.width_mm,
+                        rsg.layer,
+                        *nid,
+                    )
+                    .is_some();
+                if !ref_hit {
+                    debug!(
+                        "  channel transfer: '{}' seg ({:.1},{:.1})-({:.1},{:.1}) NEW conflict — fallback",
+                        board.nets[si].name,
+                        sg.start.0,
+                        sg.start.1,
+                        sg.end.0,
+                        sg.end.1
+                    );
+                    restore(board);
+                    return None;
+                }
+            }
+        }
+        for (v, rv) in t.vias.iter().zip(route.vias.iter()) {
+            if cidx.via_conflict(v.x, v.y, via_r, snet_id).is_some()
+                && cidx.via_conflict(rv.x, rv.y, via_r, *nid).is_none()
+            {
+                restore(board);
+                return None;
+            }
+        }
+        // Pad-exact on the sibling's own member pins of this net.
+        let touched_all = board.nets[si].pins.iter().all(|&(cid, pid)| {
+            if !sib_ids.contains(&cid) {
+                return true; // outside pins: the stamping revalidation gates them
+            }
+            let comp = board
+                .components
+                .iter()
+                .find(|c| c.id == cid)
+                .expect("sibling member");
+            let Some(pin) = comp.pins.iter().find(|p| p.pin_id == pid) else {
+                return false;
+            };
+            let (co, sn) = (comp.theta.cos(), comp.theta.sin());
+            let px = comp.x + pin.dx * co - pin.dy * sn;
+            let py = comp.y + pin.dx * sn + pin.dy * co;
+            let half = pin
+                .pad
+                .as_ref()
+                .map(|p| p.width_mm.min(p.height_mm) / 2.0)
+                .unwrap_or(0.4);
+            t.segments.iter().any(|sg| {
+                geom::point_segment_dist((px, py), sg.start, sg.end)
+                    < sg.width_mm / 2.0 + half - 0.001
+            })
+        });
+        if !touched_all {
+            debug!(
+                "  channel transfer: '{}' translated copper misses a member pad",
+                board.nets[si].name
+            );
+            restore(board);
+            return None;
+        }
+        out.push((snet_id, t));
+    }
+    Some(out)
 }
 
 /// A certified channel solve, in BOARD coordinates: the reference

@@ -831,10 +831,39 @@ pub fn build_board(
         {
             if let Some(gi) = gnd_idx {
                 if nets[gi].plane_layer.is_none() && layer_stack.layers.len() >= 2 {
-                    let bottom = layer_stack.layers.len() - 1;
-                    nets[gi].plane_layer = Some(bottom);
+                    let n_layers = layer_stack.layers.len();
+                    // Layer choice follows the routing posture. Soft
+                    // route_bias: pour the ANTI-BIAS face — routing
+                    // wants one side, so give the pour the other and
+                    // the two stop fighting (the 2-layer idiom: routes
+                    // bottom, plane top). Strict single-sided: copper
+                    // is confined to the preferred face, so the pour
+                    // must live THERE (the other face stays empty).
+                    // No bias declared: bottom, the classic default.
+                    let pour_layer = match (
+                        config.board_config.route_bias.as_deref(),
+                        config.board_config.route_bias_strict,
+                    ) {
+                        (Some(b), false) => {
+                            if b == "top" {
+                                n_layers - 1
+                            } else {
+                                0
+                            }
+                        }
+                        (Some(b), true) => {
+                            if b == "top" {
+                                0
+                            } else {
+                                n_layers - 1
+                            }
+                        }
+                        (None, _) => n_layers - 1,
+                    };
+                    nets[gi].plane_layer = Some(pour_layer);
                     log::info!(
-                        "pour assignment (experiment): bottom signal layer -> '{}'",
+                        "pour assignment (experiment): {} signal layer -> '{}'",
+                        layer_stack.layers[pour_layer].name,
                         nets[gi].name
                     );
                 }
