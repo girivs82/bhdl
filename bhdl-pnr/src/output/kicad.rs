@@ -309,9 +309,13 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
             .get(plane_layer)
             .map(|l| l.kind == crate::types::LayerKind::Signal)
             .unwrap_or(false);
+        let mut spokes: Vec<(f64, f64, f64)> = Vec::new();
+        let mut spoke_mask: Vec<(f64, f64, f64)> = Vec::new();
         if thermal {
-            let th = thermal_relief_holes(board, net.id, plane_layer, &holes);
-            holes.extend(th);
+            spoke_mask = holes.clone();
+            let (rings, sp) = thermal_reliefs(board, net.id, plane_layer);
+            holes.extend(rings);
+            spokes = sp;
         }
         // A region with NO same-net barrel inside would be an isolated
         // dead island — skip its zone entirely (the rail's unc stays
@@ -441,7 +445,18 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
                 let by1 = b.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
                 fracture_fill(bx0, by0, bx1, by1, &holes, &cutout_rects, &anchors, Some(b))
             }
-            None => fracture_fill(fx0, fy0, fx1, fy1, &holes, &cutout_rects, &anchors, None),
+            None => fracture_fill_spoked(
+                fx0,
+                fy0,
+                fx1,
+                fy1,
+                &holes,
+                &cutout_rects,
+                &anchors,
+                None,
+                &spokes,
+                &spoke_mask,
+            ),
         };
         for pts in &polys {
             out.push_str(&format!("    (filled_polygon (layer \"{}\") (pts\n", layer_name));
@@ -1056,9 +1071,68 @@ fn fracture_fill(
     anchors: &[(f64, f64)],
     mask: Option<&[(f64, f64)]>,
 ) -> Vec<Vec<(f64, f64)>> {
+    fracture_fill_spoked(x0, y0, x1, y1, holes, rects, anchors, mask, &[], &[])
+}
+
+/// fracture_fill with thermal SPOKE paint-back: after voiding, cells
+/// inside a spoke's diagonal X-bars are repainted copper — but only
+/// where the pre-thermal fill was copper (never over a foreign hole
+/// or cutout: the `spoke_mask` list is the pre-thermal hole set).
+#[allow(clippy::too_many_arguments)]
+fn fracture_fill_spoked(
+    x0: f64,
+    y0: f64,
+    x1: f64,
+    y1: f64,
+    holes: &[(f64, f64, f64)],
+    rects: &[(f64, f64, f64, f64)],
+    anchors: &[(f64, f64)],
+    mask: Option<&[(f64, f64)]>,
+    spokes: &[(f64, f64, f64)],
+    spoke_mask: &[(f64, f64, f64)],
+) -> Vec<Vec<(f64, f64)>> {
     // ONE VOID ENGINE: raster copper, trace copper components, punch
     // hole loops via the keyhole forest. See fill_copper_grid.
-    let (copper, cols, rows) = fill_copper_grid_masked(x0, y0, x1, y1, holes, rects, mask);
+    let (mut copper, cols, rows) = fill_copper_grid_masked(x0, y0, x1, y1, holes, rects, mask);
+    if !spokes.is_empty() && mask.is_none() {
+        let hw = 0.2f64; // spoke half-width (bridge 0.4)
+        let s2 = std::f64::consts::SQRT_2;
+        for &(cx, cy, ro) in spokes {
+            let ca = (((cx - ro - x0) / VOID_CELL).floor().max(0.0) as usize).min(cols - 1);
+            let cb = (((cx + ro - x0) / VOID_CELL).ceil().max(0.0) as usize).min(cols - 1);
+            let ra = (((cy - ro - y0) / VOID_CELL).floor().max(0.0) as usize).min(rows - 1);
+            let rb = (((cy + ro - y0) / VOID_CELL).ceil().max(0.0) as usize).min(rows - 1);
+            for r in ra..=rb {
+                for c in ca..=cb {
+                    let px = x0 + (c as f64 + 0.5) * VOID_CELL;
+                    let py = y0 + (r as f64 + 0.5) * VOID_CELL;
+                    let (dx, dy) = (px - cx, py - cy);
+                    let u = (dx + dy) / s2;
+                    let v = (dy - dx) / s2;
+                    let in_bar = (u.abs() <= ro && v.abs() <= hw)
+                        || (v.abs() <= ro && u.abs() <= hw);
+                    if !in_bar {
+                        continue;
+                    }
+                    // Never repaint real clearance: pre-thermal holes
+                    // (engine-inflated) and cutout rects stay void.
+                    let fh = spoke_mask.iter().any(|&(hx, hy, hr)| {
+                        (hx - px).hypot(hy - py) < hr * 1.082 + 0.19
+                    });
+                    if fh {
+                        continue;
+                    }
+                    let in_rect = rects.iter().any(|&(rx0, ry0, rx1, ry1)| {
+                        px > rx0 && px < rx1 && py > ry0 && py < ry1
+                    });
+                    if in_rect {
+                        continue;
+                    }
+                    copper[r * cols + c] = true;
+                }
+            }
+        }
+    }
     // Label copper components (4-connectivity), row-major BFS.
     let mut label = vec![0u32; rows * cols];
     let mut next = 0u32;
@@ -1447,20 +1521,26 @@ fn punch_interior_rings(poly: &mut Vec<(f64, f64)>, rings: Vec<RingKind>) {
 /// raster/connectivity model keeps solid semantics because the necks
 /// guarantee the connection by construction. Sized from the declared
 /// zone parameters (gap 0.3 / bridge 0.4).
-pub(crate) fn thermal_relief_holes(
+/// True KiCad-shape reliefs: per soldered same-net pad, ONE annular
+/// gap ring (a full-circle void of radius pad+gap) plus an X of two
+/// diagonal spoke bars painted BACK into the raster after voiding —
+/// crisp ring, four 45-degree spokes, exactly the hand-router's
+/// relief (the earlier four-circle approximation merged into
+/// neighboring clearance blobs and clipped at the board edge).
+/// Returns (ring voids, spoke centers (cx, cy, outer_radius)).
+pub(crate) fn thermal_reliefs(
     board: &Board,
     net_id: NetId,
     plane_layer: usize,
-    foreign: &[(f64, f64, f64)],
-) -> Vec<(f64, f64, f64)> {
+) -> (Vec<(f64, f64, f64)>, Vec<(f64, f64, f64)>) {
     let gap = 0.3f64;
-    let bridge = 0.4f64;
     let pour_side = if plane_layer == 0 {
         BoardSide::Top
     } else {
         BoardSide::Bottom
     };
-    let mut out: Vec<(f64, f64, f64)> = Vec::new();
+    let mut rings: Vec<(f64, f64, f64)> = Vec::new();
+    let mut spokes: Vec<(f64, f64, f64)> = Vec::new();
     for comp in &board.components {
         let cos_t = comp.theta.cos();
         let sin_t = comp.theta.sin();
@@ -1482,29 +1562,17 @@ pub(crate) fn thermal_relief_holes(
             let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
             let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
             let r_pad = pad.width_mm.max(pad.height_mm) / 2.0;
-            // Gap circles on the annulus midline; radius chosen so
-            // the diagonal necks come out ~bridge wide AFTER the void
-            // engine's hole inflation (each hole grows by 1/cos22.5x
-            // + 0.15 + 0.75 cells ≈ +0.19mm — uncompensated, adjacent
-            // gap circles OVERLAP and sever the pad: measured 7 unc).
-            let d = r_pad + gap / 2.0 + 0.02;
-            let inflate = 0.19;
-            let rg = (((d * std::f64::consts::SQRT_2 - bridge) / 2.0 - inflate)
-                / 1.082)
-                .max(0.12)
-                .min(d);
-            // NO solid fallback: under a thermal header KiCad counts
-            // spoke SHAPES — a solid-flooded pad reads as ZERO spokes
-            // and fires starved_thermal (measured: the fallback took
-            // ecc83 0->1 and the mixer 1->6). A crowded pad keeps its
-            // petals; partially-eaten spokes still count.
-            let _ = foreign;
-            for (ux, uy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
-                out.push((gx + d * ux, gy + d * uy, rg));
-            }
+            // Ring void with the engine's hole inflation compensated
+            // (each hole grows ~1.082x + 0.19mm) so the effective gap
+            // outer edge lands at r_pad + gap.
+            let r_outer = r_pad + gap;
+            let hr = ((r_outer - 0.19) / 1.082).max(r_pad * 0.6);
+            rings.push((gx, gy, hr));
+            // Spoke bars bite 0.25mm past the ring into the pour.
+            spokes.push((gx, gy, r_outer + 0.25));
         }
     }
-    out
+    (rings, spokes)
 }
 
 pub(crate) fn plane_foreign_holes(
