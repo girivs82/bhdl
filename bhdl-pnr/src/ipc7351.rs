@@ -143,6 +143,17 @@ pub enum PackageFamily {
     /// (Ø11.89mm pin circle, 36° steps, Ø1.016" pins). Derived from
     /// the standard; matches any conforming footprint by construction.
     ValveNoval,
+    /// Alps RK09K-series 9mm rotary pot, single unit, vertical mount.
+    /// Geometry from the Alps catalog mounting-hole diagram (Drawing
+    /// No.1, shared by every vertical single-unit part number).
+    PotRk09kV,
+    /// Neutrik NMJ6HCD2 6.35mm switched stereo jack, horizontal PCB
+    /// mount. Geometry from the Neutrik 2D drawing ST-NMJ6HCD2.
+    JackNmj6hcd2H,
+    /// CLIFF FC68148 (DC-10A) 2.1mm DC power entry, horizontal.
+    /// Geometry from the CLIFF drawing FC68148 iss. 11 PC-layout
+    /// panel.
+    DcJackDc10a,
     /// Dual in-line through-hole (DIP / PDIP, JEDEC MS-001). Two rows of
     /// plated through-holes; pin 1 top-left, numbered down the left side
     /// then up the right (counter-clockwise, datasheet convention).
@@ -731,6 +742,105 @@ fn generate_radial_tht(pitch: f64, drill: f64, pad_dia: f64, body_dia: f64) -> C
     }
 }
 
+/// Alps RK09K single vertical 9mm pot. Local frame = the KiCad-style
+/// terminal frame: pad 1 at origin, terminals along +Y at the
+/// catalog's 2.5mm pitch; the body (9.8 wide, ~12 deep, shaft at
+/// +7.5X) extends toward +X. Terminal holes ø1.0+0.2 per the Alps
+/// mounting diagram → drill 1.2, pad 1.8. The two snap-in support
+/// lugs (1.8×2.1 slots at ±4.4 about terminal 2, +7.0X) are
+/// MECHANICAL only and not modeled as copper — electrical
+/// correctness is the bar; body extent covers their region.
+fn generate_pot_rk09k_v() -> ComponentFootprint {
+    // Local frame centered on the BODY (the engine models bodies as
+    // centered boxes): body 12.0 (X, shaft housing) x 9.8 (Y, across
+    // the terminal row); the terminal column sits 7.0mm off-center at
+    // -X, terminals along Y at the catalog's 2.5 pitch.
+    let pads = vec![
+        make_th_pad("1", -7.0, -2.5, 1.8, 1.2, true),
+        make_th_pad("2", -7.0, 0.0, 1.8, 1.2, false),
+        make_th_pad("3", -7.0, 2.5, 1.8, 1.2, false),
+    ];
+    ComponentFootprint {
+        footprint_name: "Alps_RK09K_Single_Vertical".to_string(),
+        svg_data: String::new(),
+        pad_count: 3,
+        body_width: 12.0,
+        body_height: 9.8,
+        pitch: Some(2.5),
+        pads,
+    }
+}
+
+/// Neutrik NMJ6HCD2 horizontal 6.35mm jack. Local frame = the
+/// ST-NMJ6HCD2 drawing frame mirrored in X: T at origin, the contact
+/// row (R, S) along −X toward the jack opening, the switch-normal
+/// row 16.23mm away at +Y. Under the engine's `rot 90` transform
+/// (dx,dy)→(−dy,+dx) this lands every pad at the demo board's
+/// positions (contacts running up toward the top edge, normals
+/// column beside them). Recommended hole ø1.4 (printed on the
+/// drawing) → pad 3.0. Pads named per the drawing: T/R/S plug
+/// contacts, TN/RN/SN normally-closed switch contacts.
+fn generate_jack_nmj6hcd2_h() -> ComponentFootprint {
+    // Local frame centered on the BODY: 23.5 along the barrel (X:
+    // 20.61 shell + bushing block) x 18.2 across the pin columns
+    // (Y). Contacts T/R/S run along -X toward the jack opening
+    // (barrel toward -X), the switch-normal column 16.23 away at +Y;
+    // the whole pin field sits off-center because the shell extends
+    // 4mm past the S contact and the bushing beyond that.
+    let mut pads = Vec::new();
+    for (i, (name, x, y)) in [
+        ("T", 7.85, -8.1),
+        ("R", 1.5, -8.1),
+        ("S", -4.85, -8.1),
+        ("TN", 7.85, 8.13),
+        ("RN", 1.5, 8.13),
+        ("SN", -4.85, 8.13),
+    ]
+    .iter()
+    .enumerate()
+    {
+        pads.push(make_th_pad(name, *x, *y, 3.0, 1.4, i == 0));
+    }
+    ComponentFootprint {
+        footprint_name: "Neutrik_NMJ6HCD2_Horizontal".to_string(),
+        svg_data: String::new(),
+        pad_count: 6,
+        body_width: 23.5,
+        body_height: 18.2,
+        pitch: None,
+        pads,
+    }
+}
+
+/// CLIFF FC68148 (DC-10A) DC power entry, barrel toward +X. Local
+/// frame: pin 3 (sleeve spring) at origin; pin 1 (centre pin) 6.0mm
+/// behind it on the barrel axis; pin 2 (NC switch) between them,
+/// 4.7mm transverse — the drawing's PC-layout panel (slot centres
+/// 7.5/10.7/13.5 from the front face, 4.7 row offset). The drawing
+/// calls for 1.0×3.5 slots; the pad model carries round drills, so
+/// each slot is represented as a ø1.6 drill in a ø3.0 pad (recorded
+/// modeling gap: slot vs round hole — pad centres and nets exact).
+fn generate_dc_jack_dc10a() -> ComponentFootprint {
+    // Local frame centered on the BODY (14.2 along the barrel X x
+    // 9.0 Y), barrel opening toward +X. Pin 3 (sleeve) sits 0.4mm
+    // behind center, pin 1 (centre pin) 6.0 further back, pin 2 (NC
+    // switch) between them at +4.7 transverse.
+    let pads = vec![
+        make_th_pad("1", -6.4, -1.2, 3.0, 1.6, true),
+        make_th_pad("2", -3.6, 3.5, 3.0, 1.6, false),
+        make_th_pad("3", -0.4, -1.2, 3.0, 1.6, false),
+    ];
+    ComponentFootprint {
+        footprint_name: "CLIFF_FC68148_DC10A".to_string(),
+        svg_data: String::new(),
+        pad_count: 3,
+        body_width: 14.2,
+        body_height: 9.0,
+        pitch: None,
+        pads,
+    }
+}
+
 /// 9-pin noval (B9A) valve base — pad ring verbatim from KiCad's
 /// Valve_ECC-83-1 footprint.
 fn generate_valve_noval() -> ComponentFootprint {
@@ -793,6 +903,9 @@ pub fn generate_footprint(family: &PackageFamily, level: DensityLevel) -> Compon
         PackageFamily::RadialTht { pitch, drill, pad_dia, body_dia } => {
             generate_radial_tht(*pitch, *drill, *pad_dia, *body_dia)
         }
+        PackageFamily::PotRk09kV => generate_pot_rk09k_v(),
+        PackageFamily::JackNmj6hcd2H => generate_jack_nmj6hcd2_h(),
+        PackageFamily::DcJackDc10a => generate_dc_jack_dc10a(),
         PackageFamily::ValveNoval => generate_valve_noval(),
     }
 }
@@ -846,6 +959,15 @@ pub fn standard_package(name: &str) -> Option<PackageFamily> {
     }
     if name == "Valve-Noval" {
         return Some(PackageFamily::ValveNoval);
+    }
+    if name == "Pot-RK09K-V" {
+        return Some(PackageFamily::PotRk09kV);
+    }
+    if name == "Jack-NMJ6HCD2-H" {
+        return Some(PackageFamily::JackNmj6hcd2H);
+    }
+    if name == "DcJack-DC10A" {
+        return Some(PackageFamily::DcJackDc10a);
     }
     // PinHeader-1x06 / PinHeader-2x03 (any 1..=2 x 2..=40): 0.1" THT.
     if let Some(rest) = name.strip_prefix("PinHeader-") {

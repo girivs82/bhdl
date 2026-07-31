@@ -219,12 +219,20 @@ pub fn build_board(
             continue;
         }
 
-        // Resolve package string
+        // Resolve package string. `physical_package` is the entity's
+        // declared PCB identity (stdlib entities name their real
+        // part's pattern — e.g. Potentiometer = Pot-RK09K-V); it sits
+        // between an explicit per-instance `package` and the class
+        // default. Checked on the instance AND the module: board-level
+        // instances don't get module attributes copied down.
         let package = config
             .package_overrides
             .get(&instance.name)
             .cloned()
             .or_else(|| instance.attributes.get("package").cloned())
+            .or_else(|| instance.attributes.get("physical_package").cloned())
+            .or_else(|| module_def.attributes.get("physical_package").cloned())
+            .map(|p| p.trim_matches('"').to_string())
             .unwrap_or_else(|| {
                 let cat = categorize_component(&module_def.name, &instance.attributes);
                 default_package_for_category(&cat, pin_defs_count)

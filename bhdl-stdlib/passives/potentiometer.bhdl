@@ -24,10 +24,11 @@ entity Potentiometer(value: resistance) {
     attribute resistance = value;
     attribute manufacturer = "Alps Alpine";
     attribute part_number = "RK09K series";
-    // PCB interface = 3 in-line THT pins (RK09K vertical). The PnR
-    // package registry's parametric pin-header family IS that pad
-    // pattern; body/panel realism is the uno contract's scope.
-    attribute physical_package = "PinHeader-1x03";
+    // PCB interface: the RK09K vertical mounting pattern from the
+    // Alps catalog drawing — 3 in-line ø1.0 terminal holes at 2.5mm
+    // pitch, body/shaft housing behind them (support lugs are
+    // mechanical only).
+    attribute physical_package = "Pot-RK09K-V";
     attribute kicad_symbol = "Device:R_Potentiometer";
     attribute datasheet = "Alps RK09K series catalog";
 }

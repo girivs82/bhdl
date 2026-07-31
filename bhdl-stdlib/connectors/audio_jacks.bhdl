@@ -1,0 +1,49 @@
+// Panel-style audio and power entry connectors, PCB-mount.
+//
+// Data doctrine: the datasheet IS the model — every footprint here is
+// synthesized in bhdl-pnr from the manufacturer drawing named in the
+// entity's `datasheet` attribute, never traced from another EDA
+// tool's library.
+
+// Neutrik NMJ6HCD2 — 6.35mm (1/4") switched stereo phone jack,
+// horizontal PCB mount, threaded bushing, retention spring.
+// Complies EIA RS-453 / IEC 60603-11.
+//
+// Six flat solder lugs in two rows: plug contacts T/R/S (tip, ring,
+// sleeve), and TN/RN/SN — each contact's normally-closed switch leg,
+// which opens on plug insertion (the "normal" in patchbay usage).
+// Mono (TS) use grounds R alongside S so a mono plug shorts ring to
+// ground instead of floating it.
+entity JackTS_NMJ6HCD2() {
+    pin T:  signal inout;   // tip
+    pin R:  signal inout;   // ring
+    pin S:  signal inout;   // sleeve
+    pin TN: signal inout;   // tip switch (closed to T unplugged)
+    pin RN: signal inout;   // ring switch
+    pin SN: signal inout;   // sleeve switch
+
+    attribute component_class = "connector";
+    attribute manufacturer = "Neutrik";
+    attribute part_number = "NMJ6HCD2";
+    attribute physical_package = "Jack-NMJ6HCD2-H";
+    attribute kicad_symbol = "Connector_Audio:AudioJack6.35mm";
+    attribute datasheet = "Neutrik 2D drawing ST-NMJ6HCD2 (rev 2021-02)";
+}
+
+// CLIFF FC68148 (DC-10A) — 2.1mm DC power entry jack, horizontal PCB
+// mount. 12V DC 5A rated. Pin 1 = centre pin (tip), pin 3 = sleeve
+// spring contact, pin 2 = switch contact normally closed to the
+// sleeve spring (opens on plug insertion — the battery-disconnect
+// idiom).
+entity DcJack_DC10A() {
+    pin 1: signal inout;   // centre pin
+    pin 2: signal inout;   // NC switch (to sleeve, opens on insert)
+    pin 3: signal inout;   // sleeve
+
+    attribute component_class = "connector";
+    attribute manufacturer = "CLIFF Electronic Components";
+    attribute part_number = "FC68148";
+    attribute physical_package = "DcJack-DC10A";
+    attribute kicad_symbol = "Connector:Jack-DC";
+    attribute datasheet = "CLIFF drawing FC68148 iss. 11 (2024-05-08)";
+}

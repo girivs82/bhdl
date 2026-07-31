@@ -1399,6 +1399,26 @@ pub fn check_floating_expansion_island(
         if foreign || child_names.is_empty() {
             continue;
         }
+        // COMPOSITION exemption: when the owner is a pure composition
+        // parent — EVERY pin virtual, so the instance itself is no
+        // copper and its expansion children ARE the physical circuit
+        // (ChannelStrip, ECC83Dual) — children-only nets are its
+        // ordinary internal wiring, not duplicates of anything. The
+        // true ERC029 shape is a PHYSICAL part (a regulator with real
+        // pads) whose expansion minted support parts onto a virtual
+        // pin's auto-net beside the board-authored real path.
+        let owner_is_composition = netlist.instances.iter()
+            .find(|(_, i2)| i2.name == owner)
+            .and_then(|(_, i2)| netlist.modules.get(i2.definition))
+            .map_or(false, |m| {
+                !m.pins.is_empty()
+                    && m.pins.iter().all(|&pid| {
+                        netlist.pins.get(pid).map_or(true, |p| p.is_virtual)
+                    })
+            });
+        if owner_is_composition {
+            continue;
+        }
         child_names.sort();
         out.push(DRCViolation {
             rule_id: "ERC029".into(),
@@ -2189,6 +2209,13 @@ mod tests {
         use bhdl_netlist::types::ModuleKind;
         let mut nl = Netlist::new();
         let reg = nl.add_module("Reg".into(), ModuleKind::Component);
+        // A REAL pin alongside the virtual one: the true ERC029 shape
+        // is a physical part (regulator with real pads) minting
+        // support parts onto a virtual pin's auto-net. A module whose
+        // pins are ALL virtual is a composition parent and exempt
+        // (see the composition test below).
+        nl.add_pin(reg, "VIN".into(), PinDirection::In, PinType::Power)
+            .unwrap();
         let vpin = nl
             .add_pin(reg, "VOUT".into(), PinDirection::Out, PinType::Power)
             .unwrap();
@@ -2197,7 +2224,8 @@ mod tests {
         let u1_pis = nl.create_pin_instances(u1).unwrap();
 
         let net = nl.add_net(Some("U1_VOUT".into()));
-        nl.connect(net, ConnectionPoint::PinInstance(u1_pis[0])).unwrap();
+        // u1_pis[1] = VOUT (the virtual pin); [0] is the real VIN.
+        nl.connect(net, ConnectionPoint::PinInstance(u1_pis[1])).unwrap();
 
         let cap = nl.add_module("Cap".into(), ModuleKind::Component);
         nl.add_pin(cap, "1".into(), PinDirection::InOut, PinType::Passive)
@@ -2226,6 +2254,39 @@ mod tests {
         assert!(matches!(v[0].severity, ViolationSeverity::Error));
         assert!(v[0].description.contains("u1_C0"));
         assert!(v[0].description.contains("u1_C1"));
+    }
+
+    #[test]
+    fn erc029_composition_parent_silent() {
+        // A PURE composition parent (every pin virtual — ChannelStrip,
+        // ECC83Dual): its expansion children ARE the physical circuit,
+        // and children-only internal nets are ordinary wiring.
+        use bhdl_netlist::types::ModuleKind;
+        let mut nl = Netlist::new();
+        let strip = nl.add_module("Strip".into(), ModuleKind::Component);
+        let vin = nl
+            .add_pin(strip, "IN".into(), PinDirection::In, PinType::Signal)
+            .unwrap();
+        nl.pins.get_mut(vin).unwrap().is_virtual = true;
+        let s1 = nl.add_instance("s1".into(), strip).unwrap();
+        let s1_pis = nl.create_pin_instances(s1).unwrap();
+        let net = nl.add_net(Some("s1_ni".into()));
+        nl.connect(net, ConnectionPoint::PinInstance(s1_pis[0])).unwrap();
+        let cap = nl.add_module("Cap2".into(), ModuleKind::Component);
+        nl.add_pin(cap, "1".into(), PinDirection::InOut, PinType::Passive)
+            .unwrap();
+        let c = nl.add_instance("s1_C0".into(), cap).unwrap();
+        nl.instances
+            .get_mut(c)
+            .unwrap()
+            .attributes
+            .insert("expansion_parent".into(), "s1".into());
+        let pis = nl.create_pin_instances(c).unwrap();
+        nl.connect(net, ConnectionPoint::PinInstance(pis[0])).unwrap();
+        assert!(
+            check_floating_expansion_island(&nl, &AnalysisResult::default()).is_empty(),
+            "composition-internal net must not trip ERC029"
+        );
     }
 
     #[test]
