@@ -124,6 +124,33 @@ pub fn pathfinder_route(
         for cell in apron {
             grid.get_mut(cell).history += 2.0;
         }
+        // POUR-BAND APRON: a REGIONED pour's band is dedicated fill
+        // over its consumers — the hand-routed demo keeps its vbias
+        // band clean of top-side routing entirely (its tracks live on
+        // the other face). Foreign nets pay history inside the band
+        // on the pour layer so the fill survives whole and the
+        // reliefs land; the poured net's own pocket stubs still
+        // route (history is soft, and their copper merges with the
+        // fill anyway).
+        for net in &board.nets {
+            let Some(pl) = net.plane_layer else { continue };
+            if board.layer_stack.layers.get(pl).map(|l| l.kind)
+                != Some(crate::types::LayerKind::Signal)
+            {
+                continue;
+            }
+            let Some((rx0, ry0, rx1, ry1)) = net.plane_region else {
+                continue;
+            };
+            let c0 = grid.point_to_cell(rx0, ry0, pl);
+            let c1 = grid.point_to_cell(rx1, ry1, pl);
+            for r in c0.row.min(c1.row)..=c0.row.max(c1.row) {
+                for c in c0.col.min(c1.col)..=c0.col.max(c1.col) {
+                    let cell = CellCoord { layer: pl, row: r, col: c };
+                    grid.get_mut(cell).history += 4.0;
+                }
+            }
+        }
     }
 
     for _iteration in 0..max_iterations {

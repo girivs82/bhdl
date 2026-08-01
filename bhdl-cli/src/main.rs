@@ -2029,6 +2029,14 @@ async fn run_layout(
                 sem_config.board_config.min_spacing_mm = c;
                 println!("  {} Clearance: {c}mm (declared design rule)", "✓".green());
             }
+            if !lay.pours.is_empty() {
+                sem_config.board_config.pours = lay.pours.clone();
+                println!(
+                    "  {} Pour intent: {} (engine chooses layer + region)",
+                    "✓".green(),
+                    lay.pours.join(", ")
+                );
+            }
             if let Some(bias) = &lay.route_bias {
                 let mut words = bias.split_whitespace();
                 let side = words.next().unwrap_or("");

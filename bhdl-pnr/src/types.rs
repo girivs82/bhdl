@@ -101,6 +101,9 @@ pub struct BoardConfig {
     /// a preference, not a layer rule.
     #[serde(default)]
     pub route_bias: Option<String>,
+    /// `pour <net>;` — declared pour intents (net names, declaration
+    /// order). The engine picks layer + region organically.
+    pub pours: Vec<String>,
     /// `route_bias bottom strict;` — signal copper is CONFINED to the
     /// preferred layer (per-net allowed_layers), the way the hand-
     /// routed single-sided demos work: the router detours around
@@ -145,6 +148,7 @@ impl Default for BoardConfig {
             double_sided: false,
             stackup_material: None,
             route_bias: None,
+            pours: Vec::new(),
             route_bias_strict: false,
             design_track_width_mm: None,
             placement_regions: Vec::new(),
@@ -618,6 +622,10 @@ pub struct PnrNet {
     /// planes, all Ground planes). Computed AFTER placement from rail
     /// pin centroids; fills clip to it, drops must land inside it.
     pub plane_region: Option<(f64, f64, f64, f64)>,
+    /// Declared-pour net whose split REGION is the pin cloud — the
+    /// bbox is computed AFTER placement (free parts sit at garbage
+    /// init positions at semantic time).
+    pub pour_region_pending: bool,
     /// Layer rule: copper restricted to these layer indices (None =
     /// any signal layer). Pad layers are auto-included with a warning
     /// when a rule conflicts with where the pads physically are.

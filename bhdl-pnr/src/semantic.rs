@@ -607,6 +607,7 @@ pub fn build_board(
             layout_intents: Vec::new(),
             plane_layer: None,
             plane_region: None,
+            pour_region_pending: false,
             allowed_layers: None,
             solved_voltage_v: solved_v,
             edge_swing_v: edge_swing,
@@ -822,58 +823,112 @@ pub fn build_board(
             }
         }
 
-        // ── Signal-layer GND pour (EXPERIMENT, BHDL_PNR_POUR_GND=1) ──
-        // The classic 2-layer idiom: no dedicated plane layers, so
-        // pour GND on the BOTTOM signal layer — the zone voids around
-        // every foreign same-layer track/pad (plane_foreign_holes'
-        // pour arm), pins connect by contact or drop via, and GND
-        // leaves the routing problem entirely. Default OFF: pours on
-        // a shared layer can fragment (voids isolating islands), and
-        // only the oracle A/B decides whether the trade wins.
-        if std::env::var("BHDL_PNR_POUR_GND").is_ok()
-            && !polygon_board
-            && !layer_stack
-                .layers
-                .iter()
-                .any(|l| matches!(l.kind, LayerKind::Ground | LayerKind::Power))
+        // ── Signal-layer pours: declared `pour <net>;` intents plus
+        // the BHDL_PNR_POUR_GND experiment shorthand for ground. The
+        // classic 2-layer idiom: no dedicated plane layers, so the
+        // zone voids around every foreign same-layer track/pad
+        // (plane_foreign_holes' pour arm), pins connect by contact,
+        // relief or drop via, and the poured net leaves the routing
+        // problem. Layer choice follows the routing posture (soft
+        // bias -> ANTI-BIAS face; strict -> the preferred face; none
+        // -> bottom). The GROUND pour covers the board (and the
+        // routing face too, at emission); every ADDITIONAL pour
+        // shares the pour face over its own PIN CLOUD (bbox + 3mm) —
+        // the demo's vbias band is exactly its consumers' extent.
         {
-            if let Some(gi) = gnd_idx {
-                if nets[gi].plane_layer.is_none() && layer_stack.layers.len() >= 2 {
-                    let n_layers = layer_stack.layers.len();
-                    // Layer choice follows the routing posture. Soft
-                    // route_bias: pour the ANTI-BIAS face — routing
-                    // wants one side, so give the pour the other and
-                    // the two stop fighting (the 2-layer idiom: routes
-                    // bottom, plane top). Strict single-sided: copper
-                    // is confined to the preferred face, so the pour
-                    // must live THERE (the other face stays empty).
-                    // No bias declared: bottom, the classic default.
-                    let pour_layer = match (
-                        config.board_config.route_bias.as_deref(),
-                        config.board_config.route_bias_strict,
-                    ) {
-                        (Some(b), false) => {
-                            if b == "top" {
-                                n_layers - 1
-                            } else {
-                                0
-                            }
+            let mut pour_names: Vec<String> =
+                config.board_config.pours.clone();
+            if std::env::var("BHDL_PNR_POUR_GND").is_ok() {
+                if let Some(gi) = gnd_idx {
+                    let g = nets[gi].name.clone();
+                    if !pour_names.iter().any(|p| p == &g) {
+                        pour_names.push(g);
+                    }
+                }
+            }
+            let pourable = !pour_names.is_empty()
+                && !polygon_board
+                && layer_stack.layers.len() >= 2
+                && !layer_stack
+                    .layers
+                    .iter()
+                    .any(|l| matches!(l.kind, LayerKind::Ground | LayerKind::Power));
+            if pourable {
+                let n_layers = layer_stack.layers.len();
+                let pour_layer = match (
+                    config.board_config.route_bias.as_deref(),
+                    config.board_config.route_bias_strict,
+                ) {
+                    (Some(b), false) => {
+                        if b == "top" {
+                            n_layers - 1
+                        } else {
+                            0
                         }
-                        (Some(b), true) => {
-                            if b == "top" {
-                                0
-                            } else {
-                                n_layers - 1
-                            }
+                    }
+                    (Some(b), true) => {
+                        if b == "top" {
+                            0
+                        } else {
+                            n_layers - 1
                         }
-                        (None, _) => n_layers - 1,
+                    }
+                    (None, _) => n_layers - 1,
+                };
+                for name in &pour_names {
+                    // Net by NAME, or by PIN PATH (`u_mst.OUT_B`) —
+                    // the net attached to that instance pin (boards
+                    // often leave distribution nets auto-named).
+                    let by_name = nets.iter().position(|n| &n.name == name);
+                    let by_pin = || -> Option<usize> {
+                        let (iname, pname) = name.split_once('.')?;
+                        let comp =
+                            components.iter().find(|c| c.name == iname)?;
+                        let pin = comp
+                            .pins
+                            .iter()
+                            .find(|p| p.name == pname)?;
+                        nets.iter().position(|n| {
+                            n.pins
+                                .iter()
+                                .any(|&(cid, pid)| {
+                                    cid == comp.id && pid == pin.pin_id
+                                })
+                        })
                     };
-                    nets[gi].plane_layer = Some(pour_layer);
-                    log::info!(
-                        "pour assignment (experiment): {} signal layer -> '{}'",
-                        layer_stack.layers[pour_layer].name,
-                        nets[gi].name
-                    );
+                    let Some(pi) = by_name.or_else(by_pin) else {
+                        log::warn!(
+                            "pour intent '{name}': no such net or pin — skipped"
+                        );
+                        continue;
+                    };
+                    if nets[pi].plane_layer.is_some() {
+                        continue;
+                    }
+                    let is_ground = Some(pi) == gnd_idx;
+                    if is_ground {
+                        nets[pi].plane_layer = Some(pour_layer);
+                        log::info!(
+                            "pour assignment: {} signal layer -> '{}' (board-wide)",
+                            layer_stack.layers[pour_layer].name,
+                            nets[pi].name
+                        );
+                    } else {
+                        // Pin-cloud region: the pour serves its
+                        // consumers where they LIVE, and the ground
+                        // fill flows around it — KiCad-priority
+                        // semantics by geometric subtraction. The
+                        // bbox is computed AFTER placement (free
+                        // parts sit at init garbage here) — mark
+                        // pending; lib.rs resolves it post-place.
+                        nets[pi].plane_layer = Some(pour_layer);
+                        nets[pi].pour_region_pending = true;
+                        log::info!(
+                            "pour assignment: {} split region (pin cloud, post-placement) -> '{}'",
+                            layer_stack.layers[pour_layer].name,
+                            nets[pi].name
+                        );
+                    }
                 }
             }
         }

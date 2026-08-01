@@ -3256,6 +3256,7 @@ pub fn extract_layout_definitions(
         let stackup_material = layout_def.stackup_material();
         let cutouts = layout_def.cutouts();
         let route_bias = layout_def.route_bias();
+        let pours = layout_def.pours();
         let track_width = layout_def.track_width();
         let clearance = layout_def.clearance();
 
@@ -3274,6 +3275,7 @@ pub fn extract_layout_definitions(
             double_sided,
             stackup_material,
             route_bias,
+            pours,
             track_width,
             clearance,
         });

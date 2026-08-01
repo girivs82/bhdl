@@ -35,6 +35,8 @@ pub struct LayoutDefinition {
     pub double_sided: bool,
     /// `layer_stackup N material <name>;` — laminate selection.
     pub stackup_material: Option<String>,
+    /// `pour <net>;` — declared pour intents, in declaration order.
+    pub pours: Vec<String>,
     /// `route_bias bottom;` — preferred outer signal layer ("bottom"
     /// or "top"); the router penalizes lateral moves elsewhere.
     pub route_bias: Option<String>,

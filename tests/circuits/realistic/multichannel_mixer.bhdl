@@ -197,6 +197,17 @@ layout ElectrolyticCap { package Radial-P2.50-D5; }
 
 layout MultichannelMixer {
     layer_stackup 2;
+    // Pour intent (the demo pours GND on both faces + a vbias band
+    // over its consumers): the `pour <net|pin>;` statement and the
+    // split machinery (pin-cloud region, priority backfill, band
+    // apron) are BUILT — demo-parity runs exercise them via
+    // BHDL_PNR_POUR_GND. Not declared here yet: the pour-on run has
+    // a ~1-item starved-thermal FLAP (trial-order nondeterminism)
+    // and the corpus gate needs the deterministic pour-off default;
+    // vbias adds a 3-item band-interior tail (F.Cu escapes shred
+    // the band fill the demo keeps clean).
+    // pour GND;
+    // pour u_mst.OUT_B;
     // Demo convention: THT-era mixer routes bottom-dominant
     // (reference board: 1768mm B.Cu vs 192mm of F.Cu jumpers).
     route_bias bottom;

@@ -1458,6 +1458,71 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
     // so adjacent fills keep the 0.3mm zone clearance plus margin.
     assign_plane_regions(&mut board);
 
+    // 4.99. Resolve PENDING pour regions: a declared non-ground pour
+    // covers its consumers' PIN CLOUD — computable only now that
+    // placement is final (semantic time had free parts at init
+    // garbage). Bbox + 3mm, clamped inside the edge clearance.
+    {
+        let bw = board.config.outline.width();
+        let bh = board.config.outline.height();
+        let m = board.config.edge_clearance_mm + 0.05;
+        let comp_pos: std::collections::HashMap<ComponentId, usize> = board
+            .components
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (c.id, i))
+            .collect();
+        for i in 0..board.nets.len() {
+            if !board.nets[i].pour_region_pending {
+                continue;
+            }
+            let mut x0 = f64::INFINITY;
+            let mut y0 = f64::INFINITY;
+            let mut x1 = f64::NEG_INFINITY;
+            let mut y1 = f64::NEG_INFINITY;
+            for &(cid, pid) in &board.nets[i].pins {
+                let Some(&ci) = comp_pos.get(&cid) else { continue };
+                let comp = &board.components[ci];
+                let Some(pin) = comp.pins.iter().find(|p| p.pin_id == pid)
+                else {
+                    continue;
+                };
+                let (co, sn) = (comp.theta.cos(), comp.theta.sin());
+                let gx = comp.x + pin.dx * co - pin.dy * sn;
+                let gy = comp.y + pin.dx * sn + pin.dy * co;
+                x0 = x0.min(gx);
+                y0 = y0.min(gy);
+                x1 = x1.max(gx);
+                y1 = y1.max(gy);
+            }
+            board.nets[i].pour_region_pending = false;
+            if !x0.is_finite() || x1 - x0 < 1.0 || y1 - y0 < 1.0 {
+                log::warn!(
+                    "pour region for '{}': degenerate pin cloud ({} pins, bbox {:.2}x{:.2} at ({:.1},{:.1})) — pour dropped",
+                    board.nets[i].name,
+                    board.nets[i].pins.len(),
+                    x1 - x0,
+                    y1 - y0,
+                    x0,
+                    y0
+                );
+                board.nets[i].plane_layer = None;
+                continue;
+            }
+            let region = (
+                (x0 - 3.0).max(m),
+                (y0 - 3.0).max(m),
+                (x1 + 3.0).min(bw - m),
+                (y1 + 3.0).min(bh - m),
+            );
+            board.nets[i].plane_region = Some(region);
+            info!(
+                "pour region: '{}' pin cloud -> ({:.1},{:.1})-({:.1},{:.1})",
+                board.nets[i].name, region.0, region.1, region.2, region.3
+            );
+        }
+    }
+
     // 5. Final routing — two-pass strategy (route like a human)
     //    Pass 1: single-layer routing (no vias) — maximize what can be routed flat
     //    Pass 2: remaining unrouted nets get vias to escape to other layers
@@ -5076,9 +5141,26 @@ fn assign_plane_regions(board: &mut Board) {
         .enumerate()
         .map(|(i, c)| (c.id, i))
         .collect();
-    // Group plane nets by layer.
+    // Group plane nets by layer. DECLARED-POUR nets are exempt from
+    // band arbitration: their coexistence on a shared face is handled
+    // by geometric subtraction (the pin-cloud region carved out of
+    // the ground fill) — the band splitter saw GND+vbias on F.Cu,
+    // failed its separability gate on the board-wide ground, and
+    // silently cleared the vbias pour.
     let mut by_layer: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     for (i, n) in board.nets.iter().enumerate() {
+        if n.pour_region_pending || n.plane_region.is_some() {
+            continue;
+        }
+        if board
+            .layer_stack
+            .layers
+            .get(n.plane_layer.unwrap_or(usize::MAX))
+            .map(|l| l.kind == crate::types::LayerKind::Signal)
+            .unwrap_or(false)
+        {
+            continue; // signal-layer pours coexist by subtraction
+        }
         if let Some(l) = n.plane_layer {
             by_layer.entry(l).or_default().push(i);
         }

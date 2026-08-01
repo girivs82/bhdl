@@ -300,7 +300,42 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
             .unwrap_or("In1.Cu");
         let n = net_no(net.id);
 
-        let mut holes = plane_foreign_holes(board, routes, net.id);
+        // Foreign same-layer regioned pours (the vbias band): at
+        // EMISSION this fill backfills their region KiCad-priority
+        // style — void exactly the higher-priority pour's CLAIM
+        // (its fill simulation, clearance-dilated), not the whole
+        // band rect. The hole-model consumers elsewhere keep the
+        // conservative rect lattice (drops never site in the band;
+        // the real fill only ever has MORE copper than the model).
+        let sig_pour = board
+            .layer_stack
+            .layers
+            .get(plane_layer)
+            .map(|l| l.kind == crate::types::LayerKind::Signal)
+            .unwrap_or(false);
+        let foreign_regions: Vec<(f64, f64, f64, f64)> = if sig_pour {
+            board
+                .nets
+                .iter()
+                .filter(|o| {
+                    o.id != net.id && o.plane_layer == Some(plane_layer)
+                })
+                .filter_map(|o| o.plane_region)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let mut holes = if foreign_regions.is_empty() {
+            plane_foreign_holes(board, routes, net.id)
+        } else {
+            plane_foreign_holes_on(
+                board,
+                routes,
+                net.id,
+                Some(plane_layer),
+                false,
+            )
+        };
         // COMPENSATE the void engine's hole inflation (x1.082 +
         // 0.19mm) at the EMISSION only: uncompensated, every keepout
         // renders ~0.28mm fatter than the declared clearance — wide
@@ -456,18 +491,98 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
                 let by1 = b.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
                 fracture_fill(bx0, by0, bx1, by1, &holes, &cutout_rects, &anchors, Some(b))
             }
-            None => fracture_fill_spoked(
-                fx0,
-                fy0,
-                fx1,
-                fy1,
-                &holes,
-                &cutout_rects,
-                &anchors,
-                None,
-                &spokes,
-                &spoke_mask,
-            ),
+            None => {
+                // Higher-priority claim grid on THIS raster frame.
+                let pre_void: Option<Vec<bool>> = if foreign_regions
+                    .is_empty()
+                {
+                    None
+                } else {
+                    let zc = 0.3f64.max(board.config.min_spacing_mm);
+                    let mut claim_all: Option<Vec<bool>> = None;
+                    for other in board.nets.iter().filter(|o| {
+                        o.id != net.id
+                            && o.plane_layer == Some(plane_layer)
+                            && o.plane_region.is_some()
+                    }) {
+                        let (rx0, ry0, rx1, ry1) =
+                            other.plane_region.unwrap();
+                        let mut oh = plane_foreign_holes_on(
+                            board,
+                            routes,
+                            other.id,
+                            Some(plane_layer),
+                            false,
+                        );
+                        for h in oh.iter_mut() {
+                            h.2 = ((h.2 - 0.1875) / 1.082).max(0.1);
+                        }
+                        let (cg, ccols, crows) = fill_copper_grid_masked(
+                            fx0,
+                            fy0,
+                            fx1,
+                            fy1,
+                            &oh,
+                            &cutout_rects,
+                            None,
+                        );
+                        // +0.1 beyond the zone clearance: the claim
+                        // is raster-quantized and the region edge is
+                        // a knife-edge tie without it (measured 1
+                        // zone-zone clearance at a band corner).
+                        let dil = ((zc + 0.1) / VOID_CELL).ceil() as isize;
+                        let mut cl = vec![false; cg.len()];
+                        for r in 0..crows {
+                            for c in 0..ccols {
+                                let x = fx0 + (c as f64 + 0.5) * VOID_CELL;
+                                let y = fy0 + (r as f64 + 0.5) * VOID_CELL;
+                                if x < rx0
+                                    || x > rx1
+                                    || y < ry0
+                                    || y > ry1
+                                    || !cg[r * ccols + c]
+                                {
+                                    continue;
+                                }
+                                let r0 = (r as isize - dil).max(0) as usize;
+                                let r1c =
+                                    ((r as isize + dil) as usize).min(crows - 1);
+                                let c0 = (c as isize - dil).max(0) as usize;
+                                let c1 =
+                                    ((c as isize + dil) as usize).min(ccols - 1);
+                                for rr in r0..=r1c {
+                                    for cc in c0..=c1 {
+                                        cl[rr * ccols + cc] = true;
+                                    }
+                                }
+                            }
+                        }
+                        claim_all = Some(match claim_all {
+                            None => cl,
+                            Some(mut a) => {
+                                for (ai, ci) in a.iter_mut().zip(cl) {
+                                    *ai |= ci;
+                                }
+                                a
+                            }
+                        });
+                    }
+                    claim_all
+                };
+                fracture_fill_spoked(
+                    fx0,
+                    fy0,
+                    fx1,
+                    fy1,
+                    &holes,
+                    &cutout_rects,
+                    &anchors,
+                    None,
+                    &spokes,
+                    &spoke_mask,
+                    pre_void.as_deref(),
+                )
+            }
         };
         for pts in &polys {
             out.push_str(&format!("    (filled_polygon (layer \"{}\") (pts\n", layer_name));
@@ -511,7 +626,7 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
                     .map(|l| l.name.as_str())
                     .unwrap_or("B.Cu");
                 let mut holes2 =
-                    plane_foreign_holes_on(board, routes, net.id, Some(other));
+                    plane_foreign_holes_on(board, routes, net.id, Some(other), true);
                 for h in holes2.iter_mut() {
                     h.2 = ((h.2 - 0.1875) / 1.082).max(0.1);
                 }
@@ -595,6 +710,7 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
                             None,
                             &spokes2,
                             &spoke_mask2,
+                            None,
                         ),
                     };
                     if !polys2.is_empty() {
@@ -1038,7 +1154,7 @@ pub(crate) fn plane_pads_marooned(
     let w = board.config.outline.width();
     let h = board.config.outline.height();
     let m = board.config.edge_clearance_mm + 0.05;
-    let holes = plane_foreign_holes_on(board, routes, net_id, Some(pour_layer));
+    let holes = plane_foreign_holes_on(board, routes, net_id, Some(pour_layer), true);
     let rects = plane_cutout_rects(board);
     let (copper, cols, rows) = fill_copper_grid_masked(m, m, w - m, h - m, &holes, &rects, None);
     // Label 4-connected components.
@@ -1363,7 +1479,7 @@ fn fracture_fill(
     anchors: &[(f64, f64)],
     mask: Option<&[(f64, f64)]>,
 ) -> Vec<Vec<(f64, f64)>> {
-    fracture_fill_spoked(x0, y0, x1, y1, holes, rects, anchors, mask, &[], &[])
+    fracture_fill_spoked(x0, y0, x1, y1, holes, rects, anchors, mask, &[], &[], None)
 }
 
 /// fracture_fill with thermal SPOKE paint-back: after voiding, cells
@@ -1382,10 +1498,22 @@ fn fracture_fill_spoked(
     mask: Option<&[(f64, f64)]>,
     spokes: &[(f64, f64, f64)],
     spoke_mask: &[(f64, f64, f64)],
+    pre_void: Option<&[bool]>,
 ) -> Vec<Vec<(f64, f64)>> {
     // ONE VOID ENGINE: raster copper, trace copper components, punch
     // hole loops via the keyhole forest. See fill_copper_grid.
     let (mut copper, cols, rows) = fill_copper_grid_masked(x0, y0, x1, y1, holes, rects, mask);
+    // PRIORITY BACKFILL support: a caller-supplied void grid (same
+    // raster dims) — the higher-priority pour's CLAIM, clearance-
+    // dilated; this fill flows around it, KiCad-style.
+    if let Some(pv) = pre_void {
+        debug_assert_eq!(pv.len(), copper.len());
+        for (c, &v) in copper.iter_mut().zip(pv.iter()) {
+            if v {
+                *c = false;
+            }
+        }
+    }
     if !spokes.is_empty() && mask.is_none() {
         let hw = 0.25f64; // spoke half-width (bridge 0.5 — the demo's own)
         let s2 = std::f64::consts::SQRT_2;
@@ -1992,7 +2120,7 @@ pub(crate) fn plane_foreign_holes(
             board.layer_stack.layers.get(pl).map(|l| l.kind)
                 == Some(crate::types::LayerKind::Signal)
         });
-    plane_foreign_holes_on(board, routes, net_id, pour_layer)
+    plane_foreign_holes_on(board, routes, net_id, pour_layer, true)
 }
 
 /// Same hole set with the POUR layer given explicitly — the
@@ -2003,6 +2131,7 @@ pub(crate) fn plane_foreign_holes_on(
     routes: &[Route],
     net_id: NetId,
     pour_layer: Option<usize>,
+    include_foreign_regions: bool,
 ) -> Vec<(f64, f64, f64)> {
     let via_r = board.layer_stack.via.pad_mm / 2.0;
     // Zone clearance: 0.3 floor (the historical constant — default
@@ -2110,6 +2239,38 @@ pub(crate) fn plane_foreign_holes_on(
                 let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
                 let reach = (pad.width_mm / 2.0).hypot(pad.height_mm / 2.0);
                 holes.push((gx, gy, reach + zc + 0.05));
+            }
+        }
+        // FOREIGN split-pour regions on this layer (the vbias band):
+        // the ground fill flows AROUND a regioned pour — KiCad's
+        // zone-priority semantics by geometric subtraction. Stamped
+        // as a circle lattice so EVERY consumer of this hole set
+        // (fill, drop siting, swallow verify, maroon test) yields to
+        // the region identically. r=1.5 at 1.5 pitch survives the
+        // emission-side deflation ((r−0.1875)/1.082 = 1.21 ≥
+        // pitch/√2) with no lattice bleed-through.
+        for other in &board.nets {
+            if !include_foreign_regions {
+                break;
+            }
+            if other.id == net_id || other.plane_layer != Some(pl) {
+                continue;
+            }
+            let Some((rx0, ry0, rx1, ry1)) = other.plane_region else {
+                continue;
+            };
+            let r = 1.5f64;
+            let pitch = 1.5f64;
+            let (sx0, sy0) = (rx0 - zc + r * 0.5, ry0 - zc + r * 0.5);
+            let (sx1, sy1) = (rx1 + zc - r * 0.5, ry1 + zc - r * 0.5);
+            let nx = (((sx1 - sx0) / pitch).ceil() as usize).max(1);
+            let ny = (((sy1 - sy0) / pitch).ceil() as usize).max(1);
+            for iy in 0..=ny {
+                for ix in 0..=nx {
+                    let x = sx0 + (sx1 - sx0) * ix as f64 / nx as f64;
+                    let y = sy0 + (sy1 - sy0) * iy as f64 / ny as f64;
+                    holes.push((x, y, r));
+                }
             }
         }
     }

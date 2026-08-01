@@ -1726,6 +1726,30 @@ impl LayoutDef {
         None
     }
 
+    /// `pour <net>;` — declared pour intent: this net gets a copper
+    /// fill; the ENGINE chooses layer and region (ground nets take
+    /// the anti-bias face + the routing face; additional pours share
+    /// the pour face over their pin cloud). One statement per net.
+    pub fn pours(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for n in self
+            .0
+            .children()
+            .filter(|n| n.kind() == SyntaxKind::LAYOUT_KEEPOUT)
+        {
+            let toks = Self::mech_tokens(&n);
+            if toks.first().map(|t| t.as_str()) == Some("pour") {
+                if toks.len() > 1 {
+                    // A net name, or a PIN PATH (`pour u_mst.OUT_B;`
+                    // — pour the net attached to that pin); the path
+                    // may tokenize as ident '.' ident, so re-join.
+                    out.push(toks[1..].concat());
+                }
+            }
+        }
+        out
+    }
+
     /// `track_width 0.8;` — board design rule: default trace width in
     /// mm (the demo-era boards route 0.5-0.8mm; modern fab minimums
     /// are the 0.15mm default).
