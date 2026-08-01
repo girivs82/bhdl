@@ -14,7 +14,7 @@
 //! length matching, and impedance-controlled width are later work; this
 //! is the cheapest high-value step (`constraint_model_v0.md` §7).
 
-use std::collections::HashMap;
+use crate::det::HashMap;
 
 use crate::constraint::Constraint;
 use crate::types::{Board, NetId};
@@ -36,7 +36,7 @@ mod bonus {
 /// Per-net routing criticality from the board's constraint set. Nets not
 /// present in the map have zero bonus.
 pub fn net_criticality(board: &Board) -> HashMap<NetId, f64> {
-    let mut score: HashMap<NetId, f64> = HashMap::new();
+    let mut score: HashMap<NetId, f64> = HashMap::default();
     let mut add = |net: NetId, b: f64| {
         let e = score.entry(net).or_insert(0.0);
         // Take the max bonus per kind rather than summing duplicates, but

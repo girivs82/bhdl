@@ -8,7 +8,8 @@
 use crate::routing::grid::{CellCoord, RoutingGrid};
 use crate::types::*;
 use std::cmp::Ordering;
-use std::collections::{BTreeSet, BinaryHeap, HashMap};
+use std::collections::{BTreeSet, BinaryHeap};
+use crate::det::HashMap;
 
 /// Route all nets using PathFinder negotiated congestion.
 ///
@@ -45,7 +46,7 @@ pub fn pathfinder_route(
         // (populated below; pair adjacency applied to net_order after)
         let idx_of: HashMap<NetId, usize> =
             nets.iter().enumerate().map(|(i, n)| (n.id, i)).collect();
-        let mut m = HashMap::new();
+        let mut m = HashMap::default();
         for c in &board.constraints {
             if let crate::constraint::Constraint::DiffPair { p_net, n_net, .. } = c {
                 if let (Some(&pi), Some(&ni)) = (idx_of.get(p_net), idx_of.get(n_net)) {
@@ -267,8 +268,8 @@ fn shortest_path_3d(
 
     // Solved per-sink currents (GLACIER DC), keyed by sink cell — the
     // flow analysis tapers by REAL draws when a solve ran.
-    let mut sink_current: std::collections::HashMap<CellCoord, Option<f64>> =
-        std::collections::HashMap::new();
+    let mut sink_current: crate::det::HashMap<CellCoord, Option<f64>> =
+        crate::det::HashMap::default();
     // Map pins to grid cells, keeping the EXACT pad coordinate per cell:
     // the fabricated track must land on pad copper, not the cell center
     // (a 1 mm cell center can sit off the pad entirely — KiCad's DRC
@@ -422,8 +423,8 @@ fn shortest_path_3d(
         parent: Option<(usize, usize)>,
     }
     let mut path_recs: Vec<PathRec> = Vec::new();
-    let mut cell_home: std::collections::HashMap<CellCoord, (usize, usize)> =
-        std::collections::HashMap::new();
+    let mut cell_home: crate::det::HashMap<CellCoord, (usize, usize)> =
+        crate::det::HashMap::default();
     let mut via_keepout: Vec<(f64, f64)> = Vec::new();
 
     let root_only: BTreeSet<CellCoord> = std::iter::once(source).collect();
@@ -1556,8 +1557,8 @@ pub(crate) fn unreached_sink_count(net: &PnrNet, board: &Board, route: &Route) -
         .collect();
     let comps = route_components(route);
     let tree_comp: Option<usize> = {
-        let mut pop: std::collections::HashMap<usize, usize> =
-            std::collections::HashMap::new();
+        let mut pop: crate::det::HashMap<usize, usize> =
+            crate::det::HashMap::default();
         for &c in &comps {
             *pop.entry(c).or_insert(0) += 1;
         }
@@ -1685,8 +1686,8 @@ pub(crate) fn extend_route(
     // copper component of the surviving route.
     let comps = route_components(route);
     let tree_comp: Option<usize> = {
-        let mut pop: std::collections::HashMap<usize, usize> =
-            std::collections::HashMap::new();
+        let mut pop: crate::det::HashMap<usize, usize> =
+            crate::det::HashMap::default();
         for &c in &comps {
             *pop.entry(c).or_insert(0) += 1;
         }
@@ -2104,8 +2105,8 @@ pub(crate) fn count_connected_sinks(board: &Board, routes: &[Route]) -> usize {
         // Component pin-population: a plane net's plane counts as a
         // "pin" every drop-via component reaches (via drops connect
         // stub components through the fill).
-        let mut pop: std::collections::HashMap<usize, usize> =
-            std::collections::HashMap::new();
+        let mut pop: crate::det::HashMap<usize, usize> =
+            crate::det::HashMap::default();
         for c in pin_comp.iter().flatten() {
             *pop.entry(*c).or_insert(0) += 1;
         }

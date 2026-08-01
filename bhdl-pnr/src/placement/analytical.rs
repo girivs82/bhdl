@@ -21,7 +21,7 @@ pub fn compute_wirelength(
     let mut total_wl = 0.0;
 
     // Build component index lookup
-    let comp_idx: std::collections::HashMap<ComponentId, usize> = board
+    let comp_idx: crate::det::HashMap<ComponentId, usize> = board
         .components
         .iter()
         .enumerate()
@@ -137,7 +137,7 @@ fn lse_wirelength_1d(
 
 /// Compute the HPWL (half-perimeter wirelength) for metrics.
 pub fn compute_hpwl(board: &Board) -> f64 {
-    let comp_idx: std::collections::HashMap<ComponentId, usize> = board
+    let comp_idx: crate::det::HashMap<ComponentId, usize> = board
         .components
         .iter()
         .enumerate()

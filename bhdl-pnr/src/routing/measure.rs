@@ -17,7 +17,7 @@ pub(crate) fn net_routed_length(route: &Route) -> f64 {
     }
     let comps = route_components(route);
     let tree = {
-        let mut pop: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        let mut pop: crate::det::HashMap<usize, usize> = crate::det::HashMap::default();
         for &c in &comps {
             *pop.entry(c).or_insert(0) += 1;
         }
@@ -97,8 +97,8 @@ pub(crate) fn pin_stub_length(
     let key = |p: (f64, f64)| (q(p.0), q(p.1));
     // Endpoint degree map (vias merge layers; the walk is layer-blind
     // on purpose — a via mid-stub is still stub).
-    let mut degree: std::collections::HashMap<(i64, i64), usize> =
-        std::collections::HashMap::new();
+    let mut degree: crate::det::HashMap<(i64, i64), usize> =
+        crate::det::HashMap::default();
     for sg in &route.segments {
         *degree.entry(key(sg.start)).or_insert(0) += 1;
         *degree.entry(key(sg.end)).or_insert(0) += 1;
@@ -225,7 +225,7 @@ pub(crate) fn net_routed_delay_ps(route: &Route, stack: &LayerStack) -> f64 {
     }
     let comps = route_components(route);
     let tree = {
-        let mut pop: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        let mut pop: crate::det::HashMap<usize, usize> = crate::det::HashMap::default();
         for &c in &comps {
             *pop.entry(c).or_insert(0) += 1;
         }

@@ -62,7 +62,7 @@ fn lowers_ddr4_to_typed_constraints() {
         "ddr.lane0.DQS.P", "ddr.lane0.DQS.N",
         "ddr.ca.CK_t", "ddr.ca.CK_c", "ddr.ca.A0",
     ];
-    let ids: std::collections::HashMap<&str, NetId> =
+    let ids: crate::det::HashMap<&str, NetId> =
         paths.iter().map(|p| (*p, nets.insert(()))).collect();
     let resolve = |path: &str| ids.get(path).copied();
 

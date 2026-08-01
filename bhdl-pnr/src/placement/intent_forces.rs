@@ -16,7 +16,7 @@
 //! alone (a straddling cap collapses the loop), and rotation coupling can
 //! come later if the ATmega result needs it.
 
-use std::collections::HashMap;
+use crate::det::HashMap;
 
 use crate::constraint::{Constraint, EntitySel, Hardness, PinSel};
 use crate::constraint::eval::LayoutSnapshot;

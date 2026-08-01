@@ -16,7 +16,8 @@ pub mod optimizer;
 pub mod rotation;
 pub mod grouping;
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::VecDeque;
+use crate::det::{HashMap, HashSet};
 use crate::types::*;
 
 /// Placement state snapshot for convergence monitoring / rollback.
@@ -148,7 +149,7 @@ pub fn find_anchor(board: &Board) -> Option<usize> {
         .map(|(i, c)| (c.id, i))
         .collect();
 
-    let mut degree: HashMap<usize, usize> = HashMap::new();
+    let mut degree: HashMap<usize, usize> = HashMap::default();
     for net in &board.nets {
         let comp_indices: Vec<usize> = net.pins.iter()
             .filter_map(|(cid, _)| comp_id_to_idx.get(cid).copied())

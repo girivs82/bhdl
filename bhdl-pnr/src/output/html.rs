@@ -358,7 +358,7 @@ fn routes_to_json(board: &Board, routes: &[Route]) -> String {
 }
 
 fn groups_to_json(board: &Board) -> String {
-    let comp_idx: std::collections::HashMap<ComponentId, usize> = board.components.iter()
+    let comp_idx: crate::det::HashMap<ComponentId, usize> = board.components.iter()
         .enumerate()
         .map(|(i, c)| (c.id, i))
         .collect();

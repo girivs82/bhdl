@@ -10,7 +10,7 @@
 //! synth-side — the synth emits `intf_const__*` per-module *before*
 //! net-merge and is structurally blind to the merge (handshake §10).
 
-use std::collections::HashMap;
+use crate::det::HashMap;
 
 use crate::types::NetId;
 
@@ -120,11 +120,11 @@ fn detect_distance(constraints: &[Constraint], out: &mut Vec<Conflict>) {
 /// Same-net contradictions: impedance, topology, signal class.
 fn detect_same_net(constraints: &[Constraint], out: &mut Vec<Conflict>) {
     // net → (target_ohms, source)
-    let mut imped: HashMap<NetId, (f32, &ConstraintSource)> = HashMap::new();
+    let mut imped: HashMap<NetId, (f32, &ConstraintSource)> = HashMap::default();
     // net → (kind, source)
-    let mut topo: HashMap<NetId, (&TopoKind, &ConstraintSource)> = HashMap::new();
+    let mut topo: HashMap<NetId, (&TopoKind, &ConstraintSource)> = HashMap::default();
     // net → (class, source)
-    let mut sclass: HashMap<NetId, (&str, &ConstraintSource)> = HashMap::new();
+    let mut sclass: HashMap<NetId, (&str, &ConstraintSource)> = HashMap::default();
 
     for c in constraints {
         match c {

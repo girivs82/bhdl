@@ -733,7 +733,8 @@ fn route_tunnel_phase(
     phase_snap: bool,
 ) -> Option<Vec<(f64, f64)>> {
     use std::cmp::Reverse;
-    use std::collections::{BinaryHeap, HashMap};
+    use std::collections::BinaryHeap;
+use crate::det::HashMap;
     let step = (width + idx.spacing).max(0.25);
     let margin = 4.0;
     let (x0, y0) = if phase_snap {
@@ -773,8 +774,8 @@ fn route_tunnel_phase(
     // node id as the final deterministic tie-break.
     let key = |c: f64| Reverse(c.to_bits());
     let mut open: BinaryHeap<(Reverse<u64>, Reverse<u64>, (i32, i32))> = BinaryHeap::new();
-    let mut gscore: HashMap<(i32, i32), f64> = HashMap::new();
-    let mut prev: HashMap<(i32, i32), (i32, i32)> = HashMap::new();
+    let mut gscore: HashMap<(i32, i32), f64> = HashMap::default();
+    let mut prev: HashMap<(i32, i32), (i32, i32)> = HashMap::default();
     gscore.insert(start, 0.0);
     open.push((key(h(start)), key(0.0), start));
     let dirs: [(i32, i32); 8] = [
@@ -966,7 +967,8 @@ fn route_tunnel_ml_phase_scaled(
     step_scale: f64,
 ) -> Option<Vec<(f64, f64, usize)>> {
     use std::cmp::Reverse;
-    use std::collections::{BinaryHeap, HashMap};
+    use std::collections::BinaryHeap;
+use crate::det::HashMap;
     let step = ((width + idx.spacing) * step_scale).max(0.25);
     let margin = margin.max(1.0);
     let (x0, y0) = if phase_snap {
@@ -1010,8 +1012,8 @@ fn route_tunnel_ml_phase_scaled(
     let via_cost = 2.0; // mm-equivalent penalty per layer switch
     let key = |c: f64| Reverse(c.to_bits());
     let mut open: BinaryHeap<(Reverse<u64>, Reverse<u64>, Node)> = BinaryHeap::new();
-    let mut gscore: HashMap<Node, f64> = HashMap::new();
-    let mut prev: HashMap<Node, Node> = HashMap::new();
+    let mut gscore: HashMap<Node, f64> = HashMap::default();
+    let mut prev: HashMap<Node, Node> = HashMap::default();
     gscore.insert(start, 0.0);
     open.push((key(h(start)), key(0.0), start));
     let dirs: [(i32, i32); 8] = [

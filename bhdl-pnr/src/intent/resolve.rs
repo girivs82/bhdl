@@ -7,7 +7,7 @@
 //! lookup tables over a `Board` and resolves those references to
 //! `PinSel { component, pin }`.
 
-use std::collections::HashMap;
+use crate::det::HashMap;
 
 use bhdl_common::intent::vocabulary::{ComponentRef, PinRef};
 
@@ -29,9 +29,9 @@ pub struct LoweringContext {
 
 impl LoweringContext {
     pub fn build(board: &Board) -> Self {
-        let mut by_name = HashMap::new();
-        let mut pins = HashMap::new();
-        let mut ordered_pins = HashMap::new();
+        let mut by_name = HashMap::default();
+        let mut pins = HashMap::default();
+        let mut ordered_pins = HashMap::default();
 
         for c in &board.components {
             by_name.insert(c.name.clone(), c.id);
@@ -46,7 +46,7 @@ impl LoweringContext {
         // Host relationship: a group's `parent` is the host of every
         // member. (Decoupling caps born from an MCU's expansion land in a
         // functional group whose parent is the MCU.)
-        let mut host_of = HashMap::new();
+        let mut host_of = HashMap::default();
         for g in &board.groups {
             if let Some(parent) = g.parent {
                 for &m in &g.members {

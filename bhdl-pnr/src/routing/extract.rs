@@ -57,8 +57,8 @@ pub(crate) fn crosstalk_rows(
     routes: &[Route],
     top_n: usize,
 ) -> Vec<String> {
-    let mut pair_partner: std::collections::HashSet<(NetId, NetId)> =
-        std::collections::HashSet::new();
+    let mut pair_partner: crate::det::HashSet<(NetId, NetId)> =
+        crate::det::HashSet::default();
     for c in &board.constraints {
         if let Constraint::DiffPair { p_net, n_net, .. } = c {
             pair_partner.insert((*p_net, *n_net));
@@ -189,8 +189,8 @@ pub(crate) fn crosstalk_worst_mv(
 ) -> Option<(f64, usize, f64, f64, f64)> {
     // Intentional pairs (DiffPair partners) are the design, not
     // noise — excluded exactly as in crosstalk_rows.
-    let mut partners: std::collections::HashSet<(NetId, NetId)> =
-        std::collections::HashSet::new();
+    let mut partners: crate::det::HashSet<(NetId, NetId)> =
+        crate::det::HashSet::default();
     for c in &board.constraints {
         if let Constraint::DiffPair { p_net, n_net, .. } = c {
             partners.insert((*p_net, *n_net));
@@ -292,7 +292,7 @@ pub(crate) fn ir_drop_mv_of(board: &Board, routes: &[Route], i: usize) -> Option
             .unwrap_or(0.035);
         r_ohm += RHO_CU_OHM_MM * l / (sg.width_mm * t);
     }
-    let comp_ids: std::collections::HashSet<ComponentId> =
+    let comp_ids: crate::det::HashSet<ComponentId> =
         net.pins.iter().map(|&(cid, _)| cid).collect();
     let i_a = board
         .components
@@ -334,7 +334,7 @@ pub(crate) fn ir_rows(board: &Board, routes: &[Route]) -> Vec<String> {
             r_ohm += RHO_CU_OHM_MM * l / (sg.width_mm * t);
             length += l;
         }
-        let comp_ids: std::collections::HashSet<ComponentId> =
+        let comp_ids: crate::det::HashSet<ComponentId> =
             net.pins.iter().map(|&(cid, _)| cid).collect();
         let i_a = board
             .components

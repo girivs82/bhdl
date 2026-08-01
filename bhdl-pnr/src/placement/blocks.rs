@@ -11,7 +11,7 @@
 //! This follows the vendor app note approach: place components relative to
 //! the IC pins they connect to.
 
-use std::collections::{HashMap, HashSet};
+use crate::det::{HashMap, HashSet};
 use bhdl_common::PlacementRecipe;
 use crate::types::*;
 
@@ -48,7 +48,7 @@ pub fn form_blocks(
     placement_recipes: &std::collections::BTreeMap<String, PlacementRecipe>,
 ) -> Vec<PlacementBlock> {
     let mut blocks = Vec::new();
-    let mut assigned: HashSet<usize> = HashSet::new();
+    let mut assigned: HashSet<usize> = HashSet::default();
 
     let comp_id_to_idx: HashMap<ComponentId, usize> = board.components.iter()
         .enumerate()

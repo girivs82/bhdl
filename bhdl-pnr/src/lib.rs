@@ -27,6 +27,7 @@
 //! let kicad_pcb = bhdl_pnr::output::kicad::export_kicad_pcb(&result.board, &result.routes);
 //! ```
 
+pub mod det;
 pub mod priors;
 pub mod constraint;
 pub mod geom;
@@ -1466,7 +1467,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         let bw = board.config.outline.width();
         let bh = board.config.outline.height();
         let m = board.config.edge_clearance_mm + 0.05;
-        let comp_pos: std::collections::HashMap<ComponentId, usize> = board
+        let comp_pos: crate::det::HashMap<ComponentId, usize> = board
             .components
             .iter()
             .enumerate()
@@ -1666,7 +1667,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         let edge = board.config.edge_clearance_mm + via_r;
         let punch_gap = 2.0 * (via_r + 0.35) + 0.15;
         let mut new_vias: Vec<(f64, f64)> = Vec::new();
-        let comp_idx: std::collections::HashMap<ComponentId, usize> = board
+        let comp_idx: crate::det::HashMap<ComponentId, usize> = board
             .components
             .iter()
             .enumerate()
@@ -1875,19 +1876,19 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
     // translate with the block, e.g. off-pitch jacks).
     let mut stamped_pre: Vec<(usize, Route)> = Vec::new();
     if !stamped_channels.is_empty() {
-        let net_pos: std::collections::HashMap<NetId, usize> = board
+        let net_pos: crate::det::HashMap<NetId, usize> = board
             .nets
             .iter()
             .enumerate()
             .map(|(i, n)| (n.id, i))
             .collect();
-        let comp_pos: std::collections::HashMap<ComponentId, usize> = board
+        let comp_pos: crate::det::HashMap<ComponentId, usize> = board
             .components
             .iter()
             .enumerate()
             .map(|(i, c)| (c.id, i))
             .collect();
-        let mut taken: std::collections::HashSet<usize> = Default::default();
+        let mut taken: crate::det::HashSet<usize> = Default::default();
         let (mut n_deform, mut n_unmap, mut n_miss) = (0usize, 0usize, 0usize);
         let mut n_partial = 0usize;
         for ch in &stamped_channels {
@@ -2235,7 +2236,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
     // so a pruned route's span structure is cleared (validator
     // semantics: empty spans = rip-whole on damage).
     {
-        let comp_pos: std::collections::HashMap<ComponentId, usize> = board
+        let comp_pos: crate::det::HashMap<ComponentId, usize> = board
             .components
             .iter()
             .enumerate()
@@ -4224,7 +4225,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                     // Stub grading (fly-by budgets): measure every pin's
                     // dead-end branch off the trunk.
                     let stub_note = if let Some(limit) = stub_max_mm {
-                        let comp_idx: std::collections::HashMap<ComponentId, usize> =
+                        let comp_idx: crate::det::HashMap<ComponentId, usize> =
                             board
                                 .components
                                 .iter()
@@ -4397,7 +4398,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
 /// hold p50 1.05-1.28 / p90 1.36-1.85 on EVERY board from 15fp to
 /// 1508fp/12-layer. Read-only.
 fn detour_stats(board: &Board, final_routes: &[Route]) -> (f64, f64, usize) {
-    let comp_idx: std::collections::HashMap<ComponentId, usize> = board
+    let comp_idx: crate::det::HashMap<ComponentId, usize> = board
         .components
         .iter()
         .enumerate()
@@ -4528,7 +4529,7 @@ fn pour_defect_count(board: &Board, final_routes: &[Route]) -> usize {
         // (b) Off-side SMD pads with no live drop (stub on the pad's
         // layer touching pad copper with a via at its far end — the
         // drop pass's own liveness test).
-        let comp_idx: std::collections::HashMap<ComponentId, usize> = board
+        let comp_idx: crate::det::HashMap<ComponentId, usize> = board
             .components
             .iter()
             .enumerate()
@@ -4795,8 +4796,8 @@ fn staircase_pass(board: &Board, final_routes: &mut [Route]) -> usize {
                     }
                     let a0 = pts_all[e0];
                     let b1 = pts_all[e1 + 1];
-                    let mut run: std::collections::HashMap<(i8, i8), (f64, f64)> =
-                        std::collections::HashMap::new();
+                    let mut run: crate::det::HashMap<(i8, i8), (f64, f64)> =
+                        crate::det::HashMap::default();
                     for e in e0..=e1 {
                         if let Some(d) = edge_dir[e] {
                             let en = run.entry(d).or_insert((0.0, 0.0));
@@ -5135,7 +5136,7 @@ fn assign_plane_regions(board: &mut Board) {
     }
     let bw = board.config.outline.width();
     let bh = board.config.outline.height();
-    let comp_idx: std::collections::HashMap<ComponentId, usize> = board
+    let comp_idx: crate::det::HashMap<ComponentId, usize> = board
         .components
         .iter()
         .enumerate()
@@ -5711,7 +5712,7 @@ fn completion_pass(board: &Board, final_routes: &mut Vec<Route>) -> usize {
 /// See the call site: single-victim rip with EXACT-ladder retry for
 /// sinks the grid-based shove_one_blocker cannot free.
 fn rip_and_exact_retry(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usize {
-    let comp_idx: std::collections::HashMap<ComponentId, usize> = board
+    let comp_idx: crate::det::HashMap<ComponentId, usize> = board
         .components
         .iter()
         .enumerate()
@@ -5722,7 +5723,7 @@ fn rip_and_exact_retry(board: &Board, final_routes: &mut Vec<Route>, i: usize) -
     // Unreached pad positions: no touching copper on the pad's
     // surface layer, or stranded on an island holding no second pad.
     let mut pads: Vec<((f64, f64), usize, Option<usize>)> = Vec::new();
-    let mut comp_pads: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    let mut comp_pads: crate::det::HashMap<usize, usize> = crate::det::HashMap::default();
     {
         let r = &final_routes[i];
         let comps = route_components(r);
@@ -6218,7 +6219,7 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
         "surface rescue pass: {} plane net(s)",
         board.nets.iter().filter(|n| n.plane_layer.is_some()).count()
     );
-    let comp_idx: std::collections::HashMap<ComponentId, usize> = board
+    let comp_idx: crate::det::HashMap<ComponentId, usize> = board
         .components
         .iter()
         .enumerate()
@@ -6244,7 +6245,7 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
         // can pass the local swallow test while its fill pocket is an
         // ISLAND walled off by foreign-track voids — connectivity
         // demands the pocket reach a via/barrel/routed-track anchor.
-        let maroon: std::collections::HashMap<(ComponentId, PinId), bool> = {
+        let maroon: crate::det::HashMap<(ComponentId, PinId), bool> = {
             let mut pts: Vec<((ComponentId, PinId), (f64, f64))> = Vec::new();
             if let Some(pl) = board.nets[i].plane_layer.filter(|&pl| {
                 board.layer_stack.layers.get(pl).map(|l| l.kind)
@@ -6939,7 +6940,7 @@ fn total_unreached(board: &Board, final_routes: &[Route]) -> usize {
 /// Families need >=2 siblings and every sibling needs >=1 fixed
 /// member (the anchors must be solve-constant).
 fn sibling_suffix_classes(board: &Board) -> Vec<Vec<(usize, (f64, f64))>> {
-    use std::collections::HashMap;
+    use crate::det::HashMap;
     let comp_pos: HashMap<ComponentId, usize> = board
         .components
         .iter()
@@ -6947,10 +6948,10 @@ fn sibling_suffix_classes(board: &Board) -> Vec<Vec<(usize, (f64, f64))>> {
         .map(|(i, c)| (c.id, i))
         .collect();
     let mut families: HashMap<Vec<String>, Vec<(String, HashMap<String, usize>)>> =
-        HashMap::new();
+        HashMap::default();
     for g in &board.groups {
         let prefix = format!("{}_", g.name);
-        let mut by_suffix: HashMap<String, usize> = HashMap::new();
+        let mut by_suffix: HashMap<String, usize> = HashMap::default();
         let mut ok = true;
         for &mid in &g.members {
             let Some(&ci) = comp_pos.get(&mid) else { ok = false; break };
@@ -7123,7 +7124,7 @@ fn try_channel_transfer(
         }
     };
     let empty: Vec<Route> = board.nets.iter().map(|n| Route::empty(n.id)).collect();
-    let net_pos: std::collections::HashMap<NetId, usize> = board
+    let net_pos: crate::det::HashMap<NetId, usize> = board
         .nets
         .iter()
         .enumerate()
@@ -7138,7 +7139,7 @@ fn try_channel_transfer(
     // it also admitted real conflicts).
     let probe = {
         let mut b = board.clone();
-        let keep: std::collections::HashSet<usize> = ref_members
+        let keep: crate::det::HashSet<usize> = ref_members
             .iter()
             .chain(sib_members.iter())
             .copied()
@@ -7327,11 +7328,11 @@ fn solve_channel_miniboard_attempt(
     seed: u64,
     pad_sep: f64,
 ) -> Option<CertifiedChannel> {
-    use std::collections::{HashMap, HashSet};
+    use crate::det::{HashMap, HashSet};
     let (rx0, ry0, rw, rh) = region;
     let member_set: HashSet<usize> = free_members.iter().copied().collect();
     let mut comps: Vec<Component> = Vec::new();
-    let mut included: HashSet<ComponentId> = HashSet::new();
+    let mut included: HashSet<ComponentId> = HashSet::default();
     // Free members, region-local.
     for &ci in free_members {
         let mut c = board.components[ci].clone();
@@ -7387,8 +7388,8 @@ fn solve_channel_miniboard_attempt(
     // mandatory and missed in EVERY attempt). Such pads are external:
     // stripped from the mini netlist, and their net exits through a
     // boundary pad projected from the actual crossing point.
-    let mut outside_pins: HashSet<(ComponentId, PinId)> = HashSet::new();
-    let mut outside_pos: HashMap<(ComponentId, PinId), (f64, f64)> = HashMap::new();
+    let mut outside_pins: HashSet<(ComponentId, PinId)> = HashSet::default();
+    let mut outside_pos: HashMap<(ComponentId, PinId), (f64, f64)> = HashMap::default();
     for c in comps.iter() {
         if !c.placement.is_fixed() {
             continue;
@@ -7407,9 +7408,9 @@ fn solve_channel_miniboard_attempt(
     // Foreign fixed parts inside the region (a neighbor channel's
     // jack living in this column band) are OBSTACLES, not netlist —
     // their nets dragged 2-sink unroutables into every attempt.
-    let free_ids_set: std::collections::HashSet<ComponentId> =
+    let free_ids_set: crate::det::HashSet<ComponentId> =
         free_members.iter().map(|&ci| board.components[ci].id).collect();
-    let eligible: std::collections::HashSet<NetId> = board
+    let eligible: crate::det::HashSet<NetId> = board
         .nets
         .iter()
         .filter(|n| n.pins.iter().any(|(cid, _)| free_ids_set.contains(cid)))
@@ -7426,8 +7427,8 @@ fn solve_channel_miniboard_attempt(
             }
         }
     }
-    let mut optional_pads: std::collections::HashSet<ComponentId> =
-        std::collections::HashSet::new();
+    let mut optional_pads: crate::det::HashSet<ComponentId> =
+        crate::det::HashSet::default();
     let mut nets: Vec<PnrNet> = Vec::new();
     // BOUNDARY-PAD NEGOTIATION pass 1: each leaving net's exit pad
     // goes where its OUTSIDE-pin centroid projects onto the nearer
@@ -7679,7 +7680,7 @@ fn solve_channel_miniboard_attempt(
     // touched by its net's copper (optional rail exits skipped), and
     // no DRC beyond UnroutedNet entries attributable to those
     // optional exits.
-    let rcomp: std::collections::HashMap<ComponentId, usize> = result
+    let rcomp: crate::det::HashMap<ComponentId, usize> = result
         .board
         .components
         .iter()
@@ -7816,7 +7817,7 @@ fn solve_channel_miniboard_attempt(
 /// pairs — the pinned pots/jacks of the mechanical contract; groups
 /// with no fixed members use member centroids). Returns parts moved.
 fn stamp_sibling_groups(board: &mut Board) -> usize {
-    use std::collections::HashMap;
+    use crate::det::HashMap;
     let comp_pos: HashMap<ComponentId, usize> = board
         .components
         .iter()
@@ -7825,10 +7826,10 @@ fn stamp_sibling_groups(board: &mut Board) -> usize {
         .collect();
     // Group -> (suffix -> component index), keyed by suffix multiset.
     let mut families: HashMap<Vec<String>, Vec<(String, HashMap<String, usize>)>> =
-        HashMap::new();
+        HashMap::default();
     for g in &board.groups {
         let prefix = format!("{}_", g.name);
-        let mut by_suffix: HashMap<String, usize> = HashMap::new();
+        let mut by_suffix: HashMap<String, usize> = HashMap::default();
         let mut ok = true;
         for &mid in &g.members {
             let Some(&ci) = comp_pos.get(&mid) else { ok = false; break };
@@ -7920,7 +7921,7 @@ fn part_nudge_pass(board: &mut Board, final_routes: &mut Vec<Route>) -> usize {
     }
     let start = before;
     // Stuck pads: same detection as the escape ladder's target scan.
-    let comp_idx: std::collections::HashMap<ComponentId, usize> = board
+    let comp_idx: crate::det::HashMap<ComponentId, usize> = board
         .components
         .iter()
         .enumerate()
@@ -7941,8 +7942,8 @@ fn part_nudge_pass(board: &mut Board, final_routes: &mut Vec<Route>) -> usize {
         }
         let comps = route_components(route);
         let tree = {
-            let mut pop: std::collections::HashMap<usize, usize> =
-                std::collections::HashMap::new();
+            let mut pop: crate::det::HashMap<usize, usize> =
+                crate::det::HashMap::default();
             for &c in &comps {
                 *pop.entry(c).or_insert(0) += 1;
             }
@@ -8282,7 +8283,7 @@ pub fn bootstrap_empty_route(board: &Board, final_routes: &mut Vec<Route>, i: us
         _ => net.required_trace_width_mm,
     };
     let n_layers = board.layer_stack.layers.len();
-    let comp_idx: std::collections::HashMap<ComponentId, usize> = board
+    let comp_idx: crate::det::HashMap<ComponentId, usize> = board
         .components
         .iter()
         .enumerate()
@@ -8598,7 +8599,7 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
     // so a leg transiting an IC body interior only steals that IC's
     // fanout room (see path_respects_courtyards).
     let courtyard_guard = net.plane_layer.is_some();
-    let comp_idx: std::collections::HashMap<ComponentId, usize> = board
+    let comp_idx: crate::det::HashMap<ComponentId, usize> = board
         .components
         .iter()
         .enumerate()
@@ -8629,8 +8630,8 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
         }
         let comps = route_components(route);
         let tree = {
-            let mut pop: std::collections::HashMap<usize, usize> =
-                std::collections::HashMap::new();
+            let mut pop: crate::det::HashMap<usize, usize> =
+                crate::det::HashMap::default();
             for &c in &comps {
                 *pop.entry(c).or_insert(0) += 1;
             }
@@ -8833,8 +8834,8 @@ fn offgrid_escape(board: &Board, final_routes: &mut Vec<Route>, i: usize) -> usi
                 let route = &final_routes[i];
                 let comps2 = route_components(route);
                 let tree2 = {
-                    let mut pop: std::collections::HashMap<usize, usize> =
-                        std::collections::HashMap::new();
+                    let mut pop: crate::det::HashMap<usize, usize> =
+                        crate::det::HashMap::default();
                     for &c in &comps2 {
                         *pop.entry(c).or_insert(0) += 1;
                     }
@@ -9819,7 +9820,7 @@ fn shove_one_blocker(
     i: usize,
 ) -> usize {
     // Unreached pad positions of net i (targets to unblock).
-    let comp_idx: std::collections::HashMap<ComponentId, usize> = board
+    let comp_idx: crate::det::HashMap<ComponentId, usize> = board
         .components
         .iter()
         .enumerate()
@@ -10063,7 +10064,7 @@ fn apply_meander(
 ) -> Option<(usize, usize)> {
     let comps = pathfinder::route_components(route);
     let tree = {
-        let mut pop: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        let mut pop: crate::det::HashMap<usize, usize> = crate::det::HashMap::default();
         for &c in &comps {
             *pop.entry(c).or_insert(0) += 1;
         }
@@ -10679,7 +10680,7 @@ fn plane_via_drops(
         if net.plane_layer.is_none() {
             continue;
         }
-        let comp_idx: std::collections::HashMap<ComponentId, usize> = board
+        let comp_idx: crate::det::HashMap<ComponentId, usize> = board
             .components
             .iter()
             .enumerate()

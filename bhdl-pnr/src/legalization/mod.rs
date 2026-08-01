@@ -18,7 +18,7 @@ pub fn legalize_with_blocks(
     if blocks.is_empty() {
         return legalize(board, snap_grid_mm);
     }
-    let member_of: std::collections::HashMap<usize, usize> = blocks
+    let member_of: crate::det::HashMap<usize, usize> = blocks
         .iter()
         .enumerate()
         .flat_map(|(bi, b)| b.iter().map(move |&(ci, ..)| (ci, bi)))

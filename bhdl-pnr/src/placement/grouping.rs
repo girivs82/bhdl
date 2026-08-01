@@ -4,7 +4,7 @@
 
 use crate::placement::Forces;
 use crate::types::*;
-use std::collections::HashMap;
+use crate::det::HashMap;
 
 /// Compute group cohesion force.
 ///
@@ -175,7 +175,7 @@ pub fn compute_power_domain_cohesion(board: &Board) -> Forces {
         .collect();
 
     // Component -> dominant power rail (net index), by touched-pin count.
-    let mut rail_pins: Vec<HashMap<usize, usize>> = vec![HashMap::new(); n];
+    let mut rail_pins: Vec<HashMap<usize, usize>> = vec![HashMap::default(); n];
     for (ni, net) in board.nets.iter().enumerate() {
         if !matches!(net.net_class, crate::types::PnrNetClass::Power { .. }) {
             continue;
@@ -196,7 +196,7 @@ pub fn compute_power_domain_cohesion(board: &Board) -> Forces {
         .collect();
 
     // Centroid per rail, then a pull toward it for every member.
-    let mut cents: HashMap<usize, (f64, f64, f64)> = HashMap::new();
+    let mut cents: HashMap<usize, (f64, f64, f64)> = HashMap::default();
     for (ci, r) in rail_of.iter().enumerate() {
         if let Some(ni) = r {
             let e = cents.entry(*ni).or_insert((0.0, 0.0, 0.0));

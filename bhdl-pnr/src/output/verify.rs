@@ -9,7 +9,7 @@
 //! - Group cohesion (are expansion children near their parent?)
 
 use crate::types::*;
-use std::collections::HashMap;
+use crate::det::HashMap;
 
 /// Complete verification report.
 #[derive(Debug)]

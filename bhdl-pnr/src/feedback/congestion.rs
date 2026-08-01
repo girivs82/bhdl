@@ -75,7 +75,7 @@ pub fn compute_via_penalty(
     let n = board.components.len();
     let mut grad = vec![(0.0, 0.0); n];
 
-    let comp_idx: std::collections::HashMap<ComponentId, usize> = board
+    let comp_idx: crate::det::HashMap<ComponentId, usize> = board
         .components
         .iter()
         .enumerate()

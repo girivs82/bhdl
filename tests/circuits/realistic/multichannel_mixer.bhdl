@@ -197,17 +197,19 @@ layout ElectrolyticCap { package Radial-P2.50-D5; }
 
 layout MultichannelMixer {
     layer_stackup 2;
-    // Pour intent (the demo pours GND on both faces + a vbias band
-    // over its consumers): the `pour <net|pin>;` statement and the
-    // split machinery (pin-cloud region, priority backfill, band
-    // apron) are BUILT — demo-parity runs exercise them via
-    // BHDL_PNR_POUR_GND. Not declared here yet: the pour-on run has
-    // a ~1-item starved-thermal FLAP (trial-order nondeterminism)
-    // and the corpus gate needs the deterministic pour-off default;
-    // vbias adds a 3-item band-interior tail (F.Cu escapes shred
-    // the band fill the demo keeps clean).
+    // Pour intent, the demo's own — exercised by the demo-parity
+    // runs (BHDL_PNR_RIGID=1 [+BHDL_PNR_POUR_GND=1]): deterministic
+    // 0v/0unc on the rigid path since the hasher fix. Not the
+    // DEFAULT yet: the corpus sweep runs the free-placement path,
+    // which carries ONE starved-thermal relief (U14 V_MINUS in a
+    // fill pocket) — declared once that closes.
     // pour GND;
-    // pour u_mst.OUT_B;
+    // pour u_mst.OUT_B; — the demo's vbias band. Machinery built
+    // (pin-cloud region, priority backfill, band apron), measures
+    // 0v/3unc: starved reliefs + stranded opamp + inputs INSIDE the
+    // band, where our F.Cu escapes shred the fill the demo keeps
+    // clean (it routes B.Cu-only under its band). Declared once
+    // that tail closes.
     // Demo convention: THT-era mixer routes bottom-dominant
     // (reference board: 1768mm B.Cu vs 192mm of F.Cu jumpers).
     route_bias bottom;

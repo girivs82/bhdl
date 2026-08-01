@@ -7,7 +7,7 @@
 //! 1. IPC-7351B footprint generator (from component package string)
 //! 2. Fallback defaults when package string is unknown
 
-use std::collections::HashMap;
+use crate::det::HashMap;
 
 use anyhow::Result;
 use slotmap::SlotMap;
@@ -40,7 +40,7 @@ impl Default for SemanticConfig {
     fn default() -> Self {
         SemanticConfig {
             board_config: BoardConfig::default(),
-            package_overrides: HashMap::new(),
+            package_overrides: HashMap::default(),
             density_level: DensityLevel::Nominal,
         }
     }
@@ -164,13 +164,13 @@ pub fn build_board(
 
     // 5. Construct components
     let mut id_map = IdMap {
-        inst_to_idx: HashMap::new(),
-        net_to_idx: HashMap::new(),
+        inst_to_idx: HashMap::default(),
+        net_to_idx: HashMap::default(),
         comp_ids: Vec::new(),
         net_ids: Vec::new(),
     };
     let mut components = Vec::new();
-    let mut refdes_counters: HashMap<String, usize> = HashMap::new();
+    let mut refdes_counters: HashMap<String, usize> = HashMap::default();
 
     for &inst_id in &top_instances {
         let instance = match netlist.instances.get(inst_id) {
@@ -1005,7 +1005,7 @@ pub fn build_board(
         let h = layer_stack.dielectrics.first().map(|d| (d.thickness_mm, d.er));
         let t = layer_stack.layers.first().map(|l| l.thickness_mm).unwrap_or(0.035);
         if let Some((h_mm, er)) = h {
-            let diff_nets: std::collections::HashSet<NetId> = iface_constraints
+            let diff_nets: crate::det::HashSet<NetId> = iface_constraints
                 .iter()
                 .filter_map(|c| match c {
                     Constraint::DiffPair { p_net, n_net, .. } => Some([*p_net, *n_net]),
@@ -1076,7 +1076,7 @@ pub fn build_board(
         // exists because the physics does). User-declared spacings
         // arrive through other constraint forms and are not touched.
         if let Some((h_mm, er)) = h {
-            let zdiff_of: std::collections::HashMap<NetId, f64> = iface_constraints
+            let zdiff_of: crate::det::HashMap<NetId, f64> = iface_constraints
                 .iter()
                 .filter_map(|c| match c {
                     Constraint::Impedance { net, target_ohms, .. } => {
@@ -1085,7 +1085,7 @@ pub fn build_board(
                     _ => None,
                 })
                 .collect();
-            let width_of: std::collections::HashMap<NetId, f64> = nets
+            let width_of: crate::det::HashMap<NetId, f64> = nets
                 .iter()
                 .map(|n| (n.id, n.required_trace_width_mm))
                 .collect();
@@ -1138,7 +1138,7 @@ pub fn build_board(
         // no trace, no time budget (the mm default stands). Only the
         // lowering default is replaced; declared budgets win.
         if let Some(sim) = simulation {
-            let name_of: std::collections::HashMap<NetId, &str> = nets
+            let name_of: crate::det::HashMap<NetId, &str> = nets
                 .iter()
                 .map(|n| (n.id, n.name.as_str()))
                 .collect();
@@ -1244,8 +1244,8 @@ pub fn build_board(
     // straight-shot nets spend the corridors.
     if board_config.route_bias.is_some() || board_config.design_track_width_mm.is_some() {
         for n in nets.iter_mut() {
-            let mut per_comp: std::collections::HashMap<ComponentId, usize> =
-                std::collections::HashMap::new();
+            let mut per_comp: crate::det::HashMap<ComponentId, usize> =
+                crate::det::HashMap::default();
             for &(comp_id, pin_id) in &n.pins {
                 let Some(comp) = components.iter().find(|c| c.id == comp_id) else {
                     continue;
@@ -1478,8 +1478,8 @@ fn build_net_lookups(
     HashMap<PinInstanceId, NlNetId>,
     HashMap<(InstanceId, NlPinId), NlNetId>,
 ) {
-    let mut pin_inst_to_net: HashMap<PinInstanceId, NlNetId> = HashMap::new();
-    let mut inst_pin_to_net: HashMap<(InstanceId, NlPinId), NlNetId> = HashMap::new();
+    let mut pin_inst_to_net: HashMap<PinInstanceId, NlNetId> = HashMap::default();
+    let mut inst_pin_to_net: HashMap<(InstanceId, NlPinId), NlNetId> = HashMap::default();
 
     for (net_id, net) in netlist.nets.iter() {
         for conn in &net.connections {
@@ -1654,7 +1654,7 @@ fn extract_groups(
     // whole placement — HashMap iteration here made layout flap per process.
     let mut parent_children: std::collections::BTreeMap<String, Vec<usize>> =
         std::collections::BTreeMap::new();
-    let mut name_to_idx: HashMap<String, usize> = HashMap::new();
+    let mut name_to_idx: HashMap<String, usize> = HashMap::default();
 
     for (inst_id, inst) in &netlist.instances {
         if let Some(&comp_idx) = id_map.inst_to_idx.get(&inst_id) {
@@ -1800,7 +1800,10 @@ fn is_power_symbol(
     }
 }
 
-fn categorize_component(entity_type: &str, attrs: &HashMap<String, String>) -> String {
+fn categorize_component(
+    entity_type: &str,
+    attrs: &std::collections::HashMap<String, String>,
+) -> String {
     // Prefer component_class attribute (set by GLACIER physical selection)
     if let Some(cc) = attrs.get("component_class") {
         return cc.clone();

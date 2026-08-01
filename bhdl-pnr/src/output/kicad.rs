@@ -1191,7 +1191,7 @@ pub(crate) fn plane_pads_marooned(
         Some(r as usize * cols + c as usize)
     };
     // Anchored components: via / THT barrel / own routed track here.
-    let mut anchored: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut anchored: crate::det::HashSet<u32> = crate::det::HashSet::default();
     let ni = board.nets.iter().position(|n| n.id == net_id);
     if let Some(r) = ni.and_then(|i| routes.get(i)) {
         for v in &r.vias {
