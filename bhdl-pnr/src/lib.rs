@@ -6158,6 +6158,62 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
             .min_trace_width_mm
             .max(0.15)
             .min(board.nets[i].required_trace_width_mm);
+        // MAROON pre-pass (pour-side pads, one raster per net): a pad
+        // can pass the local swallow test while its fill pocket is an
+        // ISLAND walled off by foreign-track voids — connectivity
+        // demands the pocket reach a via/barrel/routed-track anchor.
+        let maroon: std::collections::HashMap<(ComponentId, PinId), bool> = {
+            let mut pts: Vec<((ComponentId, PinId), (f64, f64))> = Vec::new();
+            if let Some(pl) = board.nets[i].plane_layer.filter(|&pl| {
+                board.layer_stack.layers.get(pl).map(|l| l.kind)
+                    == Some(crate::types::LayerKind::Signal)
+            }) {
+                for &(cid, pid) in &board.nets[i].pins {
+                    let Some(&ci) = comp_idx.get(&cid) else { continue };
+                    let comp = &board.components[ci];
+                    let surf = match comp.side {
+                        BoardSide::Top => 0,
+                        BoardSide::Bottom => n_layers - 1,
+                    };
+                    if surf != pl {
+                        continue;
+                    }
+                    let Some(pin) = comp.pins.iter().find(|p| p.pin_id == pid) else {
+                        continue;
+                    };
+                    if pin.unplaced
+                        || pin.pad.as_ref().and_then(|p| p.drill_mm).is_some()
+                    {
+                        continue;
+                    }
+                    let (co, sn) = (comp.theta.cos(), comp.theta.sin());
+                    pts.push((
+                        (cid, pid),
+                        (
+                            comp.x + pin.dx * co - pin.dy * sn,
+                            comp.y + pin.dx * sn + pin.dy * co,
+                        ),
+                    ));
+                }
+                if !pts.is_empty() {
+                    let flags = output::kicad::plane_pads_marooned(
+                        board,
+                        final_routes,
+                        net_id,
+                        pl,
+                        &pts.iter().map(|p| p.1).collect::<Vec<_>>(),
+                    );
+                    pts.iter()
+                        .zip(flags)
+                        .map(|(&(k, _), f)| (k, f))
+                        .collect()
+                } else {
+                    Default::default()
+                }
+            } else {
+                Default::default()
+            }
+        };
         // Pads not touching ANY same-net copper.
         let mut todo: Vec<((f64, f64), usize, Option<usize>, bool)> = Vec::new();
         for &(cid, pid) in &board.nets[i].pins {
@@ -6251,6 +6307,7 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
             });
             let stranded = if pour_side {
                 output::kicad::plane_swallows(board, &merged, px, py, half, region)
+                    || maroon.get(&(cid, pid)).copied().unwrap_or(false)
             } else {
                 pad_comp.is_none() || !island_has_via
             };

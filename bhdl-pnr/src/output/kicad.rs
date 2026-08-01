@@ -477,6 +477,172 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
             out.push_str("    ))\n");
         }
         out.push_str("  )\n");
+
+        // ── DUAL-LAYER GND POUR: fill the ROUTING face too ──
+        // The hand-routed demo's GND zone spans BOTH copper faces —
+        // the routing face gets whatever copper survives between the
+        // tracks, island-removed to fragments that touch same-net
+        // copper (KiCad's own island semantics). Connectivity never
+        // DEPENDS on this fill (the primary plane + drop machinery
+        // carry it); it adds real return-path copper. Gated off for
+        // STRICT single-sided boards: their other face is empty by
+        // design (the ecc83 demo has no top copper at all).
+        let secondary = thermal
+            && !board.config.route_bias_strict
+            && board.layer_stack.layers.len() >= 2
+            && net.plane_region.is_none();
+        if secondary {
+            let other = if plane_layer == 0 {
+                board.layer_stack.layers.len() - 1
+            } else {
+                0
+            };
+            let other_is_signal = board
+                .layer_stack
+                .layers
+                .get(other)
+                .map(|l| l.kind == crate::types::LayerKind::Signal)
+                .unwrap_or(false);
+            if other_is_signal {
+                let other_name = board
+                    .layer_stack
+                    .layers
+                    .get(other)
+                    .map(|l| l.name.as_str())
+                    .unwrap_or("B.Cu");
+                let mut holes2 =
+                    plane_foreign_holes_on(board, routes, net.id, Some(other));
+                for h in holes2.iter_mut() {
+                    h.2 = ((h.2 - 0.1875) / 1.082).max(0.1);
+                }
+                let spoke_mask2 = holes2.clone();
+                let (rings2, spokes2) = thermal_reliefs(board, net.id, other);
+                holes2.extend(rings2);
+                // Anchors on THIS face: same-net vias and THT barrels,
+                // SMD pads mounted on this side, and the net's own
+                // routed tracks here (fill merging with a GND track IS
+                // connected — sampled endpoints + midpoint).
+                let mut anchors2: Vec<(f64, f64)> = Vec::new();
+                if let Some(r) = routes.get(ni) {
+                    for v in &r.vias {
+                        anchors2.push((v.x, v.y));
+                    }
+                    for sg in &r.segments {
+                        if sg.layer == other {
+                            anchors2.push(sg.start);
+                            anchors2.push(sg.end);
+                            anchors2.push((
+                                (sg.start.0 + sg.end.0) / 2.0,
+                                (sg.start.1 + sg.end.1) / 2.0,
+                            ));
+                        }
+                    }
+                }
+                let side2 = if other == 0 {
+                    crate::types::BoardSide::Top
+                } else {
+                    crate::types::BoardSide::Bottom
+                };
+                for comp in &board.components {
+                    let (co, sn) = (comp.theta.cos(), comp.theta.sin());
+                    for pin in &comp.pins {
+                        if pin.net != Some(net.id) || pin.unplaced {
+                            continue;
+                        }
+                        let Some(pad) = &pin.pad else { continue };
+                        if pad.drill_mm.is_some() || comp.side == side2 {
+                            anchors2.push((
+                                comp.x + pin.dx * co - pin.dy * sn,
+                                comp.y + pin.dx * sn + pin.dy * co,
+                            ));
+                        }
+                    }
+                }
+                if !anchors2.is_empty() {
+                    let polys2 = match &poly_boundary {
+                        Some(b) => {
+                            let bx0 =
+                                b.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
+                            let bx1 = b
+                                .iter()
+                                .map(|p| p.0)
+                                .fold(f64::NEG_INFINITY, f64::max);
+                            let by0 =
+                                b.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
+                            let by1 = b
+                                .iter()
+                                .map(|p| p.1)
+                                .fold(f64::NEG_INFINITY, f64::max);
+                            fracture_fill(
+                                bx0,
+                                by0,
+                                bx1,
+                                by1,
+                                &holes2,
+                                &cutout_rects,
+                                &anchors2,
+                                Some(b),
+                            )
+                        }
+                        None => fracture_fill_spoked(
+                            fx0,
+                            fy0,
+                            fx1,
+                            fy1,
+                            &holes2,
+                            &cutout_rects,
+                            &anchors2,
+                            None,
+                            &spokes2,
+                            &spoke_mask2,
+                        ),
+                    };
+                    if !polys2.is_empty() {
+                        out.push_str(&format!(
+                            "  (zone (net {}) (net_name \"{}\") (layer \"{}\") (hatch edge 0.5)\n",
+                            n, net.name, other_name
+                        ));
+                        out.push_str(&format!(
+                            "    (connect_pads (clearance {}))\n",
+                            0.3f64.max(board.config.min_spacing_mm)
+                        ));
+                        out.push_str(
+                            "    (min_thickness 0.25) (filled_areas_thickness no)\n",
+                        );
+                        out.push_str(
+                            "    (fill yes (thermal_gap 0.3) (thermal_bridge_width 0.4))\n",
+                        );
+                        out.push_str("    (polygon (pts\n");
+                        match &poly_boundary {
+                            Some(b) => {
+                                for (x, y) in b {
+                                    out.push_str(&format!("      (xy {x} {y})\n"));
+                                }
+                            }
+                            None => {
+                                for (x, y) in
+                                    [(zx0, zy0), (zx1, zy0), (zx1, zy1), (zx0, zy1)]
+                                {
+                                    out.push_str(&format!("      (xy {x} {y})\n"));
+                                }
+                            }
+                        }
+                        out.push_str("    ))\n");
+                        for pts in &polys2 {
+                            out.push_str(&format!(
+                                "    (filled_polygon (layer \"{}\") (pts\n",
+                                other_name
+                            ));
+                            for (x, y) in pts {
+                                out.push_str(&format!("      (xy {x} {y})\n"));
+                            }
+                            out.push_str("    ))\n");
+                        }
+                        out.push_str("  )\n");
+                    }
+                }
+            }
+        }
     }
 
     out.push_str(")\n");
@@ -851,6 +1017,121 @@ pub(crate) fn fill_copper_grid(
 /// v1 poly classification (interior vs crossing rects, absorb-into-
 /// rect, notch walks): a cutout crossing the boundary just rasters
 /// as the union of two voids.
+/// MAROON TEST for pour-side pads: is this pad's local fill pocket
+/// connected to copper that guarantees GLOBAL net connectivity — a
+/// same-net via, a THT barrel, or the net's own routed track on the
+/// pour layer? A pad can pass the local swallow test (fill exists
+/// around it) while that fill is an ISLAND walled off by foreign-
+/// track voids (mixer dual-pour: one 1206 GND pad shipped with its
+/// spokes and a fill pocket, marooned — KiCad island semantics).
+/// Rings/spokes are not modeled: they only carve pad-locally and
+/// never bridge regions, so the ring-less raster is the same
+/// component structure. Returns one flag per query point; a point in
+/// bare void is marooned too (the swallow test catches those first).
+pub(crate) fn plane_pads_marooned(
+    board: &Board,
+    routes: &[Route],
+    net_id: NetId,
+    pour_layer: usize,
+    queries: &[(f64, f64)],
+) -> Vec<bool> {
+    let w = board.config.outline.width();
+    let h = board.config.outline.height();
+    let m = board.config.edge_clearance_mm + 0.05;
+    let holes = plane_foreign_holes_on(board, routes, net_id, Some(pour_layer));
+    let rects = plane_cutout_rects(board);
+    let (copper, cols, rows) = fill_copper_grid_masked(m, m, w - m, h - m, &holes, &rects, None);
+    // Label 4-connected components.
+    let mut label = vec![0u32; copper.len()];
+    let mut next = 1u32;
+    let mut stack: Vec<usize> = Vec::new();
+    for start in 0..copper.len() {
+        if !copper[start] || label[start] != 0 {
+            continue;
+        }
+        next += 1;
+        label[start] = next;
+        stack.push(start);
+        while let Some(i) = stack.pop() {
+            let (r, c) = (i / cols, i % cols);
+            let mut push = |j: usize| {
+                if copper[j] && label[j] == 0 {
+                    label[j] = next;
+                    stack.push(j);
+                }
+            };
+            if c > 0 { push(i - 1); }
+            if c + 1 < cols { push(i + 1); }
+            if r > 0 { push(i - cols); }
+            if r + 1 < rows { push(i + cols); }
+        }
+    }
+    let cell_of = |x: f64, y: f64| -> Option<usize> {
+        let c = ((x - m) / VOID_CELL) as i64;
+        let r = ((y - m) / VOID_CELL) as i64;
+        if c < 0 || r < 0 || c as usize >= cols || r as usize >= rows {
+            return None;
+        }
+        Some(r as usize * cols + c as usize)
+    };
+    // Anchored components: via / THT barrel / own routed track here.
+    let mut anchored: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let ni = board.nets.iter().position(|n| n.id == net_id);
+    if let Some(r) = ni.and_then(|i| routes.get(i)) {
+        for v in &r.vias {
+            if let Some(cl) = cell_of(v.x, v.y) {
+                if label[cl] != 0 { anchored.insert(label[cl]); }
+            }
+        }
+        for sg in &r.segments {
+            if sg.layer != pour_layer { continue; }
+            for t in [0.0, 0.5, 1.0] {
+                let q = (sg.start.0 + t * (sg.end.0 - sg.start.0),
+                         sg.start.1 + t * (sg.end.1 - sg.start.1));
+                if let Some(cl) = cell_of(q.0, q.1) {
+                    if label[cl] != 0 { anchored.insert(label[cl]); }
+                }
+            }
+        }
+    }
+    for comp in &board.components {
+        let (co, sn) = (comp.theta.cos(), comp.theta.sin());
+        for pin in &comp.pins {
+            if pin.net != Some(net_id) || pin.unplaced {
+                continue;
+            }
+            if pin.pad.as_ref().and_then(|p| p.drill_mm).is_none() {
+                continue; // barrels only — SMD contact is what we're judging
+            }
+            let gx = comp.x + pin.dx * co - pin.dy * sn;
+            let gy = comp.y + pin.dx * sn + pin.dy * co;
+            if let Some(cl) = cell_of(gx, gy) {
+                if label[cl] != 0 { anchored.insert(label[cl]); }
+            }
+        }
+    }
+    queries
+        .iter()
+        .map(|&(px, py)| {
+            // Probe a small ring around the pad (its own cell may sit
+            // in the relief-ring region of a NEIGHBOR pad's punch).
+            let mut lbl = 0u32;
+            'probe: for (dx, dy) in [
+                (0.0, 0.0), (0.8, 0.0), (-0.8, 0.0), (0.0, 0.8), (0.0, -0.8),
+                (0.8, 0.8), (-0.8, -0.8), (0.8, -0.8), (-0.8, 0.8),
+            ] {
+                if let Some(cl) = cell_of(px + dx, py + dy) {
+                    if label[cl] != 0 {
+                        lbl = label[cl];
+                        break 'probe;
+                    }
+                }
+            }
+            lbl == 0 || !anchored.contains(&lbl)
+        })
+        .collect()
+}
+
 pub(crate) fn fill_copper_grid_masked(
     x0: f64,
     y0: f64,
@@ -1702,6 +1983,27 @@ pub(crate) fn plane_foreign_holes(
     routes: &[Route],
     net_id: NetId,
 ) -> Vec<(f64, f64, f64)> {
+    let pour_layer = board
+        .nets
+        .iter()
+        .find(|n| n.id == net_id)
+        .and_then(|n| n.plane_layer)
+        .filter(|&pl| {
+            board.layer_stack.layers.get(pl).map(|l| l.kind)
+                == Some(crate::types::LayerKind::Signal)
+        });
+    plane_foreign_holes_on(board, routes, net_id, pour_layer)
+}
+
+/// Same hole set with the POUR layer given explicitly — the
+/// dual-layer GND fill voids the SECONDARY (routing) face around that
+/// face's copper, while the primary keeps the net's own plane_layer.
+pub(crate) fn plane_foreign_holes_on(
+    board: &Board,
+    routes: &[Route],
+    net_id: NetId,
+    pour_layer: Option<usize>,
+) -> Vec<(f64, f64, f64)> {
     let via_r = board.layer_stack.via.pad_mm / 2.0;
     // Zone clearance: 0.3 floor (the historical constant — default
     // boards stay byte-identical), raised to the board's declared
@@ -1765,15 +2067,6 @@ pub(crate) fn plane_foreign_holes(
     // emission, fanout drop siting, completion drops, swallow verify —
     // sees the same voids, which is the whole point of extending it
     // HERE rather than at one call site.
-    let pour_layer = board
-        .nets
-        .iter()
-        .find(|n| n.id == net_id)
-        .and_then(|n| n.plane_layer)
-        .filter(|&pl| {
-            board.layer_stack.layers.get(pl).map(|l| l.kind)
-                == Some(crate::types::LayerKind::Signal)
-        });
     if let Some(pl) = pour_layer {
         for (rj, r) in routes.iter().enumerate() {
             if board.nets.get(rj).map(|x| x.id) == Some(net_id) {
