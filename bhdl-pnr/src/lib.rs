@@ -6651,13 +6651,140 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
             // stub, commit stub + via. The grid-based routed-drop
             // fallback failed exactly here (grid fully blocked); the
             // continuous router threads what the grid cannot.
-            // POUR-SIDE: a stub + via is structurally dangling (the
-            // far end lands on a bare signal layer) — surface joins
-            // are the only legal rescue; if they all failed, the pad
-            // stays honestly unconnected.
-            if !connected && pour_side {
+            // Stage 1.7 — VIA HOP (pour-side pads): every same-layer
+            // join is fenced, but same-net copper often runs on the
+            // OTHER layer right past the pocket (probe evidence: the
+            // stranded vbias pads had a clean same-x candidate 10mm
+            // up that no same-layer join could thread). One TRACK
+            // via: a stub on the pad's layer to a claimed site, then
+            // an exact run on the other layer to same-net copper
+            // there. Both via ends carry REAL segments — structurally
+            // immune to via_dangling (unlike plane drops, no fill
+            // dependence on the far side).
+            if !connected && pour_side && n_layers >= 2 {
                 for (jj, old) in snaps.drain(..).rev() {
                     final_routes[jj] = old;
+                }
+                let other = if layer == 0 { n_layers - 1 } else { 0 };
+                let via_r = board.layer_stack.via.pad_mm / 2.0;
+                // Attach candidates on the OTHER layer: same-net
+                // segment projections and via centers.
+                let r = &final_routes[i];
+                let mut attach_b: Vec<((f64, f64), f64)> = r
+                    .segments
+                    .iter()
+                    .filter(|sg| sg.layer == other)
+                    .map(|sg| {
+                        let (dx, dy) =
+                            (sg.end.0 - sg.start.0, sg.end.1 - sg.start.1);
+                        let l2 = dx * dx + dy * dy;
+                        let t = if l2 <= 1e-12 {
+                            0.0
+                        } else {
+                            (((px - sg.start.0) * dx + (py - sg.start.1) * dy)
+                                / l2)
+                                .clamp(0.0, 1.0)
+                        };
+                        let q = (sg.start.0 + t * dx, sg.start.1 + t * dy);
+                        (q, (px - q.0).hypot(py - q.1))
+                    })
+                    .collect();
+                for v in &r.vias {
+                    attach_b.push(((v.x, v.y), (px - v.x).hypot(py - v.y)));
+                }
+                attach_b.sort_by(|a, b| {
+                    a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+                });
+                attach_b.truncate(8);
+                if !attach_b.is_empty() {
+                    'viahop: for &src in &sources {
+                        let mut vsnaps: Vec<(usize, Route)> = Vec::new();
+                        let mut budget = 2usize;
+                        let Some((vx, vy)) = claim_via_site(
+                            board,
+                            final_routes,
+                            i,
+                            src,
+                            via_r,
+                            None,
+                            &mut vsnaps,
+                            &mut budget,
+                        ) else {
+                            for (jj, old) in vsnaps.drain(..).rev() {
+                                final_routes[jj] = old;
+                            }
+                            continue;
+                        };
+                        let idx = geom::ClearanceIndex::build(
+                            board,
+                            final_routes,
+                            Some(net_id),
+                        );
+                        let Some(fpath) =
+                            geom::route_escape(&idx, src, (vx, vy), width, layer, net_id)
+                        else {
+                            for (jj, old) in vsnaps.drain(..).rev() {
+                                final_routes[jj] = old;
+                            }
+                            continue;
+                        };
+                        if !path_respects_courtyards(board, &fpath) {
+                            for (jj, old) in vsnaps.drain(..).rev() {
+                                final_routes[jj] = old;
+                            }
+                            continue;
+                        }
+                        let mut done = false;
+                        for &(q, _) in &attach_b {
+                            let Some(bpath) = geom::route_escape(
+                                &idx,
+                                (vx, vy),
+                                q,
+                                width,
+                                other,
+                                net_id,
+                            ) else {
+                                continue;
+                            };
+                            commit_escape(
+                                &mut final_routes[i],
+                                &fpath,
+                                layer,
+                                width,
+                                Some(RouteVia {
+                                    x: vx,
+                                    y: vy,
+                                    from_layer: layer,
+                                    to_layer: other,
+                                }),
+                                &board.nets[i].name,
+                            );
+                            commit_escape(
+                                &mut final_routes[i],
+                                &bpath,
+                                other,
+                                width,
+                                None,
+                                &board.nets[i].name,
+                            );
+                            info!(
+                                "plane surface rescue: '{}' pad at ({px:.2},{py:.2}) joined by VIA HOP to the other layer",
+                                board.nets[i].name
+                            );
+                            connected = true;
+                            done = true;
+                            break;
+                        }
+                        if done {
+                            break 'viahop;
+                        }
+                        for (jj, old) in vsnaps.drain(..).rev() {
+                            final_routes[jj] = old;
+                        }
+                    }
+                }
+                if connected {
+                    rescued += 1;
                 }
                 continue;
             }

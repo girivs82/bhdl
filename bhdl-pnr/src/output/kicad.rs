@@ -80,6 +80,519 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
             .unwrap_or("")
     };
 
+    // ── Plane zones, computed FIRST and to a SOLID-CONNECT fixpoint:
+    // a pad where fewer than two thermal spokes can form (KiCad's
+    // starved threshold, probed in all eight directions with
+    // extending reach) ships `zone_connect 2` — the pad-level SOLID
+    // override KiCad's DRC honors — and the fill re-runs with that
+    // pad's relief ring dropped so copper genuinely floods it. The
+    // zone text is appended after the routes.
+    let (zones_out, dead_solid): (String, Vec<(f64, f64)>) = {
+        let mut dead_solid: Vec<(f64, f64)> = Vec::new();
+        let mut zbuf = String::new();
+        for _pass in 0..3 {
+            zbuf.clear();
+            let mut dead_new: Vec<(f64, f64)> = Vec::new();
+        // ── Plane zones with REAL fill geometry ──
+        // One zone per plane-assigned net, WITH saved filled_polygon
+        // copper: headless KiCad DRC uses saved fills (no CLI refill in
+        // 9.0), so plane connectivity must be actual polygons. The fill is
+        // the board rect (minus edge clearance) with clearance holes
+        // punched around every FOREIGN through-barrel (vias + plated
+        // holes of other nets) — same-net barrels sit in solid copper,
+        // which is exactly the connectivity we're claiming. Emitted as
+        // horizontal strips (simple polygons; holes need no fracturing).
+        for (ni, net) in board.nets.iter().enumerate() {
+            let Some(plane_layer) = net.plane_layer else { continue };
+            let layer_name = board
+                .layer_stack
+                .layers
+                .get(plane_layer)
+                .map(|l| l.name.as_str())
+                .unwrap_or("In1.Cu");
+            let n = net_no(net.id);
+
+            // Foreign same-layer regioned pours (the vbias band): at
+            // EMISSION this fill backfills their region KiCad-priority
+            // style — void exactly the higher-priority pour's CLAIM
+            // (its fill simulation, clearance-dilated), not the whole
+            // band rect. The hole-model consumers elsewhere keep the
+            // conservative rect lattice (drops never site in the band;
+            // the real fill only ever has MORE copper than the model).
+            let sig_pour = board
+                .layer_stack
+                .layers
+                .get(plane_layer)
+                .map(|l| l.kind == crate::types::LayerKind::Signal)
+                .unwrap_or(false);
+            let foreign_regions: Vec<(f64, f64, f64, f64)> = if sig_pour {
+                board
+                    .nets
+                    .iter()
+                    .filter(|o| {
+                        o.id != net.id && o.plane_layer == Some(plane_layer)
+                    })
+                    .filter_map(|o| o.plane_region)
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let mut holes = if foreign_regions.is_empty() {
+                plane_foreign_holes(board, routes, net.id)
+            } else {
+                plane_foreign_holes_on(
+                    board,
+                    routes,
+                    net.id,
+                    Some(plane_layer),
+                    false,
+                )
+            };
+            // COMPENSATE the void engine's hole inflation (x1.082 +
+            // 0.19mm) at the EMISSION only: uncompensated, every keepout
+            // renders ~0.28mm fatter than the declared clearance — wide
+            // enough to swallow the thermal relief rings (user report;
+            // KiCad carves its declared clearance nearly exactly). The
+            // stored radii already carry clearance + 0.05 knife-edge
+            // margin; siting consumers elsewhere keep the uncompensated
+            // list.
+            for h in holes.iter_mut() {
+                h.2 = ((h.2 - 0.1875) / 1.082).max(0.1);
+            }
+            // Signal-layer pours get thermal-relief pad connections (the
+            // hand-routed-demo idiom); dedicated Power planes stay solid.
+            let thermal = board
+                .layer_stack
+                .layers
+                .get(plane_layer)
+                .map(|l| l.kind == crate::types::LayerKind::Signal)
+                .unwrap_or(false);
+            let mut spokes: Vec<(f64, f64, f64)> = Vec::new();
+            let mut spoke_mask: Vec<(f64, f64, f64)> = Vec::new();
+            if thermal {
+                spoke_mask = holes.clone();
+                let (rings, sp) = thermal_reliefs(board, net.id, plane_layer, &dead_solid);
+                holes.extend(rings);
+                spokes = sp;
+            }
+            // A region with NO same-net barrel inside would be an isolated
+            // dead island — skip its zone entirely (the rail's unc stays
+            // honest).
+            {
+                let (rx0, ry0, rx1, ry1) = net
+                    .plane_region
+                    .unwrap_or((0.0, 0.0, w, h));
+                let has_barrel = routes
+                    .get(ni)
+                    .map(|r| {
+                        r.vias
+                            .iter()
+                            .any(|v| v.x > rx0 && v.x < rx1 && v.y > ry0 && v.y < ry1)
+                    })
+                    .unwrap_or(false)
+                    || board.components.iter().any(|comp| {
+                        let cos_t = comp.theta.cos();
+                        let sin_t = comp.theta.sin();
+                        comp.pins.iter().any(|pin| {
+                            pin.net == Some(net.id)
+                                && pin.pad.as_ref().and_then(|p| p.drill_mm).is_some()
+                                && {
+                                    let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
+                                    let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+                                    gx > rx0 && gx < rx1 && gy > ry0 && gy < ry1
+                                }
+                        })
+                    });
+                if !has_barrel {
+                    log::warn!(
+                        "plane fill for '{}' has no same-net barrel in its region — zone skipped",
+                        net.name
+                    );
+                    continue;
+                }
+            }
+
+            zbuf.push_str(&format!(
+                "  (zone (net {}) (net_name \"{}\") (layer \"{}\") (hatch edge 0.5)\n",
+                n, net.name, layer_name
+            ));
+            // Header MUST agree with the shipped fill geometry (the
+            // starved_thermal lesson): SOLID for dedicated Power planes
+            // (fill floods the pads), THERMAL for signal-layer pours
+            // (fill now carries real gap rings + diagonal spoke necks).
+            if thermal {
+                zbuf.push_str(&format!(
+                    "    (connect_pads (clearance {}))\n",
+                    0.3f64.max(board.config.min_spacing_mm)
+                ));
+            } else {
+                zbuf.push_str(&format!(
+                    "    (connect_pads yes (clearance {}))\n",
+                    0.3f64.max(board.config.min_spacing_mm)
+                ));
+            }
+            zbuf.push_str("    (min_thickness 0.25) (filled_areas_thickness no)\n");
+            zbuf.push_str("    (fill yes (thermal_gap 0.3) (thermal_bridge_width 0.4))\n");
+            // Edge margin: edge_clearance + 0.05mm. An inset of EXACTLY
+            // the clearance is a knife-edge tie — KiCad's zone refill is
+            // threaded and lands an ulp on either side run to run, so the
+            // SAME .kicad_pcb flapped between 0 and 2 copper_edge_clearance
+            // violations (uno inner planes, measured 2026-07-24). The
+            // 0.05mm is fab-invisible and kills the tie.
+            let m = board.config.edge_clearance_mm + 0.05;
+            let (zx0, zy0, zx1, zy1) = match net.plane_region {
+                Some((rx0, ry0, rx1, ry1)) => {
+                    (rx0.max(m), ry0.max(m), rx1.min(w - m), ry1.min(h - m))
+                }
+                None => (m, m, w - m, h - m),
+            };
+            // Polygon outlines: the zone boundary (and the fill) is the
+            // outline inset by the edge margin, clipped to the region rect
+            // — never the bbox (copper in a cutout notch is off-board).
+            let poly_boundary: Option<Vec<(f64, f64)>> =
+                if let PnrBoardOutlinePoly(opts) = &board.config.outline {
+                    inset_rectilinear(opts, m)
+                        .map(|ins| clip_poly_to_rect(&ins, zx0, zy0, zx1, zy1))
+                        .filter(|b| b.len() >= 4)
+                } else {
+                    None
+                };
+            zbuf.push_str("    (polygon (pts\n");
+            match &poly_boundary {
+                Some(b) => {
+                    for (x, y) in b {
+                        zbuf.push_str(&format!("      (xy {x} {y})\n"));
+                    }
+                }
+                None => {
+                    for (x, y) in [(zx0, zy0), (zx1, zy0), (zx1, zy1), (zx0, zy1)] {
+                        zbuf.push_str(&format!("      (xy {x} {y})\n"));
+                    }
+                }
+            }
+            zbuf.push_str("    ))\n");
+
+            // ONE fractured polygon: KiCad's connectivity treats every
+            // saved filled_polygon as its own island (overlapping strips
+            // stayed 90+ isolated_copper items and split the net), so the
+            // fill must be a single simple polygon — holes joined to the
+            // outline through zero-width slits, exactly how KiCad's own
+            // filler stores them.
+            // Split-plane: clip the fill to the rail's region.
+            let (fx0, fy0, fx1, fy1) = match net.plane_region {
+                Some((rx0, ry0, rx1, ry1)) => {
+                    (rx0.max(m), ry0.max(m), rx1.min(w - m), ry1.min(h - m))
+                }
+                None => (m, m, w - m, h - m),
+            };
+            let cutout_rects = plane_cutout_rects(board);
+            // The void engine may sever a fill into several copper
+            // components (a full-height cut, a via wall) — emit one
+            // filled_polygon per component; KiCad zones accept many. A
+            // component with NO same-net barrel (drop via or THT pad)
+            // would be an isolated island: dropped, like KiCad's own
+            // island removal.
+            let anchors = plane_anchor_points(board, routes, ni);
+            let polys = match &poly_boundary {
+                // Poly outlines ride the SAME raster engine, masked to the
+                // inset boundary — one truth for both outline shapes.
+                Some(b) => {
+                    let bx0 = b.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
+                    let bx1 = b.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max);
+                    let by0 = b.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
+                    let by1 = b.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
+                    fracture_fill(bx0, by0, bx1, by1, &holes, &cutout_rects, &anchors, Some(b))
+                }
+                None => {
+                    // Higher-priority claim grid on THIS raster frame.
+                    let pre_void: Option<Vec<bool>> = if foreign_regions
+                        .is_empty()
+                    {
+                        None
+                    } else {
+                        let zc = 0.3f64.max(board.config.min_spacing_mm);
+                        let mut claim_all: Option<Vec<bool>> = None;
+                        for other in board.nets.iter().filter(|o| {
+                            o.id != net.id
+                                && o.plane_layer == Some(plane_layer)
+                                && o.plane_region.is_some()
+                        }) {
+                            let (rx0, ry0, rx1, ry1) =
+                                other.plane_region.unwrap();
+                            let mut oh = plane_foreign_holes_on(
+                                board,
+                                routes,
+                                other.id,
+                                Some(plane_layer),
+                                false,
+                            );
+                            for h in oh.iter_mut() {
+                                h.2 = ((h.2 - 0.1875) / 1.082).max(0.1);
+                            }
+                            let (cg, ccols, crows) = fill_copper_grid_masked(
+                                fx0,
+                                fy0,
+                                fx1,
+                                fy1,
+                                &oh,
+                                &cutout_rects,
+                                None,
+                            );
+                            // +0.1 beyond the zone clearance: the claim
+                            // is raster-quantized and the region edge is
+                            // a knife-edge tie without it (measured 1
+                            // zone-zone clearance at a band corner).
+                            let dil = ((zc + 0.1) / VOID_CELL).ceil() as isize;
+                            let mut cl = vec![false; cg.len()];
+                            for r in 0..crows {
+                                for c in 0..ccols {
+                                    let x = fx0 + (c as f64 + 0.5) * VOID_CELL;
+                                    let y = fy0 + (r as f64 + 0.5) * VOID_CELL;
+                                    if x < rx0
+                                        || x > rx1
+                                        || y < ry0
+                                        || y > ry1
+                                        || !cg[r * ccols + c]
+                                    {
+                                        continue;
+                                    }
+                                    let r0 = (r as isize - dil).max(0) as usize;
+                                    let r1c =
+                                        ((r as isize + dil) as usize).min(crows - 1);
+                                    let c0 = (c as isize - dil).max(0) as usize;
+                                    let c1 =
+                                        ((c as isize + dil) as usize).min(ccols - 1);
+                                    for rr in r0..=r1c {
+                                        for cc in c0..=c1 {
+                                            cl[rr * ccols + cc] = true;
+                                        }
+                                    }
+                                }
+                            }
+                            claim_all = Some(match claim_all {
+                                None => cl,
+                                Some(mut a) => {
+                                    for (ai, ci) in a.iter_mut().zip(cl) {
+                                        *ai |= ci;
+                                    }
+                                    a
+                                }
+                            });
+                        }
+                        claim_all
+                    };
+                    fracture_fill_spoked(
+                        fx0,
+                        fy0,
+                        fx1,
+                        fy1,
+                        &holes,
+                        &cutout_rects,
+                        &anchors,
+                        None,
+                        &spokes,
+                        &spoke_mask,
+                        pre_void.as_deref(),
+                        Some(&mut dead_new),
+                    )
+                }
+            };
+            for pts in &polys {
+                zbuf.push_str(&format!("    (filled_polygon (layer \"{}\") (pts\n", layer_name));
+                for (x, y) in pts {
+                    zbuf.push_str(&format!("      (xy {x} {y})\n"));
+                }
+                zbuf.push_str("    ))\n");
+            }
+            zbuf.push_str("  )\n");
+
+            // ── DUAL-LAYER GND POUR: fill the ROUTING face too ──
+            // The hand-routed demo's GND zone spans BOTH copper faces —
+            // the routing face gets whatever copper survives between the
+            // tracks, island-removed to fragments that touch same-net
+            // copper (KiCad's own island semantics). Connectivity never
+            // DEPENDS on this fill (the primary plane + drop machinery
+            // carry it); it adds real return-path copper. Gated off for
+            // STRICT single-sided boards: their other face is empty by
+            // design (the ecc83 demo has no top copper at all).
+            let secondary = thermal
+                && !board.config.route_bias_strict
+                && board.layer_stack.layers.len() >= 2
+                && net.plane_region.is_none();
+            if secondary {
+                let other = if plane_layer == 0 {
+                    board.layer_stack.layers.len() - 1
+                } else {
+                    0
+                };
+                let other_is_signal = board
+                    .layer_stack
+                    .layers
+                    .get(other)
+                    .map(|l| l.kind == crate::types::LayerKind::Signal)
+                    .unwrap_or(false);
+                if other_is_signal {
+                    let other_name = board
+                        .layer_stack
+                        .layers
+                        .get(other)
+                        .map(|l| l.name.as_str())
+                        .unwrap_or("B.Cu");
+                    let mut holes2 =
+                        plane_foreign_holes_on(board, routes, net.id, Some(other), true);
+                    for h in holes2.iter_mut() {
+                        h.2 = ((h.2 - 0.1875) / 1.082).max(0.1);
+                    }
+                    let spoke_mask2 = holes2.clone();
+                    let (rings2, spokes2) = thermal_reliefs(board, net.id, other, &dead_solid);
+                    holes2.extend(rings2);
+                    // Anchors on THIS face: same-net vias and THT barrels,
+                    // SMD pads mounted on this side, and the net's own
+                    // routed tracks here (fill merging with a GND track IS
+                    // connected — sampled endpoints + midpoint).
+                    let mut anchors2: Vec<(f64, f64)> = Vec::new();
+                    if let Some(r) = routes.get(ni) {
+                        for v in &r.vias {
+                            anchors2.push((v.x, v.y));
+                        }
+                        for sg in &r.segments {
+                            if sg.layer == other {
+                                anchors2.push(sg.start);
+                                anchors2.push(sg.end);
+                                anchors2.push((
+                                    (sg.start.0 + sg.end.0) / 2.0,
+                                    (sg.start.1 + sg.end.1) / 2.0,
+                                ));
+                            }
+                        }
+                    }
+                    let side2 = if other == 0 {
+                        crate::types::BoardSide::Top
+                    } else {
+                        crate::types::BoardSide::Bottom
+                    };
+                    for comp in &board.components {
+                        let (co, sn) = (comp.theta.cos(), comp.theta.sin());
+                        for pin in &comp.pins {
+                            if pin.net != Some(net.id) || pin.unplaced {
+                                continue;
+                            }
+                            let Some(pad) = &pin.pad else { continue };
+                            if pad.drill_mm.is_some() || comp.side == side2 {
+                                anchors2.push((
+                                    comp.x + pin.dx * co - pin.dy * sn,
+                                    comp.y + pin.dx * sn + pin.dy * co,
+                                ));
+                            }
+                        }
+                    }
+                    if !anchors2.is_empty() {
+                        let polys2 = match &poly_boundary {
+                            Some(b) => {
+                                let bx0 =
+                                    b.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
+                                let bx1 = b
+                                    .iter()
+                                    .map(|p| p.0)
+                                    .fold(f64::NEG_INFINITY, f64::max);
+                                let by0 =
+                                    b.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
+                                let by1 = b
+                                    .iter()
+                                    .map(|p| p.1)
+                                    .fold(f64::NEG_INFINITY, f64::max);
+                                fracture_fill(
+                                    bx0,
+                                    by0,
+                                    bx1,
+                                    by1,
+                                    &holes2,
+                                    &cutout_rects,
+                                    &anchors2,
+                                    Some(b),
+                                )
+                            }
+                            None => fracture_fill_spoked(
+                                fx0,
+                                fy0,
+                                fx1,
+                                fy1,
+                                &holes2,
+                                &cutout_rects,
+                                &anchors2,
+                                None,
+                                &spokes2,
+                                &spoke_mask2,
+                                None,
+                                Some(&mut dead_new),
+                            ),
+                        };
+                        if !polys2.is_empty() {
+                            zbuf.push_str(&format!(
+                                "  (zone (net {}) (net_name \"{}\") (layer \"{}\") (hatch edge 0.5)\n",
+                                n, net.name, other_name
+                            ));
+                            zbuf.push_str(&format!(
+                                "    (connect_pads (clearance {}))\n",
+                                0.3f64.max(board.config.min_spacing_mm)
+                            ));
+                            zbuf.push_str(
+                                "    (min_thickness 0.25) (filled_areas_thickness no)\n",
+                            );
+                            zbuf.push_str(
+                                "    (fill yes (thermal_gap 0.3) (thermal_bridge_width 0.4))\n",
+                            );
+                            zbuf.push_str("    (polygon (pts\n");
+                            match &poly_boundary {
+                                Some(b) => {
+                                    for (x, y) in b {
+                                        zbuf.push_str(&format!("      (xy {x} {y})\n"));
+                                    }
+                                }
+                                None => {
+                                    for (x, y) in
+                                        [(zx0, zy0), (zx1, zy0), (zx1, zy1), (zx0, zy1)]
+                                    {
+                                        zbuf.push_str(&format!("      (xy {x} {y})\n"));
+                                    }
+                                }
+                            }
+                            zbuf.push_str("    ))\n");
+                            for pts in &polys2 {
+                                zbuf.push_str(&format!(
+                                    "    (filled_polygon (layer \"{}\") (pts\n",
+                                    other_name
+                                ));
+                                for (x, y) in pts {
+                                    zbuf.push_str(&format!("      (xy {x} {y})\n"));
+                                }
+                                zbuf.push_str("    ))\n");
+                            }
+                            zbuf.push_str("  )\n");
+                        }
+                    }
+                }
+            }
+        }
+
+            let mut grew = false;
+            for d in dead_new {
+                if !dead_solid
+                    .iter()
+                    .any(|&(ex, ey)| (ex - d.0).hypot(ey - d.1) < 0.05)
+                {
+                    dead_solid.push(d);
+                    grew = true;
+                }
+            }
+            if !grew {
+                break;
+            }
+        }
+        (zbuf, dead_solid)
+    };
+
+
     // ── Board outline ──
     match &board.config.outline {
         BoardOutline::Rectangle { width_mm, height_mm } => {
@@ -228,10 +741,27 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
             // 1.35mm-wide pads 0.95mm apart overlap each other (the
             // oracle's A-shorts-K family) and tracks legally spaced
             // from the true rotated pad sit inside the unrotated rect.
+            // SOLID-connect pads: fewer than two thermal spokes can
+            // form — `zone_connect 2` is the pad-level SOLID override
+            // KiCad's DRC honors (no spoke counting), and the fill
+            // has already flooded them (ring dropped in the zone
+            // fixpoint above).
+            let gpx =
+                comp.x + pin.dx * comp.theta.cos() - pin.dy * comp.theta.sin();
+            let gpy =
+                comp.y + pin.dx * comp.theta.sin() + pin.dy * comp.theta.cos();
+            let zc_clause = if dead_solid
+                .iter()
+                .any(|&(ex, ey)| (ex - gpx).hypot(ey - gpy) < 0.05)
+            {
+                " (zone_connect 2)"
+            } else {
+                ""
+            };
             out.push_str(&format!(
-                "    (pad \"{}\" {} {} (at {} {} {:.1}) (size {} {}){}{} (layers {}){})\n",
+                "    (pad \"{}\" {} {} (at {} {} {:.1}) (size {} {}){}{}{} (layers {}){})\n",
                 pin.name, pad_type, shape, pin.dx, pin.dy, rot_deg, size_x, size_y,
-                drill_clause, rr, layers, net_clause
+                drill_clause, rr, zc_clause, layers, net_clause
             ));
         }
 
@@ -281,486 +811,7 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
     }
     out.push('\n');
 
-    // ── Plane zones with REAL fill geometry ──
-    // One zone per plane-assigned net, WITH saved filled_polygon
-    // copper: headless KiCad DRC uses saved fills (no CLI refill in
-    // 9.0), so plane connectivity must be actual polygons. The fill is
-    // the board rect (minus edge clearance) with clearance holes
-    // punched around every FOREIGN through-barrel (vias + plated
-    // holes of other nets) — same-net barrels sit in solid copper,
-    // which is exactly the connectivity we're claiming. Emitted as
-    // horizontal strips (simple polygons; holes need no fracturing).
-    for (ni, net) in board.nets.iter().enumerate() {
-        let Some(plane_layer) = net.plane_layer else { continue };
-        let layer_name = board
-            .layer_stack
-            .layers
-            .get(plane_layer)
-            .map(|l| l.name.as_str())
-            .unwrap_or("In1.Cu");
-        let n = net_no(net.id);
-
-        // Foreign same-layer regioned pours (the vbias band): at
-        // EMISSION this fill backfills their region KiCad-priority
-        // style — void exactly the higher-priority pour's CLAIM
-        // (its fill simulation, clearance-dilated), not the whole
-        // band rect. The hole-model consumers elsewhere keep the
-        // conservative rect lattice (drops never site in the band;
-        // the real fill only ever has MORE copper than the model).
-        let sig_pour = board
-            .layer_stack
-            .layers
-            .get(plane_layer)
-            .map(|l| l.kind == crate::types::LayerKind::Signal)
-            .unwrap_or(false);
-        let foreign_regions: Vec<(f64, f64, f64, f64)> = if sig_pour {
-            board
-                .nets
-                .iter()
-                .filter(|o| {
-                    o.id != net.id && o.plane_layer == Some(plane_layer)
-                })
-                .filter_map(|o| o.plane_region)
-                .collect()
-        } else {
-            Vec::new()
-        };
-        let mut holes = if foreign_regions.is_empty() {
-            plane_foreign_holes(board, routes, net.id)
-        } else {
-            plane_foreign_holes_on(
-                board,
-                routes,
-                net.id,
-                Some(plane_layer),
-                false,
-            )
-        };
-        // COMPENSATE the void engine's hole inflation (x1.082 +
-        // 0.19mm) at the EMISSION only: uncompensated, every keepout
-        // renders ~0.28mm fatter than the declared clearance — wide
-        // enough to swallow the thermal relief rings (user report;
-        // KiCad carves its declared clearance nearly exactly). The
-        // stored radii already carry clearance + 0.05 knife-edge
-        // margin; siting consumers elsewhere keep the uncompensated
-        // list.
-        for h in holes.iter_mut() {
-            h.2 = ((h.2 - 0.1875) / 1.082).max(0.1);
-        }
-        // Signal-layer pours get thermal-relief pad connections (the
-        // hand-routed-demo idiom); dedicated Power planes stay solid.
-        let thermal = board
-            .layer_stack
-            .layers
-            .get(plane_layer)
-            .map(|l| l.kind == crate::types::LayerKind::Signal)
-            .unwrap_or(false);
-        let mut spokes: Vec<(f64, f64, f64)> = Vec::new();
-        let mut spoke_mask: Vec<(f64, f64, f64)> = Vec::new();
-        if thermal {
-            spoke_mask = holes.clone();
-            let (rings, sp) = thermal_reliefs(board, net.id, plane_layer);
-            holes.extend(rings);
-            spokes = sp;
-        }
-        // A region with NO same-net barrel inside would be an isolated
-        // dead island — skip its zone entirely (the rail's unc stays
-        // honest).
-        {
-            let (rx0, ry0, rx1, ry1) = net
-                .plane_region
-                .unwrap_or((0.0, 0.0, w, h));
-            let has_barrel = routes
-                .get(ni)
-                .map(|r| {
-                    r.vias
-                        .iter()
-                        .any(|v| v.x > rx0 && v.x < rx1 && v.y > ry0 && v.y < ry1)
-                })
-                .unwrap_or(false)
-                || board.components.iter().any(|comp| {
-                    let cos_t = comp.theta.cos();
-                    let sin_t = comp.theta.sin();
-                    comp.pins.iter().any(|pin| {
-                        pin.net == Some(net.id)
-                            && pin.pad.as_ref().and_then(|p| p.drill_mm).is_some()
-                            && {
-                                let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
-                                let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
-                                gx > rx0 && gx < rx1 && gy > ry0 && gy < ry1
-                            }
-                    })
-                });
-            if !has_barrel {
-                log::warn!(
-                    "plane fill for '{}' has no same-net barrel in its region — zone skipped",
-                    net.name
-                );
-                continue;
-            }
-        }
-
-        out.push_str(&format!(
-            "  (zone (net {}) (net_name \"{}\") (layer \"{}\") (hatch edge 0.5)\n",
-            n, net.name, layer_name
-        ));
-        // Header MUST agree with the shipped fill geometry (the
-        // starved_thermal lesson): SOLID for dedicated Power planes
-        // (fill floods the pads), THERMAL for signal-layer pours
-        // (fill now carries real gap rings + diagonal spoke necks).
-        if thermal {
-            out.push_str(&format!(
-                "    (connect_pads (clearance {}))\n",
-                0.3f64.max(board.config.min_spacing_mm)
-            ));
-        } else {
-            out.push_str(&format!(
-                "    (connect_pads yes (clearance {}))\n",
-                0.3f64.max(board.config.min_spacing_mm)
-            ));
-        }
-        out.push_str("    (min_thickness 0.25) (filled_areas_thickness no)\n");
-        out.push_str("    (fill yes (thermal_gap 0.3) (thermal_bridge_width 0.4))\n");
-        // Edge margin: edge_clearance + 0.05mm. An inset of EXACTLY
-        // the clearance is a knife-edge tie — KiCad's zone refill is
-        // threaded and lands an ulp on either side run to run, so the
-        // SAME .kicad_pcb flapped between 0 and 2 copper_edge_clearance
-        // violations (uno inner planes, measured 2026-07-24). The
-        // 0.05mm is fab-invisible and kills the tie.
-        let m = board.config.edge_clearance_mm + 0.05;
-        let (zx0, zy0, zx1, zy1) = match net.plane_region {
-            Some((rx0, ry0, rx1, ry1)) => {
-                (rx0.max(m), ry0.max(m), rx1.min(w - m), ry1.min(h - m))
-            }
-            None => (m, m, w - m, h - m),
-        };
-        // Polygon outlines: the zone boundary (and the fill) is the
-        // outline inset by the edge margin, clipped to the region rect
-        // — never the bbox (copper in a cutout notch is off-board).
-        let poly_boundary: Option<Vec<(f64, f64)>> =
-            if let PnrBoardOutlinePoly(opts) = &board.config.outline {
-                inset_rectilinear(opts, m)
-                    .map(|ins| clip_poly_to_rect(&ins, zx0, zy0, zx1, zy1))
-                    .filter(|b| b.len() >= 4)
-            } else {
-                None
-            };
-        out.push_str("    (polygon (pts\n");
-        match &poly_boundary {
-            Some(b) => {
-                for (x, y) in b {
-                    out.push_str(&format!("      (xy {x} {y})\n"));
-                }
-            }
-            None => {
-                for (x, y) in [(zx0, zy0), (zx1, zy0), (zx1, zy1), (zx0, zy1)] {
-                    out.push_str(&format!("      (xy {x} {y})\n"));
-                }
-            }
-        }
-        out.push_str("    ))\n");
-
-        // ONE fractured polygon: KiCad's connectivity treats every
-        // saved filled_polygon as its own island (overlapping strips
-        // stayed 90+ isolated_copper items and split the net), so the
-        // fill must be a single simple polygon — holes joined to the
-        // outline through zero-width slits, exactly how KiCad's own
-        // filler stores them.
-        // Split-plane: clip the fill to the rail's region.
-        let (fx0, fy0, fx1, fy1) = match net.plane_region {
-            Some((rx0, ry0, rx1, ry1)) => {
-                (rx0.max(m), ry0.max(m), rx1.min(w - m), ry1.min(h - m))
-            }
-            None => (m, m, w - m, h - m),
-        };
-        let cutout_rects = plane_cutout_rects(board);
-        // The void engine may sever a fill into several copper
-        // components (a full-height cut, a via wall) — emit one
-        // filled_polygon per component; KiCad zones accept many. A
-        // component with NO same-net barrel (drop via or THT pad)
-        // would be an isolated island: dropped, like KiCad's own
-        // island removal.
-        let anchors = plane_anchor_points(board, routes, ni);
-        let polys = match &poly_boundary {
-            // Poly outlines ride the SAME raster engine, masked to the
-            // inset boundary — one truth for both outline shapes.
-            Some(b) => {
-                let bx0 = b.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
-                let bx1 = b.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max);
-                let by0 = b.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
-                let by1 = b.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
-                fracture_fill(bx0, by0, bx1, by1, &holes, &cutout_rects, &anchors, Some(b))
-            }
-            None => {
-                // Higher-priority claim grid on THIS raster frame.
-                let pre_void: Option<Vec<bool>> = if foreign_regions
-                    .is_empty()
-                {
-                    None
-                } else {
-                    let zc = 0.3f64.max(board.config.min_spacing_mm);
-                    let mut claim_all: Option<Vec<bool>> = None;
-                    for other in board.nets.iter().filter(|o| {
-                        o.id != net.id
-                            && o.plane_layer == Some(plane_layer)
-                            && o.plane_region.is_some()
-                    }) {
-                        let (rx0, ry0, rx1, ry1) =
-                            other.plane_region.unwrap();
-                        let mut oh = plane_foreign_holes_on(
-                            board,
-                            routes,
-                            other.id,
-                            Some(plane_layer),
-                            false,
-                        );
-                        for h in oh.iter_mut() {
-                            h.2 = ((h.2 - 0.1875) / 1.082).max(0.1);
-                        }
-                        let (cg, ccols, crows) = fill_copper_grid_masked(
-                            fx0,
-                            fy0,
-                            fx1,
-                            fy1,
-                            &oh,
-                            &cutout_rects,
-                            None,
-                        );
-                        // +0.1 beyond the zone clearance: the claim
-                        // is raster-quantized and the region edge is
-                        // a knife-edge tie without it (measured 1
-                        // zone-zone clearance at a band corner).
-                        let dil = ((zc + 0.1) / VOID_CELL).ceil() as isize;
-                        let mut cl = vec![false; cg.len()];
-                        for r in 0..crows {
-                            for c in 0..ccols {
-                                let x = fx0 + (c as f64 + 0.5) * VOID_CELL;
-                                let y = fy0 + (r as f64 + 0.5) * VOID_CELL;
-                                if x < rx0
-                                    || x > rx1
-                                    || y < ry0
-                                    || y > ry1
-                                    || !cg[r * ccols + c]
-                                {
-                                    continue;
-                                }
-                                let r0 = (r as isize - dil).max(0) as usize;
-                                let r1c =
-                                    ((r as isize + dil) as usize).min(crows - 1);
-                                let c0 = (c as isize - dil).max(0) as usize;
-                                let c1 =
-                                    ((c as isize + dil) as usize).min(ccols - 1);
-                                for rr in r0..=r1c {
-                                    for cc in c0..=c1 {
-                                        cl[rr * ccols + cc] = true;
-                                    }
-                                }
-                            }
-                        }
-                        claim_all = Some(match claim_all {
-                            None => cl,
-                            Some(mut a) => {
-                                for (ai, ci) in a.iter_mut().zip(cl) {
-                                    *ai |= ci;
-                                }
-                                a
-                            }
-                        });
-                    }
-                    claim_all
-                };
-                fracture_fill_spoked(
-                    fx0,
-                    fy0,
-                    fx1,
-                    fy1,
-                    &holes,
-                    &cutout_rects,
-                    &anchors,
-                    None,
-                    &spokes,
-                    &spoke_mask,
-                    pre_void.as_deref(),
-                )
-            }
-        };
-        for pts in &polys {
-            out.push_str(&format!("    (filled_polygon (layer \"{}\") (pts\n", layer_name));
-            for (x, y) in pts {
-                out.push_str(&format!("      (xy {x} {y})\n"));
-            }
-            out.push_str("    ))\n");
-        }
-        out.push_str("  )\n");
-
-        // ── DUAL-LAYER GND POUR: fill the ROUTING face too ──
-        // The hand-routed demo's GND zone spans BOTH copper faces —
-        // the routing face gets whatever copper survives between the
-        // tracks, island-removed to fragments that touch same-net
-        // copper (KiCad's own island semantics). Connectivity never
-        // DEPENDS on this fill (the primary plane + drop machinery
-        // carry it); it adds real return-path copper. Gated off for
-        // STRICT single-sided boards: their other face is empty by
-        // design (the ecc83 demo has no top copper at all).
-        let secondary = thermal
-            && !board.config.route_bias_strict
-            && board.layer_stack.layers.len() >= 2
-            && net.plane_region.is_none();
-        if secondary {
-            let other = if plane_layer == 0 {
-                board.layer_stack.layers.len() - 1
-            } else {
-                0
-            };
-            let other_is_signal = board
-                .layer_stack
-                .layers
-                .get(other)
-                .map(|l| l.kind == crate::types::LayerKind::Signal)
-                .unwrap_or(false);
-            if other_is_signal {
-                let other_name = board
-                    .layer_stack
-                    .layers
-                    .get(other)
-                    .map(|l| l.name.as_str())
-                    .unwrap_or("B.Cu");
-                let mut holes2 =
-                    plane_foreign_holes_on(board, routes, net.id, Some(other), true);
-                for h in holes2.iter_mut() {
-                    h.2 = ((h.2 - 0.1875) / 1.082).max(0.1);
-                }
-                let spoke_mask2 = holes2.clone();
-                let (rings2, spokes2) = thermal_reliefs(board, net.id, other);
-                holes2.extend(rings2);
-                // Anchors on THIS face: same-net vias and THT barrels,
-                // SMD pads mounted on this side, and the net's own
-                // routed tracks here (fill merging with a GND track IS
-                // connected — sampled endpoints + midpoint).
-                let mut anchors2: Vec<(f64, f64)> = Vec::new();
-                if let Some(r) = routes.get(ni) {
-                    for v in &r.vias {
-                        anchors2.push((v.x, v.y));
-                    }
-                    for sg in &r.segments {
-                        if sg.layer == other {
-                            anchors2.push(sg.start);
-                            anchors2.push(sg.end);
-                            anchors2.push((
-                                (sg.start.0 + sg.end.0) / 2.0,
-                                (sg.start.1 + sg.end.1) / 2.0,
-                            ));
-                        }
-                    }
-                }
-                let side2 = if other == 0 {
-                    crate::types::BoardSide::Top
-                } else {
-                    crate::types::BoardSide::Bottom
-                };
-                for comp in &board.components {
-                    let (co, sn) = (comp.theta.cos(), comp.theta.sin());
-                    for pin in &comp.pins {
-                        if pin.net != Some(net.id) || pin.unplaced {
-                            continue;
-                        }
-                        let Some(pad) = &pin.pad else { continue };
-                        if pad.drill_mm.is_some() || comp.side == side2 {
-                            anchors2.push((
-                                comp.x + pin.dx * co - pin.dy * sn,
-                                comp.y + pin.dx * sn + pin.dy * co,
-                            ));
-                        }
-                    }
-                }
-                if !anchors2.is_empty() {
-                    let polys2 = match &poly_boundary {
-                        Some(b) => {
-                            let bx0 =
-                                b.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
-                            let bx1 = b
-                                .iter()
-                                .map(|p| p.0)
-                                .fold(f64::NEG_INFINITY, f64::max);
-                            let by0 =
-                                b.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
-                            let by1 = b
-                                .iter()
-                                .map(|p| p.1)
-                                .fold(f64::NEG_INFINITY, f64::max);
-                            fracture_fill(
-                                bx0,
-                                by0,
-                                bx1,
-                                by1,
-                                &holes2,
-                                &cutout_rects,
-                                &anchors2,
-                                Some(b),
-                            )
-                        }
-                        None => fracture_fill_spoked(
-                            fx0,
-                            fy0,
-                            fx1,
-                            fy1,
-                            &holes2,
-                            &cutout_rects,
-                            &anchors2,
-                            None,
-                            &spokes2,
-                            &spoke_mask2,
-                            None,
-                        ),
-                    };
-                    if !polys2.is_empty() {
-                        out.push_str(&format!(
-                            "  (zone (net {}) (net_name \"{}\") (layer \"{}\") (hatch edge 0.5)\n",
-                            n, net.name, other_name
-                        ));
-                        out.push_str(&format!(
-                            "    (connect_pads (clearance {}))\n",
-                            0.3f64.max(board.config.min_spacing_mm)
-                        ));
-                        out.push_str(
-                            "    (min_thickness 0.25) (filled_areas_thickness no)\n",
-                        );
-                        out.push_str(
-                            "    (fill yes (thermal_gap 0.3) (thermal_bridge_width 0.4))\n",
-                        );
-                        out.push_str("    (polygon (pts\n");
-                        match &poly_boundary {
-                            Some(b) => {
-                                for (x, y) in b {
-                                    out.push_str(&format!("      (xy {x} {y})\n"));
-                                }
-                            }
-                            None => {
-                                for (x, y) in
-                                    [(zx0, zy0), (zx1, zy0), (zx1, zy1), (zx0, zy1)]
-                                {
-                                    out.push_str(&format!("      (xy {x} {y})\n"));
-                                }
-                            }
-                        }
-                        out.push_str("    ))\n");
-                        for pts in &polys2 {
-                            out.push_str(&format!(
-                                "    (filled_polygon (layer \"{}\") (pts\n",
-                                other_name
-                            ));
-                            for (x, y) in pts {
-                                out.push_str(&format!("      (xy {x} {y})\n"));
-                            }
-                            out.push_str("    ))\n");
-                        }
-                        out.push_str("  )\n");
-                    }
-                }
-            }
-        }
-    }
-
+    out.push_str(&zones_out);
     out.push_str(")\n");
     out
 }
@@ -1516,7 +1567,7 @@ fn fracture_fill(
     anchors: &[(f64, f64)],
     mask: Option<&[(f64, f64)]>,
 ) -> Vec<Vec<(f64, f64)>> {
-    fracture_fill_spoked(x0, y0, x1, y1, holes, rects, anchors, mask, &[], &[], None)
+    fracture_fill_spoked(x0, y0, x1, y1, holes, rects, anchors, mask, &[], &[], None, None)
 }
 
 /// fracture_fill with thermal SPOKE paint-back: after voiding, cells
@@ -1536,6 +1587,7 @@ fn fracture_fill_spoked(
     spokes: &[(f64, f64, f64)],
     spoke_mask: &[(f64, f64, f64)],
     pre_void: Option<&[bool]>,
+    mut dead_spokes: Option<&mut Vec<(f64, f64)>>,
 ) -> Vec<Vec<(f64, f64)>> {
     // ONE VOID ENGINE: raster copper, trace copper components, punch
     // hole loops via the keyhole forest. See fill_copper_grid.
@@ -1600,6 +1652,59 @@ fn fracture_fill_spoked(
             // the standard tip) and paint every bar that lands.
             // Healthy pads never enter this branch, so clean boards
             // are byte-identical.
+            if nd < 2 && dead_spokes.is_some() {
+                // Below KiCad's two-spoke starved threshold even
+                // before the 8-direction fallback tries: report for
+                // the SOLID-connect pass (the caller re-runs the fill
+                // with this pad's ring dropped and marks the pad
+                // zone_connect 2). The fallback below still handles
+                // callers that don't collect.
+                let n8 = {
+                    let s2i = 1.0 / s2;
+                    let dirs8 = [
+                        (s2i, s2i),
+                        (-s2i, -s2i),
+                        (s2i, -s2i),
+                        (-s2i, s2i),
+                        (1.0, 0.0),
+                        (-1.0, 0.0),
+                        (0.0, -1.0),
+                        (0.0, 1.0),
+                    ];
+                    let mut n = 0usize;
+                    for &(ux, uy) in &dirs8 {
+                        'reach: for ext in [0.0, 0.15, 0.3, 0.45, 0.6] {
+                            let l = ro + ext;
+                            let mut ok = true;
+                            for t in [l + 0.05, l + 0.15] {
+                                let (qx, qy) = (cx + ux * t, cy + uy * t);
+                                let c = ((qx - x0) / VOID_CELL) as isize;
+                                let r = ((qy - y0) / VOID_CELL) as isize;
+                                if r < 0
+                                    || c < 0
+                                    || r >= rows as isize
+                                    || c >= cols as isize
+                                    || !base[r as usize * cols + c as usize]
+                                {
+                                    ok = false;
+                                    break;
+                                }
+                            }
+                            if ok {
+                                n += 1;
+                                break 'reach;
+                            }
+                        }
+                    }
+                    n
+                };
+                if n8 < 2 {
+                    if let Some(dead) = dead_spokes.as_deref_mut() {
+                        dead.push((cx, cy));
+                    }
+                    continue;
+                }
+            }
             if nd < 2 {
                 let s2i = 1.0 / s2;
                 let dirs8 = [
@@ -2174,6 +2279,7 @@ pub(crate) fn thermal_reliefs(
     board: &Board,
     net_id: NetId,
     plane_layer: usize,
+    exclude: &[(f64, f64)],
 ) -> (Vec<(f64, f64, f64)>, Vec<(f64, f64, f64)>) {
     let gap = 0.3f64;
     let pour_side = if plane_layer == 0 {
@@ -2203,6 +2309,15 @@ pub(crate) fn thermal_reliefs(
             }
             let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
             let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+            // SOLID-connect pads (fewer than two spokes can form —
+            // KiCad's starved threshold): no ring, no bars; the fill
+            // floods to the pad and the pad ships zone_connect 2.
+            if exclude
+                .iter()
+                .any(|&(ex, ey)| (ex - gx).hypot(ey - gy) < 0.05)
+            {
+                continue;
+            }
             let r_pad = pad.width_mm.max(pad.height_mm) / 2.0;
             // Ring void with the engine's hole inflation compensated
             // (each hole grows ~1.082x + 0.19mm) so the effective gap
