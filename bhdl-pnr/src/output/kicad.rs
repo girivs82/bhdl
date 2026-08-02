@@ -1156,7 +1156,35 @@ pub(crate) fn plane_pads_marooned(
     let m = board.config.edge_clearance_mm + 0.05;
     let holes = plane_foreign_holes_on(board, routes, net_id, Some(pour_layer), true);
     let rects = plane_cutout_rects(board);
-    let (copper, cols, rows) = fill_copper_grid_masked(m, m, w - m, h - m, &holes, &rects, None);
+    let (mut copper, cols, rows) = fill_copper_grid_masked(m, m, w - m, h - m, &holes, &rects, None);
+    // REGIONED pour: fill exists only inside the region — cells
+    // beyond it are phantom copper that made every in-band pad look
+    // connected (the maroon test never fired, so the rescue never
+    // routed the genuinely stranded ones).
+    let net_region = board
+        .nets
+        .iter()
+        .find(|n| n.id == net_id)
+        .and_then(|n| n.plane_region);
+    if let Some((rx0, ry0, rx1, ry1)) = net_region {
+        for r in 0..rows {
+            for c in 0..cols {
+                let x = m + (c as f64 + 0.5) * VOID_CELL;
+                let y = m + (r as f64 + 0.5) * VOID_CELL;
+                if x < rx0 || x > rx1 || y < ry0 || y > ry1 {
+                    copper[r * cols + c] = false;
+                }
+            }
+        }
+    }
+    let in_region = |x: f64, y: f64| -> bool {
+        match net_region {
+            None => true,
+            Some((rx0, ry0, rx1, ry1)) => {
+                x >= rx0 && x <= rx1 && y >= ry0 && y <= ry1
+            }
+        }
+    };
     // Label 4-connected components.
     let mut label = vec![0u32; copper.len()];
     let mut next = 1u32;
@@ -1195,6 +1223,9 @@ pub(crate) fn plane_pads_marooned(
     let ni = board.nets.iter().position(|n| n.id == net_id);
     if let Some(r) = ni.and_then(|i| routes.get(i)) {
         for v in &r.vias {
+            if !in_region(v.x, v.y) {
+                continue;
+            }
             if let Some(cl) = cell_of(v.x, v.y) {
                 if label[cl] != 0 { anchored.insert(label[cl]); }
             }
@@ -1204,6 +1235,9 @@ pub(crate) fn plane_pads_marooned(
             for t in [0.0, 0.5, 1.0] {
                 let q = (sg.start.0 + t * (sg.end.0 - sg.start.0),
                          sg.start.1 + t * (sg.end.1 - sg.start.1));
+                if !in_region(q.0, q.1) {
+                    continue;
+                }
                 if let Some(cl) = cell_of(q.0, q.1) {
                     if label[cl] != 0 { anchored.insert(label[cl]); }
                 }
@@ -1221,6 +1255,9 @@ pub(crate) fn plane_pads_marooned(
             }
             let gx = comp.x + pin.dx * co - pin.dy * sn;
             let gy = comp.y + pin.dx * sn + pin.dy * co;
+            if !in_region(gx, gy) {
+                continue;
+            }
             if let Some(cl) = cell_of(gx, gy) {
                 if label[cl] != 0 { anchored.insert(label[cl]); }
             }
@@ -1556,20 +1593,94 @@ fn fracture_fill_spoked(
             // H/V fill corridors). Healthy pads keep the demo-shape
             // diagonals, so clean boards are byte-identical.
             let nd = live_d.iter().filter(|&&l| l).count();
-            let (live, diag) = if nd >= 2 {
-                (live_d, true)
-            } else {
-                let dirs_o = [(1.0, 0.0), (-1.0, 0.0), (0.0, -1.0), (0.0, 1.0)];
-                let live_o: Vec<bool> = dirs_o
-                    .iter()
-                    .map(|&(ux, uy)| tip_ok(cx, cy, ux, uy, ro))
-                    .collect();
-                if live_o.iter().filter(|&&l| l).count() > nd {
-                    (live_o, false)
-                } else {
-                    (live_d, true)
+            // STARVING pad (<2 standard diagonal bars — KiCad's
+            // starved-thermal threshold is two spokes): probe ALL
+            // EIGHT directions with EXTENDING reach (up to +0.6mm —
+            // in a crowded pocket the fill often starts just past
+            // the standard tip) and paint every bar that lands.
+            // Healthy pads never enter this branch, so clean boards
+            // are byte-identical.
+            if nd < 2 {
+                let s2i = 1.0 / s2;
+                let dirs8 = [
+                    (s2i, s2i),
+                    (-s2i, -s2i),
+                    (s2i, -s2i),
+                    (-s2i, s2i),
+                    (1.0, 0.0),
+                    (-1.0, 0.0),
+                    (0.0, -1.0),
+                    (0.0, 1.0),
+                ];
+                let mut bars: Vec<((f64, f64), f64)> = Vec::new();
+                for &(ux, uy) in &dirs8 {
+                    'reach: for ext in [0.0, 0.15, 0.3, 0.45, 0.6] {
+                        let l = ro + ext;
+                        let mut ok = true;
+                        for t in [l + 0.05, l + 0.15] {
+                            let (px, py) = (cx + ux * t, cy + uy * t);
+                            let c = ((px - x0) / VOID_CELL) as isize;
+                            let r = ((py - y0) / VOID_CELL) as isize;
+                            if r < 0
+                                || c < 0
+                                || r >= rows as isize
+                                || c >= cols as isize
+                                || !base[r as usize * cols + c as usize]
+                            {
+                                ok = false;
+                                break;
+                            }
+                        }
+                        if ok {
+                            bars.push(((ux, uy), l));
+                            break 'reach;
+                        }
+                    }
                 }
-            };
+                if bars.is_empty() {
+                    continue;
+                }
+                let rmax = bars.iter().map(|b| b.1).fold(ro, f64::max);
+                let ca = (((cx - rmax - x0) / VOID_CELL).floor().max(0.0) as usize)
+                    .min(cols - 1);
+                let cb = (((cx + rmax - x0) / VOID_CELL).ceil().max(0.0) as usize)
+                    .min(cols - 1);
+                let ra = (((cy - rmax - y0) / VOID_CELL).floor().max(0.0) as usize)
+                    .min(rows - 1);
+                let rb = (((cy + rmax - y0) / VOID_CELL).ceil().max(0.0) as usize)
+                    .min(rows - 1);
+                for r in ra..=rb {
+                    for c in ca..=cb {
+                        let px = x0 + (c as f64 + 0.5) * VOID_CELL;
+                        let py = y0 + (r as f64 + 0.5) * VOID_CELL;
+                        let (dx, dy) = (px - cx, py - cy);
+                        let in_bar = bars.iter().any(|&((ux, uy), l)| {
+                            let t = dx * ux + dy * uy;
+                            let perp = (dx * uy - dy * ux).abs();
+                            t >= 0.0 && t <= l && perp <= hw
+                        });
+                        if !in_bar {
+                            continue;
+                        }
+                        let fh = spoke_mask.iter().any(|&(hx, hy, hr)| {
+                            (hx - px).hypot(hy - py) < hr * 1.082 + 0.19
+                        });
+                        if fh {
+                            continue;
+                        }
+                        let in_rect = rects.iter().any(|&(rx0, ry0, rx1, ry1)| {
+                            px > rx0 && px < rx1 && py > ry0 && py < ry1
+                        });
+                        if in_rect {
+                            continue;
+                        }
+                        copper[r * cols + c] = true;
+                    }
+                }
+                continue;
+            }
+            let live = live_d;
+            let diag = true;
             if !live.iter().any(|&l| l) {
                 continue;
             }

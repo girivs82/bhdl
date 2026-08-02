@@ -197,19 +197,21 @@ layout ElectrolyticCap { package Radial-P2.50-D5; }
 
 layout MultichannelMixer {
     layer_stackup 2;
-    // Pour intent, the demo's own — exercised by the demo-parity
-    // runs (BHDL_PNR_RIGID=1 [+BHDL_PNR_POUR_GND=1]): deterministic
-    // 0v/0unc on the rigid path since the hasher fix. Not the
-    // DEFAULT yet: the corpus sweep runs the free-placement path,
-    // which carries ONE starved-thermal relief (U14 V_MINUS in a
-    // fill pocket) — declared once that closes.
-    // pour GND;
-    // pour u_mst.OUT_B; — the demo's vbias band. Machinery built
-    // (pin-cloud region, priority backfill, band apron), measures
-    // 0v/3unc: starved reliefs + stranded opamp + inputs INSIDE the
-    // band, where our F.Cu escapes shred the fill the demo keeps
-    // clean (it routes B.Cu-only under its band). Declared once
-    // that tail closes.
+    // Pour intent, the demo's own: GND on both faces (anti-bias
+    // face + routing-face backfill; deterministic 0v/0unc on both
+    // the free and rigid paths since the starving-pad 8-direction
+    // relief fallback).
+    pour GND;
+    // pour u_mst.OUT_B; — the demo's vbias band. Machinery complete
+    // (pin-cloud region, priority backfill, band apron, region-
+    // clipped maroon test) but the BAND KNOT stands: pads of two
+    // pour nets + every channel's crossings share one strip, and
+    // each lever measured zero-sum (pour-home cost exemption let
+    // vbias copper carve GND's fill: 12 unc; pad-attach rescue
+    // chained stubs to unserved pads; wider margins displace more
+    // ground). The structural fix is band-interior F.Cu discipline
+    // — or the demo's own trick, a taller band from placement that
+    // spreads its consumers. Declared once that closes.
     // Demo convention: THT-era mixer routes bottom-dominant
     // (reference board: 1768mm B.Cu vs 192mm of F.Cu jumpers).
     route_bias bottom;
