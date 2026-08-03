@@ -393,10 +393,23 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
                         &spokes,
                         &spoke_mask,
                         pre_void.as_deref(),
-                        Some(&mut dead_new),
                     )
                 }
             };
+            // EXACT starved accounting on the emitted outlines: any
+            // pad KiCad would flag (<2 spokes counting its tracks)
+            // becomes SOLID on the next fixpoint pass.
+            for d in kicad_starved_pads(
+                board,
+                net.id,
+                plane_layer,
+                &polys,
+                routes.get(ni),
+                0.3,
+                &dead_solid,
+            ) {
+                dead_new.push(d);
+            }
             for pts in &polys {
                 zbuf.push_str(&format!("    (filled_polygon (layer \"{}\") (pts\n", layer_name));
                 for (x, y) in pts {
@@ -524,10 +537,20 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
                                 &spokes2,
                                 &spoke_mask2,
                                 None,
-                                Some(&mut dead_new),
                             ),
                         };
                         if !polys2.is_empty() {
+                            for d in kicad_starved_pads(
+                                board,
+                                net.id,
+                                other,
+                                &polys2,
+                                routes.get(ni),
+                                0.3,
+                                &dead_solid,
+                            ) {
+                                dead_new.push(d);
+                            }
                             zbuf.push_str(&format!(
                                 "  (zone (net {}) (net_name \"{}\") (layer \"{}\") (hatch edge 0.5)\n",
                                 n, net.name, other_name
@@ -1567,7 +1590,7 @@ fn fracture_fill(
     anchors: &[(f64, f64)],
     mask: Option<&[(f64, f64)]>,
 ) -> Vec<Vec<(f64, f64)>> {
-    fracture_fill_spoked(x0, y0, x1, y1, holes, rects, anchors, mask, &[], &[], None, None)
+    fracture_fill_spoked(x0, y0, x1, y1, holes, rects, anchors, mask, &[], &[], None)
 }
 
 /// fracture_fill with thermal SPOKE paint-back: after voiding, cells
@@ -1587,7 +1610,6 @@ fn fracture_fill_spoked(
     spokes: &[(f64, f64, f64)],
     spoke_mask: &[(f64, f64, f64)],
     pre_void: Option<&[bool]>,
-    mut dead_spokes: Option<&mut Vec<(f64, f64)>>,
 ) -> Vec<Vec<(f64, f64)>> {
     // ONE VOID ENGINE: raster copper, trace copper components, punch
     // hole loops via the keyhole forest. See fill_copper_grid.
@@ -1652,59 +1674,6 @@ fn fracture_fill_spoked(
             // the standard tip) and paint every bar that lands.
             // Healthy pads never enter this branch, so clean boards
             // are byte-identical.
-            if nd < 2 && dead_spokes.is_some() {
-                // Below KiCad's two-spoke starved threshold even
-                // before the 8-direction fallback tries: report for
-                // the SOLID-connect pass (the caller re-runs the fill
-                // with this pad's ring dropped and marks the pad
-                // zone_connect 2). The fallback below still handles
-                // callers that don't collect.
-                let n8 = {
-                    let s2i = 1.0 / s2;
-                    let dirs8 = [
-                        (s2i, s2i),
-                        (-s2i, -s2i),
-                        (s2i, -s2i),
-                        (-s2i, s2i),
-                        (1.0, 0.0),
-                        (-1.0, 0.0),
-                        (0.0, -1.0),
-                        (0.0, 1.0),
-                    ];
-                    let mut n = 0usize;
-                    for &(ux, uy) in &dirs8 {
-                        'reach: for ext in [0.0, 0.15, 0.3, 0.45, 0.6] {
-                            let l = ro + ext;
-                            let mut ok = true;
-                            for t in [l + 0.05, l + 0.15] {
-                                let (qx, qy) = (cx + ux * t, cy + uy * t);
-                                let c = ((qx - x0) / VOID_CELL) as isize;
-                                let r = ((qy - y0) / VOID_CELL) as isize;
-                                if r < 0
-                                    || c < 0
-                                    || r >= rows as isize
-                                    || c >= cols as isize
-                                    || !base[r as usize * cols + c as usize]
-                                {
-                                    ok = false;
-                                    break;
-                                }
-                            }
-                            if ok {
-                                n += 1;
-                                break 'reach;
-                            }
-                        }
-                    }
-                    n
-                };
-                if n8 < 2 {
-                    if let Some(dead) = dead_spokes.as_deref_mut() {
-                        dead.push((cx, cy));
-                    }
-                    continue;
-                }
-            }
             if nd < 2 {
                 let s2i = 1.0 / s2;
                 let dirs8 = [
@@ -2275,6 +2244,165 @@ fn punch_interior_rings(poly: &mut Vec<(f64, f64)>, rings: Vec<RingKind>) {
 /// relief (the earlier four-circle approximation merged into
 /// neighboring clearance blobs and clipped at the board edge).
 /// Returns (ring voids, spoke centers (cx, cy, outer_radius)).
+
+/// EXACT mirror of KiCad's starved-thermal DRC accounting
+/// (drc_test_provider_zone_connections.cpp): the pad's polygon,
+/// inflated by HALF the thermal gap, is a closed contour through the
+/// middle of the relief annulus; SPOKES = transversal crossings of
+/// the saved fill outlines with that contour (touching/collinear
+/// excluded, deduped, /2 per outline, summed). A pad with ZERO
+/// crossings is not starved (connectivity's problem, not this
+/// test's); tracks salvage — a same-net segment with one endpoint
+/// inside the contour and the other landing in fill counts as a
+/// spoke. Starved iff 0 < spokes+track_spokes < 2. Returns starving
+/// pad centers for the SOLID fixpoint.
+#[allow(clippy::too_many_arguments)]
+fn kicad_starved_pads(
+    board: &Board,
+    net_id: NetId,
+    layer: usize,
+    polys: &[Vec<(f64, f64)>],
+    route: Option<&Route>,
+    gap: f64,
+    exclude: &[(f64, f64)],
+) -> Vec<(f64, f64)> {
+    let n_layers = board.layer_stack.layers.len();
+    let pour_side = if layer == 0 {
+        BoardSide::Top
+    } else {
+        BoardSide::Bottom
+    };
+    let pip = |pt: (f64, f64), poly: &[(f64, f64)]| -> bool {
+        let (x, y) = pt;
+        let mut inside = false;
+        let m = poly.len();
+        for k in 0..m {
+            let (x1, y1) = poly[k];
+            let (x2, y2) = poly[(k + 1) % m];
+            if (y1 > y) != (y2 > y)
+                && x < (x2 - x1) * (y - y1) / (y2 - y1) + x1
+            {
+                inside = !inside;
+            }
+        }
+        inside
+    };
+    let in_fill = |pt: (f64, f64)| -> bool { polys.iter().any(|p| pip(pt, p)) };
+    let orient = |a: (f64, f64), b: (f64, f64), c: (f64, f64)| -> f64 {
+        (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0)
+    };
+    let mut out: Vec<(f64, f64)> = Vec::new();
+    for comp in &board.components {
+        let (co, sn) = (comp.theta.cos(), comp.theta.sin());
+        for pin in &comp.pins {
+            if pin.net != Some(net_id) || pin.unplaced {
+                continue;
+            }
+            let Some(pad) = &pin.pad else { continue };
+            let tht = pad.drill_mm.is_some();
+            if !tht && comp.side != pour_side && n_layers >= 2 {
+                continue;
+            }
+            let gx = comp.x + pin.dx * co - pin.dy * sn;
+            let gy = comp.y + pin.dx * sn + pin.dy * co;
+            if exclude
+                .iter()
+                .any(|&(ex, ey)| (ex - gx).hypot(ey - gy) < 0.05)
+            {
+                continue; // already SOLID — override skips the test
+            }
+            // Contour: pad polygon inflated by gap/2 (Minkowski disc
+            // = rounded corners), rotated to the pad's frame.
+            let inf = gap / 2.0;
+            let (hw, hh) = (pad.width_mm / 2.0, pad.height_mm / 2.0);
+            let cr = match pad.shape {
+                crate::types::PadShapeKind::Circle
+                | crate::types::PadShapeKind::Oval => hw.min(hh),
+                crate::types::PadShapeKind::RoundRect => 0.25 * hw.min(hh) * 2.0,
+                crate::types::PadShapeKind::Rect => 0.0,
+            } + inf;
+            let (ix, iy) = ((hw + inf - cr).max(0.0), (hh + inf - cr).max(0.0));
+            let mut contour: Vec<(f64, f64)> = Vec::new();
+            let n_arc = 8usize;
+            for (qx, qy, a0) in [
+                (ix, iy, 0.0f64),
+                (-ix, iy, std::f64::consts::FRAC_PI_2),
+                (-ix, -iy, std::f64::consts::PI),
+                (ix, -iy, 1.5 * std::f64::consts::PI),
+            ] {
+                for k in 0..=n_arc {
+                    let a = a0 + std::f64::consts::FRAC_PI_2 * k as f64
+                        / n_arc as f64;
+                    let (lx, ly) = (qx + cr * a.cos(), qy + cr * a.sin());
+                    let wx = gx + lx * co - ly * sn;
+                    let wy = gy + lx * sn + ly * co;
+                    contour.push((wx, wy));
+                }
+            }
+            // Crossings per fill outline.
+            let mut spokes = 0usize;
+            for poly in polys {
+                let mut pts: Vec<(f64, f64)> = Vec::new();
+                let m = poly.len();
+                for k in 0..m {
+                    let (a, b) = (poly[k], poly[(k + 1) % m]);
+                    // bbox cull vs contour bbox
+                    for w in 0..contour.len() {
+                        let (c1, c2) =
+                            (contour[w], contour[(w + 1) % contour.len()]);
+                        let o1 = orient(a, b, c1);
+                        let o2 = orient(a, b, c2);
+                        let o3 = orient(c1, c2, a);
+                        let o4 = orient(c1, c2, b);
+                        if o1 * o2 < 0.0 && o3 * o4 < 0.0 {
+                            let t = o3 / (o3 - o4);
+                            let px = a.0 + t * (b.0 - a.0);
+                            let py = a.1 + t * (b.1 - a.1);
+                            if !pts
+                                .iter()
+                                .any(|&(qx2, qy2)| {
+                                    (qx2 - px).hypot(qy2 - py) < 1e-6
+                                })
+                            {
+                                pts.push((px, py));
+                            }
+                        }
+                    }
+                }
+                if pts.len() >= 2 {
+                    spokes += pts.len() / 2;
+                }
+            }
+            if spokes == 0 {
+                continue; // no fill contact — not this test's problem
+            }
+            if spokes >= 2 {
+                continue;
+            }
+            // Manual-spoke salvage: same-net tracks through the gap.
+            let mut track_spokes = 0usize;
+            if let Some(r) = route {
+                for sg in &r.segments {
+                    if sg.layer != layer {
+                        continue;
+                    }
+                    let a_in = pip(sg.start, &contour);
+                    let b_in = pip(sg.end, &contour);
+                    if (a_in && !b_in && in_fill(sg.end))
+                        || (b_in && !a_in && in_fill(sg.start))
+                    {
+                        track_spokes += 1;
+                    }
+                }
+            }
+            if spokes + track_spokes < 2 {
+                out.push((gx, gy));
+            }
+        }
+    }
+    out
+}
+
 pub(crate) fn thermal_reliefs(
     board: &Board,
     net_id: NetId,

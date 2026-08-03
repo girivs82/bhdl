@@ -2794,6 +2794,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
             if final_routes[i].is_empty() {
                 continue;
             }
+            let mut pour_net_sweep = false;
             let mut own_pads: Vec<(f64, f64, f64, f64)> = Vec::new();
             for comp in &board.components {
                 let cos_t = comp.theta.cos();
@@ -3110,16 +3111,37 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
             }
             loop {
                 let r = &final_routes[i];
+                // SIGNAL-POUR nets: validator amputations routinely
+                // leave LONG free-ended spurs (a mid-piece under-
+                // clearing a pin row is removed, stranding a 3-4mm
+                // tail that ships as track_dangling + an island).
+                // A spur with a genuinely free end is dead copper at
+                // ANY length — lift the caps for these nets only;
+                // ordinary nets keep the conservative bounds.
+                let pour_net = board.nets[i]
+                    .plane_layer
+                    .and_then(|pl| board.layer_stack.layers.get(pl))
+                    .map(|l| l.kind == crate::types::LayerKind::Signal)
+                    .unwrap_or(false);
+                // Segment-level trim only for REGIONED pours: their
+                // routes are small (pocket stubs + hops), while a
+                // board-wide ground's thousands of segments make the
+                // O(n^2)-per-removal scan intractable — and its spur
+                // classes are already covered by the span machinery.
+                pour_net_sweep =
+                    pour_net && board.nets[i].plane_region.is_some();
+                let (cap_pl, cap_len) =
+                    if pour_net { (16usize, 20.0f64) } else { (4, 2.2) };
                 let mut drop_span: Option<usize> = None;
                 'stubs: for (si, &(ps, pl)) in r.path_spans.iter().enumerate() {
-                    if pl == 0 || pl > 4 {
+                    if pl == 0 || pl > cap_pl {
                         continue;
                     }
                     let len: f64 = r.segments[ps..ps + pl]
                         .iter()
                         .map(|sg| (sg.end.0 - sg.start.0).hypot(sg.end.1 - sg.start.1))
                         .sum();
-                    if len > 2.2 {
+                    if len > cap_len {
                         continue;
                     }
                     let via_r = board.layer_stack.via.pad_mm / 2.0;
@@ -3167,6 +3189,82 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                     None => break,
                 }
             }
+            // POUR-NET SEGMENT-LEVEL free-end trim: validator
+            // amputations clear span bookkeeping, so their leftover
+            // spurs are invisible to the span-based loop above — but
+            // a segment endpoint anchored on NOTHING (no pad, no via,
+            // no other segment's centerline) dangles per KiCad
+            // regardless. Iteratively eat such tips (the amputated
+            // 3.3mm vbias spur family).
+            if pour_net_sweep {
+                if std::env::var("BHDL_PNR_PROBE").is_ok() {
+                    log::info!(
+                        "[probe] pour-net trim: '{}' {} seg(s)",
+                        board.nets[i].name,
+                        final_routes[i].segments.len()
+                    );
+                }
+                loop {
+                    let r = &final_routes[i];
+                    let via_r = board.layer_stack.via.pad_mm / 2.0;
+                    let mut drop: Option<usize> = None;
+                    'segs: for (sk, sg) in r.segments.iter().enumerate() {
+                        for &e in &[sg.start, sg.end] {
+                            // SAME-LAYER segments only — a B.Cu leg
+                            // under an F.Cu tip is no anchor (cross-
+                            // layer joins need the via test below).
+                            let anchored = r
+                                .segments
+                                .iter()
+                                .enumerate()
+                                .any(|(sj, s2)| {
+                                    sj != sk
+                                        && s2.layer == sg.layer
+                                        && geom::point_segment_dist(
+                                            e, s2.start, s2.end,
+                                        ) <= 0.05
+                                })
+                                || r.vias.iter().any(|v| {
+                                    (v.x - e.0).hypot(v.y - e.1) <= via_r
+                                })
+                                || own_pads.iter().any(|&(cx, cy, hx, hy)| {
+                                    (e.0 - cx).abs() <= hx
+                                        && (e.1 - cy).abs() <= hy
+                                });
+                            if !anchored {
+                                drop = Some(sk);
+                                break 'segs;
+                            } else if std::env::var("BHDL_PNR_PROBE").is_ok()
+                                && (e.0 - 52.65).hypot(e.1 - 34.35) < 0.1
+                            {
+                                log::info!(
+                                    "[probe] tip ({:.2},{:.2}) judged ANCHORED",
+                                    e.0, e.1
+                                );
+                            }
+                        }
+                    }
+                    match drop {
+                        Some(sk) => {
+                            let r = &mut final_routes[i];
+                            r.segments.remove(sk);
+                            // span bookkeeping is already stale for
+                            // these nets — clear it (rip-whole
+                            // semantics on later damage).
+                            for (qs, ql) in r.path_spans.iter_mut() {
+                                if *qs > sk {
+                                    *qs -= 1;
+                                } else if sk < *qs + *ql {
+                                    *ql = ql.saturating_sub(1);
+                                }
+                            }
+                            pruned += 1;
+                        }
+                        None => break,
+                    }
+                }
+            }
+
             // COVERED DUPLICATES: an END segment whose whole body lies
             // inside another same-net same-layer COLLINEAR segment is
             // duplicate copper — KiCad keeps it as a separate track
@@ -3801,9 +3899,107 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                     }
                 }
             }
+            // SECOND free-end trim: the covered-duplicates and
+            // component passes above can remove the very copper that
+            // anchored a spur tip during the first trim (measured:
+            // the 3.3mm vbias spur's tip sat on a duplicate that the
+            // covered pass then deleted).
+            // POUR-NET SEGMENT-LEVEL free-end trim: validator
+            // amputations clear span bookkeeping, so their leftover
+            // spurs are invisible to the span-based loop above — but
+            // a segment endpoint anchored on NOTHING (no pad, no via,
+            // no other segment's centerline) dangles per KiCad
+            // regardless. Iteratively eat such tips (the amputated
+            // 3.3mm vbias spur family).
+            if pour_net_sweep {
+                if std::env::var("BHDL_PNR_PROBE").is_ok() {
+                    log::info!(
+                        "[probe] pour-net trim: '{}' {} seg(s)",
+                        board.nets[i].name,
+                        final_routes[i].segments.len()
+                    );
+                }
+                loop {
+                    let r = &final_routes[i];
+                    let via_r = board.layer_stack.via.pad_mm / 2.0;
+                    let mut drop: Option<usize> = None;
+                    'segs: for (sk, sg) in r.segments.iter().enumerate() {
+                        for &e in &[sg.start, sg.end] {
+                            // SAME-LAYER segments only — a B.Cu leg
+                            // under an F.Cu tip is no anchor (cross-
+                            // layer joins need the via test below).
+                            let anchored = r
+                                .segments
+                                .iter()
+                                .enumerate()
+                                .any(|(sj, s2)| {
+                                    sj != sk
+                                        && s2.layer == sg.layer
+                                        && geom::point_segment_dist(
+                                            e, s2.start, s2.end,
+                                        ) <= 0.05
+                                })
+                                || r.vias.iter().any(|v| {
+                                    (v.x - e.0).hypot(v.y - e.1) <= via_r
+                                })
+                                || own_pads.iter().any(|&(cx, cy, hx, hy)| {
+                                    (e.0 - cx).abs() <= hx
+                                        && (e.1 - cy).abs() <= hy
+                                });
+                            if !anchored {
+                                drop = Some(sk);
+                                break 'segs;
+                            } else if std::env::var("BHDL_PNR_PROBE").is_ok()
+                                && (e.0 - 52.65).hypot(e.1 - 34.35) < 0.1
+                            {
+                                log::info!(
+                                    "[probe] tip ({:.2},{:.2}) judged ANCHORED",
+                                    e.0, e.1
+                                );
+                            }
+                        }
+                    }
+                    match drop {
+                        Some(sk) => {
+                            let r = &mut final_routes[i];
+                            r.segments.remove(sk);
+                            // span bookkeeping is already stale for
+                            // these nets — clear it (rip-whole
+                            // semantics on later damage).
+                            for (qs, ql) in r.path_spans.iter_mut() {
+                                if *qs > sk {
+                                    *qs -= 1;
+                                } else if sk < *qs + *ql {
+                                    *ql = ql.saturating_sub(1);
+                                }
+                            }
+                            pruned += 1;
+                        }
+                        None => break,
+                    }
+                }
+            }
         }
         if pruned > 0 {
             info!("final orphan sweep: {pruned} stranded fragment(s) pruned");
+
+    // 5.997. POST-SWEEP PLANE RESCUE: the sweeps above run AFTER the
+    // surface rescue, so a pad whose serving copper they trimmed
+    // (amputation spurs, covered duplicates) ends the pipeline
+    // unserved with no repair. One more idempotent rescue round —
+    // pads with live copper skip — closes exactly that window.
+    {
+        let rescued = plane_surface_rescue(&board, &mut final_routes);
+        if rescued > 0 {
+            info!("post-sweep plane rescue: {rescued} pad(s) joined");
+            // Its joins can leave short overshoot tails — trim them
+            // with the same free-end rule before sign-off.
+            let trimmed = pour_net_free_end_trim(&board, &mut final_routes);
+            if trimmed > 0 {
+                info!("post-rescue trim: {trimmed} spur segment(s)");
+            }
+        }
+    }
         }
         for i in 0..board.nets.len() {
             if std::env::var("BHDL_PNR_DEBUG_NETS")
@@ -6212,6 +6408,93 @@ fn path_respects_courtyards(board: &Board, path: &[(f64, f64)]) -> bool {
         }
     }
     true
+}
+
+
+/// Free-end trim for REGIONED-pour nets: iteratively remove segments
+/// with a genuinely unanchored endpoint (no same-layer segment
+/// centerline, no via, no own pad). Validator amputations and rescue
+/// stubs leave such spurs with cleared span bookkeeping, invisible
+/// to the span-based sweep. Small routes only (pocket stubs + hops),
+/// so the quadratic scan is cheap.
+fn pour_net_free_end_trim(board: &Board, final_routes: &mut [Route]) -> usize {
+    let via_r = board.layer_stack.via.pad_mm / 2.0;
+    let mut pruned = 0usize;
+    for i in 0..board.nets.len() {
+        let pour = board.nets[i]
+            .plane_layer
+            .and_then(|pl| board.layer_stack.layers.get(pl))
+            .map(|l| l.kind == crate::types::LayerKind::Signal)
+            .unwrap_or(false)
+            && board.nets[i].plane_region.is_some();
+        if !pour || final_routes[i].segments.is_empty() {
+            continue;
+        }
+        let mut own_pads: Vec<(f64, f64, f64, f64)> = Vec::new();
+        for comp in &board.components {
+            let (co, sn) = (comp.theta.cos(), comp.theta.sin());
+            let quarter = ((comp.theta / std::f64::consts::FRAC_PI_2).round()
+                as i64)
+                .rem_euclid(2);
+            for pin in &comp.pins {
+                if pin.net != Some(board.nets[i].id) || pin.unplaced {
+                    continue;
+                }
+                let gx = comp.x + pin.dx * co - pin.dy * sn;
+                let gy = comp.y + pin.dx * sn + pin.dy * co;
+                let (pw, ph) = match &pin.pad {
+                    Some(p) => (p.width_mm, p.height_mm),
+                    None => (0.5, 0.5),
+                };
+                let (pw, ph) = if quarter == 1 { (ph, pw) } else { (pw, ph) };
+                own_pads.push((gx, gy, pw / 2.0, ph / 2.0));
+            }
+        }
+        loop {
+            let r = &final_routes[i];
+            let mut drop: Option<usize> = None;
+            'segs: for (sk, sg) in r.segments.iter().enumerate() {
+                for &e in &[sg.start, sg.end] {
+                    let anchored = r
+                        .segments
+                        .iter()
+                        .enumerate()
+                        .any(|(sj, s2)| {
+                            sj != sk
+                                && s2.layer == sg.layer
+                                && geom::point_segment_dist(e, s2.start, s2.end)
+                                    <= 0.01
+                        })
+                        || r.vias
+                            .iter()
+                            .any(|v| (v.x - e.0).hypot(v.y - e.1) <= via_r)
+                        || own_pads.iter().any(|&(cx, cy, hx, hy)| {
+                            (e.0 - cx).abs() <= hx && (e.1 - cy).abs() <= hy
+                        });
+                    if !anchored {
+                        drop = Some(sk);
+                        break 'segs;
+                    }
+                }
+            }
+            match drop {
+                Some(sk) => {
+                    let r = &mut final_routes[i];
+                    r.segments.remove(sk);
+                    for (qs, ql) in r.path_spans.iter_mut() {
+                        if *qs > sk {
+                            *qs -= 1;
+                        } else if sk < *qs + *ql {
+                            *ql = ql.saturating_sub(1);
+                        }
+                    }
+                    pruned += 1;
+                }
+                None => break,
+            }
+        }
+    }
+    pruned
 }
 
 fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
