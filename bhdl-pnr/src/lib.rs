@@ -6450,6 +6450,65 @@ fn pour_net_free_end_trim(board: &Board, final_routes: &mut [Route]) -> usize {
                 own_pads.push((gx, gy, pw / 2.0, ph / 2.0));
             }
         }
+        // T-SPLIT first: a rescue join landing mid-span on its target
+        // is electrically connected but KiCad's dangling test demands
+        // a REAL junction — split the host segment at every such
+        // landing (the sweep's own splitter runs before the
+        // post-sweep rescue, so its joins arrive unsplit).
+        loop {
+            let r = &final_routes[i];
+            let mut split: Option<(usize, (f64, f64))> = None;
+            'find_t: for sg in &r.segments {
+                for pt in [sg.start, sg.end] {
+                    for (sk, host) in r.segments.iter().enumerate() {
+                        if host.layer != sg.layer {
+                            continue;
+                        }
+                        let (dx, dy) =
+                            (host.end.0 - host.start.0, host.end.1 - host.start.1);
+                        let l2 = dx * dx + dy * dy;
+                        if l2 <= 1e-12 {
+                            continue;
+                        }
+                        let t = ((pt.0 - host.start.0) * dx
+                            + (pt.1 - host.start.1) * dy)
+                            / l2;
+                        if t <= 1e-6 || t >= 1.0 - 1e-6 {
+                            continue;
+                        }
+                        let q = (host.start.0 + t * dx, host.start.1 + t * dy);
+                        if (pt.0 - q.0).hypot(pt.1 - q.1) < 0.01
+                            && (pt.0 - host.start.0).hypot(pt.1 - host.start.1)
+                                > 1e-6
+                            && (pt.0 - host.end.0).hypot(pt.1 - host.end.1) > 1e-6
+                        {
+                            split = Some((sk, pt));
+                            break 'find_t;
+                        }
+                    }
+                }
+            }
+            let Some((sk, pt)) = split else { break };
+            let r = &mut final_routes[i];
+            let host = r.segments[sk].clone();
+            r.segments[sk].end = pt;
+            r.segments.insert(
+                sk + 1,
+                RouteSegment {
+                    layer: host.layer,
+                    start: pt,
+                    end: host.end,
+                    width_mm: host.width_mm,
+                },
+            );
+            for (qs, ql) in r.path_spans.iter_mut() {
+                if *qs <= sk && sk < *qs + *ql {
+                    *ql += 1;
+                } else if *qs > sk {
+                    *qs += 1;
+                }
+            }
+        }
         loop {
             let r = &final_routes[i];
             let mut drop: Option<usize> = None;
@@ -6474,6 +6533,26 @@ fn pour_net_free_end_trim(board: &Board, final_routes: &mut [Route]) -> usize {
                     if !anchored {
                         drop = Some(sk);
                         break 'segs;
+                    }
+                }
+            }
+            if drop.is_none() && std::env::var("BHDL_PNR_PROBE").is_ok() {
+                for (sk, sg) in r.segments.iter().enumerate() {
+                    for &e in &[sg.start, sg.end] {
+                        if (e.0 - 49.296).hypot(e.1 - 39.45) < 0.2 {
+                            let seg_a = r.segments.iter().enumerate().find(|(sj, s2)| {
+                                *sj != sk
+                                    && s2.layer == sg.layer
+                                    && geom::point_segment_dist(e, s2.start, s2.end) <= 0.01
+                            });
+                            log::info!(
+                                "[probe] final-trim tip ({:.3},{:.3}) anchored: seg={:?} via={} pad={}",
+                                e.0, e.1,
+                                seg_a.map(|(_, s2)| (s2.start, s2.end, s2.layer)),
+                                r.vias.iter().any(|v| (v.x - e.0).hypot(v.y - e.1) <= via_r),
+                                own_pads.iter().any(|&(cx, cy, hx, hy)| (e.0 - cx).abs() <= hx && (e.1 - cy).abs() <= hy)
+                            );
+                        }
                     }
                 }
             }

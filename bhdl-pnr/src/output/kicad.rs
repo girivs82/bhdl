@@ -338,11 +338,13 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
                                 &cutout_rects,
                                 None,
                             );
-                            // +0.1 beyond the zone clearance: the claim
+                            // +0.2 beyond the zone clearance: the claim
                             // is raster-quantized and the region edge is
-                            // a knife-edge tie without it (measured 1
-                            // zone-zone clearance at a band corner).
-                            let dil = ((zc + 0.1) / VOID_CELL).ceil() as isize;
+                            // a knife-edge tie without margin (measured
+                            // 1 zone-zone clearance at a band corner at
+                            // +0.1 — the square dilation's diagonal
+                            // deficit against an angled fill edge).
+                            let dil = ((zc + 0.2) / VOID_CELL).ceil() as isize;
                             let mut cl = vec![false; cg.len()];
                             for r in 0..crows {
                                 for c in 0..ccols {
