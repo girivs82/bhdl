@@ -549,6 +549,10 @@ pub fn place_and_route_best_of(
 /// Input: a fully constructed `Board` (from semantic preprocessing).
 /// Output: `PnrResult` with final placement, routes, metrics, and DRC.
 pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result<PnrResult> {
+    // Residual emission-model strandings the island-bridge pass
+    // (5.998) could not close — added to pour_defects so trial
+    // selection prefers placements where every bridge landed.
+    let mut pour_bridge_residual = 0usize;
     // INVARIANT REPAIR: every pin stamped `pin.net = Some(n)` must
     // appear in that net's pins list. The exporter writes pad nets
     // from pin.net, so a pad missing from net.pins is INVISIBLE to
@@ -4000,6 +4004,242 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
             }
         }
     }
+
+    // 5.998. EMISSION-MODEL ISLAND BRIDGE: detect islands on the SAME
+    // copper the file will ship (emission_fill_polys mirrors the
+    // writer — rings, spokes, backfill claims, anchored fracture) and
+    // route a bridge from each stranded island's pad to the main
+    // fill. The stitcher's optimistic raster missed exactly these
+    // (the free-path C35/U20 ground pair), and patching ITS raster
+    // regressed other paths.
+    {
+        let mut bridged = 0usize;
+        for ni in 0..board.nets.len() {
+            let Some(polys) =
+                output::kicad::emission_fill_polys(&board, &final_routes, ni)
+            else {
+                continue;
+            };
+            if polys.is_empty() {
+                continue;
+            }
+            let net_id = board.nets[ni].id;
+            let layer = board.nets[ni].plane_layer.unwrap_or(0);
+            let pip = |pt: (f64, f64), poly: &[(f64, f64)]| -> bool {
+                let (x, y) = pt;
+                let mut inside = false;
+                let mm = poly.len();
+                for k in 0..mm {
+                    let (x1, y1) = poly[k];
+                    let (x2, y2) = poly[(k + 1) % mm];
+                    if (y1 > y) != (y2 > y)
+                        && x < (x2 - x1) * (y - y1) / (y2 - y1) + x1
+                    {
+                        inside = !inside;
+                    }
+                }
+                inside
+            };
+            // Same-net pads with their fill poly (if any).
+            let pour_side = if layer == 0 {
+                BoardSide::Top
+            } else {
+                BoardSide::Bottom
+            };
+            let mut pad_polys: Vec<((f64, f64), usize)> = Vec::new();
+            // SMD pads on the pour face that map to NO fill poly at
+            // all — the fill retreated from their whole area, so
+            // they hang on bare tracks (or nothing). The fill model
+            // can't see track connectivity; these get a BFS over the
+            // net's actual segments before any bridge fires.
+            let mut stranded: Vec<(f64, f64)> = Vec::new();
+            for comp in &board.components {
+                let (co, sn) = (comp.theta.cos(), comp.theta.sin());
+                for pin in &comp.pins {
+                    if pin.net != Some(net_id) || pin.unplaced {
+                        continue;
+                    }
+                    let Some(pad) = &pin.pad else { continue };
+                    if pad.drill_mm.is_none() && comp.side != pour_side {
+                        continue;
+                    }
+                    let gx = comp.x + pin.dx * co - pin.dy * sn;
+                    let gy = comp.y + pin.dx * sn + pin.dy * co;
+                    // Nearest poly containing OR within 1.3mm of a
+                    // vertex (the pad sits inside its relief ring —
+                    // its island's fill surrounds, not contains, the
+                    // center).
+                    let mut best: Option<(usize, f64)> = None;
+                    for (pi2, poly) in polys.iter().enumerate() {
+                        if pip((gx, gy), poly) {
+                            best = Some((pi2, 0.0));
+                            break;
+                        }
+                        // Full-resolution distance for SMALL polys
+                        // (islands); big polys — the main fill —
+                        // only get the containment test above (a pad
+                        // near the main fill isn't stranded anyway).
+                        // 1.6mm covers the relief ring + gap.
+                        if poly.len() > 5000 {
+                            continue;
+                        }
+                        let d = poly
+                            .iter()
+                            .map(|&(vx, vy)| (vx - gx).hypot(vy - gy))
+                            .fold(f64::INFINITY, f64::min);
+                        if d < 1.6 && best.map_or(true, |(_, bd)| d < bd) {
+                            best = Some((pi2, d));
+                        }
+                    }
+                    if let Some((pi2, _)) = best {
+                        pad_polys.push(((gx, gy), pi2));
+                    } else if pad.drill_mm.is_none() {
+                        // THT pads reach the other face's fill through
+                        // their own reliefs — only SMD pads on this
+                        // face can be truly fill-orphaned.
+                        stranded.push((gx, gy));
+                    }
+                }
+            }
+            if pad_polys.is_empty() && stranded.is_empty() {
+                continue;
+            }
+            let mut counts = vec![0usize; polys.len()];
+            for &(_, pi2) in &pad_polys {
+                counts[pi2] += 1;
+            }
+            // Main poly: the one with the most pads (area proxy).
+            let main = counts
+                .iter()
+                .enumerate()
+                .max_by_key(|&(pi2, &c)| (c, polys[pi2].len()))
+                .map(|(pi2, _)| pi2)
+                .unwrap_or(0);
+            let width = board
+                .config
+                .min_trace_width_mm
+                .max(0.15)
+                .min(board.nets[ni].required_trace_width_mm);
+            for island in 0..polys.len() {
+                if island == main || counts[island] == 0 {
+                    continue;
+                }
+                let mut done = false;
+                for &(src, pi2) in &pad_polys {
+                    if pi2 != island || done {
+                        continue;
+                    }
+                    done = island_bridge_pad(
+                        &board,
+                        &mut final_routes,
+                        ni,
+                        src,
+                        &polys[main],
+                        layer,
+                        width,
+                        false,
+                    );
+                }
+                if done {
+                    bridged += 1;
+                } else {
+                    pour_bridge_residual += 1;
+                    log::warn!(
+                        "island bridge: '{}' island with {} pad(s) — no legal bridge (honest)",
+                        board.nets[ni].name,
+                        counts[island]
+                    );
+                }
+            }
+            // Fill-orphaned pads: SMD pads the emission model maps to
+            // NO poly at all. The fill model can't see tracks, so a
+            // pad here may still be grounded through routed copper —
+            // BFS the net's actual segments first, and bridge only
+            // chains that provably reach nothing (re-checked per pad:
+            // an earlier bridge grounds the rest of its track group).
+            if !stranded.is_empty() && board.nets[ni].plane_region.is_none() {
+                let mut grounded_pads: Vec<(f64, f64)> = pad_polys
+                    .iter()
+                    .map(|&(p, _)| p)
+                    .collect();
+                for comp in &board.components {
+                    let (co, sn) = (comp.theta.cos(), comp.theta.sin());
+                    for pin in &comp.pins {
+                        if pin.net != Some(net_id) || pin.unplaced {
+                            continue;
+                        }
+                        let Some(pad) = &pin.pad else { continue };
+                        if pad.drill_mm.is_some() {
+                            grounded_pads.push((
+                                comp.x + pin.dx * co - pin.dy * sn,
+                                comp.y + pin.dx * sn + pin.dy * co,
+                            ));
+                        }
+                    }
+                }
+                for &src in &stranded {
+                    let Some(chain) = pad_track_grounded(
+                        &final_routes[ni],
+                        src,
+                        &polys,
+                        layer,
+                        &grounded_pads,
+                    ) else {
+                        continue;
+                    };
+                    // The pad itself may be walled in — try every
+                    // point of its copper chain, nearest-to-fill
+                    // first.
+                    let dist_to_fill = |p: (f64, f64)| -> f64 {
+                        polys[main]
+                            .iter()
+                            .step_by(4)
+                            .map(|&(vx, vy)| (vx - p.0).hypot(vy - p.1))
+                            .fold(f64::INFINITY, f64::min)
+                    };
+                    let mut sources: Vec<(f64, f64)> = std::iter::once(src)
+                        .chain(chain.into_iter())
+                        .collect();
+                    sources.sort_by(|a, b| {
+                        dist_to_fill(*a)
+                            .partial_cmp(&dist_to_fill(*b))
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                    sources.truncate(8);
+                    let mut done = false;
+                    for &s2 in &sources {
+                        if island_bridge_pad(
+                            &board,
+                            &mut final_routes,
+                            ni,
+                            s2,
+                            &polys[main],
+                            layer,
+                            width,
+                            true,
+                        ) {
+                            bridged += 1;
+                            done = true;
+                            break;
+                        }
+                    }
+                    if !done {
+                        pour_bridge_residual += 1;
+                        log::warn!(
+                            "island bridge: '{}' fill-orphaned pad ({:.1},{:.1}) — no legal bridge (honest)",
+                            board.nets[ni].name, src.0, src.1
+                        );
+                    }
+                }
+            }
+        }
+        if bridged > 0 {
+            let trimmed = pour_net_free_end_trim(&board, &mut final_routes);
+            if trimmed > 0 {
+                info!("post-bridge trim: {trimmed} spur segment(s)");
+            }
+        }
+    }
         }
         for i in 0..board.nets.len() {
             if std::env::var("BHDL_PNR_DEBUG_NETS")
@@ -4546,7 +4786,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         }
     }
 
-    let pour_defects = pour_defect_count(&board, &final_routes);
+    let pour_defects = pour_defect_count(&board, &final_routes) + pour_bridge_residual;
     if pour_defects > 0 {
         info!("pour defects (trial currency): {pour_defects}");
     }
@@ -6286,6 +6526,482 @@ fn try_shove_track(
 /// aside (exactly-gated) when a site is blocked only by copper that
 /// can move. Successful shoves stay committed and their snapshots
 /// accumulate in `snapshots` for the caller to revert on failure.
+/// One bridge attempt for a fill-stranded pad: same-layer escape to
+/// the nearest main-poly vertices first, then a VIA drop into the
+/// other face's fill (dual-face pours — the ground plane is right
+/// underneath). The via site must survive the swallow test on that
+/// face's hole model, and the stub keeps the via pad-anchored on this
+/// face so both ends carry copper.
+fn island_bridge_pad(
+    board: &Board,
+    final_routes: &mut Vec<Route>,
+    ni: usize,
+    src: (f64, f64),
+    main_poly: &[(f64, f64)],
+    layer: usize,
+    width: f64,
+    far: bool,
+) -> bool {
+    let net_id = board.nets[ni].id;
+    let pip_main = |x: f64, y: f64| -> bool {
+        let mut inside = false;
+        let m = main_poly.len();
+        for k in 0..m {
+            let (x1, y1) = main_poly[k];
+            let (x2, y2) = main_poly[(k + 1) % m];
+            if (y1 > y) != (y2 > y) && x < (x2 - x1) * (y - y1) / (y2 - y1) + x1 {
+                inside = !inside;
+            }
+        }
+        inside
+    };
+    // A fill vertex sits exactly ON the clearance boundary of whatever
+    // carved it — landing a track end there is knife-edge illegal.
+    // Nudge each candidate INTO the fill (perpendicular to the local
+    // edge, direction chosen by the containment test) so the bridge
+    // lands on solid copper.
+    let n_verts = main_poly.len();
+    let mut targets: Vec<((f64, f64), f64)> = main_poly
+        .iter()
+        .enumerate()
+        .step_by(4)
+        .filter_map(|(vi, &(vx, vy))| {
+            let d = (vx - src.0).hypot(vy - src.1);
+            if d >= 18.0 {
+                return None;
+            }
+            let (px, py) = main_poly[(vi + n_verts - 1) % n_verts];
+            let (nx2, ny2) = main_poly[(vi + 1) % n_verts];
+            let (ex, ey) = (nx2 - px, ny2 - py);
+            let el = ex.hypot(ey).max(1e-9);
+            let (mut ox, mut oy) = (-ey / el * 0.4, ex / el * 0.4);
+            if !pip_main(vx + ox, vy + oy) {
+                (ox, oy) = (-ox, -oy);
+            }
+            let (tx, ty) = (vx + ox, vy + oy);
+            if pip_main(tx, ty) {
+                Some(((tx, ty), d))
+            } else {
+                Some(((vx, vy), d))
+            }
+        })
+        .collect();
+    targets.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    targets.truncate(12);
+    let idx = geom::ClearanceIndex::build(board, final_routes, Some(net_id));
+    for &(q, _) in &targets {
+        let Some(path) = geom::route_escape(&idx, src, q, width, layer, net_id) else {
+            continue;
+        };
+        if !path_respects_courtyards(board, &path) {
+            continue;
+        }
+        commit_escape(
+            &mut final_routes[ni],
+            &path,
+            layer,
+            width,
+            None,
+            &board.nets[ni].name,
+        );
+        info!(
+            "island bridge: '{}' island pad ({:.1},{:.1}) bridged to main fill",
+            board.nets[ni].name, src.0, src.1
+        );
+        return true;
+    }
+    // Straight escapes can't thread the congestion that made the fill
+    // retreat here in the first place — maze-tunnel (exact A*) the
+    // nearest targets before giving up the layer.
+    for &(q, _) in targets.iter().take(4) {
+        let Some(path) = geom::route_tunnel(&idx, src, q, width, layer, net_id) else {
+            continue;
+        };
+        if !path_respects_courtyards(board, &path) {
+            continue;
+        }
+        commit_escape(
+            &mut final_routes[ni],
+            &path,
+            layer,
+            width,
+            None,
+            &board.nets[ni].name,
+        );
+        info!(
+            "island bridge: '{}' island pad ({:.1},{:.1}) maze-bridged to main fill",
+            board.nets[ni].name, src.0, src.1
+        );
+        return true;
+    }
+    let n_layers = board.layer_stack.layers.len();
+    if n_layers >= 2 && board.nets[ni].plane_region.is_none() {
+        let other = if layer == 0 { n_layers - 1 } else { 0 };
+        let other_sig = board
+            .layer_stack
+            .layers
+            .get(other)
+            .map(|l| l.kind == crate::types::LayerKind::Signal)
+            .unwrap_or(false);
+        if other_sig {
+            let via_r = board.layer_stack.via.pad_mm / 2.0;
+            let merged_b = output::kicad::merge_holes(output::kicad::plane_foreign_holes_on(
+                board,
+                final_routes,
+                net_id,
+                Some(other),
+                true,
+            ));
+            let mut vsnaps: Vec<(usize, Route)> = Vec::new();
+            // Sealed pockets need room made, not found: allow several
+            // neighbor-track shoves (snapshot-rolled-back on failure).
+            let mut budget = 6usize;
+            match claim_via_site(
+                board,
+                final_routes,
+                ni,
+                src,
+                via_r,
+                None,
+                &mut vsnaps,
+                &mut budget,
+            ) {
+                Some((vx, vy))
+                    if !output::kicad::plane_swallows(board, &merged_b, vx, vy, via_r, None) =>
+                {
+                    let idx = geom::ClearanceIndex::build(board, final_routes, Some(net_id));
+                    if let Some(path) =
+                        geom::route_escape(&idx, src, (vx, vy), width, layer, net_id)
+                    {
+                        commit_escape(
+                            &mut final_routes[ni],
+                            &path,
+                            layer,
+                            width,
+                            Some(RouteVia {
+                                x: vx,
+                                y: vy,
+                                from_layer: layer,
+                                to_layer: other,
+                            }),
+                            &board.nets[ni].name,
+                        );
+                        info!(
+                            "island bridge: '{}' island pad ({:.1},{:.1}) VIA-dropped to the {} fill",
+                            board.nets[ni].name,
+                            src.0,
+                            src.1,
+                            board
+                                .layer_stack
+                                .layers
+                                .get(other)
+                                .map(|l| l.name.as_str())
+                                .unwrap_or("other")
+                        );
+                        return true;
+                    }
+                    for (jj, old) in vsnaps.drain(..).rev() {
+                        final_routes[jj] = old;
+                    }
+                }
+                _ => {
+                    for (jj, old) in vsnaps.drain(..).rev() {
+                        final_routes[jj] = old;
+                    }
+                }
+            }
+            // Extended via search (stranded pads only): the near ring
+            // above tops out at 2.0mm — inside a sealed pocket (band
+            // area, bottom-bias congestion) that's never enough.
+            // Sites must land in the other face's MAIN plane fragment
+            // — the secondary fill is island-removed to fragments
+            // that touch same-net copper, so a via in a sliver
+            // between tracks survives as an anchored island that
+            // connects to nothing (measured: 11 dangling vias).
+            // Approximate main-fragment membership by a coarse flood
+            // fill over B free space (merged foreign holes as walls)
+            // seeded from same-net THT barrels and existing vias.
+            if !far {
+                return false;
+            }
+            let cell = 0.3f64;
+            let bw = board.config.outline.width();
+            let bh = board.config.outline.height();
+            let nx = (bw / cell).ceil() as usize + 2;
+            let nyc = (bh / cell).ceil() as usize + 2;
+            let mut open = vec![true; nx * nyc];
+            for &(hx, hy, hr) in &merged_b {
+                let rr2 = hr + 0.15;
+                let x0 = (((hx - rr2) / cell).floor().max(0.0)) as usize;
+                let x1 = ((((hx + rr2) / cell).ceil()) as usize).min(nx - 1);
+                let y0 = (((hy - rr2) / cell).floor().max(0.0)) as usize;
+                let y1 = ((((hy + rr2) / cell).ceil()) as usize).min(nyc - 1);
+                for gx in x0..=x1 {
+                    for gy in y0..=y1 {
+                        let (cx, cy) = (gx as f64 * cell, gy as f64 * cell);
+                        if (cx - hx).hypot(cy - hy) <= rr2 {
+                            open[gy * nx + gx] = false;
+                        }
+                    }
+                }
+            }
+            let mut region = vec![false; nx * nyc];
+            let mut q: Vec<(usize, usize)> = Vec::new();
+            let mut seed = |x: f64, y: f64, open: &[bool], region: &mut [bool], q: &mut Vec<(usize, usize)>| {
+                let gx = (x / cell).round().max(0.0) as usize;
+                let gy = (y / cell).round().max(0.0) as usize;
+                if gx < nx && gy < nyc && open[gy * nx + gx] && !region[gy * nx + gx] {
+                    region[gy * nx + gx] = true;
+                    q.push((gx, gy));
+                }
+            };
+            for comp in &board.components {
+                let (co, sn) = (comp.theta.cos(), comp.theta.sin());
+                for pin in &comp.pins {
+                    if pin.net != Some(net_id) || pin.unplaced {
+                        continue;
+                    }
+                    let Some(pad) = &pin.pad else { continue };
+                    if pad.drill_mm.is_some() {
+                        seed(
+                            comp.x + pin.dx * co - pin.dy * sn,
+                            comp.y + pin.dx * sn + pin.dy * co,
+                            &open,
+                            &mut region,
+                            &mut q,
+                        );
+                    }
+                }
+            }
+            for v in &final_routes[ni].vias {
+                seed(v.x, v.y, &open, &mut region, &mut q);
+            }
+            while let Some((gx, gy)) = q.pop() {
+                for (dx, dy) in [(-1i64, 0i64), (1, 0), (0, -1), (0, 1)] {
+                    let (ax, ay) = (gx as i64 + dx, gy as i64 + dy);
+                    if ax < 0 || ay < 0 || ax as usize >= nx || ay as usize >= nyc {
+                        continue;
+                    }
+                    let ii = ay as usize * nx + ax as usize;
+                    if open[ii] && !region[ii] {
+                        region[ii] = true;
+                        q.push((ax as usize, ay as usize));
+                    }
+                }
+            }
+            let idx2 = geom::ClearanceIndex::build(board, final_routes, Some(net_id));
+            let mut cands: Vec<((f64, f64), f64)> = Vec::new();
+            // Ring 0 = via-in-pad (r=0): a fully boxed-in pad's last
+            // legal exit is straight down. DRC-legal; validated by
+            // the same conflict/swallow/fragment tests.
+            for ring in -1i32..19 {
+                let rr = if ring < 0 {
+                    0.0
+                } else {
+                    0.6 + ring as f64 * 0.45
+                };
+                for k in 0..12 {
+                    if ring < 0 && k > 0 {
+                        break;
+                    }
+                    let ang = k as f64 * std::f64::consts::PI / 6.0;
+                    let (vx, vy) = (src.0 + rr * ang.cos(), src.1 + rr * ang.sin());
+                    let gx = (vx / cell).round().max(0.0) as usize;
+                    let gy = (vy / cell).round().max(0.0) as usize;
+                    if gx >= nx || gy >= nyc || !region[gy * nx + gx] {
+                        continue;
+                    }
+                    if output::kicad::plane_swallows(board, &merged_b, vx, vy, via_r, None)
+                    {
+                        continue;
+                    }
+                    if idx2.via_conflict(vx, vy, via_r, net_id).is_some() {
+                        continue;
+                    }
+                    cands.push(((vx, vy), rr));
+                }
+            }
+            for &((vx, vy), rr) in cands.iter().take(12) {
+                let path = if rr <= 0.01 {
+                    // via-in-pad: the span just needs real copper —
+                    // a micro-stub on the pad's own footprint.
+                    [(0.25f64, 0.0f64), (-0.25, 0.0), (0.0, 0.25), (0.0, -0.25)]
+                        .iter()
+                        .find_map(|&(dx, dy)| {
+                            geom::route_escape(
+                                &idx2,
+                                src,
+                                (src.0 + dx, src.1 + dy),
+                                width,
+                                layer,
+                                net_id,
+                            )
+                        })
+                } else {
+                    geom::route_escape(&idx2, src, (vx, vy), width, layer, net_id)
+                        .or_else(|| {
+                            geom::route_tunnel(&idx2, src, (vx, vy), width, layer, net_id)
+                        })
+                };
+                let Some(path) = path else { continue };
+                if !path_respects_courtyards(board, &path) {
+                    continue;
+                }
+                commit_escape(
+                    &mut final_routes[ni],
+                    &path,
+                    layer,
+                    width,
+                    Some(RouteVia {
+                        x: vx,
+                        y: vy,
+                        from_layer: layer,
+                        to_layer: other,
+                    }),
+                    &board.nets[ni].name,
+                );
+                info!(
+                    "island bridge: '{}' island pad ({:.1},{:.1}) FAR-via-dropped at ({vx:.1},{vy:.1}) to the {} fill",
+                    board.nets[ni].name,
+                    src.0,
+                    src.1,
+                    board
+                        .layer_stack
+                        .layers
+                        .get(other)
+                        .map(|l| l.name.as_str())
+                        .unwrap_or("other")
+                );
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Is a fill-orphaned pad already grounded through routed copper?
+/// BFS over the net's segments from the pad (endpoint adjacency on a
+/// 0.01mm grid, layer-aware): grounded if the chain touches ANY fill
+/// poly of the net (fill floods over same-net tracks, so contact is
+/// tested by dense sampling ALONG each segment, not just endpoints —
+/// endpoint-only tests miss it and produced mass false "stranded"),
+/// reaches a via (the other face's fill takes it), or touches a THT /
+/// fill-mapped pad. A sample budget bounds the walk; exhausting it
+/// counts as GROUNDED — on doubt, never bridge. Returns None when
+/// grounded; when stranded, returns the chain's segment endpoints —
+/// the pad may be walled in while some point along its copper still
+/// has a clear shot at the fill.
+fn pad_track_grounded(
+    route: &Route,
+    src: (f64, f64),
+    polys: &[Vec<(f64, f64)>],
+    layer: usize,
+    grounded_pads: &[(f64, f64)],
+) -> Option<Vec<(f64, f64)>> {
+    let key = |x: f64, y: f64| ((x / 0.01).round() as i64, (y / 0.01).round() as i64);
+    let near = |a: (f64, f64), b: (f64, f64), r: f64| (a.0 - b.0).hypot(a.1 - b.1) <= r;
+    let bboxes: Vec<(f64, f64, f64, f64)> = polys
+        .iter()
+        .map(|p| {
+            p.iter().fold(
+                (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY),
+                |(x0, y0, x1, y1), &(x, y)| (x0.min(x), y0.min(y), x1.max(x), y1.max(y)),
+            )
+        })
+        .collect();
+    let in_fill = |pt: (f64, f64)| -> bool {
+        let (x, y) = pt;
+        for (pi, poly) in polys.iter().enumerate() {
+            let (x0, y0, x1, y1) = bboxes[pi];
+            if x < x0 || x > x1 || y < y0 || y > y1 {
+                continue;
+            }
+            let mut inside = false;
+            let m = poly.len();
+            for k in 0..m {
+                let (px1, py1) = poly[k];
+                let (px2, py2) = poly[(k + 1) % m];
+                if (py1 > y) != (py2 > y) && x < (px2 - px1) * (y - py1) / (py2 - py1) + px1 {
+                    inside = !inside;
+                }
+            }
+            if inside {
+                return true;
+            }
+        }
+        false
+    };
+    let mut grid: crate::det::HashMap<(i64, i64, usize), Vec<usize>> = Default::default();
+    for (i, sg) in route.segments.iter().enumerate() {
+        for &(x, y) in &[sg.start, sg.end] {
+            let (kx, ky) = key(x, y);
+            grid.entry((kx, ky, sg.layer)).or_default().push(i);
+        }
+    }
+    let mut stack: Vec<usize> = route
+        .segments
+        .iter()
+        .enumerate()
+        .filter(|(_, sg)| {
+            sg.layer == layer && (near(sg.start, src, 0.8) || near(sg.end, src, 0.8))
+        })
+        .map(|(i, _)| i)
+        .collect();
+    let mut seen: crate::det::HashSet<usize> = stack.iter().copied().collect();
+    let mut budget = 20_000usize;
+    let mut endpoints: Vec<(f64, f64)> = Vec::new();
+    while let Some(i) = stack.pop() {
+        let sg = &route.segments[i];
+        // Fill contact anywhere along the copper, 0.3mm steps.
+        let len = (sg.end.0 - sg.start.0).hypot(sg.end.1 - sg.start.1);
+        let steps = ((len / 0.3).ceil() as usize).max(1);
+        for s in 0..=steps {
+            let t = s as f64 / steps as f64;
+            let pt = (
+                sg.start.0 + (sg.end.0 - sg.start.0) * t,
+                sg.start.1 + (sg.end.1 - sg.start.1) * t,
+            );
+            if in_fill(pt) {
+                return None;
+            }
+            budget = budget.saturating_sub(1);
+            if budget == 0 {
+                return None;
+            }
+        }
+        for &pt in &[sg.start, sg.end] {
+            if route.vias.iter().any(|v| near((v.x, v.y), pt, 0.05)) {
+                return None;
+            }
+            if grounded_pads.iter().any(|&p| near(p, pt, 0.8)) {
+                return None;
+            }
+            if sg.layer == layer && !endpoints.iter().any(|&e| near(e, pt, 0.05)) {
+                endpoints.push(pt);
+            }
+            let (kx, ky) = key(pt.0, pt.1);
+            for dx in -1..=1i64 {
+                for dy in -1..=1i64 {
+                    let Some(cands) = grid.get(&(kx + dx, ky + dy, sg.layer)) else {
+                        continue;
+                    };
+                    for &j in cands {
+                        if seen.contains(&j) {
+                            continue;
+                        }
+                        let o = &route.segments[j];
+                        if near(o.start, pt, 0.011) || near(o.end, pt, 0.011) {
+                            seen.insert(j);
+                            stack.push(j);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Some(endpoints)
+}
+
 fn claim_via_site(
     board: &Board,
     final_routes: &mut [Route],

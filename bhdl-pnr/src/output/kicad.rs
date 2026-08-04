@@ -2405,6 +2405,139 @@ fn kicad_starved_pads(
     out
 }
 
+
+/// EMISSION-MODEL fill polys for the island-bridge pass: mirrors the
+/// writer's primary-zone computation (foreign-region hole choice +
+/// hole compensation + thermal rings/spokes + backfill claim
+/// pre-void + anchored fracture) so island detection judges the SAME
+/// copper the file will ship — the stitcher's optimistic raster
+/// missed islands the emission severs (rings) and its ring-patched
+/// variant regressed the rigid path. Rect boards only; polygon
+/// outlines return None (the bridge pass skips them). Drift note:
+/// intentionally a mirror, not a shared extraction — the writer's
+/// fixpoint interleaves emission text; the ecc83 byte-guard patrols
+/// the writer, this fn patrols itself via the bridge measurements.
+pub(crate) fn emission_fill_polys(
+    board: &Board,
+    routes: &[Route],
+    ni: usize,
+) -> Option<Vec<Vec<(f64, f64)>>> {
+    let net = &board.nets[ni];
+    let plane_layer = net.plane_layer?;
+    if board.layer_stack.layers.get(plane_layer).map(|l| l.kind)
+        != Some(crate::types::LayerKind::Signal)
+    {
+        return None;
+    }
+    if matches!(&board.config.outline, PnrBoardOutlinePoly(_)) {
+        return None;
+    }
+    let w = board.config.outline.width();
+    let h = board.config.outline.height();
+    let m = board.config.edge_clearance_mm + 0.05;
+    let foreign_regions: Vec<(f64, f64, f64, f64)> = board
+        .nets
+        .iter()
+        .filter(|o| o.id != net.id && o.plane_layer == Some(plane_layer))
+        .filter_map(|o| o.plane_region)
+        .collect();
+    let mut holes = if foreign_regions.is_empty() {
+        plane_foreign_holes(board, routes, net.id)
+    } else {
+        plane_foreign_holes_on(board, routes, net.id, Some(plane_layer), false)
+    };
+    for hh in holes.iter_mut() {
+        hh.2 = ((hh.2 - 0.1875) / 1.082).max(0.1);
+    }
+    let spoke_mask = holes.clone();
+    let (rings, spokes) = thermal_reliefs(board, net.id, plane_layer, &[]);
+    holes.extend(rings);
+    let (fx0, fy0, fx1, fy1) = match net.plane_region {
+        Some((rx0, ry0, rx1, ry1)) => {
+            (rx0.max(m), ry0.max(m), rx1.min(w - m), ry1.min(h - m))
+        }
+        None => (m, m, w - m, h - m),
+    };
+    let cutout_rects = plane_cutout_rects(board);
+    let anchors = plane_anchor_points(board, routes, ni);
+    let pre_void: Option<Vec<bool>> = if foreign_regions.is_empty() {
+        None
+    } else {
+        let zc = 0.3f64.max(board.config.min_spacing_mm);
+        let mut claim_all: Option<Vec<bool>> = None;
+        for other in board.nets.iter().filter(|o| {
+            o.id != net.id
+                && o.plane_layer == Some(plane_layer)
+                && o.plane_region.is_some()
+        }) {
+            let (rx0, ry0, rx1, ry1) = other.plane_region.unwrap();
+            let mut oh = plane_foreign_holes_on(
+                board,
+                routes,
+                other.id,
+                Some(plane_layer),
+                false,
+            );
+            for hh in oh.iter_mut() {
+                hh.2 = ((hh.2 - 0.1875) / 1.082).max(0.1);
+            }
+            let (cg, ccols, crows) = fill_copper_grid_masked(
+                fx0,
+                fy0,
+                fx1,
+                fy1,
+                &oh,
+                &cutout_rects,
+                None,
+            );
+            let dil = ((zc + 0.2) / VOID_CELL).ceil() as isize;
+            let mut cl = vec![false; cg.len()];
+            for r in 0..crows {
+                for c in 0..ccols {
+                    let x = fx0 + (c as f64 + 0.5) * VOID_CELL;
+                    let y = fy0 + (r as f64 + 0.5) * VOID_CELL;
+                    if x < rx0 || x > rx1 || y < ry0 || y > ry1 || !cg[r * ccols + c]
+                    {
+                        continue;
+                    }
+                    let r0 = (r as isize - dil).max(0) as usize;
+                    let r1c = ((r as isize + dil) as usize).min(crows - 1);
+                    let c0 = (c as isize - dil).max(0) as usize;
+                    let c1 = ((c as isize + dil) as usize).min(ccols - 1);
+                    for rr in r0..=r1c {
+                        for cc in c0..=c1 {
+                            cl[rr * ccols + cc] = true;
+                        }
+                    }
+                }
+            }
+            claim_all = Some(match claim_all {
+                None => cl,
+                Some(mut a) => {
+                    for (ai, ci) in a.iter_mut().zip(cl) {
+                        *ai |= ci;
+                    }
+                    a
+                }
+            });
+        }
+        claim_all
+    };
+    Some(fracture_fill_spoked(
+        fx0,
+        fy0,
+        fx1,
+        fy1,
+        &holes,
+        &cutout_rects,
+        &anchors,
+        None,
+        &spokes,
+        &spoke_mask,
+        pre_void.as_deref(),
+    ))
+}
+
 pub(crate) fn thermal_reliefs(
     board: &Board,
     net_id: NetId,

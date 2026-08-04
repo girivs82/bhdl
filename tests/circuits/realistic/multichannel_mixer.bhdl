@@ -205,11 +205,14 @@ layout MultichannelMixer {
     // pour u_mst.OUT_B; — the demo's vbias band. The RIGID
     // demo-parity path is fully CLEAN with it declared (0v/0unc:
     // via-hop rescue + T-split junctions + exact spoke accounting +
-    // claim dilation). The free-placement path still ships 2
-    // unconnected (a C35/U20 ground island pair in the pot grid
-    // whose bridge the island stitcher's model cannot see without
-    // regressing the rigid path) — and the corpus gate runs free.
-    // Declared once that bridge lands.
+    // claim dilation), and the emission-model island bridge (fill-
+    // orphan detection + fragment-validated far via drops) cut the
+    // free-placement tail 2 -> 1 unconnected. The last pad (C35's
+    // ground in the pot grid) is sealed on BOTH faces at every seed-
+    // 42 trial — no GND copper within ~5mm, courtyard-walled, B.Cu
+    // packed by bottom-bias routing. Closing it needs the placement-
+    // aware band (strategy seam), not more bridging force — and the
+    // corpus gate runs free. Declared once that lands.
     route_bias bottom;
     // NOT yet declared: the demo's 0.5/0.2 design rules. The
     // long-haul arc cut the wide-rules tail 17 -> 1 unc (the ladder's
