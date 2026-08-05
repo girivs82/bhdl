@@ -4259,6 +4259,15 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         }
     }
 
+    // 5.9987. Routed signal nets shipped in more than one piece —
+    // rejoin them on KiCad's own grouping terms.
+    {
+        let repaired = signal_net_continuity_repair(&board, &mut final_routes);
+        if repaired > 0 {
+            info!("continuity repair: {repaired} split net(s) rejoined");
+        }
+    }
+
     // 5.9986. Orphan chains judged on the shipped copper — after the
     // region followed placement + own-copper corridors, whatever
     // still touches nothing is metal KiCad will group alone.
@@ -7397,6 +7406,206 @@ fn path_respects_courtyards(board: &Board, path: &[(f64, f64)]) -> bool {
 /// stubs leave such spurs with cleared span bookkeeping, invisible
 /// to the span-based sweep. Small routes only (pocket stubs + hops),
 /// so the quadratic scan is cheap.
+/// SIGNAL-NET CONTINUITY REPAIR: mirror KiCad's connectivity grouping
+/// per ROUTED net — segments joined by geometric overlap (same layer)
+/// and by vias across layers, pads joined by contact — and when a
+/// net's pads land in MORE THAN ONE group, route the gap between the
+/// two nearest group endpoints. A validator amputation with stale
+/// span bookkeeping can strand half a routed tree while the sink
+/// counter still reads complete (ch3_a_out shipped in two pieces,
+/// 3.7mm apart, invisible to every existing check).
+fn signal_net_continuity_repair(board: &Board, final_routes: &mut Vec<Route>) -> usize {
+    let via_r = board.layer_stack.via.pad_mm / 2.0;
+    let mut repaired = 0usize;
+    for ni in 0..board.nets.len() {
+        if board.nets[ni].plane_layer.is_some()
+            || board.nets[ni].pins.len() < 2
+            || final_routes[ni].segments.len() < 2
+        {
+            continue;
+        }
+        let net_id = board.nets[ni].id;
+        let segs: Vec<RouteSegment> = final_routes[ni].segments.clone();
+        let n = segs.len();
+        // Union-find over segments: same-layer geometric contact
+        // (endpoint against the other's centerline within combined
+        // half-widths) + via bridges across layers.
+        let mut par: Vec<usize> = (0..n).collect();
+        fn find(par: &mut Vec<usize>, mut a: usize) -> usize {
+            while par[a] != a {
+                par[a] = par[par[a]];
+                a = par[a];
+            }
+            a
+        }
+        for a in 0..n {
+            for b in (a + 1)..n {
+                if segs[a].layer != segs[b].layer {
+                    continue;
+                }
+                let tol = (segs[a].width_mm + segs[b].width_mm) / 2.0 + 1e-3;
+                let touch = geom::segment_point_too_close(
+                    segs[b].start,
+                    segs[b].end,
+                    segs[a].start,
+                    tol,
+                ) || geom::segment_point_too_close(
+                    segs[b].start,
+                    segs[b].end,
+                    segs[a].end,
+                    tol,
+                ) || geom::segment_point_too_close(
+                    segs[a].start,
+                    segs[a].end,
+                    segs[b].start,
+                    tol,
+                ) || geom::segment_point_too_close(
+                    segs[a].start,
+                    segs[a].end,
+                    segs[b].end,
+                    tol,
+                );
+                if touch {
+                    let (ra, rb) = (find(&mut par, a), find(&mut par, b));
+                    par[ra] = rb;
+                }
+            }
+        }
+        for v in final_routes[ni].vias.clone() {
+            let mut first: Option<usize> = None;
+            for (i, sg) in segs.iter().enumerate() {
+                if (sg.start.0 - v.x).hypot(sg.start.1 - v.y) <= via_r + 1e-3
+                    || (sg.end.0 - v.x).hypot(sg.end.1 - v.y) <= via_r + 1e-3
+                {
+                    match first {
+                        None => first = Some(i),
+                        Some(f) => {
+                            let (ra, rb) = (find(&mut par, f), find(&mut par, i));
+                            par[ra] = rb;
+                        }
+                    }
+                }
+            }
+        }
+        // Pads -> groups (pad bbox contact with a segment endpoint,
+        // pad layer respected via component side for SMD).
+        let comp_pos: crate::det::HashMap<ComponentId, usize> = board
+            .components
+            .iter()
+            .enumerate()
+            .map(|(k, c)| (c.id, k))
+            .collect();
+        let mut pad_group: Vec<((f64, f64), Option<usize>)> = Vec::new();
+        for &(cid, pid) in &board.nets[ni].pins {
+            let Some(&ci) = comp_pos.get(&cid) else { continue };
+            let comp = &board.components[ci];
+            let Some(pin) = comp.pins.iter().find(|p| p.pin_id == pid) else {
+                continue;
+            };
+            if pin.unplaced {
+                continue;
+            }
+            let (co, sn) = (comp.theta.cos(), comp.theta.sin());
+            let gx = comp.x + pin.dx * co - pin.dy * sn;
+            let gy = comp.y + pin.dx * sn + pin.dy * co;
+            let half = pin
+                .pad
+                .as_ref()
+                .map(|p| p.width_mm.max(p.height_mm) / 2.0)
+                .unwrap_or(0.4);
+            let mut g: Option<usize> = None;
+            for (i, sg) in segs.iter().enumerate() {
+                if geom::segment_point_too_close(
+                    sg.start,
+                    sg.end,
+                    (gx, gy),
+                    half + sg.width_mm / 2.0,
+                ) {
+                    g = Some(find(&mut par, i));
+                    break;
+                }
+            }
+            pad_group.push(((gx, gy), g));
+        }
+        let mut groups: Vec<usize> = pad_group.iter().filter_map(|&(_, g)| g).collect();
+        groups.sort_unstable();
+        groups.dedup();
+        if groups.len() < 2 {
+            continue;
+        }
+        // Main group = most pads; bridge every other pad-group to it
+        // from its nearest endpoint pair, same layer first, maze
+        // fallback.
+        let count_of = |g: usize, pg: &[((f64, f64), Option<usize>)]| {
+            pg.iter().filter(|&&(_, x)| x == Some(g)).count()
+        };
+        let main = *groups
+            .iter()
+            .max_by_key(|&&g| count_of(g, &pad_group))
+            .unwrap();
+        for &g in &groups {
+            if g == main {
+                continue;
+            }
+            let mut best: Option<((f64, f64), (f64, f64), usize, f64)> = None;
+            for (i, sa) in segs.iter().enumerate() {
+                if find(&mut par, i) != g {
+                    continue;
+                }
+                for (j, sb) in segs.iter().enumerate() {
+                    if find(&mut par, j) != main || sb.layer != sa.layer {
+                        continue;
+                    }
+                    for &pa in &[sa.start, sa.end] {
+                        for &pb in &[sb.start, sb.end] {
+                            let d = (pa.0 - pb.0).hypot(pa.1 - pb.1);
+                            if best.map_or(true, |(.., bd)| d < bd) {
+                                best = Some((pa, pb, sa.layer, d));
+                            }
+                        }
+                    }
+                }
+            }
+            let Some((pa, pb, layer, d)) = best else { continue };
+            if d > 20.0 {
+                continue;
+            }
+            let width = segs
+                .iter()
+                .map(|s| s.width_mm)
+                .fold(f64::INFINITY, f64::min)
+                .max(board.config.min_trace_width_mm);
+            let idx = geom::ClearanceIndex::build(board, final_routes, Some(net_id));
+            let path = geom::route_escape(&idx, pa, pb, width, layer, net_id)
+                .or_else(|| geom::route_tunnel(&idx, pa, pb, width, layer, net_id));
+            let Some(path) = path else {
+                log::warn!(
+                    "continuity repair: '{}' split at ({:.1},{:.1})<->({:.1},{:.1}) — no legal joint (honest)",
+                    board.nets[ni].name, pa.0, pa.1, pb.0, pb.1
+                );
+                continue;
+            };
+            if !path_respects_courtyards(board, &path) {
+                continue;
+            }
+            commit_escape(
+                &mut final_routes[ni],
+                &path,
+                layer,
+                width,
+                None,
+                &board.nets[ni].name,
+            );
+            info!(
+                "continuity repair: '{}' rejoined at ({:.1},{:.1})->({:.1},{:.1}) ({d:.1}mm gap)",
+                board.nets[ni].name, pa.0, pa.1, pb.0, pb.1
+            );
+            repaired += 1;
+        }
+    }
+    repaired
+}
+
 /// EMISSION-MODEL ORPHAN-CHAIN SWEEP: a pour net's routed chain that
 /// touches no pad, no via, and no fill of the SHIPPED copper is
 /// orphan metal — KiCad groups it alone and reports it unconnected

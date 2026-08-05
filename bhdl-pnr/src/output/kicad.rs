@@ -2875,18 +2875,28 @@ pub(crate) fn plane_anchor_points(
             let tht = pad.drill_mm.is_some();
             let smd_contact = !tht && pour_side.is_some_and(|s| comp.side == s);
             if tht || smd_contact {
-                anchors.push((
-                    comp.x + pin.dx * cos_t - pin.dy * sin_t,
-                    comp.y + pin.dx * sin_t + pin.dy * cos_t,
-                ));
+                let gx = comp.x + pin.dx * cos_t - pin.dy * sin_t;
+                let gy = comp.y + pin.dx * sin_t + pin.dy * cos_t;
+                anchors.push((gx, gy));
+                // SHAPED regions only: a relief pad's center sits
+                // INSIDE its ring-hole void, so a fragment of the
+                // pad's own spokes + local fill has no live anchor
+                // cell and island removal eats it (U25 starved
+                // thermal: the region edge severed the local fill
+                // from the main body). Anchor the spoke bars — four
+                // diagonal points just past the ring. Whole-layer
+                // pours (default GND) must NOT get this: keeping
+                // such fragments there ships isolated Zone-vs-Zone
+                // groups and defeats the maroon/rescue machinery
+                // (measured: defaults 0/0 -> 3 unc).
+                if pour_side.is_some() && !net.plane_region_rects.is_empty() {
+                    let r_pad = pad.width_mm.max(pad.height_mm) / 2.0;
+                    let a = (r_pad + 0.45) / std::f64::consts::SQRT_2;
+                    for (sx, sy) in [(a, a), (-a, -a), (a, -a), (-a, a)] {
+                        anchors.push((gx + sx, gy + sy));
+                    }
+                }
             }
-            // NOTE (measured, reverted): anchoring relief pads at
-            // their spoke bars kept fragments island removal used to
-            // drop — it closed one shaped-region starved thermal but
-            // shipped isolated F.Cu fragments on the DEFAULT path
-            // (KiCad groups an anchored-but-unreached fragment
-            // alone: Zone-vs-Zone unconnected pairs). The maroon/
-            // rescue machinery depends on those fragments DYING.
         }
     }
     anchors
