@@ -607,6 +607,7 @@ pub fn build_board(
             layout_intents: Vec::new(),
             plane_layer: None,
             plane_region: None,
+            plane_region_rects: Vec::new(),
             pour_region_pending: false,
             allowed_layers: None,
             solved_voltage_v: solved_v,

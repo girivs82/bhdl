@@ -317,8 +317,6 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
                                 && o.plane_layer == Some(plane_layer)
                                 && o.plane_region.is_some()
                         }) {
-                            let (rx0, ry0, rx1, ry1) =
-                                other.plane_region.unwrap();
                             let mut oh = plane_foreign_holes_on(
                                 board,
                                 routes,
@@ -350,10 +348,7 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
                                 for c in 0..ccols {
                                     let x = fx0 + (c as f64 + 0.5) * VOID_CELL;
                                     let y = fy0 + (r as f64 + 0.5) * VOID_CELL;
-                                    if x < rx0
-                                        || x > rx1
-                                        || y < ry0
-                                        || y > ry1
+                                    if !region_contains(other, x, y)
                                         || !cg[r * ccols + c]
                                     {
                                         continue;
@@ -383,6 +378,30 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
                         }
                         claim_all
                     };
+                    // PLACEMENT-AWARE own shape: a shaped region's
+                    // fill exists only inside its union rects — the
+                    // bbox frame is just the raster window.
+                    let pre_void: Option<Vec<bool>> =
+                        if net.plane_region_rects.is_empty() {
+                            pre_void
+                        } else {
+                            let cols =
+                                (((fx1 - fx0) / VOID_CELL).ceil() as usize).max(1);
+                            let rows =
+                                (((fy1 - fy0) / VOID_CELL).ceil() as usize).max(1);
+                            let mut v =
+                                pre_void.unwrap_or_else(|| vec![false; rows * cols]);
+                            for r in 0..rows {
+                                for c in 0..cols {
+                                    let x = fx0 + (c as f64 + 0.5) * VOID_CELL;
+                                    let y = fy0 + (r as f64 + 0.5) * VOID_CELL;
+                                    if !region_contains(net, x, y) {
+                                        v[r * cols + c] = true;
+                                    }
+                                }
+                            }
+                            Some(v)
+                        };
                     fracture_fill_spoked(
                         fx0,
                         fy0,
@@ -1237,28 +1256,26 @@ pub(crate) fn plane_pads_marooned(
     // beyond it are phantom copper that made every in-band pad look
     // connected (the maroon test never fired, so the rescue never
     // routed the genuinely stranded ones).
-    let net_region = board
+    let region_net = board
         .nets
         .iter()
         .find(|n| n.id == net_id)
-        .and_then(|n| n.plane_region);
-    if let Some((rx0, ry0, rx1, ry1)) = net_region {
+        .filter(|n| n.plane_region.is_some());
+    if let Some(rn) = region_net {
         for r in 0..rows {
             for c in 0..cols {
                 let x = m + (c as f64 + 0.5) * VOID_CELL;
                 let y = m + (r as f64 + 0.5) * VOID_CELL;
-                if x < rx0 || x > rx1 || y < ry0 || y > ry1 {
+                if !region_contains(rn, x, y) {
                     copper[r * cols + c] = false;
                 }
             }
         }
     }
     let in_region = |x: f64, y: f64| -> bool {
-        match net_region {
+        match region_net {
             None => true,
-            Some((rx0, ry0, rx1, ry1)) => {
-                x >= rx0 && x <= rx1 && y >= ry0 && y <= ry1
-            }
+            Some(rn) => region_contains(rn, x, y),
         }
     };
     // Label 4-connected components.
@@ -1714,6 +1731,11 @@ fn fracture_fill_spoked(
                     }
                 }
                 if bars.is_empty() {
+                    if std::env::var("BHDL_PNR_PROBE").is_ok() {
+                        eprintln!(
+                            "[probe] spoke fallback EMPTY at pad ({cx:.2},{cy:.2}) ro={ro:.2}"
+                        );
+                    }
                     continue;
                 }
                 let rmax = bars.iter().map(|b| b.1).fold(ro, f64::max);
@@ -2406,6 +2428,22 @@ fn kicad_starved_pads(
 }
 
 
+/// Region membership for a regioned pour: the union of its
+/// placement-aware shape rects when present, else the single
+/// plane_region rect (None = whole layer).
+pub(crate) fn region_contains(net: &PnrNet, x: f64, y: f64) -> bool {
+    if !net.plane_region_rects.is_empty() {
+        return net
+            .plane_region_rects
+            .iter()
+            .any(|&(x0, y0, x1, y1)| x >= x0 && x <= x1 && y >= y0 && y <= y1);
+    }
+    match net.plane_region {
+        Some((x0, y0, x1, y1)) => x >= x0 && x <= x1 && y >= y0 && y <= y1,
+        None => true,
+    }
+}
+
 /// EMISSION-MODEL fill polys for the island-bridge pass: mirrors the
 /// writer's primary-zone computation (foreign-region hole choice +
 /// hole compensation + thermal rings/spokes + backfill claim
@@ -2470,7 +2508,6 @@ pub(crate) fn emission_fill_polys(
                 && o.plane_layer == Some(plane_layer)
                 && o.plane_region.is_some()
         }) {
-            let (rx0, ry0, rx1, ry1) = other.plane_region.unwrap();
             let mut oh = plane_foreign_holes_on(
                 board,
                 routes,
@@ -2496,8 +2533,7 @@ pub(crate) fn emission_fill_polys(
                 for c in 0..ccols {
                     let x = fx0 + (c as f64 + 0.5) * VOID_CELL;
                     let y = fy0 + (r as f64 + 0.5) * VOID_CELL;
-                    if x < rx0 || x > rx1 || y < ry0 || y > ry1 || !cg[r * ccols + c]
-                    {
+                    if !region_contains(other, x, y) || !cg[r * ccols + c] {
                         continue;
                     }
                     let r0 = (r as isize - dil).max(0) as usize;
@@ -2522,6 +2558,24 @@ pub(crate) fn emission_fill_polys(
             });
         }
         claim_all
+    };
+    // PLACEMENT-AWARE own shape (mirror of the writer).
+    let pre_void: Option<Vec<bool>> = if net.plane_region_rects.is_empty() {
+        pre_void
+    } else {
+        let cols = (((fx1 - fx0) / VOID_CELL).ceil() as usize).max(1);
+        let rows = (((fy1 - fy0) / VOID_CELL).ceil() as usize).max(1);
+        let mut v = pre_void.unwrap_or_else(|| vec![false; rows * cols]);
+        for r in 0..rows {
+            for c in 0..cols {
+                let x = fx0 + (c as f64 + 0.5) * VOID_CELL;
+                let y = fy0 + (r as f64 + 0.5) * VOID_CELL;
+                if !region_contains(net, x, y) {
+                    v[r * cols + c] = true;
+                }
+            }
+        }
+        Some(v)
     };
     Some(fracture_fill_spoked(
         fx0,
@@ -2745,20 +2799,31 @@ pub(crate) fn plane_foreign_holes_on(
             if other.id == net_id || other.plane_layer != Some(pl) {
                 continue;
             }
-            let Some((rx0, ry0, rx1, ry1)) = other.plane_region else {
+            if other.plane_region.is_none() {
                 continue;
+            }
+            // Placement-aware shape: stamp the lattice per union
+            // rect — the apron must not blanket the bbox of a
+            // scattered consumer cloud.
+            let rects: Vec<(f64, f64, f64, f64)> = if other.plane_region_rects.is_empty()
+            {
+                vec![other.plane_region.unwrap()]
+            } else {
+                other.plane_region_rects.clone()
             };
-            let r = 1.5f64;
-            let pitch = 1.5f64;
-            let (sx0, sy0) = (rx0 - zc + r * 0.5, ry0 - zc + r * 0.5);
-            let (sx1, sy1) = (rx1 + zc - r * 0.5, ry1 + zc - r * 0.5);
-            let nx = (((sx1 - sx0) / pitch).ceil() as usize).max(1);
-            let ny = (((sy1 - sy0) / pitch).ceil() as usize).max(1);
-            for iy in 0..=ny {
-                for ix in 0..=nx {
-                    let x = sx0 + (sx1 - sx0) * ix as f64 / nx as f64;
-                    let y = sy0 + (sy1 - sy0) * iy as f64 / ny as f64;
-                    holes.push((x, y, r));
+            for (rx0, ry0, rx1, ry1) in rects {
+                let r = 1.5f64;
+                let pitch = 1.5f64;
+                let (sx0, sy0) = (rx0 - zc + r * 0.5, ry0 - zc + r * 0.5);
+                let (sx1, sy1) = (rx1 + zc - r * 0.5, ry1 + zc - r * 0.5);
+                let nx = (((sx1 - sx0) / pitch).ceil() as usize).max(1);
+                let ny = (((sy1 - sy0) / pitch).ceil() as usize).max(1);
+                for iy in 0..=ny {
+                    for ix in 0..=nx {
+                        let x = sx0 + (sx1 - sx0) * ix as f64 / nx as f64;
+                        let y = sy0 + (sy1 - sy0) * iy as f64 / ny as f64;
+                        holes.push((x, y, r));
+                    }
                 }
             }
         }
@@ -2815,6 +2880,13 @@ pub(crate) fn plane_anchor_points(
                     comp.y + pin.dx * sin_t + pin.dy * cos_t,
                 ));
             }
+            // NOTE (measured, reverted): anchoring relief pads at
+            // their spoke bars kept fragments island removal used to
+            // drop — it closed one shaped-region starved thermal but
+            // shipped isolated F.Cu fragments on the DEFAULT path
+            // (KiCad groups an anchored-but-unreached fragment
+            // alone: Zone-vs-Zone unconnected pairs). The maroon/
+            // rescue machinery depends on those fragments DYING.
         }
     }
     anchors

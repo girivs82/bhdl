@@ -64,6 +64,7 @@ fn board_with_fence(fenced: bool) -> (Board, Vec<Route>) {
         layout_intents: vec![],
         plane_layer: None,
         plane_region: None,
+        plane_region_rects: Vec::new(),
         pour_region_pending: false,
     };
 

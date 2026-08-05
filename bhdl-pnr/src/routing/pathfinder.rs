@@ -140,15 +140,25 @@ pub fn pathfinder_route(
             {
                 continue;
             }
-            let Some((rx0, ry0, rx1, ry1)) = net.plane_region else {
+            if net.plane_region.is_none() {
                 continue;
+            }
+            // Placement-aware shape: the history apron follows the
+            // union rects, not the bbox of a scattered pin cloud.
+            let rects: Vec<(f64, f64, f64, f64)> = if !net.plane_region_rects.is_empty()
+            {
+                net.plane_region_rects.clone()
+            } else {
+                vec![net.plane_region.unwrap()]
             };
-            let c0 = grid.point_to_cell(rx0, ry0, pl);
-            let c1 = grid.point_to_cell(rx1, ry1, pl);
-            for r in c0.row.min(c1.row)..=c0.row.max(c1.row) {
-                for c in c0.col.min(c1.col)..=c0.col.max(c1.col) {
-                    let cell = CellCoord { layer: pl, row: r, col: c };
-                    grid.get_mut(cell).history += 4.0;
+            for (rx0, ry0, rx1, ry1) in rects {
+                let c0 = grid.point_to_cell(rx0, ry0, pl);
+                let c1 = grid.point_to_cell(rx1, ry1, pl);
+                for r in c0.row.min(c1.row)..=c0.row.max(c1.row) {
+                    for c in c0.col.min(c1.col)..=c0.col.max(c1.col) {
+                        let cell = CellCoord { layer: pl, row: r, col: c };
+                        grid.get_mut(cell).history += 4.0;
+                    }
                 }
             }
         }
@@ -843,7 +853,7 @@ pub(crate) fn build_attract_set(grid: &RoutingGrid, route: &Route) -> BTreeSet<C
 
 /// Foreign plane fills a grid-placed via must be punchable from
 /// (same rule as geom::via_conflict).
-pub(crate) fn plane_no_via_zones(board: &Board) -> Vec<(NetId, (f64, f64, f64, f64))> {
+pub(crate) fn plane_no_via_zones(board: &Board) -> Vec<(NetId, Vec<(f64, f64, f64, f64)>)> {
     let ec = board.config.edge_clearance_mm;
     let (bx1, by1) = (
         board.config.outline.width() - ec,
@@ -854,13 +864,18 @@ pub(crate) fn plane_no_via_zones(board: &Board) -> Vec<(NetId, (f64, f64, f64, f
         .iter()
         .filter(|n| n.plane_layer.is_some())
         .map(|n| {
-            let rect = match n.plane_region {
-                Some((x0, y0, x1, y1)) => {
-                    (x0.max(ec), y0.max(ec), x1.min(bx1), y1.min(by1))
-                }
-                None => (ec, ec, bx1, by1),
+            let clamp = |(x0, y0, x1, y1): (f64, f64, f64, f64)| {
+                (x0.max(ec), y0.max(ec), x1.min(bx1), y1.min(by1))
             };
-            (n.id, rect)
+            let rects: Vec<(f64, f64, f64, f64)> = if !n.plane_region_rects.is_empty() {
+                n.plane_region_rects.iter().copied().map(clamp).collect()
+            } else {
+                match n.plane_region {
+                    Some(r) => vec![clamp(r)],
+                    None => vec![(ec, ec, bx1, by1)],
+                }
+            };
+            (n.id, rects)
         })
         .collect()
 }
@@ -958,7 +973,7 @@ fn dijkstra_to_any(
     banned_sites: &[(f64, f64)],
     clear_ring: usize,
     attract: Option<&BTreeSet<CellCoord>>,
-    no_via_zones: &[(NetId, (f64, f64, f64, f64))],
+    no_via_zones: &[(NetId, Vec<(f64, f64, f64, f64)>)],
 ) -> Option<(Vec<CellCoord>, CellCoord)> {
     DIJK_SCRATCH.with(|s| {
         dijkstra_to_any_inner(
@@ -994,7 +1009,7 @@ fn dijkstra_to_any_inner(
     banned_sites: &[(f64, f64)],
     clear_ring: usize,
     attract: Option<&BTreeSet<CellCoord>>,
-    no_via_zones: &[(NetId, (f64, f64, f64, f64))],
+    no_via_zones: &[(NetId, Vec<(f64, f64, f64, f64)>)],
     s: &mut DijkScratch,
 ) -> Option<(Vec<CellCoord>, CellCoord)> {
     // DENSE state: the default SipHash HashMap<CellCoord, _> was ~40%
@@ -1213,16 +1228,32 @@ fn dijkstra_to_any_inner(
                 }
                 // Fill-boundary punchability (mirrors via_conflict).
                 let punch = stack.via.pad_mm / 2.0 + 0.35;
-                if no_via_zones.iter().any(|&(zn, (zx0, zy0, zx1, zy1))| {
-                    zn != net.id
-                        && vx > zx0 - punch
-                        && vx < zx1 + punch
-                        && vy > zy0 - punch
-                        && vy < zy1 + punch
-                        && !(vx > zx0 + punch
-                            && vx < zx1 - punch
-                            && vy > zy0 + punch
-                            && vy < zy1 - punch)
+                if no_via_zones.iter().any(|(zn, rects)| {
+                    *zn != net.id && {
+                        // Union shape: internal rect-rect edges are
+                        // not fill edges — reject only when the punch
+                        // touches the union yet sits fully interior
+                        // to NO rect.
+                        let mut intersects = false;
+                        let mut interior = false;
+                        for &(zx0, zy0, zx1, zy1) in rects {
+                            if vx > zx0 - punch
+                                && vx < zx1 + punch
+                                && vy > zy0 - punch
+                                && vy < zy1 + punch
+                            {
+                                intersects = true;
+                            }
+                            if vx > zx0 + punch
+                                && vx < zx1 - punch
+                                && vy > zy0 + punch
+                                && vy < zy1 - punch
+                            {
+                                interior = true;
+                            }
+                        }
+                        intersects && !interior
+                    }
                 }) {
                     continue;
                 }

@@ -1521,10 +1521,184 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                 (y1 + 3.0).min(bh - m),
             );
             board.nets[i].plane_region = Some(region);
-            info!(
-                "pour region: '{}' pin cloud -> ({:.1},{:.1})-({:.1},{:.1})",
-                board.nets[i].name, region.0, region.1, region.2, region.3
-            );
+            // PLACEMENT-AWARE SHAPE: a scattered consumer cloud must
+            // not blanket the board with pour priority (the free-
+            // placement vbias bbox covered 80x70mm, its claim/apron
+            // swallowed foreign SMD pockets, and a walled GND pad
+            // shipped unconnected). Cluster the pins (single-linkage,
+            // 6mm) and connect cluster boxes with L-corridors along
+            // an MST — the DEMO's own band is exactly this shape when
+            // the consumers sit in a row. One cluster = the bbox,
+            // byte-for-byte today's behavior.
+            let pts: Vec<(f64, f64)> = {
+                let mut v = Vec::new();
+                for &(cid, pid) in &board.nets[i].pins {
+                    let Some(&ci) = comp_pos.get(&cid) else { continue };
+                    let comp = &board.components[ci];
+                    let Some(pin) = comp.pins.iter().find(|p| p.pin_id == pid)
+                    else {
+                        continue;
+                    };
+                    let (co, sn) = (comp.theta.cos(), comp.theta.sin());
+                    v.push((
+                        comp.x + pin.dx * co - pin.dy * sn,
+                        comp.y + pin.dx * sn + pin.dy * co,
+                    ));
+                }
+                v
+            };
+            let mut cluster = (0..pts.len()).collect::<Vec<usize>>();
+            fn find(c: &mut Vec<usize>, mut a: usize) -> usize {
+                while c[a] != a {
+                    c[a] = c[c[a]];
+                    a = c[a];
+                }
+                a
+            }
+            for a in 0..pts.len() {
+                for b in (a + 1)..pts.len() {
+                    if (pts[a].0 - pts[b].0).hypot(pts[a].1 - pts[b].1) <= 6.0 {
+                        let (ra, rb) = (find(&mut cluster, a), find(&mut cluster, b));
+                        cluster[ra] = rb;
+                    }
+                }
+            }
+            let mut boxes: Vec<(f64, f64, f64, f64)> = Vec::new();
+            let mut roots: Vec<usize> = Vec::new();
+            for a in 0..pts.len() {
+                let r = find(&mut cluster, a);
+                let bi = match roots.iter().position(|&x| x == r) {
+                    Some(k) => k,
+                    None => {
+                        roots.push(r);
+                        boxes.push((
+                            f64::INFINITY,
+                            f64::INFINITY,
+                            f64::NEG_INFINITY,
+                            f64::NEG_INFINITY,
+                        ));
+                        boxes.len() - 1
+                    }
+                };
+                boxes[bi].0 = boxes[bi].0.min(pts[a].0);
+                boxes[bi].1 = boxes[bi].1.min(pts[a].1);
+                boxes[bi].2 = boxes[bi].2.max(pts[a].0);
+                boxes[bi].3 = boxes[bi].3.max(pts[a].1);
+            }
+            if boxes.len() > 1 {
+                let clamp = |r: (f64, f64, f64, f64)| {
+                    (
+                        r.0.max(m),
+                        r.1.max(m),
+                        r.2.min(bw - m),
+                        r.3.min(bh - m),
+                    )
+                };
+                let mut rects: Vec<(f64, f64, f64, f64)> = boxes
+                    .iter()
+                    .map(|&(a, b, c, d)| clamp((a - 3.0, b - 3.0, c + 3.0, d + 3.0)))
+                    .collect();
+                // MST over cluster centers (Prim), L-corridors 6mm wide.
+                let ctr: Vec<(f64, f64)> = boxes
+                    .iter()
+                    .map(|&(a, b, c, d)| ((a + c) / 2.0, (b + d) / 2.0))
+                    .collect();
+                let mut joined = vec![false; ctr.len()];
+                joined[0] = true;
+                for _ in 1..ctr.len() {
+                    let mut best: Option<(usize, usize, f64)> = None;
+                    for a in 0..ctr.len() {
+                        if !joined[a] {
+                            continue;
+                        }
+                        for b in 0..ctr.len() {
+                            if joined[b] {
+                                continue;
+                            }
+                            let d = (ctr[a].0 - ctr[b].0).hypot(ctr[a].1 - ctr[b].1);
+                            if best.map_or(true, |(.., bd)| d < bd) {
+                                best = Some((a, b, d));
+                            }
+                        }
+                    }
+                    let Some((a, b, _)) = best else { break };
+                    joined[b] = true;
+                    let hw = 3.0;
+                    let (ax, ay) = ctr[a];
+                    let (bx, by) = ctr[b];
+                    rects.push(clamp((
+                        ax.min(bx) - hw,
+                        ay - hw,
+                        ax.max(bx) + hw,
+                        ay + hw,
+                    )));
+                    rects.push(clamp((
+                        bx - hw,
+                        ay.min(by) - hw,
+                        bx + hw,
+                        ay.max(by) + hw,
+                    )));
+                }
+                // AREA GATE: the shape earns its keep only when the
+                // bbox is mostly empty space (a scattered cloud whose
+                // blanket would swallow foreign pockets). A dense row
+                // — the demo's own band — keeps the blanket: its
+                // pocket machinery (drops, rescue) was built for it.
+                let (bx0, by0, bx1, by1) = region;
+                let (gw, gh) = (
+                    (((bx1 - bx0) / 1.0).ceil() as usize).max(1),
+                    (((by1 - by0) / 1.0).ceil() as usize).max(1),
+                );
+                let mut covered = 0usize;
+                for gy in 0..gh {
+                    for gx in 0..gw {
+                        let x = bx0 + (gx as f64 + 0.5) * (bx1 - bx0) / gw as f64;
+                        let y = by0 + (gy as f64 + 0.5) * (by1 - by0) / gh as f64;
+                        if rects
+                            .iter()
+                            .any(|&(x0, y0, x1, y1)| {
+                                x >= x0 && x <= x1 && y >= y0 && y <= y1
+                            })
+                        {
+                            covered += 1;
+                        }
+                    }
+                }
+                let ratio = covered as f64 / (gw * gh) as f64;
+                if ratio >= 0.5 {
+                    info!(
+                        "pour region: '{}' pin cloud -> ({:.1},{:.1})-({:.1},{:.1}) ({} cluster(s), union {:.0}% of bbox — blanket kept)",
+                        board.nets[i].name, region.0, region.1, region.2, region.3,
+                        boxes.len(), ratio * 100.0
+                    );
+                    continue;
+                }
+                info!(
+                    "pour region: '{}' {} pin cluster(s) -> {} rect(s) (union {:.0}% of bbox), bbox ({:.1},{:.1})-({:.1},{:.1})",
+                    board.nets[i].name,
+                    boxes.len(),
+                    rects.len(),
+                    ratio * 100.0,
+                    region.0,
+                    region.1,
+                    region.2,
+                    region.3
+                );
+                if std::env::var("BHDL_PNR_PROBE").is_ok() {
+                    for r in &rects {
+                        info!(
+                            "[probe] region rect ({:.2},{:.2})-({:.2},{:.2})",
+                            r.0, r.1, r.2, r.3
+                        );
+                    }
+                }
+                board.nets[i].plane_region_rects = rects;
+            } else {
+                info!(
+                    "pour region: '{}' pin cloud -> ({:.1},{:.1})-({:.1},{:.1})",
+                    board.nets[i].name, region.0, region.1, region.2, region.3
+                );
+            }
         }
     }
 
@@ -4002,6 +4176,96 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
             if trimmed > 0 {
                 info!("post-rescue trim: {trimmed} spur segment(s)");
             }
+        }
+    }
+
+    // 5.9985. REGION FOLLOWS THE NET'S OWN COPPER: a shaped pour
+    // region comes from PIN clusters at 4.99 — before routing — so
+    // trunks that wander between clusters end up outside it, and
+    // copper the old blanket fill flooded over ships as orphan
+    // groups (rigid C4: a 6mm staircase remnant dangled). Extend
+    // the union with corridor rects along the net's own plane-layer
+    // segments and vias so the fill serves every piece of its own
+    // copper.
+    {
+        let bw = board.config.outline.width();
+        let bh = board.config.outline.height();
+        let m = board.config.edge_clearance_mm + 0.05;
+        for ni in 0..board.nets.len() {
+            if board.nets[ni].plane_region_rects.is_empty() {
+                continue;
+            }
+            let Some(pl) = board.nets[ni].plane_layer else { continue };
+            let contains = |rects: &[(f64, f64, f64, f64)], x: f64, y: f64| {
+                rects
+                    .iter()
+                    .any(|&(x0, y0, x1, y1)| x >= x0 && x <= x1 && y >= y0 && y <= y1)
+            };
+            let clamp = |(x0, y0, x1, y1): (f64, f64, f64, f64)| {
+                (x0.max(m), y0.max(m), x1.min(bw - m), y1.min(bh - m))
+            };
+            let mut add: Vec<(f64, f64, f64, f64)> = Vec::new();
+            let mut cur: Option<(f64, f64, f64, f64)> = None;
+            for sg in &final_routes[ni].segments {
+                if sg.layer != pl {
+                    continue;
+                }
+                let rects = &board.nets[ni].plane_region_rects;
+                if contains(rects, sg.start.0, sg.start.1)
+                    && contains(rects, sg.end.0, sg.end.1)
+                {
+                    continue;
+                }
+                let sb = (
+                    sg.start.0.min(sg.end.0),
+                    sg.start.1.min(sg.end.1),
+                    sg.start.0.max(sg.end.0),
+                    sg.start.1.max(sg.end.1),
+                );
+                cur = Some(match cur {
+                    None => sb,
+                    Some(c) => {
+                        let merged = (
+                            c.0.min(sb.0),
+                            c.1.min(sb.1),
+                            c.2.max(sb.2),
+                            c.3.max(sb.3),
+                        );
+                        if merged.2 - merged.0 > 15.0 && merged.3 - merged.1 > 15.0 {
+                            add.push(clamp((c.0 - 3.0, c.1 - 3.0, c.2 + 3.0, c.3 + 3.0)));
+                            sb
+                        } else {
+                            merged
+                        }
+                    }
+                });
+            }
+            if let Some(c) = cur {
+                add.push(clamp((c.0 - 3.0, c.1 - 3.0, c.2 + 3.0, c.3 + 3.0)));
+            }
+            for v in &final_routes[ni].vias {
+                if !contains(&board.nets[ni].plane_region_rects, v.x, v.y) {
+                    add.push(clamp((v.x - 3.0, v.y - 3.0, v.x + 3.0, v.y + 3.0)));
+                }
+            }
+            if !add.is_empty() {
+                info!(
+                    "pour region: '{}' +{} own-copper corridor rect(s)",
+                    board.nets[ni].name,
+                    add.len()
+                );
+                board.nets[ni].plane_region_rects.extend(add);
+            }
+        }
+    }
+
+    // 5.9986. Orphan chains judged on the shipped copper — after the
+    // region followed placement + own-copper corridors, whatever
+    // still touches nothing is metal KiCad will group alone.
+    {
+        let swept = pour_orphan_chain_sweep(&board, &mut final_routes);
+        if swept > 0 {
+            info!("pour orphan sweep: {swept} segment(s) removed");
         }
     }
 
@@ -7133,6 +7397,232 @@ fn path_respects_courtyards(board: &Board, path: &[(f64, f64)]) -> bool {
 /// stubs leave such spurs with cleared span bookkeeping, invisible
 /// to the span-based sweep. Small routes only (pocket stubs + hops),
 /// so the quadratic scan is cheap.
+/// EMISSION-MODEL ORPHAN-CHAIN SWEEP: a pour net's routed chain that
+/// touches no pad, no via, and no fill of the SHIPPED copper is
+/// orphan metal — KiCad groups it alone and reports it unconnected
+/// (rigid C4: a 6mm staircase remnant the blanket fill used to flood
+/// over dangled once the region followed placement). Deleting it is
+/// the honest move: by definition nothing connects through it.
+/// Mid-span contact with non-group copper (an unsplit T) keeps the
+/// chain — endpoint adjacency alone must never justify deletion.
+fn pour_orphan_chain_sweep(board: &Board, final_routes: &mut [Route]) -> usize {
+    let via_r = board.layer_stack.via.pad_mm / 2.0;
+    let mut swept = 0usize;
+    for ni in 0..board.nets.len() {
+        let pour = board.nets[ni]
+            .plane_layer
+            .and_then(|pl| board.layer_stack.layers.get(pl))
+            .map(|l| l.kind == crate::types::LayerKind::Signal)
+            .unwrap_or(false)
+            // REGIONED pours only: a whole-layer pour (default GND)
+            // floods over its own copper everywhere — its "orphans"
+            // are the rescue machinery's raw material, not trash.
+            && board.nets[ni].plane_region.is_some();
+        if !pour || final_routes[ni].segments.is_empty() {
+            continue;
+        }
+        let Some(polys) = output::kicad::emission_fill_polys(board, final_routes, ni)
+        else {
+            continue;
+        };
+        let mut own_pads: Vec<(f64, f64, f64, f64)> = Vec::new();
+        for comp in &board.components {
+            let (co, sn) = (comp.theta.cos(), comp.theta.sin());
+            let quarter =
+                ((comp.theta / std::f64::consts::FRAC_PI_2).round() as i64).rem_euclid(2);
+            for pin in &comp.pins {
+                if pin.net != Some(board.nets[ni].id) || pin.unplaced {
+                    continue;
+                }
+                let gx = comp.x + pin.dx * co - pin.dy * sn;
+                let gy = comp.y + pin.dx * sn + pin.dy * co;
+                let (pw, ph) = match &pin.pad {
+                    Some(p) => (p.width_mm, p.height_mm),
+                    None => (0.5, 0.5),
+                };
+                let (pw, ph) = if quarter == 1 { (ph, pw) } else { (pw, ph) };
+                own_pads.push((gx, gy, pw / 2.0 + 0.05, ph / 2.0 + 0.05));
+            }
+        }
+        let bboxes: Vec<(f64, f64, f64, f64)> = polys
+            .iter()
+            .map(|p| {
+                p.iter().fold(
+                    (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY),
+                    |(x0, y0, x1, y1), &(x, y)| {
+                        (x0.min(x), y0.min(y), x1.max(x), y1.max(y))
+                    },
+                )
+            })
+            .collect();
+        let in_fill = |x: f64, y: f64| -> bool {
+            for (pi, poly) in polys.iter().enumerate() {
+                let (x0, y0, x1, y1) = bboxes[pi];
+                if x < x0 || x > x1 || y < y0 || y > y1 {
+                    continue;
+                }
+                let mut inside = false;
+                let mm = poly.len();
+                for k in 0..mm {
+                    let (px1, py1) = poly[k];
+                    let (px2, py2) = poly[(k + 1) % mm];
+                    if (py1 > y) != (py2 > y)
+                        && x < (px2 - px1) * (y - py1) / (py2 - py1) + px1
+                    {
+                        inside = !inside;
+                    }
+                }
+                if inside {
+                    return true;
+                }
+            }
+            false
+        };
+        // Group segments by same-layer endpoint adjacency.
+        let n = final_routes[ni].segments.len();
+        let key = |x: f64, y: f64| ((x / 0.01).round() as i64, (y / 0.01).round() as i64);
+        let mut grid: crate::det::HashMap<(i64, i64, usize), Vec<usize>> =
+            Default::default();
+        for (i, sg) in final_routes[ni].segments.iter().enumerate() {
+            for &(x, y) in &[sg.start, sg.end] {
+                let (kx, ky) = key(x, y);
+                grid.entry((kx, ky, sg.layer)).or_default().push(i);
+            }
+        }
+        let mut group = vec![usize::MAX; n];
+        let mut ng = 0usize;
+        for s0 in 0..n {
+            if group[s0] != usize::MAX {
+                continue;
+            }
+            let g = ng;
+            ng += 1;
+            let mut stack = vec![s0];
+            group[s0] = g;
+            while let Some(i) = stack.pop() {
+                let sg = final_routes[ni].segments[i].clone();
+                for &pt in &[sg.start, sg.end] {
+                    let (kx, ky) = key(pt.0, pt.1);
+                    for dx in -1..=1i64 {
+                        for dy in -1..=1i64 {
+                            let Some(c) = grid.get(&(kx + dx, ky + dy, sg.layer)) else {
+                                continue;
+                            };
+                            for &j in c {
+                                if group[j] != usize::MAX {
+                                    continue;
+                                }
+                                let o = &final_routes[ni].segments[j];
+                                if (o.start.0 - pt.0).hypot(o.start.1 - pt.1) <= 0.011
+                                    || (o.end.0 - pt.0).hypot(o.end.1 - pt.1) <= 0.011
+                                {
+                                    group[j] = g;
+                                    stack.push(j);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Judge each group.
+        let mut keep = vec![false; ng];
+        for (i, sg) in final_routes[ni].segments.iter().enumerate() {
+            if keep[group[i]] {
+                continue;
+            }
+            let mut ok = false;
+            for &pt in &[sg.start, sg.end] {
+                if final_routes[ni]
+                    .vias
+                    .iter()
+                    .any(|v| (v.x - pt.0).hypot(v.y - pt.1) <= via_r + 0.05)
+                    || own_pads.iter().any(|&(cx, cy, hx, hy)| {
+                        (pt.0 - cx).abs() <= hx && (pt.1 - cy).abs() <= hy
+                    })
+                {
+                    ok = true;
+                    break;
+                }
+            }
+            if !ok {
+                let len = (sg.end.0 - sg.start.0).hypot(sg.end.1 - sg.start.1);
+                let steps = ((len / 0.3).ceil() as usize).max(1);
+                for s in 0..=steps {
+                    let t = s as f64 / steps as f64;
+                    if in_fill(
+                        sg.start.0 + (sg.end.0 - sg.start.0) * t,
+                        sg.start.1 + (sg.end.1 - sg.start.1) * t,
+                    ) {
+                        ok = true;
+                        break;
+                    }
+                }
+            }
+            if ok {
+                if std::env::var("BHDL_PNR_PROBE").is_ok() {
+                    log::info!(
+                        "orphan-sweep keep: '{}' g{} seg ({:.2},{:.2})->({:.2},{:.2}) via/pad/fill",
+                        board.nets[ni].name, group[i],
+                        sg.start.0, sg.start.1, sg.end.0, sg.end.1
+                    );
+                }
+                keep[group[i]] = true;
+            }
+        }
+        // Unsplit T: an endpoint resting mid-span on OUT-of-group
+        // same-net copper means the chain is connected — keep.
+        for g in 0..ng {
+            if keep[g] {
+                continue;
+            }
+            'seg: for i in 0..n {
+                if group[i] != g {
+                    continue;
+                }
+                let sg = final_routes[ni].segments[i].clone();
+                for &pt in &[sg.start, sg.end] {
+                    for (j, o) in final_routes[ni].segments.iter().enumerate() {
+                        if group[j] == g || o.layer != sg.layer {
+                            continue;
+                        }
+                        if geom::segment_point_too_close(
+                            o.start,
+                            o.end,
+                            pt,
+                            (o.width_mm + sg.width_mm) / 2.0 + 0.01,
+                        ) {
+                            if std::env::var("BHDL_PNR_PROBE").is_ok() {
+                                log::info!(
+                                    "orphan-sweep keep: '{}' g{} T-touch at ({:.2},{:.2})",
+                                    board.nets[ni].name, g, pt.0, pt.1
+                                );
+                            }
+                            keep[g] = true;
+                            break 'seg;
+                        }
+                    }
+                }
+            }
+        }
+        let mut drop: Vec<usize> = (0..n).filter(|&i| !keep[group[i]]).collect();
+        drop.sort_unstable_by(|a, b| b.cmp(a));
+        for sk in drop {
+            let r = &mut final_routes[ni];
+            r.segments.remove(sk);
+            for (qs, ql) in r.path_spans.iter_mut() {
+                if *qs > sk {
+                    *qs -= 1;
+                } else if sk < *qs + *ql {
+                    *ql = ql.saturating_sub(1);
+                }
+            }
+            swept += 1;
+        }
+    }
+    swept
+}
+
 fn pour_net_free_end_trim(board: &Board, final_routes: &mut [Route]) -> usize {
     let via_r = board.layer_stack.via.pad_mm / 2.0;
     let mut pruned = 0usize;

@@ -210,7 +210,7 @@ pub struct ClearanceIndex {
     /// interior gets a punched hole; one straddling the fill boundary
     /// ships un-punched copper under-clearing the barrel (measured
     /// 0.2573mm vs the 0.30 zone rule).
-    plane_zones: Vec<(NetId, (f64, f64, f64, f64))>,
+    plane_zones: Vec<(NetId, Vec<(f64, f64, f64, f64)>)>,
     /// Fidelity mode (route_bias or declared design rules): exact
     /// legs must read as hand routing — H/V/45 only. Arbitrary-angle
     /// directs are skipped, 45-dogleg shapes replace them, and the
@@ -269,13 +269,19 @@ impl ClearanceIndex {
                         board.config.outline.width() - ec,
                         board.config.outline.height() - ec,
                     );
-                    let rect = match n.plane_region {
-                        Some((x0, y0, x1, y1)) => {
-                            (x0.max(ec), y0.max(ec), x1.min(bx1), y1.min(by1))
-                        }
-                        None => (ec, ec, bx1, by1),
+                    let clamp = |(x0, y0, x1, y1): (f64, f64, f64, f64)| {
+                        (x0.max(ec), y0.max(ec), x1.min(bx1), y1.min(by1))
                     };
-                    (n.id, rect)
+                    let rects: Vec<(f64, f64, f64, f64)> =
+                        if !n.plane_region_rects.is_empty() {
+                            n.plane_region_rects.iter().copied().map(clamp).collect()
+                        } else {
+                            match n.plane_region {
+                                Some(r) => vec![clamp(r)],
+                                None => vec![(ec, ec, bx1, by1)],
+                            }
+                        };
+                    (n.id, rects)
                 })
                 .collect(),
         };
@@ -1215,18 +1221,25 @@ impl ClearanceIndex {
         // margin, matching plane_foreign_holes) must be fully interior
         // or fully outside the fill rect.
         let punch = r + 0.3 + 0.05;
-        for &(zn, (zx0, zy0, zx1, zy1)) in &self.plane_zones {
-            if zn == net {
+        for (zn, rects) in &self.plane_zones {
+            if *zn == net {
                 continue;
             }
-            let intersects = x > zx0 - punch
-                && x < zx1 + punch
-                && y > zy0 - punch
-                && y < zy1 + punch;
-            let interior = x > zx0 + punch
-                && x < zx1 - punch
-                && y > zy0 + punch
-                && y < zy1 - punch;
+            // Union shape: an edge shared between two rects is not a
+            // real fill edge — conflict only when the punch touches
+            // the union but is fully interior to NO rect.
+            let mut intersects = false;
+            let mut interior = false;
+            for &(zx0, zy0, zx1, zy1) in rects {
+                if x > zx0 - punch && x < zx1 + punch && y > zy0 - punch && y < zy1 + punch
+                {
+                    intersects = true;
+                }
+                if x > zx0 + punch && x < zx1 - punch && y > zy0 + punch && y < zy1 - punch
+                {
+                    interior = true;
+                }
+            }
             if intersects && !interior {
                 return Some(Conflict::Cutout);
             }

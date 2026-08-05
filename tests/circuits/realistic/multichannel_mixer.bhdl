@@ -203,16 +203,15 @@ layout MultichannelMixer {
     // relief fallback).
     pour GND;
     // pour u_mst.OUT_B; — the demo's vbias band. The RIGID
-    // demo-parity path is fully CLEAN with it declared (0v/0unc:
-    // via-hop rescue + T-split junctions + exact spoke accounting +
-    // claim dilation), and the emission-model island bridge (fill-
-    // orphan detection + fragment-validated far via drops) cut the
-    // free-placement tail 2 -> 1 unconnected. The last pad (C35's
-    // ground in the pot grid) is sealed on BOTH faces at every seed-
-    // 42 trial — no GND copper within ~5mm, courtyard-walled, B.Cu
-    // packed by bottom-bias routing. Closing it needs the placement-
-    // aware band (strategy seam), not more bridging force — and the
-    // corpus gate runs free. Declared once that lands.
+    // demo-parity path is fully CLEAN with it declared (0v/0unc),
+    // and the PLACEMENT-AWARE region (pin clusters + MST corridors,
+    // area-gated so a dense row keeps its blanket band) freed the
+    // scattered free-placement cloud from blanketing the board —
+    // the old C35 sealed-pocket wall is gone. The free tail is now
+    // 1v/4unc of known classes (pot-grid interior pockets the
+    // bridge cannot legally reach, one shaped-fill starved thermal,
+    // one pad-fenced signal knot) — and the corpus gate runs free.
+    // Declared once those close.
     route_bias bottom;
     // NOT yet declared: the demo's 0.5/0.2 design rules. The
     // long-haul arc cut the wide-rules tail 17 -> 1 unc (the ladder's

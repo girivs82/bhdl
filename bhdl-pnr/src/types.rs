@@ -622,6 +622,15 @@ pub struct PnrNet {
     /// planes, all Ground planes). Computed AFTER placement from rail
     /// pin centroids; fills clip to it, drops must land inside it.
     pub plane_region: Option<(f64, f64, f64, f64)>,
+    /// PLACEMENT-AWARE region shape: union of rects (pin-cluster
+    /// boxes + MST corridors). Empty = the region IS plane_region's
+    /// rect (single dense pin cloud, split-plane rails, legacy).
+    /// Non-empty = plane_region holds the union's BBOX (coarse
+    /// consumers prefilter on it) and fills/claims/aprons clip to
+    /// the union — a scattered consumer cloud must NOT blanket the
+    /// board with pour priority (free-placement vbias covered
+    /// 80x70mm and swallowed foreign SMD pockets).
+    pub plane_region_rects: Vec<(f64, f64, f64, f64)>,
     /// Declared-pour net whose split REGION is the pin cloud — the
     /// bbox is computed AFTER placement (free parts sit at garbage
     /// init positions at semantic time).
