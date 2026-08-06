@@ -4287,6 +4287,9 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
     // regressed other paths.
     {
         let mut bridged = 0usize;
+        // RIP-tier budget for the whole pass: victim rebuilds carry
+        // RoutingGrid builds — unbounded, one free run took 4h.
+        let mut rip_budget = 3usize;
         for ni in 0..board.nets.len() {
             let Some(polys) =
                 output::kicad::emission_fill_polys(&board, &final_routes, ni)
@@ -4411,6 +4414,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                         layer,
                         width,
                         false,
+                        &mut rip_budget,
                     );
                 }
                 if done {
@@ -4490,6 +4494,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                             layer,
                             width,
                             true,
+                            &mut rip_budget,
                         ) {
                             bridged += 1;
                             done = true;
@@ -4510,6 +4515,21 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
             let trimmed = pour_net_free_end_trim(&board, &mut final_routes);
             if trimmed > 0 {
                 info!("post-bridge trim: {trimmed} spur segment(s)");
+            }
+            // A RIP-bridged victim was rebuilt AFTER the continuity
+            // pass ran — give rebuilt nets the same split check.
+            let repaired = signal_net_continuity_repair(&board, &mut final_routes);
+            if repaired > 0 {
+                info!("post-bridge continuity repair: {repaired} split net(s) rejoined");
+            }
+            // Bridges land on the CURRENT emission model; the final
+            // fill can still withdraw (fixpoint). Mid-bridge pieces
+            // whose fill left are orphan copper — and GND never gets
+            // the regioned free-end trim. Sweep on the post-bridge
+            // model.
+            let swept = pour_orphan_chain_sweep(&board, &mut final_routes);
+            if swept > 0 {
+                info!("post-bridge orphan sweep: {swept} segment(s) removed");
             }
         }
     }
@@ -6814,6 +6834,7 @@ fn island_bridge_pad(
     layer: usize,
     width: f64,
     far: bool,
+    rip_budget: &mut usize,
 ) -> bool {
     let net_id = board.nets[ni].id;
     let pip_main = |x: f64, y: f64| -> bool {
@@ -7094,7 +7115,8 @@ fn island_bridge_pad(
                     cands.push(((vx, vy), rr));
                 }
             }
-            for &((vx, vy), rr) in cands.iter().take(12) {
+            let far_cands = cands;
+            for &((vx, vy), rr) in far_cands.iter().take(12) {
                 let path = if rr <= 0.01 {
                     // via-in-pad: the span just needs real copper —
                     // a micro-stub on the pad's own footprint.
@@ -7147,6 +7169,134 @@ fn island_bridge_pad(
                 );
                 return true;
             }
+        }
+    }
+    // VICTIM RIP + BRIDGE RETRY — the router's own hammer, last tier:
+    // every one-shot lever above measured illegal, so the pocket is
+    // fenced by ROUTED foreign copper. Rip the fencing signal net
+    // wholesale, land the bridge through the freed corridor, rebuild
+    // the victim on the new board (grid + exact-gated commit + the
+    // exact ladder), strict victim-no-worse-or-revert — the same
+    // contract as completion's rip_and_exact_retry.
+    if far && *rip_budget > 0 {
+        *rip_budget -= 1;
+        let snap_i = final_routes[ni].clone();
+        'lines: for &(q, _) in targets.iter().take(1) {
+            // NEGOTIATION LOOP along one target line: rip each new
+            // blocker as it surfaces (a 15mm corridor is fenced by
+            // SEVERAL nets — one rip just exposes the next), up to 4
+            // victims, until the bridge lands.
+            let mut snaps: Vec<(usize, Route)> = Vec::new();
+            let mut landed = false;
+            for _round in 0..4 {
+                let idx4 =
+                    geom::ClearanceIndex::build(board, final_routes, Some(net_id));
+                let path = geom::route_escape(&idx4, src, q, width, layer, net_id)
+                    .or_else(|| geom::route_tunnel(&idx4, src, q, width, layer, net_id));
+                if let Some(path) = path {
+                    if path_respects_courtyards(board, &path) {
+                        commit_escape(
+                            &mut final_routes[ni],
+                            &path,
+                            layer,
+                            width,
+                            None,
+                            &board.nets[ni].name,
+                        );
+                        landed = true;
+                    }
+                    break;
+                }
+                if snaps.len() >= 3 {
+                    break;
+                }
+                let Some(geom::Conflict::Track { net: vn, .. }) =
+                    geom::escape_blocker(&idx4, src, q, width, layer, net_id)
+                else {
+                    break;
+                };
+                let Some(vj) = board.nets.iter().position(|n| n.id == vn) else {
+                    break;
+                };
+                if board.nets[vj].plane_layer.is_some()
+                    || final_routes[vj].is_empty()
+                    || snaps.iter().any(|&(k, _)| k == vj)
+                {
+                    break;
+                }
+                snaps.push((vj, final_routes[vj].clone()));
+                final_routes[vj] = Route::empty(final_routes[vj].net_id);
+            }
+            if !landed {
+                for (jj, old) in snaps.drain(..).rev() {
+                    final_routes[jj] = old;
+                }
+                final_routes[ni] = snap_i.clone();
+                continue 'lines;
+            }
+            // Rebuild every victim on the board that carries the
+            // bridge; ALL must come back no worse than before, or
+            // everything reverts.
+            let mut ok = true;
+            for &(vj, ref snap_v) in &snaps {
+                let v_before =
+                    pathfinder::unreached_sink_count(&board.nets[vj], board, snap_v);
+                let g_before = net_pad_group_count(board, snap_v, vj);
+                let mut jgrid = RoutingGrid::build(board);
+                for (k, r) in final_routes.iter().enumerate() {
+                    if k != vj && !r.is_empty() {
+                        pathfinder::block_route_geometry(&mut jgrid, r, board);
+                    }
+                }
+                let mut fresh = Route::empty(snap_v.net_id);
+                pathfinder::extend_route(
+                    &mut jgrid, &board.nets[vj], board, &mut fresh, 1.0, 1.0, &[], &[],
+                    false, None,
+                );
+                {
+                    let mut bans = Vec::new();
+                    let mut trial_board: Vec<Route> = final_routes.clone();
+                    trial_board[vj] = Route::empty(snap_v.net_id);
+                    exact_commit_strip(board, &trial_board, vj, &mut fresh, 0, &mut bans);
+                }
+                final_routes[vj] = fresh;
+                if pathfinder::unreached_sink_count(
+                    &board.nets[vj],
+                    board,
+                    &final_routes[vj],
+                ) > 0
+                {
+                    offgrid_escape(board, final_routes, vj);
+                }
+                let v_after = pathfinder::unreached_sink_count(
+                    &board.nets[vj],
+                    board,
+                    &final_routes[vj],
+                );
+                // KiCad-grounded acceptance: the sink counter read a
+                // gutted 1-segment rebuild as complete — the pads
+                // must land in no MORE connectivity groups than the
+                // snapshot's.
+                let g_after = net_pad_group_count(board, &final_routes[vj], vj);
+                if v_after > v_before || g_after > g_before {
+                    ok = false;
+                    break;
+                }
+            }
+            if ok {
+                info!(
+                    "island bridge: '{}' pad ({:.1},{:.1}) RIP-bridged ({} victim(s) rebuilt)",
+                    board.nets[ni].name,
+                    src.0,
+                    src.1,
+                    snaps.len()
+                );
+                return true;
+            }
+            for (jj, old) in snaps.drain(..).rev() {
+                final_routes[jj] = old;
+            }
+            final_routes[ni] = snap_i.clone();
         }
     }
     false
@@ -7406,6 +7556,110 @@ fn path_respects_courtyards(board: &Board, path: &[(f64, f64)]) -> bool {
 /// stubs leave such spurs with cleared span bookkeeping, invisible
 /// to the span-based sweep. Small routes only (pocket stubs + hops),
 /// so the quadratic scan is cheap.
+/// KiCad-grounded connectivity: the number of GROUPS the net's pads
+/// land in (segments joined by genuine copper overlap on a layer,
+/// vias across layers; a pad touching no copper is its own group).
+/// 1 = electrically whole. The victim-rebuild acceptance test —
+/// unreached_sink_count read a gutted 1-segment net as complete
+/// (ch2_vtap shipped as a 0.13mm sliver).
+fn net_pad_group_count(board: &Board, route: &Route, ni: usize) -> usize {
+    let via_r = board.layer_stack.via.pad_mm / 2.0;
+    let segs = &route.segments;
+    let n = segs.len();
+    let mut par: Vec<usize> = (0..n).collect();
+    fn find(par: &mut Vec<usize>, mut a: usize) -> usize {
+        while par[a] != a {
+            par[a] = par[par[a]];
+            a = par[a];
+        }
+        a
+    }
+    for a in 0..n {
+        for b in (a + 1)..n {
+            if segs[a].layer != segs[b].layer {
+                continue;
+            }
+            let tol = (segs[a].width_mm + segs[b].width_mm) / 2.0 - 1e-3;
+            let touch = geom::segment_point_too_close(segs[b].start, segs[b].end, segs[a].start, tol)
+                || geom::segment_point_too_close(segs[b].start, segs[b].end, segs[a].end, tol)
+                || geom::segment_point_too_close(segs[a].start, segs[a].end, segs[b].start, tol)
+                || geom::segment_point_too_close(segs[a].start, segs[a].end, segs[b].end, tol);
+            if touch {
+                let (ra, rb) = (find(&mut par, a), find(&mut par, b));
+                par[ra] = rb;
+            }
+        }
+    }
+    for v in &route.vias {
+        let mut first: Option<usize> = None;
+        for (i, sg) in segs.iter().enumerate() {
+            if (sg.start.0 - v.x).hypot(sg.start.1 - v.y) <= via_r + 1e-3
+                || (sg.end.0 - v.x).hypot(sg.end.1 - v.y) <= via_r + 1e-3
+            {
+                match first {
+                    None => first = Some(i),
+                    Some(f) => {
+                        let (ra, rb) = (find(&mut par, f), find(&mut par, i));
+                        par[ra] = rb;
+                    }
+                }
+            }
+        }
+    }
+    let comp_pos: crate::det::HashMap<ComponentId, usize> = board
+        .components
+        .iter()
+        .enumerate()
+        .map(|(k, c)| (c.id, k))
+        .collect();
+    let mut groups: Vec<Option<usize>> = Vec::new();
+    for &(cid, pid) in &board.nets[ni].pins {
+        let Some(&ci) = comp_pos.get(&cid) else { continue };
+        let comp = &board.components[ci];
+        let Some(pin) = comp.pins.iter().find(|p| p.pin_id == pid) else {
+            continue;
+        };
+        if pin.unplaced {
+            continue;
+        }
+        let (co, sn) = (comp.theta.cos(), comp.theta.sin());
+        let gx = comp.x + pin.dx * co - pin.dy * sn;
+        let gy = comp.y + pin.dx * sn + pin.dy * co;
+        let half = pin
+            .pad
+            .as_ref()
+            .map(|p| p.width_mm.max(p.height_mm) / 2.0)
+            .unwrap_or(0.4);
+        let mut g: Option<usize> = None;
+        for (i, sg) in segs.iter().enumerate() {
+            if geom::segment_point_too_close(
+                sg.start,
+                sg.end,
+                (gx, gy),
+                half + sg.width_mm / 2.0 - 1e-3,
+            ) {
+                g = Some(find(&mut par, i));
+                break;
+            }
+        }
+        groups.push(g);
+    }
+    let mut distinct: Vec<Option<usize>> = Vec::new();
+    let mut count = 0usize;
+    for g in groups {
+        match g {
+            None => count += 1, // bare pad = its own group
+            Some(r) => {
+                if !distinct.contains(&Some(r)) {
+                    distinct.push(Some(r));
+                    count += 1;
+                }
+            }
+        }
+    }
+    count.max(1)
+}
+
 /// SIGNAL-NET CONTINUITY REPAIR: mirror KiCad's connectivity grouping
 /// per ROUTED net — segments joined by geometric overlap (same layer)
 /// and by vias across layers, pads joined by contact — and when a
@@ -7420,7 +7674,7 @@ fn signal_net_continuity_repair(board: &Board, final_routes: &mut Vec<Route>) ->
     for ni in 0..board.nets.len() {
         if board.nets[ni].plane_layer.is_some()
             || board.nets[ni].pins.len() < 2
-            || final_routes[ni].segments.len() < 2
+            || final_routes[ni].segments.is_empty()
         {
             continue;
         }
@@ -7443,7 +7697,10 @@ fn signal_net_continuity_repair(board: &Board, final_routes: &mut Vec<Route>) ->
                 if segs[a].layer != segs[b].layer {
                     continue;
                 }
-                let tol = (segs[a].width_mm + segs[b].width_mm) / 2.0 + 1e-3;
+                // GENUINE overlap only: KiCad connects on copper
+                // overlap; a +grace here merged a 0.13mm sliver into
+                // its pad group and the padless test never fired.
+                let tol = (segs[a].width_mm + segs[b].width_mm) / 2.0 - 1e-3;
                 let touch = geom::segment_point_too_close(
                     segs[b].start,
                     segs[b].end,
@@ -7519,7 +7776,7 @@ fn signal_net_continuity_repair(board: &Board, final_routes: &mut Vec<Route>) ->
                     sg.start,
                     sg.end,
                     (gx, gy),
-                    half + sg.width_mm / 2.0,
+                    half + sg.width_mm / 2.0 - 1e-3,
                 ) {
                     g = Some(find(&mut par, i));
                     break;
@@ -7530,38 +7787,114 @@ fn signal_net_continuity_repair(board: &Board, final_routes: &mut Vec<Route>) ->
         let mut groups: Vec<usize> = pad_group.iter().filter_map(|&(_, g)| g).collect();
         groups.sort_unstable();
         groups.dedup();
-        if groups.len() < 2 {
+        // Padless slivers: a group carrying NO pad is orphan copper
+        // (rip/rebuild leftovers — a 0.13mm ch2_vtap tail shipped as
+        // its own KiCad group). The union-find above already merged
+        // T-contacts and via bridges, so "no pad in the whole group"
+        // is exact. Delete them.
+        let roots: Vec<usize> = (0..n).map(|i| find(&mut par, i)).collect();
+        let mut sliver_drop: Vec<usize> =
+            (0..n).filter(|&i| !groups.contains(&roots[i])).collect();
+        if !sliver_drop.is_empty() {
+            sliver_drop.sort_unstable_by(|a, b| b.cmp(a));
+            let n_drop = sliver_drop.len();
+            for sk in sliver_drop {
+                let r = &mut final_routes[ni];
+                r.segments.remove(sk);
+                for (qs, ql) in r.path_spans.iter_mut() {
+                    if *qs > sk {
+                        *qs -= 1;
+                    } else if sk < *qs + *ql {
+                        *ql = ql.saturating_sub(1);
+                    }
+                }
+            }
+            info!(
+                "continuity repair: '{}' {} padless sliver segment(s) removed",
+                board.nets[ni].name, n_drop
+            );
+            repaired += 1;
+            // Segment indexing is stale for the bridging step — this
+            // net gets re-judged on the pass's next invocation.
             continue;
         }
-        // Main group = most pads; bridge every other pad-group to it
-        // from its nearest endpoint pair, same layer first, maze
-        // fallback.
+        // BARE pads count as their own group — a gutted net (one
+        // 0.13mm sliver, both pads copper-less) is split even though
+        // it has fewer than two pad-BEARING groups.
+        let bare = pad_group.iter().filter(|&&(_, g)| g.is_none()).count();
+        if groups.len() + bare < 2 {
+            continue;
+        }
+        // Main group = most pads (a pad-bearing group wins over bare
+        // pads); bridge every other pad-group AND every bare pad to
+        // it — nearest endpoint pair, same layer first, maze
+        // fallback. A fully-bare net routes pad-to-pad.
         let count_of = |g: usize, pg: &[((f64, f64), Option<usize>)]| {
             pg.iter().filter(|&&(_, x)| x == Some(g)).count()
         };
-        let main = *groups
+        let main: Option<usize> =
+            groups.iter().copied().max_by_key(|&g| count_of(g, &pad_group));
+        // Sources to join: other pad-bearing groups + bare pads.
+        enum Join {
+            Group(usize),
+            Bare((f64, f64)),
+        }
+        let mut joins: Vec<Join> = groups
             .iter()
-            .max_by_key(|&&g| count_of(g, &pad_group))
-            .unwrap();
-        for &g in &groups {
-            if g == main {
-                continue;
+            .filter(|&&g| Some(g) != main)
+            .map(|&g| Join::Group(g))
+            .collect();
+        for &(p, g) in &pad_group {
+            if g.is_none() {
+                joins.push(Join::Bare(p));
             }
-            let mut best: Option<((f64, f64), (f64, f64), usize, f64)> = None;
-            for (i, sa) in segs.iter().enumerate() {
-                if find(&mut par, i) != g {
-                    continue;
+        }
+        // Anchor set of MAIN: its segments' endpoints, or (fully bare
+        // net) the first bare pad — which then must not also be a
+        // join source.
+        let main_pts: Vec<((f64, f64), usize)> = match main {
+            Some(mg) => segs
+                .iter()
+                .enumerate()
+                .filter(|(j, _)| find(&mut par, *j) == mg)
+                .flat_map(|(_, sb)| [(sb.start, sb.layer), (sb.end, sb.layer)])
+                .collect(),
+            None => {
+                let Some(&(p0, _)) = pad_group.first() else { continue };
+                if let Some(pos) = joins.iter().position(
+                    |j| matches!(j, Join::Bare(p) if (p.0 - p0.0).hypot(p.1 - p0.1) < 1e-6),
+                ) {
+                    joins.remove(pos);
                 }
-                for (j, sb) in segs.iter().enumerate() {
-                    if find(&mut par, j) != main || sb.layer != sa.layer {
-                        continue;
-                    }
-                    for &pa in &[sa.start, sa.end] {
-                        for &pb in &[sb.start, sb.end] {
-                            let d = (pa.0 - pb.0).hypot(pa.1 - pb.1);
-                            if best.map_or(true, |(.., bd)| d < bd) {
-                                best = Some((pa, pb, sa.layer, d));
+                vec![(p0, 0usize)]
+            }
+        };
+        for join in joins {
+            let mut best: Option<((f64, f64), (f64, f64), usize, f64)> = None;
+            match join {
+                Join::Group(g) => {
+                    for (i, sa) in segs.iter().enumerate() {
+                        if find(&mut par, i) != g {
+                            continue;
+                        }
+                        for &(pb, bl) in &main_pts {
+                            if bl != sa.layer {
+                                continue;
                             }
+                            for &pa in &[sa.start, sa.end] {
+                                let d = (pa.0 - pb.0).hypot(pa.1 - pb.1);
+                                if best.map_or(true, |(.., bd)| d < bd) {
+                                    best = Some((pa, pb, sa.layer, d));
+                                }
+                            }
+                        }
+                    }
+                }
+                Join::Bare(p) => {
+                    for &(pb, bl) in &main_pts {
+                        let d = (p.0 - pb.0).hypot(p.1 - pb.1);
+                        if best.map_or(true, |(.., bd)| d < bd) {
+                            best = Some((p, pb, bl, d));
                         }
                     }
                 }
@@ -7579,10 +7912,50 @@ fn signal_net_continuity_repair(board: &Board, final_routes: &mut Vec<Route>) ->
             let path = geom::route_escape(&idx, pa, pb, width, layer, net_id)
                 .or_else(|| geom::route_tunnel(&idx, pa, pb, width, layer, net_id));
             let Some(path) = path else {
-                log::warn!(
-                    "continuity repair: '{}' split at ({:.1},{:.1})<->({:.1},{:.1}) — no legal joint (honest)",
-                    board.nets[ni].name, pa.0, pa.1, pb.0, pb.1
+                // No legal joint — REBUILD the whole net with the
+                // late grid machinery (a gutted net is basically
+                // unrouted; the escape/maze joint is the wrong tool
+                // for a 4mm gap through congestion). Accept only a
+                // strictly better pad grouping.
+                let snap = final_routes[ni].clone();
+                let g_before = net_pad_group_count(board, &snap, ni);
+                let mut jgrid = RoutingGrid::build(board);
+                for (k, r) in final_routes.iter().enumerate() {
+                    if k != ni && !r.is_empty() {
+                        pathfinder::block_route_geometry(&mut jgrid, r, board);
+                    }
+                }
+                let mut fresh = Route::empty(snap.net_id);
+                pathfinder::extend_route(
+                    &mut jgrid, &board.nets[ni], board, &mut fresh, 1.0, 1.0, &[], &[],
+                    false, None,
                 );
+                {
+                    let mut bans = Vec::new();
+                    let mut trial_board: Vec<Route> = final_routes.clone();
+                    trial_board[ni] = Route::empty(snap.net_id);
+                    exact_commit_strip(board, &trial_board, ni, &mut fresh, 0, &mut bans);
+                }
+                final_routes[ni] = fresh;
+                if pathfinder::unreached_sink_count(&board.nets[ni], board, &final_routes[ni])
+                    > 0
+                {
+                    offgrid_escape(board, final_routes, ni);
+                }
+                let g_after = net_pad_group_count(board, &final_routes[ni], ni);
+                if g_after < g_before {
+                    info!(
+                        "continuity repair: '{}' REBUILT ({} -> {} pad group(s))",
+                        board.nets[ni].name, g_before, g_after
+                    );
+                    repaired += 1;
+                } else {
+                    final_routes[ni] = snap;
+                    log::warn!(
+                        "continuity repair: '{}' split at ({:.1},{:.1})<->({:.1},{:.1}) — no legal joint, rebuild no better (honest)",
+                        board.nets[ni].name, pa.0, pa.1, pb.0, pb.1
+                    );
+                }
                 continue;
             };
             if !path_respects_courtyards(board, &path) {
@@ -7622,11 +7995,12 @@ fn pour_orphan_chain_sweep(board: &Board, final_routes: &mut [Route]) -> usize {
             .plane_layer
             .and_then(|pl| board.layer_stack.layers.get(pl))
             .map(|l| l.kind == crate::types::LayerKind::Signal)
-            .unwrap_or(false)
-            // REGIONED pours only: a whole-layer pour (default GND)
-            // floods over its own copper everywhere — its "orphans"
-            // are the rescue machinery's raw material, not trash.
-            && board.nets[ni].plane_region.is_some();
+            .unwrap_or(false);
+        // Whole-layer pours are back in scope: the rip/rebuild tier
+        // leaves genuinely dangling GND track groups (measured:
+        // 6mm+1.9mm pair). All four keep-tests (pad, via, T-contact,
+        // fill) stand — the earlier defaults regression is re-gated
+        // by them plus the T-merge; defaults re-verified per ship.
         if !pour || final_routes[ni].segments.is_empty() {
             continue;
         }
@@ -7770,8 +8144,15 @@ fn pour_orphan_chain_sweep(board: &Board, final_routes: &mut [Route]) -> usize {
             }
             if ok {
                 if std::env::var("BHDL_PNR_PROBE").is_ok() {
+                    let via_t = final_routes[ni]
+                        .vias
+                        .iter()
+                        .any(|v| {
+                            (v.x - sg.start.0).hypot(v.y - sg.start.1) <= via_r + 0.05
+                                || (v.x - sg.end.0).hypot(v.y - sg.end.1) <= via_r + 0.05
+                        });
                     log::info!(
-                        "orphan-sweep keep: '{}' g{} seg ({:.2},{:.2})->({:.2},{:.2}) via/pad/fill",
+                        "orphan-sweep keep: '{}' g{} seg ({:.2},{:.2})->({:.2},{:.2}) via={via_t}",
                         board.nets[ni].name, group[i],
                         sg.start.0, sg.start.1, sg.end.0, sg.end.1
                     );
