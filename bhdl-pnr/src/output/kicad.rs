@@ -2488,8 +2488,6 @@ pub(crate) fn emission_fill_polys(
         hh.2 = ((hh.2 - 0.1875) / 1.082).max(0.1);
     }
     let spoke_mask = holes.clone();
-    let (rings, spokes) = thermal_reliefs(board, net.id, plane_layer, &[]);
-    holes.extend(rings);
     let (fx0, fy0, fx1, fy1) = match net.plane_region {
         Some((rx0, ry0, rx1, ry1)) => {
             (rx0.max(m), ry0.max(m), rx1.min(w - m), ry1.min(h - m))
@@ -2577,19 +2575,46 @@ pub(crate) fn emission_fill_polys(
         }
         Some(v)
     };
-    Some(fracture_fill_spoked(
-        fx0,
-        fy0,
-        fx1,
-        fy1,
-        &holes,
-        &cutout_rects,
-        &anchors,
-        None,
-        &spokes,
-        &spoke_mask,
-        pre_void.as_deref(),
-    ))
+    // STARVED-PAD FIXPOINT (mirror of the writer, <=3 passes): pads
+    // KiCad would flag go SOLID — ring dropped — and the fill
+    // regrows over them. Judging on pass-1 fill kept phantom ring
+    // geometry alive: bridges landed on copper the shipped fill
+    // replaced, and the orphan sweep kept remnants "in fill" that
+    // the final zone had withdrawn from.
+    let mut dead: Vec<(f64, f64)> = Vec::new();
+    let mut polys: Vec<Vec<(f64, f64)>> = Vec::new();
+    for _pass in 0..3 {
+        let (rings, spokes) = thermal_reliefs(board, net.id, plane_layer, &dead);
+        let mut pass_holes = holes.clone();
+        pass_holes.extend(rings);
+        polys = fracture_fill_spoked(
+            fx0,
+            fy0,
+            fx1,
+            fy1,
+            &pass_holes,
+            &cutout_rects,
+            &anchors,
+            None,
+            &spokes,
+            &spoke_mask,
+            pre_void.as_deref(),
+        );
+        let d_new = kicad_starved_pads(
+            board,
+            net.id,
+            plane_layer,
+            &polys,
+            routes.get(ni),
+            0.3,
+            &dead,
+        );
+        if d_new.is_empty() {
+            break;
+        }
+        dead.extend(d_new);
+    }
+    Some(polys)
 }
 
 pub(crate) fn thermal_reliefs(

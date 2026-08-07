@@ -202,19 +202,13 @@ layout MultichannelMixer {
     // the free and rigid paths since the starving-pad 8-direction
     // relief fallback).
     pour GND;
-    // pour u_mst.OUT_B; — the demo's vbias band. The RIGID
-    // demo-parity path is fully CLEAN with it declared (0v/0unc),
-    // and the PLACEMENT-AWARE region (pin clusters + MST corridors,
-    // area-gated so a dense row keeps its blanket band) freed the
-    // scattered free-placement cloud from blanketing the board —
-    // the old C35 sealed-pocket wall is gone, and the RIP-
-    // NEGOTIATION bridge (fence nets ripped, bridge landed, victims
-    // rebuilt, all-no-worse-or-revert) closed the pot-grid pocket
-    // class. The free tail is now 0v/2unc: one GND orphan-copper
-    // pair the sweep's fill model still keeps (emission-vs-final
-    // drift) and one signal net (ch2_vtap) gutted by a shove/trim
-    // interplay whose pocket no router pass re-enters — and the
-    // corpus gate runs free. Declared once those close.
+    pour u_mst.OUT_B; // the demo's vbias band — DECLARED. Both
+    // paths ship 0v/0unc: the placement-aware region, the
+    // emission-model island bridge with the rip-negotiation tier,
+    // the ordering fixpoint (re-judge strandedness after each
+    // round's own mutations), and the multi-layer maze joint in the
+    // continuity repair each closed a class the previous one
+    // exposed. Full pour parity with the hand-routed demo.
     route_bias bottom;
     // NOT yet declared: the demo's 0.5/0.2 design rules. The
     // long-haul arc cut the wide-rules tail 17 -> 1 unc (the ladder's

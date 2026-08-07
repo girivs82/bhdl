@@ -4286,10 +4286,17 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
     // (the free-path C35/U20 ground pair), and patching ITS raster
     // regressed other paths.
     {
-        let mut bridged = 0usize;
         // RIP-tier budget for the whole pass: victim rebuilds carry
         // RoutingGrid builds — unbounded, one free run took 4h.
         let mut rip_budget = 3usize;
+        // ORDERING FIXPOINT: victim rebuilds and later bridges add
+        // copper that can sever EARLIER bridges (measured: a bridged
+        // pad's mid-path shipped as two dangling fragments). A
+        // second round re-judges strandedness on the
+        // post-everything emission model.
+        for _round in 0..3 {
+        let mut bridged = 0usize;
+        let mut round_residual = 0usize;
         for ni in 0..board.nets.len() {
             let Some(polys) =
                 output::kicad::emission_fill_polys(&board, &final_routes, ni)
@@ -4420,7 +4427,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                 if done {
                     bridged += 1;
                 } else {
-                    pour_bridge_residual += 1;
+                    round_residual += 1;
                     log::warn!(
                         "island bridge: '{}' island with {} pad(s) — no legal bridge (honest)",
                         board.nets[ni].name,
@@ -4502,7 +4509,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                         }
                     }
                     if !done {
-                        pour_bridge_residual += 1;
+                        round_residual += 1;
                         log::warn!(
                             "island bridge: '{}' fill-orphaned pad ({:.1},{:.1}) — no legal bridge (honest)",
                             board.nets[ni].name, src.0, src.1
@@ -4531,6 +4538,17 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
             if swept > 0 {
                 info!("post-bridge orphan sweep: {swept} segment(s) removed");
             }
+        }
+        pour_bridge_residual = round_residual;
+        // Re-scan whenever ANY bridge landed: this round's own
+        // mutations (later bridges, victim rebuilds, sweeps) can
+        // sever an EARLIER bridge — the residual count above was
+        // taken before them (measured: a "bridged" pad shipped
+        // stranded with its stub, invisible to the single-round
+        // gate).
+        if bridged == 0 {
+            break;
+        }
         }
     }
         }
@@ -6837,6 +6855,19 @@ fn island_bridge_pad(
     rip_budget: &mut usize,
 ) -> bool {
     let net_id = board.nets[ni].id;
+    // An earlier ROUND already via-dropped this pad: the F.Cu model
+    // still shows an island (the via serves it through the B face),
+    // and re-dropping stacked coincident vias (oracle:
+    // holes_co_located + hole_to_hole, 6 warnings at (69.6,79.4)).
+    let via_r_own = board.layer_stack.via.pad_mm / 2.0;
+    if final_routes[ni]
+        .vias
+        .iter()
+        .any(|v| (v.x - src.0).hypot(v.y - src.1) <= 2.0)
+    {
+        let _ = via_r_own;
+        return true;
+    }
     let pip_main = |x: f64, y: f64| -> bool {
         let mut inside = false;
         let m = main_poly.len();
@@ -6961,7 +6992,13 @@ fn island_bridge_pad(
                 &mut budget,
             ) {
                 Some((vx, vy))
-                    if !output::kicad::plane_swallows(board, &merged_b, vx, vy, via_r, None) =>
+                    if !output::kicad::plane_swallows(board, &merged_b, vx, vy, via_r, None)
+                        && !final_routes.iter().any(|r| {
+                            r.vias.iter().any(|v| {
+                                let d = (v.x - vx).hypot(v.y - vy);
+                                d < board.layer_stack.via.drill_mm + 0.25
+                            })
+                        }) =>
                 {
                     let idx = geom::ClearanceIndex::build(board, final_routes, Some(net_id));
                     if let Some(path) =
@@ -7110,6 +7147,14 @@ fn island_bridge_pad(
                         continue;
                     }
                     if idx2.via_conflict(vx, vy, via_r, net_id).is_some() {
+                        continue;
+                    }
+                    if final_routes.iter().any(|r| {
+                        r.vias.iter().any(|v| {
+                            let d = (v.x - vx).hypot(v.y - vy);
+                            d < board.layer_stack.via.drill_mm + 0.25
+                        })
+                    }) {
                         continue;
                     }
                     cands.push(((vx, vy), rr));
@@ -7912,6 +7957,247 @@ fn signal_net_continuity_repair(board: &Board, final_routes: &mut Vec<Route>) ->
             let path = geom::route_escape(&idx, pa, pb, width, layer, net_id)
                 .or_else(|| geom::route_tunnel(&idx, pa, pb, width, layer, net_id));
             let Some(path) = path else {
+                // MULTI-LAYER maze joint: a pad fence on this face
+                // is unrippable — but the other face is often open
+                // (ch2_vtap: C22's pocket sealed on F.Cu by the pot
+                // grid, empty underneath).
+                {
+                    let signal_layers: Vec<usize> = board
+                        .layer_stack
+                        .layers
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, l)| l.kind == crate::types::LayerKind::Signal)
+                        .map(|(k, _)| k)
+                        .collect();
+                    let via_r2 = board.layer_stack.via.pad_mm / 2.0;
+                    let cidx =
+                        geom::ClearanceIndex::build(board, final_routes, Some(net_id));
+                    // Drill-rule validation: every layer-switch point
+                    // must clear EVERY existing hole (any net's via,
+                    // any THT barrel) by drill+0.25 — the oracle's
+                    // hole_to_hole / holes_co_located (measured: 6
+                    // violations at the sweep's default seed).
+                    let hole_gap = board.layer_stack.via.drill_mm + 0.25;
+                    let mut all_holes: Vec<(f64, f64)> = Vec::new();
+                    for r in final_routes.iter() {
+                        for v in &r.vias {
+                            all_holes.push((v.x, v.y));
+                        }
+                    }
+                    for comp in &board.components {
+                        let (co, sn) = (comp.theta.cos(), comp.theta.sin());
+                        for pin in &comp.pins {
+                            if pin.unplaced {
+                                continue;
+                            }
+                            if pin.pad.as_ref().and_then(|pd| pd.drill_mm).is_some() {
+                                all_holes.push((
+                                    comp.x + pin.dx * co - pin.dy * sn,
+                                    comp.y + pin.dx * sn + pin.dy * co,
+                                ));
+                            }
+                        }
+                    }
+                    let way_legal = |way: &Vec<(f64, f64, usize)>| -> bool {
+                        way.windows(2).all(|w| {
+                            w[0].2 == w[1].2
+                                || !all_holes.iter().any(|&(hx, hy)| {
+                                    let d = (hx - w[0].0).hypot(hy - w[0].1);
+                                    d > 1e-6 && d < hole_gap
+                                })
+                        })
+                    };
+                    // Nearest target failed the drill rule at some
+                    // seeds — try the next-nearest main anchors too.
+                    let mut cands: Vec<(f64, f64)> = vec![pb];
+                    {
+                        let mut extra: Vec<((f64, f64), f64)> = main_pts
+                            .iter()
+                            .filter(|&&(_, l)| l == layer)
+                            .map(|&(p, _)| (p, (p.0 - pa.0).hypot(p.1 - pa.1)))
+                            .collect();
+                        extra.sort_by(|a, b| {
+                            a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                        for (p, _) in extra.into_iter().take(4) {
+                            if !cands
+                                .iter()
+                                .any(|&c| (c.0 - p.0).hypot(c.1 - p.1) < 1e-6)
+                            {
+                                cands.push(p);
+                            }
+                        }
+                    }
+                    if let Some(way) = cands.iter().find_map(|&pb2| {
+                        geom::route_tunnel_ml(
+                            &cidx,
+                            pa,
+                            layer,
+                            pb2,
+                            layer,
+                            width,
+                            via_r2,
+                            &signal_layers,
+                            net_id,
+                            12.0,
+                        )
+                        .filter(&way_legal)
+                    }) {
+                        let route = &mut final_routes[ni];
+                        let seg_start = route.segments.len();
+                        let via_start = route.vias.len();
+                        let n_l = board.layer_stack.layers.len() - 1;
+                        for w in way.windows(2) {
+                            let (a, b) = (w[0], w[1]);
+                            if a.2 == b.2 {
+                                if (a.0 - b.0).hypot(a.1 - b.1) > 1e-9 {
+                                    route.segments.push(RouteSegment {
+                                        layer: a.2,
+                                        start: (a.0, a.1),
+                                        end: (b.0, b.1),
+                                        width_mm: width,
+                                    });
+                                }
+                            } else {
+                                let dup = route
+                                    .vias
+                                    .iter()
+                                    .any(|v| (v.x - a.0).hypot(v.y - a.1) < 1e-6);
+                                if !dup {
+                                    route.vias.push(RouteVia {
+                                        x: a.0,
+                                        y: a.1,
+                                        from_layer: 0,
+                                        to_layer: n_l,
+                                    });
+                                }
+                            }
+                        }
+                        let n_vias = route.vias.len() - via_start;
+                        route
+                            .path_spans
+                            .push((seg_start, route.segments.len() - seg_start));
+                        route.path_parents.push(None);
+                        route.via_spans.push((via_start, n_vias));
+                        info!(
+                            "continuity repair: '{}' ML-joined at ({:.1},{:.1})->({:.1},{:.1}) ({n_vias} via(s))",
+                            board.nets[ni].name, pa.0, pa.1, pb.0, pb.1
+                        );
+                        repaired += 1;
+                        continue;
+                    }
+                }
+                // RIP-NEGOTIATION joint first (same contract as the
+                // island bridge's last tier): the gap is fenced by
+                // routed foreign copper — rip each blocker as it
+                // surfaces, land the joint, rebuild every victim,
+                // all-no-worse-or-revert.
+                {
+                    let mut snaps: Vec<(usize, Route)> = Vec::new();
+                    let snap_self = final_routes[ni].clone();
+                    let mut landed = false;
+                    for _round in 0..4 {
+                        let idx2 =
+                            geom::ClearanceIndex::build(board, final_routes, Some(net_id));
+                        let jp = geom::route_escape(&idx2, pa, pb, width, layer, net_id)
+                            .or_else(|| {
+                                geom::route_tunnel(&idx2, pa, pb, width, layer, net_id)
+                            });
+                        if let Some(jp) = jp {
+                            if path_respects_courtyards(board, &jp) {
+                                commit_escape(
+                                    &mut final_routes[ni],
+                                    &jp,
+                                    layer,
+                                    width,
+                                    None,
+                                    &board.nets[ni].name,
+                                );
+                                landed = true;
+                            }
+                            break;
+                        }
+                        if snaps.len() >= 3 {
+                            break;
+                        }
+                        let Some(geom::Conflict::Track { net: vn, .. }) =
+                            geom::escape_blocker(&idx2, pa, pb, width, layer, net_id)
+                        else {
+                            break;
+                        };
+                        let Some(vj) = board.nets.iter().position(|n| n.id == vn) else {
+                            break;
+                        };
+                        if vj == ni
+                            || board.nets[vj].plane_layer.is_some()
+                            || final_routes[vj].is_empty()
+                            || snaps.iter().any(|&(k, _)| k == vj)
+                        {
+                            break;
+                        }
+                        snaps.push((vj, final_routes[vj].clone()));
+                        final_routes[vj] = Route::empty(final_routes[vj].net_id);
+                    }
+                    if landed {
+                        let mut ok = true;
+                        for &(vj, ref snap_v) in &snaps {
+                            let vb =
+                                pathfinder::unreached_sink_count(&board.nets[vj], board, snap_v);
+                            let gb = net_pad_group_count(board, snap_v, vj);
+                            let mut jgrid = RoutingGrid::build(board);
+                            for (k, r) in final_routes.iter().enumerate() {
+                                if k != vj && !r.is_empty() {
+                                    pathfinder::block_route_geometry(&mut jgrid, r, board);
+                                }
+                            }
+                            let mut fresh = Route::empty(snap_v.net_id);
+                            pathfinder::extend_route(
+                                &mut jgrid, &board.nets[vj], board, &mut fresh, 1.0, 1.0,
+                                &[], &[], false, None,
+                            );
+                            {
+                                let mut bans = Vec::new();
+                                let mut trial_board: Vec<Route> = final_routes.clone();
+                                trial_board[vj] = Route::empty(snap_v.net_id);
+                                exact_commit_strip(
+                                    board, &trial_board, vj, &mut fresh, 0, &mut bans,
+                                );
+                            }
+                            final_routes[vj] = fresh;
+                            if pathfinder::unreached_sink_count(
+                                &board.nets[vj],
+                                board,
+                                &final_routes[vj],
+                            ) > 0
+                            {
+                                offgrid_escape(board, final_routes, vj);
+                            }
+                            let va = pathfinder::unreached_sink_count(
+                                &board.nets[vj],
+                                board,
+                                &final_routes[vj],
+                            );
+                            let ga = net_pad_group_count(board, &final_routes[vj], vj);
+                            if va > vb || ga > gb {
+                                ok = false;
+                                break;
+                            }
+                        }
+                        if ok {
+                            info!(
+                                "continuity repair: '{}' RIP-joined at ({:.1},{:.1})->({:.1},{:.1}) ({} victim(s) rebuilt)",
+                                board.nets[ni].name, pa.0, pa.1, pb.0, pb.1, snaps.len()
+                            );
+                            repaired += 1;
+                            continue;
+                        }
+                    }
+                    for (jj, old) in snaps.drain(..).rev() {
+                        final_routes[jj] = old;
+                    }
+                    final_routes[ni] = snap_self;
+                }
                 // No legal joint — REBUILD the whole net with the
                 // late grid machinery (a gutted net is basically
                 // unrouted; the escape/maze joint is the wrong tool
@@ -8008,6 +8294,20 @@ fn pour_orphan_chain_sweep(board: &Board, final_routes: &mut [Route]) -> usize {
         else {
             continue;
         };
+        if let Ok(dir) = std::env::var("BHDL_PNR_DUMP_MIRROR") {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::File::create(format!(
+                "{dir}/mirror_{}.txt",
+                board.nets[ni].name.replace('/', "_")
+            )) {
+                for p in &polys {
+                    for (x, y) in p {
+                        let _ = writeln!(f, "{x} {y}");
+                    }
+                    let _ = writeln!(f, "---");
+                }
+            }
+        }
         let mut own_pads: Vec<(f64, f64, f64, f64)> = Vec::new();
         for comp in &board.components {
             let (co, sn) = (comp.theta.cos(), comp.theta.sin());
@@ -8108,6 +8408,23 @@ fn pour_orphan_chain_sweep(board: &Board, final_routes: &mut [Route]) -> usize {
                 }
             }
         }
+        // Other-face hole model: a via grounds a chain ONLY if its
+        // far end lands in that face's fill — a via inside a hole is
+        // dead copper and kept a dangling fragment alive (measured).
+        let pl = board.nets[ni].plane_layer.unwrap_or(0);
+        let n_layers = board.layer_stack.layers.len();
+        let other = if pl == 0 { n_layers.saturating_sub(1) } else { 0 };
+        let merged_b: Vec<(f64, f64, f64)> = if n_layers >= 2 {
+            output::kicad::merge_holes(output::kicad::plane_foreign_holes_on(
+                board,
+                final_routes,
+                board.nets[ni].id,
+                Some(other),
+                true,
+            ))
+        } else {
+            Vec::new()
+        };
         // Judge each group.
         let mut keep = vec![false; ng];
         for (i, sg) in final_routes[ni].segments.iter().enumerate() {
@@ -8116,14 +8433,14 @@ fn pour_orphan_chain_sweep(board: &Board, final_routes: &mut [Route]) -> usize {
             }
             let mut ok = false;
             for &pt in &[sg.start, sg.end] {
-                if final_routes[ni]
-                    .vias
-                    .iter()
-                    .any(|v| (v.x - pt.0).hypot(v.y - pt.1) <= via_r + 0.05)
-                    || own_pads.iter().any(|&(cx, cy, hx, hy)| {
-                        (pt.0 - cx).abs() <= hx && (pt.1 - cy).abs() <= hy
-                    })
-                {
+                if final_routes[ni].vias.iter().any(|v| {
+                    (v.x - pt.0).hypot(v.y - pt.1) <= via_r + 0.05
+                        && !output::kicad::plane_swallows(
+                            board, &merged_b, v.x, v.y, via_r, None,
+                        )
+                }) || own_pads.iter().any(|&(cx, cy, hx, hy)| {
+                    (pt.0 - cx).abs() <= hx && (pt.1 - cy).abs() <= hy
+                }) {
                     ok = true;
                     break;
                 }

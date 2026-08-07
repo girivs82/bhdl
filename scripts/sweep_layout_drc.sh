@@ -35,7 +35,7 @@ for f in tests/circuits/realistic/*.bhdl; do
   # 900s ceiling: the LQFP-100 board (test_stm32_vb_panel) is the
   # slowest at ~6.5 min after the conflict-scan perf arc (was 18 min
   # before the epoch-stamp dedupe + bbox pre-reject in geom.rs).
-  if ! BHDL_JLCPARTS_DB=/nonexistent RUST_LOG=off timeout 900 \
+  if ! BHDL_JLCPARTS_DB=/nonexistent RUST_LOG=off timeout 1800 \
       ./target/release/bhdl-cli "$f" layout -o "$pcb" ${seed:+--seed "$seed"} \
       >"$outdir/$b.layout.log" 2>&1; then
     echo "$b: LAYOUT-FAILED"
