@@ -3412,13 +3412,6 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                             if !anchored {
                                 drop = Some(sk);
                                 break 'segs;
-                            } else if std::env::var("BHDL_PNR_PROBE").is_ok()
-                                && (e.0 - 52.65).hypot(e.1 - 34.35) < 0.1
-                            {
-                                log::info!(
-                                    "[probe] tip ({:.2},{:.2}) judged ANCHORED",
-                                    e.0, e.1
-                                );
                             }
                         }
                     }
@@ -4127,13 +4120,6 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                             if !anchored {
                                 drop = Some(sk);
                                 break 'segs;
-                            } else if std::env::var("BHDL_PNR_PROBE").is_ok()
-                                && (e.0 - 52.65).hypot(e.1 - 34.35) < 0.1
-                            {
-                                log::info!(
-                                    "[probe] tip ({:.2},{:.2}) judged ANCHORED",
-                                    e.0, e.1
-                                );
                             }
                         }
                     }
