@@ -2455,11 +2455,28 @@ pub(crate) fn region_contains(net: &PnrNet, x: f64, y: f64) -> bool {
 /// intentionally a mirror, not a shared extraction — the writer's
 /// fixpoint interleaves emission text; the ecc83 byte-guard patrols
 /// the writer, this fn patrols itself via the bridge measurements.
+pub(crate) static EMISSION_CALLS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+pub(crate) static EMISSION_MS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 pub(crate) fn emission_fill_polys(
     board: &Board,
     routes: &[Route],
     ni: usize,
 ) -> Option<Vec<Vec<(f64, f64)>>> {
+    let _t0 = std::time::Instant::now();
+    struct T(std::time::Instant);
+    impl Drop for T {
+        fn drop(&mut self) {
+            EMISSION_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            EMISSION_MS.fetch_add(
+                self.0.elapsed().as_millis() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
+    }
+    let _t = T(_t0);
     let net = &board.nets[ni];
     let plane_layer = net.plane_layer?;
     if board.layer_stack.layers.get(plane_layer).map(|l| l.kind)

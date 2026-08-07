@@ -130,6 +130,48 @@ fn trial_dominated(result: &PnrResult, best: &PnrResult, has_measured: bool) -> 
     result.metrics.hpwl_mm >= best.metrics.hpwl_mm
 }
 
+
+/// Run one tier's trials CONCURRENTLY — each trial is an independent
+/// pipeline over its own board clone + per-trial seed, so results in
+/// TRIAL ORDER feed the caller's unchanged fold/tie-breaks/early
+/// breaks and the winner is byte-identical to the serial run (an
+/// early break just discards precomputed extras). All engine scratch
+/// state is thread_local; the only process-wide mutables are metric
+/// atomics. Escape hatch: BHDL_PNR_SERIAL_TRIALS=1.
+fn run_tier_trials(
+    board: &Board,
+    config: &PnrConfig,
+    trials: usize,
+    base_seed: u64,
+    prep: &(dyn Fn(&mut Board) + Sync),
+) -> Vec<Result<PnrResult>> {
+    if trials <= 1 || std::env::var("BHDL_PNR_SERIAL_TRIALS").is_ok() {
+        return (0..trials)
+            .map(|t| {
+                let mut tb = board.clone();
+                prep(&mut tb);
+                place_and_route(tb, config.clone(), base_seed.wrapping_add(t as u64))
+            })
+            .collect();
+    }
+    std::thread::scope(|sc| {
+        let handles: Vec<_> = (0..trials)
+            .map(|t| {
+                let mut tb = board.clone();
+                prep(&mut tb);
+                let cfg = config.clone();
+                sc.spawn(move || {
+                    place_and_route(tb, cfg, base_seed.wrapping_add(t as u64))
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("trial thread panicked"))
+            .collect()
+    })
+}
+
 /// Run multiple placement+routing trials with different initializations,
 /// return the best result (highest routability, then lowest HPWL; on
 /// boards with measured IBIS edges, lower measured crosstalk breaks
@@ -148,10 +190,10 @@ pub fn place_and_route_best_of(
     // byte-identity.
     let has_measured = board.nets.iter().any(|n| n.edge_swing_v.is_some());
 
-    for trial in 0..trials {
+    let tier = run_tier_trials(&board, &config, trials, base_seed, &|_b| {});
+    for (trial, result) in tier.into_iter().enumerate() {
         info!("=== Trial {}/{} ===", trial + 1, trials);
-        let trial_board = board.clone();
-        let result = place_and_route(trial_board, config.clone(), base_seed.wrapping_add(trial as u64))?;
+        let result = result?;
 
         // PLACEMENT LEGALITY FIRST: a trial shipping a residual
         // pad-box overlap grades as clearance + mask-bridge
@@ -221,12 +263,12 @@ pub fn place_and_route_best_of(
             || legalization::residual_pad_overlaps(&b.board) > 0
     });
     if best_imperfect {
-        for trial in 0..trials {
+        let tier = run_tier_trials(&board, &config, trials, base_seed, &|b| {
+            b.config.si_return_cost = true;
+        });
+        for (trial, result) in tier.into_iter().enumerate() {
             info!("=== SI-cost trial {}/{} ===", trial + 1, trials);
-            let mut trial_board = board.clone();
-            trial_board.config.si_return_cost = true;
-            let result =
-                place_and_route(trial_board, config.clone(), base_seed.wrapping_add(trial as u64))?;
+            let result = result?;
             let r_over = legalization::residual_pad_overlaps(&result.board);
             let dominated = best
                 .as_ref()
@@ -275,15 +317,12 @@ pub fn place_and_route_best_of(
             || legalization::residual_pad_overlaps(&b.board) > 0
     });
     if still_imperfect {
-        for trial in 0..trials {
+        let tier = run_tier_trials(&board, &config, trials, base_seed, &|b| {
+            b.config.fanout_first = true;
+        });
+        for (trial, result) in tier.into_iter().enumerate() {
             info!("=== Fanout-first trial {}/{} ===", trial + 1, trials);
-            let mut trial_board = board.clone();
-            trial_board.config.fanout_first = true;
-            let result = place_and_route(
-                trial_board,
-                config.clone(),
-                base_seed.wrapping_add(trial as u64),
-            )?;
+            let result = result?;
             let dominated = best
                 .as_ref()
                 .map_or(false, |b| trial_dominated(&result, b, has_measured));
@@ -335,15 +374,12 @@ pub fn place_and_route_best_of(
             || legalization::residual_pad_overlaps(&b.board) > 0
     });
     if still_imperfect2 {
-        for trial in 0..trials {
+        let tier = run_tier_trials(&board, &config, trials, base_seed, &|b| {
+            b.config.cheap_amputation = true;
+        });
+        for (trial, result) in tier.into_iter().enumerate() {
             info!("=== Cheap-amputation trial {}/{} ===", trial + 1, trials);
-            let mut trial_board = board.clone();
-            trial_board.config.cheap_amputation = true;
-            let result = place_and_route(
-                trial_board,
-                config.clone(),
-                base_seed.wrapping_add(trial as u64),
-            )?;
+            let result = result?;
             let dominated = best
                 .as_ref()
                 .map_or(false, |b| trial_dominated(&result, b, has_measured));
@@ -399,16 +435,13 @@ pub fn place_and_route_best_of(
             || legalization::residual_pad_overlaps(&b.board) > 0
     });
     if pre_escape_imperfect {
-        for trial in 0..trials {
+        let tier = run_tier_trials(&board, &config, trials, base_seed, &|b| {
+            b.config.escape_demand = 2.0;
+            b.config.fanout_first = true;
+        });
+        for (trial, result) in tier.into_iter().enumerate() {
             info!("=== Escape-demand trial {}/{} ===", trial + 1, trials);
-            let mut trial_board = board.clone();
-            trial_board.config.escape_demand = 2.0;
-            trial_board.config.fanout_first = true;
-            let result = place_and_route(
-                trial_board,
-                config.clone(),
-                base_seed.wrapping_add(trial as u64),
-            )?;
+            let result = result?;
             let dominated = best
                 .as_ref()
                 .map_or(false, |b| trial_dominated(&result, b, has_measured));
@@ -516,15 +549,12 @@ pub fn place_and_route_best_of(
             }
         }
         if !fb.is_empty() {
-            for trial in 0..trials {
+            let tier = run_tier_trials(&board, &config, trials, base_seed, &|b| {
+                b.constraints.extend(fb.iter().cloned());
+            });
+            for (trial, result) in tier.into_iter().enumerate() {
                 info!("=== Noise-feedback trial {}/{} ===", trial + 1, trials);
-                let mut trial_board = board.clone();
-                trial_board.constraints.extend(fb.iter().cloned());
-                let result = place_and_route(
-                    trial_board,
-                    config.clone(),
-                    base_seed.wrapping_add(trial as u64),
-                )?;
+                let result = result?;
                 let dominated = best
                     .as_ref()
                     .map_or(false, |b| trial_dominated(&result, b, true));
@@ -4264,6 +4294,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         }
     }
 
+    let _t_bridge = std::time::Instant::now();
     // 5.998. EMISSION-MODEL ISLAND BRIDGE: detect islands on the SAME
     // copper the file will ship (emission_fill_polys mirrors the
     // writer — rings, spokes, backfill claims, anchored fracture) and
@@ -4394,8 +4425,24 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                     continue;
                 }
                 let mut done = false;
+                let mut served = false;
                 for &(src, pi2) in &pad_polys {
-                    if pi2 != island || done {
+                    if pi2 != island || done || served {
+                        continue;
+                    }
+                    // An earlier ROUND already via-dropped this pad:
+                    // the surface model still shows an island (the
+                    // via serves it through the other face);
+                    // re-dropping stacked coincident vias (oracle:
+                    // holes_co_located). Served is NOT a new bridge —
+                    // counting it as one made the ordering fixpoint
+                    // run all its rounds on every trial.
+                    if final_routes[ni]
+                        .vias
+                        .iter()
+                        .any(|v| (v.x - src.0).hypot(v.y - src.1) <= 2.0)
+                    {
+                        served = true;
                         continue;
                     }
                     done = island_bridge_pad(
@@ -4412,7 +4459,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                 }
                 if done {
                     bridged += 1;
-                } else {
+                } else if !served {
                     round_residual += 1;
                     log::warn!(
                         "island bridge: '{}' island with {} pad(s) — no legal bridge (honest)",
@@ -4477,6 +4524,13 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                     });
                     sources.truncate(8);
                     let mut done = false;
+                    if final_routes[ni]
+                        .vias
+                        .iter()
+                        .any(|v| (v.x - src.0).hypot(v.y - src.1) <= 2.0)
+                    {
+                        continue; // served by an earlier round's via
+                    }
                     for &s2 in &sources {
                         if island_bridge_pad(
                             &board,
@@ -4524,6 +4578,14 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
             if swept > 0 {
                 info!("post-bridge orphan sweep: {swept} segment(s) removed");
             }
+        }
+        if std::env::var("BHDL_PNR_TIMING").is_ok() {
+            eprintln!(
+                "[timing] bridge round done at {:.1}s (emission calls {}, {}ms cum)",
+                _t_bridge.elapsed().as_secs_f64(),
+                output::kicad::EMISSION_CALLS.load(std::sync::atomic::Ordering::Relaxed),
+                output::kicad::EMISSION_MS.load(std::sync::atomic::Ordering::Relaxed),
+            );
         }
         pour_bridge_residual = round_residual;
         // Re-scan whenever ANY bridge landed: this round's own
@@ -6841,19 +6903,7 @@ fn island_bridge_pad(
     rip_budget: &mut usize,
 ) -> bool {
     let net_id = board.nets[ni].id;
-    // An earlier ROUND already via-dropped this pad: the F.Cu model
-    // still shows an island (the via serves it through the B face),
-    // and re-dropping stacked coincident vias (oracle:
-    // holes_co_located + hole_to_hole, 6 warnings at (69.6,79.4)).
-    let via_r_own = board.layer_stack.via.pad_mm / 2.0;
-    if final_routes[ni]
-        .vias
-        .iter()
-        .any(|v| (v.x - src.0).hypot(v.y - src.1) <= 2.0)
-    {
-        let _ = via_r_own;
-        return true;
-    }
+
     let pip_main = |x: f64, y: f64| -> bool {
         let mut inside = false;
         let m = main_poly.len();
