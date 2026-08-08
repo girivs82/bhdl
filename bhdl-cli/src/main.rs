@@ -2242,7 +2242,14 @@ async fn run_layout(
 
     // Direct fabrication output — Gerber + Excellon, no EDA tool.
     if fab {
-        let pkg = bhdl_pnr::output::gerber::export_fab(&result.board, &result.routes);
+        // The writer computes the zone fills; the fab package ships
+        // those exact polygons rather than a second opinion.
+        let (_, fills) = bhdl_pnr::output::kicad::export_kicad_pcb_with_fills(
+            &result.board,
+            &result.routes,
+        );
+        let pkg =
+            bhdl_pnr::output::gerber::export_fab(&result.board, &result.routes, &fills);
         let dir = output_path.with_extension("fab");
         std::fs::create_dir_all(&dir)?;
         let mut bytes = 0usize;

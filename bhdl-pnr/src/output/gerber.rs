@@ -5,16 +5,16 @@
 //! the path. KiCad stays the TEST oracle (its DRC judges our boards);
 //! it stops being a required stage of the pipeline.
 //!
-//! INCREMENT 1 covers the copper that lives in the data model —
-//! tracks, pads, via pads — plus the board outline and the drill
-//! file. ZONE FILLS ARE NOT YET EMITTED: the pour fill is computed
-//! inside the KiCad writer's emission fixpoint, and the honest way to
-//! share it is to extract that computation so both writers call ONE
-//! function. Mirroring it here would plant exactly the drift class
-//! that cost this project three separate arcs. A board exported today
-//! therefore carries its routed copper but not its pours — stated
-//! plainly in the manifest rather than left for a fab house to
-//! discover.
+//! Covers tracks, pads, via pads, mounting-hole annuli, the board
+//! outline, the drill file, AND zone/pour copper.
+//!
+//! The zone copper is NOT recomputed here. It arrives as `BoardFills`
+//! from the one place that computes it — the emission fixpoint, whose
+//! passes are inseparable from the starved-pad accounting they feed.
+//! Three arcs of this project were lost to mirrors of that
+//! computation drifting from it; the cure is one computation with two
+//! consumers, not a better mirror. A board therefore ships the exact
+//! polygons its .kicad_pcb carries, bit for bit.
 //!
 //! Format: RS-274X, absolute, metric, 4.6 (nanometre resolution).
 //! Rotated rectangular pads are emitted as REGIONS rather than
@@ -150,7 +150,13 @@ fn pad_on_layer(pad: &PadGeom, side: BoardSide, layer: usize, last: usize) -> bo
 }
 
 /// One copper layer as a Gerber file.
-fn copper_layer(board: &Board, routes: &[Route], layer: usize, name: &str) -> GerberFile {
+fn copper_layer(
+    board: &Board,
+    routes: &[Route],
+    fills: &crate::output::kicad::BoardFills,
+    layer: usize,
+    name: &str,
+) -> GerberFile {
     let last = board.layer_stack.layers.len().saturating_sub(1);
     let via_r = board.layer_stack.via.pad_mm / 2.0;
     let mut ap = Apertures::new();
@@ -312,6 +318,23 @@ fn copper_layer(board: &Board, routes: &[Route], layer: usize, name: &str) -> Ge
     }
     body.push_str(&mh_body);
 
+    // Zone/pour copper — the writer's own polygons, not a mirror of
+    // them. Each fractured polygon (holes joined to the outline by
+    // zero-width slits, exactly as KiCad stores them) becomes one
+    // Gerber region.
+    let mut zone_body = String::new();
+    for zf in &fills.zones {
+        if zf.layer != layer {
+            continue;
+        }
+        for poly in &zf.polys {
+            if poly.len() >= 3 {
+                zone_body.push_str(&region(poly));
+            }
+        }
+    }
+    body.push_str(&zone_body);
+
     let mut s = header(name);
     s.push_str(&ap.emit());
     s.push_str(&body);
@@ -401,14 +424,18 @@ fn excellon(board: &Board, routes: &[Route]) -> GerberFile {
 }
 
 /// Build the full package for a placed-and-routed board.
-pub fn export_fab(board: &Board, routes: &[Route]) -> FabPackage {
+pub fn export_fab(
+    board: &Board,
+    routes: &[Route],
+    fills: &crate::output::kicad::BoardFills,
+) -> FabPackage {
     let mut gerbers = Vec::new();
     for (i, layer) in board.layer_stack.layers.iter().enumerate() {
         if layer.kind != LayerKind::Signal {
             continue;
         }
         let name = layer.name.replace('.', "_");
-        gerbers.push(copper_layer(board, routes, i, &name));
+        gerbers.push(copper_layer(board, routes, fills, i, &name));
     }
     gerbers.push(edge_cuts(board));
     let drill = excellon(board, routes);
@@ -436,20 +463,13 @@ pub fn export_fab(board: &Board, routes: &[Route]) -> FabPackage {
         let _ = writeln!(manifest, "  {}", g.filename);
     }
     let _ = writeln!(manifest, "  {}", drill.filename);
+    let n_zone_polys: usize = fills.zones.iter().map(|z| z.polys.len()).sum();
+    let _ = writeln!(manifest, "zones:  {n_zone_polys} filled polygon(s)");
     if !poured.is_empty() {
-        manifest.push_str(
-            "\nINCOMPLETE — READ BEFORE FABRICATING\n\
-             This package does NOT include zone/pour copper. The board\n\
-             declares pours on these nets:\n",
-        );
+        manifest.push_str("\nPoured nets (zone copper included):\n");
         for p in &poured {
             let _ = writeln!(manifest, "  - {p}");
         }
-        manifest.push_str(
-            "Their fills are computed by the KiCad-writer emission path and\n\
-             are not yet shared with this exporter. Until they are, use the\n\
-             .kicad_pcb output for fabrication of poured boards.\n",
-        );
     }
     FabPackage { gerbers, drill, manifest }
 }

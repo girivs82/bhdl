@@ -18,7 +18,36 @@ use crate::types::*;
 use crate::types::BoardOutline::Polygon as PnrBoardOutlinePoly;
 
 /// Export board and routes to KiCad PCB format.
+/// The zone copper this writer actually emitted, exposed so other
+/// consumers (the direct Gerber exporter) can ship the SAME polygons
+/// instead of recomputing them. Three separate arcs of this project
+/// were lost to mirrors of this computation drifting from it; the
+/// cure is not a better mirror, it is one computation with two
+/// consumers. Collected inside the emission fixpoint and reset with
+/// the buffer each pass, so what you get is exactly what the final
+/// pass wrote.
+#[derive(Debug, Clone)]
+pub struct ZoneFill {
+    pub net_id: NetId,
+    pub layer: usize,
+    pub polys: Vec<Vec<(f64, f64)>>,
+}
+
+/// All zone copper on the board, in emission order.
+#[derive(Debug, Clone, Default)]
+pub struct BoardFills {
+    pub zones: Vec<ZoneFill>,
+}
+
 pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
+    export_kicad_pcb_with_fills(board, routes).0
+}
+
+/// As `export_kicad_pcb`, plus the zone fills it computed.
+pub fn export_kicad_pcb_with_fills(
+    board: &Board,
+    routes: &[Route],
+) -> (String, BoardFills) {
     let mut out = String::new();
 
     out.push_str("(kicad_pcb (version 20240108) (generator \"bhdl-pnr\") (generator_version \"1.0\")\n");
@@ -87,11 +116,13 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
     // override KiCad's DRC honors — and the fill re-runs with that
     // pad's relief ring dropped so copper genuinely floods it. The
     // zone text is appended after the routes.
-    let (zones_out, dead_solid): (String, Vec<(f64, f64)>) = {
+    let (zones_out, dead_solid, board_fills): (String, Vec<(f64, f64)>, BoardFills) = {
         let mut dead_solid: Vec<(f64, f64)> = Vec::new();
         let mut zbuf = String::new();
+        let mut fills = BoardFills::default();
         for _pass in 0..3 {
             zbuf.clear();
+            fills.zones.clear();
             let mut dead_new: Vec<(f64, f64)> = Vec::new();
         // ── Plane zones with REAL fill geometry ──
         // One zone per plane-assigned net, WITH saved filled_polygon
@@ -431,6 +462,11 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
             ) {
                 dead_new.push(d);
             }
+            fills.zones.push(ZoneFill {
+                net_id: net.id,
+                layer: plane_layer,
+                polys: polys.clone(),
+            });
             for pts in &polys {
                 zbuf.push_str(&format!("    (filled_polygon (layer \"{}\") (pts\n", layer_name));
                 for (x, y) in pts {
@@ -602,6 +638,11 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
                                 }
                             }
                             zbuf.push_str("    ))\n");
+                            fills.zones.push(ZoneFill {
+                                net_id: net.id,
+                                layer: other,
+                                polys: polys2.clone(),
+                            });
                             for pts in &polys2 {
                                 zbuf.push_str(&format!(
                                     "    (filled_polygon (layer \"{}\") (pts\n",
@@ -633,7 +674,7 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
                 break;
             }
         }
-        (zbuf, dead_solid)
+        (zbuf, dead_solid, fills)
     };
 
 
@@ -857,7 +898,7 @@ pub fn export_kicad_pcb(board: &Board, routes: &[Route]) -> String {
 
     out.push_str(&zones_out);
     out.push_str(")\n");
-    out
+    (out, board_fills)
 }
 
 
