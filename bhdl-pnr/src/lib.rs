@@ -2986,6 +2986,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
     }
 
     via_anchor_check(&board, &final_routes, "post-rescue");
+    probe_dangling_vias(&board, &final_routes, "post-5.995-rescue");
     // 5.996. FINAL ORPHAN SWEEP (after every copper-moving pass): copper-moving passes (shove, miter,
     // strip) can strand short parentless fragments after the last
     // validate — the oracle reads them as track_dangling. KiCad
@@ -3331,13 +3332,19 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                     .and_then(|pl| board.layer_stack.layers.get(pl))
                     .map(|l| l.kind == crate::types::LayerKind::Signal)
                     .unwrap_or(false);
-                // Segment-level trim only for REGIONED pours: their
-                // routes are small (pocket stubs + hops), while a
-                // board-wide ground's thousands of segments make the
-                // O(n^2)-per-removal scan intractable — and its spur
-                // classes are already covered by the span machinery.
-                pour_net_sweep =
-                    pour_net && board.nets[i].plane_region.is_some();
+                // Segment-level trim for REGIONED pours AND signal
+                // nets — both carry small routes (pocket stubs, a
+                // few dozen segments), while a board-wide ground's
+                // thousands make the O(n^2)-per-removal scan
+                // intractable (its spur classes are covered by the
+                // span machinery). Signal nets need it too: rebuild
+                // churn leaves dead-end tips the pour gate never
+                // served (7 track_dangling at the mixer's seed-7
+                // board, warning severity — invisible to the old
+                // severity-error-only checks).
+                pour_net_sweep = (pour_net
+                    && board.nets[i].plane_region.is_some())
+                    || board.nets[i].plane_layer.is_none();
                 let (cap_pl, cap_len) =
                     if pour_net { (16usize, 20.0f64) } else { (4, 2.2) };
                 let mut drop_span: Option<usize> = None;
@@ -3357,14 +3364,20 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                     // a one-end-anchored spur dangles just the same.
                     let ends = [r.segments[ps].start, r.segments[ps + pl - 1].end];
                     let all_anchored = ends.iter().all(|&e| {
-                        r.path_spans
+                        // ALL other copper anchors, not just
+                        // span-REGISTERED copper: rescue joins, trim
+                        // T-split halves, and amputation leftovers
+                        // carry no span bookkeeping, and a via hop's
+                        // 17mm B-leg landing on such a host was
+                        // judged tip-unanchored and eaten (seed-7
+                        // via_dangling pair).
+                        r.segments
                             .iter()
                             .enumerate()
-                            .filter(|&(sj, _)| sj != si)
-                            .any(|(_, &(qs, ql))| {
-                                r.segments[qs..qs + ql].iter().any(|sg| {
-                                    geom::point_segment_dist(e, sg.start, sg.end) <= 0.05
-                                })
+                            .any(|(k, sg)| {
+                                (k < ps || k >= ps + pl)
+                                    && geom::point_segment_dist(e, sg.start, sg.end)
+                                        <= 0.05
                             })
                             || r
                                 .vias
@@ -3448,6 +3461,14 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                     match drop {
                         Some(sk) => {
                             let r = &mut final_routes[i];
+                            if std::env::var("BHDL_PNR_PROBE").is_ok() {
+                                let sg = &r.segments[sk];
+                                log::info!(
+                                    "[probe] tip-trim DROP '{}' l{} ({:.2},{:.2})->({:.2},{:.2})",
+                                    board.nets[i].name, sg.layer,
+                                    sg.start.0, sg.start.1, sg.end.0, sg.end.1
+                                );
+                            }
                             r.segments.remove(sk);
                             // span bookkeeping is already stale for
                             // these nets — clear it (rip-whole
@@ -4156,6 +4177,14 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                     match drop {
                         Some(sk) => {
                             let r = &mut final_routes[i];
+                            if std::env::var("BHDL_PNR_PROBE").is_ok() {
+                                let sg = &r.segments[sk];
+                                log::info!(
+                                    "[probe] tip-trim DROP '{}' l{} ({:.2},{:.2})->({:.2},{:.2})",
+                                    board.nets[i].name, sg.layer,
+                                    sg.start.0, sg.start.1, sg.end.0, sg.end.1
+                                );
+                            }
                             r.segments.remove(sk);
                             // span bookkeeping is already stale for
                             // these nets — clear it (rip-whole
@@ -4177,6 +4206,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         if pruned > 0 {
             info!("final orphan sweep: {pruned} stranded fragment(s) pruned");
 
+    probe_dangling_vias(&board, &final_routes, "post-5.996-sweep");
     // 5.997. POST-SWEEP PLANE RESCUE: the sweeps above run AFTER the
     // surface rescue, so a pad whose serving copper they trimmed
     // (amputation spurs, covered duplicates) ends the pipeline
@@ -4195,6 +4225,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         }
     }
 
+    probe_dangling_vias(&board, &final_routes, "pre-5.9985");
     // 5.9985. REGION FOLLOWS THE NET'S OWN COPPER: a shaped pour
     // region comes from PIN clusters at 4.99 — before routing — so
     // trunks that wander between clusters end up outside it, and
@@ -4281,6 +4312,48 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         let repaired = signal_net_continuity_repair(&board, &mut final_routes);
         if repaired > 0 {
             info!("continuity repair: {repaired} split net(s) rejoined");
+        }
+    }
+
+    // 5.99855. EXACT-DUPLICATE segments: bridge/joint re-commits can
+    // stack a segment on itself; the pair then self-anchors through
+    // the tip-trim's centerline test (each anchors the other at
+    // distance zero) while KiCad sees one dangling stub (7
+    // track_dangling at the mixer's seed-7 board). Pure redundancy —
+    // remove.
+    {
+        let mut deduped = 0usize;
+        for ni in 0..board.nets.len() {
+            let r = &mut final_routes[ni];
+            let mut k = 0usize;
+            while k < r.segments.len() {
+                let dup = (0..k).any(|j| {
+                    let (a, b) = (&r.segments[j], &r.segments[k]);
+                    a.layer == b.layer
+                        && (a.width_mm - b.width_mm).abs() < 1e-6
+                        && (((a.start.0 - b.start.0).hypot(a.start.1 - b.start.1) < 1e-6
+                            && (a.end.0 - b.end.0).hypot(a.end.1 - b.end.1) < 1e-6)
+                            || ((a.start.0 - b.end.0).hypot(a.start.1 - b.end.1) < 1e-6
+                                && (a.end.0 - b.start.0).hypot(a.end.1 - b.start.1)
+                                    < 1e-6))
+                });
+                if dup {
+                    r.segments.remove(k);
+                    for (qs, ql) in r.path_spans.iter_mut() {
+                        if *qs > k {
+                            *qs -= 1;
+                        } else if k < *qs + *ql {
+                            *ql = ql.saturating_sub(1);
+                        }
+                    }
+                    deduped += 1;
+                } else {
+                    k += 1;
+                }
+            }
+        }
+        if deduped > 0 {
+            info!("segment dedup: {deduped} exact duplicate(s) removed");
         }
     }
 
@@ -5145,6 +5218,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         }
     }
 
+    probe_dangling_vias(&board, &final_routes, "pre-metrics");
     let pour_defects = pour_defect_count(&board, &final_routes) + pour_bridge_residual;
     if pour_defects > 0 {
         info!("pour defects (trial currency): {pour_defects}");
@@ -7741,6 +7815,75 @@ fn net_pad_group_count(board: &Board, route: &Route, ni: usize) -> usize {
     count.max(1)
 }
 
+
+
+/// Split the segment whose INTERIOR carries point q into two halves
+/// ending exactly at q — a route landing mid-span is electrically
+/// connected, but every dangling/stub judge (KiCad's and ours)
+/// demands a REAL junction (the d37c674 T-split lesson). Committed
+/// joins must split their host AT COMMIT TIME: the 5.996 span trim
+/// runs before the later T-splitting passes and ate a via hop's
+/// 17mm B-leg as an unanchored stub span.
+fn t_split_host_at(route: &mut Route, q: (f64, f64), layer: usize) {
+    for k in 0..route.segments.len() {
+        let sg = &route.segments[k];
+        if sg.layer != layer {
+            continue;
+        }
+        if geom::point_segment_dist(q, sg.start, sg.end) > 0.01 {
+            continue;
+        }
+        if (q.0 - sg.start.0).hypot(q.1 - sg.start.1) < 0.01
+            || (q.0 - sg.end.0).hypot(q.1 - sg.end.1) < 0.01
+        {
+            return; // already lands on a junction
+        }
+        let (start, end, w, l) = (sg.start, sg.end, sg.width_mm, sg.layer);
+        route.segments[k] = RouteSegment {
+            layer: l,
+            start,
+            end: q,
+            width_mm: w,
+        };
+        route.segments.push(RouteSegment {
+            layer: l,
+            start: q,
+            end,
+            width_mm: w,
+        });
+        return;
+    }
+}
+
+/// PROBE census: vias with no segment contact on one of their
+/// layers — the shipping via_dangling shape. Log-only.
+fn probe_dangling_vias(board: &Board, final_routes: &[Route], tag: &str) {
+    if std::env::var("BHDL_PNR_PROBE").is_err() {
+        return;
+    }
+    let via_r = board.layer_stack.via.pad_mm / 2.0;
+    for (ni, r) in final_routes.iter().enumerate() {
+        for v in &r.vias {
+            let touch = |layer: usize| {
+                r.segments.iter().any(|sg| {
+                    sg.layer == layer
+                        && ((sg.start.0 - v.x).hypot(sg.start.1 - v.y) <= via_r + 0.05
+                            || (sg.end.0 - v.x).hypot(sg.end.1 - v.y) <= via_r + 0.05)
+                })
+            };
+            let f = touch(v.from_layer);
+            let b = touch(v.to_layer);
+            if !f || !b {
+                log::info!(
+                    "[probe] census {tag}: '{}' via ({:.3},{:.3}) contact from={} to={}",
+                    board.nets.get(ni).map(|n| n.name.as_str()).unwrap_or("?"),
+                    v.x, v.y, f, b
+                );
+            }
+        }
+    }
+}
+
 /// SIGNAL-NET CONTINUITY REPAIR: mirror KiCad's connectivity grouping
 /// per ROUTED net — segments joined by geometric overlap (same layer)
 /// and by vias across layers, pads joined by contact — and when a
@@ -8471,9 +8614,24 @@ fn pour_orphan_chain_sweep(board: &Board, final_routes: &mut [Route]) -> usize {
             for &pt in &[sg.start, sg.end] {
                 if final_routes[ni].vias.iter().any(|v| {
                     (v.x - pt.0).hypot(v.y - pt.1) <= via_r + 0.05
-                        && !output::kicad::plane_swallows(
-                            board, &merged_b, v.x, v.y, via_r, None,
-                        )
+                        && (in_fill(v.x, v.y)
+                            || !output::kicad::plane_swallows(
+                                board, &merged_b, v.x, v.y, via_r, None,
+                            )
+                            // ROUTED continuation: on a routed net a
+                            // via joins track layers — the other
+                            // layer's copper grounds this chain even
+                            // with no fill anywhere near (requiring
+                            // fill-landing ate 1278 legitimate vbias
+                            // B.Cu segments and left their vias
+                            // dangling).
+                            || final_routes[ni].segments.iter().any(|o| {
+                                o.layer != sg.layer
+                                    && ((o.start.0 - v.x).hypot(o.start.1 - v.y)
+                                        <= via_r + 0.05
+                                        || (o.end.0 - v.x).hypot(o.end.1 - v.y)
+                                            <= via_r + 0.05)
+                            }))
                 }) || own_pads.iter().any(|&(cx, cy, hx, hy)| {
                     (pt.0 - cx).abs() <= hx && (pt.1 - cy).abs() <= hy
                 }) {
@@ -8549,6 +8707,16 @@ fn pour_orphan_chain_sweep(board: &Board, final_routes: &mut [Route]) -> usize {
             }
         }
         let mut drop: Vec<usize> = (0..n).filter(|&i| !keep[group[i]]).collect();
+        if std::env::var("BHDL_PNR_PROBE").is_ok() {
+            for &i in &drop {
+                let sg = &final_routes[ni].segments[i];
+                log::info!(
+                    "[probe] orphan-sweep DROP '{}' l{} ({:.2},{:.2})->({:.2},{:.2})",
+                    board.nets[ni].name, sg.layer,
+                    sg.start.0, sg.start.1, sg.end.0, sg.end.1
+                );
+            }
+        }
         drop.sort_unstable_by(|a, b| b.cmp(a));
         for sk in drop {
             let r = &mut final_routes[ni];
@@ -8708,6 +8876,14 @@ fn pour_net_free_end_trim(board: &Board, final_routes: &mut [Route]) -> usize {
             match drop {
                 Some(sk) => {
                     let r = &mut final_routes[i];
+                    if std::env::var("BHDL_PNR_PROBE").is_ok() {
+                        let sg = &r.segments[sk];
+                        log::info!(
+                            "[probe] free-end-trim DROP '{}' l{} ({:.2},{:.2})->({:.2},{:.2})",
+                            board.nets[i].name, sg.layer,
+                            sg.start.0, sg.start.1, sg.end.0, sg.end.1
+                        );
+                    }
                     r.segments.remove(sk);
                     for (qs, ql) in r.path_spans.iter_mut() {
                         if *qs > sk {
@@ -9201,7 +9377,19 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
                     })
                     .collect();
                 for v in &r.vias {
-                    attach_b.push(((v.x, v.y), (px - v.x).hypot(py - v.y)));
+                    // A via with no copper on the TARGET layer is a
+                    // dead landing — hopping to it ships
+                    // via_dangling, not connectivity.
+                    let live = r.segments.iter().any(|sg| {
+                        sg.layer == other
+                            && ((sg.start.0 - v.x).hypot(sg.start.1 - v.y)
+                                <= via_r + 0.05
+                                || (sg.end.0 - v.x).hypot(sg.end.1 - v.y)
+                                    <= via_r + 0.05)
+                    });
+                    if live {
+                        attach_b.push(((v.x, v.y), (px - v.x).hypot(py - v.y)));
+                    }
                 }
                 attach_b.sort_by(|a, b| {
                     a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
@@ -9247,6 +9435,15 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
                         }
                         let mut done = false;
                         for &(q, _) in &attach_b {
+                            // A target at the claimed site itself
+                            // yields a DEGENERATE B-leg: commit_escape
+                            // silently pushes nothing while the
+                            // F-side commit already carried the via —
+                            // the exact anatomy of the seed-7
+                            // via_dangling pair.
+                            if (q.0 - vx).hypot(q.1 - vy) < via_r * 2.0 {
+                                continue;
+                            }
                             let Some(bpath) = geom::route_escape(
                                 &idx,
                                 (vx, vy),
@@ -9257,6 +9454,13 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
                             ) else {
                                 continue;
                             };
+                            let blen: f64 = bpath
+                                .windows(2)
+                                .map(|w| (w[0].0 - w[1].0).hypot(w[0].1 - w[1].1))
+                                .sum();
+                            if blen < 0.05 {
+                                continue;
+                            }
                             commit_escape(
                                 &mut final_routes[i],
                                 &fpath,
@@ -9278,6 +9482,14 @@ fn plane_surface_rescue(board: &Board, final_routes: &mut Vec<Route>) -> usize {
                                 None,
                                 &board.nets[i].name,
                             );
+                            t_split_host_at(&mut final_routes[i], q, other);
+                            if std::env::var("BHDL_PNR_PROBE").is_ok() {
+                                log::info!(
+                                    "[probe] hop internals: fpath {} pt(s), bpath {} pt(s), blen {blen:.3}, via ({vx:.3},{vy:.3}), q ({:.3},{:.3}), segs now {}",
+                                    fpath.len(), bpath.len(), q.0, q.1,
+                                    final_routes[i].segments.len()
+                                );
+                            }
                             info!(
                                 "plane surface rescue: '{}' pad at ({px:.2},{py:.2}) joined by VIA HOP to the other layer",
                                 board.nets[i].name

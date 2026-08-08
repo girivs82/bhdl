@@ -354,6 +354,13 @@ pub fn place_blocks(blocks: &mut [PlacementBlock], board_w: f64, board_h: f64, e
     });
 
     let rotate_by = (seed as usize) % n.max(1);
+    // The seed's ENTIRE placement entropy is this rotation index —
+    // seeds collide modulo the block count (mixer: 7 and 99 shipped
+    // byte-identical boards). Logged so seed-based claims can be
+    // made against the EFFECTIVE index, not the raw seed. A richer
+    // seeded shuffle would break every byte-guarded board's
+    // user-approved output — deliberate future work, not a patch.
+    log::info!("placement seed: rotation {rotate_by} of {n} block(s) (seed {seed})");
     order.rotate_left(rotate_by.min(n.saturating_sub(1)));
 
     // Shelf packing
