@@ -278,6 +278,12 @@ enum Commands {
         /// Also generate interactive HTML board visualization
         #[arg(long)]
         html: bool,
+
+        /// Also write a direct Gerber/Excellon fabrication package
+        /// (RS-274X + drill) into <output>.fab/ — no EDA tool in the
+        /// path. See the package manifest for coverage.
+        #[arg(long)]
+        fab: bool,
     },
 
     /// Transcribe a MCAD DXF (positional FILE) into layout-block
@@ -595,8 +601,8 @@ async fn main() -> Result<()> {
             run_simulation(&source_file, testbench, output, &format).await?;
         }
 
-        Some(Commands::Layout { output, trials, max_iterations, html, seed }) => {
-            run_layout(&source_file, output, trials, max_iterations, html, &cli.input, seed).await?;
+        Some(Commands::Layout { output, trials, max_iterations, html, fab, seed }) => {
+            run_layout(&source_file, output, trials, max_iterations, html, fab, &cli.input, seed).await?;
         }
 
         Some(Commands::Doc { output, bom_only, budget_only, no_tree, no_patterns }) => {
@@ -1739,6 +1745,7 @@ async fn run_layout(
     trials: usize,
     max_iterations: usize,
     html: bool,
+    fab: bool,
     source_path: &Path,
     seed: u64,
 ) -> Result<()> {
@@ -2231,6 +2238,34 @@ async fn run_layout(
             .map(|&(_, y)| y)
             .fold(0.0_f64, f64::max);
         mech_check::check_parity(outline_pts, holes, cutouts, &dxf, board_h)?;
+    }
+
+    // Direct fabrication output — Gerber + Excellon, no EDA tool.
+    if fab {
+        let pkg = bhdl_pnr::output::gerber::export_fab(&result.board, &result.routes);
+        let dir = output_path.with_extension("fab");
+        std::fs::create_dir_all(&dir)?;
+        let mut bytes = 0usize;
+        for g in &pkg.gerbers {
+            std::fs::write(dir.join(&g.filename), &g.contents)?;
+            bytes += g.contents.len();
+        }
+        std::fs::write(dir.join(&pkg.drill.filename), &pkg.drill.contents)?;
+        bytes += pkg.drill.contents.len();
+        std::fs::write(dir.join("MANIFEST.txt"), &pkg.manifest)?;
+        println!(
+            "  {} Fab package: {} ({} file(s), {} bytes)",
+            "✓".green(),
+            dir.display(),
+            pkg.gerbers.len() + 2,
+            bytes
+        );
+        if pkg.manifest.contains("INCOMPLETE") {
+            println!(
+                "  {} fab package omits ZONE COPPER — see MANIFEST.txt",
+                "!".yellow()
+            );
+        }
     }
 
     // HTML visualization (always generate, or only with --html flag)
