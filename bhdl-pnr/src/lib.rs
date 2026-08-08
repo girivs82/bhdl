@@ -5218,6 +5218,12 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         }
     }
 
+    {
+        let pruned = signal_free_end_trim(&board, &mut final_routes);
+        if pruned > 0 {
+            info!("post-everything free-end trim: {pruned} segment(s) removed");
+        }
+    }
     probe_dangling_vias(&board, &final_routes, "pre-metrics");
     let pour_defects = pour_defect_count(&board, &final_routes) + pour_bridge_residual;
     if pour_defects > 0 {
@@ -7853,6 +7859,87 @@ fn t_split_host_at(route: &mut Route, q: (f64, f64), layer: usize) {
         });
         return;
     }
+}
+
+
+/// TRULY-FINAL free-end trim for SIGNAL nets. The 5.996 "final"
+/// orphan sweep is not last: the 5.997 post-sweep plane rescue runs
+/// after it and its Stage-1 shove DEFORMS foreign copper — a lateral
+/// bump whose return rung is orphaned when a later shove displaces
+/// the run the rung aimed at (seed-7: two 0.5mm rungs dead-ending in
+/// space, the shipped track_dangling pair). Rather than teach every
+/// deformer to clean up after the ones that follow it, sweep once at
+/// the true end: a segment endpoint anchored on NOTHING — no pad, no
+/// via, no other segment's centerline — dangles per KiCad, whoever
+/// left it. Signal nets only: a board-wide ground's thousands of
+/// segments make the per-removal rescan intractable, and its classes
+/// are covered by the span machinery.
+fn signal_free_end_trim(board: &Board, final_routes: &mut [Route]) -> usize {
+    let via_r = board.layer_stack.via.pad_mm / 2.0;
+    let mut pruned = 0usize;
+    for i in 0..board.nets.len() {
+        if board.nets[i].plane_layer.is_some() || final_routes[i].segments.is_empty() {
+            continue;
+        }
+        let mut own_pads: Vec<(f64, f64, f64, f64)> = Vec::new();
+        for comp in &board.components {
+            let (co, sn) = (comp.theta.cos(), comp.theta.sin());
+            let quarter =
+                ((comp.theta / std::f64::consts::FRAC_PI_2).round() as i64).rem_euclid(2);
+            for pin in &comp.pins {
+                if pin.net != Some(board.nets[i].id) || pin.unplaced {
+                    continue;
+                }
+                let gx = comp.x + pin.dx * co - pin.dy * sn;
+                let gy = comp.y + pin.dx * sn + pin.dy * co;
+                let (pw, ph) = match &pin.pad {
+                    Some(pd) => (pd.width_mm, pd.height_mm),
+                    None => (0.5, 0.5),
+                };
+                let (pw, ph) = if quarter == 1 { (ph, pw) } else { (pw, ph) };
+                own_pads.push((gx, gy, pw / 2.0, ph / 2.0));
+            }
+        }
+        loop {
+            let r = &final_routes[i];
+            let mut drop: Option<usize> = None;
+            'segs: for (sk, sg) in r.segments.iter().enumerate() {
+                for &e in &[sg.start, sg.end] {
+                    let anchored = r.segments.iter().enumerate().any(|(sj, s2)| {
+                        sj != sk
+                            && s2.layer == sg.layer
+                            && geom::point_segment_dist(e, s2.start, s2.end) <= 0.05
+                    }) || r
+                        .vias
+                        .iter()
+                        .any(|v| (v.x - e.0).hypot(v.y - e.1) <= via_r)
+                        || own_pads.iter().any(|&(cx, cy, hx, hy)| {
+                            (e.0 - cx).abs() <= hx && (e.1 - cy).abs() <= hy
+                        });
+                    if !anchored {
+                        drop = Some(sk);
+                        break 'segs;
+                    }
+                }
+            }
+            match drop {
+                Some(sk) => {
+                    let r = &mut final_routes[i];
+                    r.segments.remove(sk);
+                    for (qs, ql) in r.path_spans.iter_mut() {
+                        if *qs > sk {
+                            *qs -= 1;
+                        } else if sk < *qs + *ql {
+                            *ql = ql.saturating_sub(1);
+                        }
+                    }
+                    pruned += 1;
+                }
+                None => break,
+            }
+        }
+    }
+    pruned
 }
 
 /// PROBE census: vias with no segment contact on one of their
