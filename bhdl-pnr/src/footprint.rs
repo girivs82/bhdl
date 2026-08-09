@@ -82,6 +82,7 @@ fn convert_pad(p: &KiCadPad) -> FootprintPad {
         height: p.size_y,
         shape: map_shape(&p.shape),
         drill_diameter: p.drill,
+        drill_slot: None,
         pad_type: map_pad_type(&p.pad_type),
     }
     // NOTE: pad rotation (p.rotation) is not yet applied — most pads are

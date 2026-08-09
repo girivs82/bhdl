@@ -298,6 +298,7 @@ pub fn build_board(
                         _ => crate::types::PadShapeKind::Rect,
                     },
                     drill_mm: pad.drill_diameter,
+                    drill_slot_mm: pad.drill_slot,
                 }
             };
             let mut used = vec![false; fp.pads.len()];

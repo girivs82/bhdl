@@ -811,9 +811,21 @@ pub fn export_kicad_pcb_with_fills(
                 Some(nid) => format!(" (net {} \"{}\")", net_no(nid), net_name(nid)),
                 None => String::new(),
             };
-            let drill_clause = drill
-                .map(|d| format!(" (drill {d})"))
-                .unwrap_or_default();
+            // SLOTTED holes emit KiCad's oval drill form so the
+            // oracle judges the real opening; round holes are
+            // unchanged.
+            let drill_clause = match pin.pad.as_ref().and_then(|p| p.drill_slot_mm) {
+                Some((sw, sh)) => {
+                    // The slot's long axis follows the component's
+                    // rotation, like every other pad dimension.
+                    let quarter = ((comp.theta / std::f64::consts::FRAC_PI_2).round()
+                        as i64)
+                        .rem_euclid(2);
+                    let (ow, oh) = if quarter == 1 { (sh, sw) } else { (sw, sh) };
+                    format!(" (drill oval {ow} {oh})")
+                }
+                None => drill.map(|d| format!(" (drill {d})")).unwrap_or_default(),
+            };
             let rr = if shape == "roundrect" {
                 " (roundrect_rratio 0.25)"
             } else {
@@ -2793,7 +2805,16 @@ pub(crate) fn plane_foreign_holes_on(
             // shortfalls of exactly that corner on the real-uno
             // headers). Oval/circle pads keep the tight radius.
             let barrel = match pad.shape {
-                crate::types::PadShapeKind::Rect => {
+                // ROUNDRECT belongs here with Rect, not with the round
+                // shapes: its corners still reach nearly the
+                // half-diagonal, and the tight max(w,h)/2 circle
+                // under-voids them by the same mechanism this comment
+                // already describes for squares. Latent until a
+                // roundrect THT pad met a pour (the RK09K mounting
+                // posts: 38 zone-clearance shortfalls, all at pad
+                // corners, actual 0.114 against a 0.3 rule).
+                crate::types::PadShapeKind::Rect
+                | crate::types::PadShapeKind::RoundRect => {
                     (pad.width_mm / 2.0).hypot(pad.height_mm / 2.0)
                 }
                 _ => pad.width_mm.max(pad.height_mm) / 2.0,

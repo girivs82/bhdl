@@ -152,6 +152,14 @@ pub struct FootprintPad {
     pub height: f64,
     pub shape: PadShape,
     pub drill_diameter: Option<f64>,
+    /// SLOTTED hole (width, height) in the pad's own frame — a
+    /// mounting lug or a wide power terminal needs an oblong hole,
+    /// not a round one. `None` = round hole of `drill_diameter`.
+    /// Kept separate from the pad OUTLINE: the copper can be a
+    /// roundrect while the hole inside it is a slot (the demo's own
+    /// RK09K mounting posts are exactly that).
+    #[serde(default)]
+    pub drill_slot: Option<(f64, f64)>,
     pub pad_type: PadType,
 }
 

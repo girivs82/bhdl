@@ -590,6 +590,11 @@ pub struct PadGeom {
     pub shape: PadShapeKind,
     /// Some(drill) = through-hole pad on all copper layers.
     pub drill_mm: Option<f64>,
+    /// SLOTTED hole (width, height) where the part needs an oblong
+    /// opening — mounting lugs, wide power terminals. `drill_mm`
+    /// stays populated with the minor axis so consumers that predate
+    /// slots keep a conservative round hole instead of none.
+    pub drill_slot_mm: Option<(f64, f64)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

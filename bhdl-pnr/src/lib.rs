@@ -10567,6 +10567,7 @@ fn solve_channel_miniboard_attempt(
                         width_mm: 1.7,
                         height_mm: 1.7,
                         shape: PadShapeKind::Circle,
+                        drill_slot_mm: None,
                         drill_mm: Some(1.0),
                     }),
                     unplaced: false,

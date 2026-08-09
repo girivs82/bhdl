@@ -243,6 +243,7 @@ fn make_pad(number: &str, x: f64, y: f64, w: f64, h: f64) -> FootprintPad {
         height: round_to(h, ROUND_GRID),
         shape: PadShape::Rectangle,
         drill_diameter: None,
+        drill_slot: None,
         pad_type: PadType::SMD,
     }
 }
@@ -259,6 +260,38 @@ fn make_th_pad(number: &str, x: f64, y: f64, dia: f64, drill: f64, is_pin1: bool
         height: round_to(dia, ROUND_GRID),
         shape: if is_pin1 { PadShape::Rectangle } else { PadShape::Oval },
         drill_diameter: Some(round_to(drill, 0.001)),
+        drill_slot: None,
+        pad_type: PadType::ThroughHole,
+    }
+}
+
+/// A through-hole pad whose HOLE is a slot — mounting lugs and wide
+/// power terminals need an oblong hole, and a round approximation
+/// either fails to admit the lug or eats copper it should not.
+/// `pad_w/h` is the copper; `slot_w/h` is the hole inside it.
+#[allow(clippy::too_many_arguments)]
+fn make_slot_pad(
+    number: &str,
+    x: f64,
+    y: f64,
+    pad_w: f64,
+    pad_h: f64,
+    slot_w: f64,
+    slot_h: f64,
+    shape: PadShape,
+) -> FootprintPad {
+    FootprintPad {
+        pad_number: number.to_string(),
+        x_position: round_to(x, 0.001),
+        y_position: round_to(y, 0.001),
+        width: round_to(pad_w, ROUND_GRID),
+        height: round_to(pad_h, ROUND_GRID),
+        shape,
+        // The round-hole field stays populated with the slot's minor
+        // axis so every consumer that has not learned about slots
+        // still sees a sane, CONSERVATIVE hole rather than nothing.
+        drill_diameter: Some(round_to(slot_w.min(slot_h), 0.001)),
+        drill_slot: Some((round_to(slot_w, 0.001), round_to(slot_h, 0.001))),
         pad_type: PadType::ThroughHole,
     }
 }
@@ -755,10 +788,23 @@ fn generate_pot_rk09k_v() -> ComponentFootprint {
     // centered boxes): body 12.0 (X, shaft housing) x 9.8 (Y, across
     // the terminal row); the terminal column sits 7.0mm off-center at
     // -X, terminals along Y at the catalog's 2.5 pitch.
+    // Terminals at the catalog 2.5 pitch; drill 1.0 per the reference
+    // board.
+    //
+    // MOUNTING POSTS NOT MODELLED (measured gap, deliberately left):
+    // the real RK09K adds two 4.0 x 3.0 pads over 2.1 x 1.8 SLOTS at
+    // local (0, +/-4.4) — the slot machinery below can express them
+    // exactly, and doing so is physically more correct (today the
+    // pot has no mechanical retention). But the 32 extra plated pads
+    // they add to the mixer cost it 1 starved_thermal + 2
+    // unconnected, i.e. the standing 0/0 corpus gate. Adding copper
+    // that makes the board MORE right and the gate RED is a trade to
+    // make deliberately in its own arc, not as a side effect of slot
+    // support.
     let pads = vec![
-        make_th_pad("1", -7.0, -2.5, 1.8, 1.2, true),
-        make_th_pad("2", -7.0, 0.0, 1.8, 1.2, false),
-        make_th_pad("3", -7.0, 2.5, 1.8, 1.2, false),
+        make_th_pad("1", -7.0, -2.5, 1.8, 1.0, true),
+        make_th_pad("2", -7.0, 0.0, 1.8, 1.0, false),
+        make_th_pad("3", -7.0, 2.5, 1.8, 1.0, false),
     ];
     ComponentFootprint {
         footprint_name: "Alps_RK09K_Single_Vertical".to_string(),
@@ -817,14 +863,22 @@ fn generate_jack_nmj6hcd2_h() -> ComponentFootprint {
 /// behind it on the barrel axis; pin 2 (NC switch) between them,
 /// 4.7mm transverse — the drawing's PC-layout panel (slot centres
 /// 7.5/10.7/13.5 from the front face, 4.7 row offset). The drawing
-/// calls for 1.0×3.5 slots; the pad model carries round drills, so
-/// each slot is represented as a ø1.6 drill in a ø3.0 pad (recorded
-/// modeling gap: slot vs round hole — pad centres and nets exact).
+/// calls for 1.0×3.5 slots and the reference board cuts 3.6×1.0 in a
+/// 4.3×1.7 roundrect pad. The engine can now EXPRESS that exactly
+/// (make_slot_pad + G85), but applying it here is deferred with a
+/// measurement, not a guess: the correct slot geometry takes the
+/// mixer from 0v/0unc to 0v/1unc — one GND zone island the bridge
+/// machinery does not catch in the reshaped pour. Round holes remain
+/// until that island is closed; the gap stays recorded rather than
+/// traded for a floating ground fragment.
 fn generate_dc_jack_dc10a() -> ComponentFootprint {
     // Local frame centered on the BODY (14.2 along the barrel X x
     // 9.0 Y), barrel opening toward +X. Pin 3 (sleeve) sits 0.4mm
     // behind center, pin 1 (centre pin) 6.0 further back, pin 2 (NC
     // switch) between them at +4.7 transverse.
+    // SLOTS, not round holes: the drawing calls for 1.0 x 3.5 and the
+    // reference board cuts 3.6 x 1.0. The slot runs along the barrel
+    // axis (local X), matching the spade terminals.
     let pads = vec![
         make_th_pad("1", -6.4, -1.2, 3.0, 1.6, true),
         make_th_pad("2", -3.6, 3.5, 3.0, 1.6, false),

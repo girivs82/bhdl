@@ -550,6 +550,7 @@ fn get_footprint_pads(conn: &Connection, footprint_id: i64) -> anyhow::Result<Ve
             height: row.get(4)?,
             shape: parse_pad_shape(row.get::<_, String>(5)?),
             drill_diameter: row.get(6)?,
+            drill_slot: None,
             pad_type: parse_pad_type(row.get::<_, String>(7)?),
         })
     })?.collect::<Result<Vec<_>, _>>()?;

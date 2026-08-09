@@ -174,6 +174,7 @@ fn convert_kicad_footprint(
             height: kicad_pad.size_y,
             shape: convert_pad_shape(&kicad_pad.shape),
             drill_diameter: kicad_pad.drill,
+            drill_slot: None,
             pad_type: convert_pad_type(&kicad_pad.pad_type),
         }
     }).collect();

@@ -20,6 +20,7 @@ fn pad(w: f64, h: f64) -> Option<PadGeom> {
         height_mm: h,
         shape: PadShapeKind::Rect,
         drill_mm: None,
+        drill_slot_mm: None,
     })
 }
 
