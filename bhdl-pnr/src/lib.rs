@@ -172,6 +172,93 @@ fn run_tier_trials(
     })
 }
 
+/// Run SEVERAL tiers' trials at once, bounded by the machine.
+///
+/// The tier ladder is a fallback chain — each tier runs only when the
+/// best result so far is still imperfect — and it was executed as a
+/// chain of barriers: three trials wide, five tiers deep, so a 14-core
+/// machine sat at 2.66x average parallelism (measured: real 436s,
+/// user 1160s, exactly three busy worker threads).
+///
+/// The tiers in this chain are INDEPENDENT: each prep mutates only
+/// config knobs on a fresh clone of the ORIGINAL board, and none of
+/// them reads a previous tier's result. So they can all be computed up
+/// front and thrown away unused, which is what the caller's early
+/// break already does to surplus trials within a tier. The fold, the
+/// tie-breaks and the winner are untouched — only the moment of
+/// computation moves.
+///
+/// Jobs are pulled from one counter by a fixed pool, so concurrency is
+/// bounded by cores rather than by tiers x trials, and each result
+/// lands in its own slot: the returned per-tier vectors are in trial
+/// order regardless of completion order. Escape hatches:
+/// BHDL_PNR_SERIAL_TRIALS=1 (fully serial), BHDL_PNR_NO_SPECULATION=1
+/// (tier-at-a-time, trials still parallel), BHDL_PNR_MAX_TRIAL_THREADS
+/// to cap the pool when memory matters more than time.
+fn run_tiers_speculative(
+    board: &Board,
+    config: &PnrConfig,
+    trials: usize,
+    base_seed: u64,
+    preps: &[&(dyn Fn(&mut Board) + Sync)],
+) -> Vec<Vec<Result<PnrResult>>> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let ntier = preps.len();
+    if trials == 0 || ntier == 0 {
+        return (0..ntier).map(|_| Vec::new()).collect();
+    }
+    if trials == 1
+        || std::env::var("BHDL_PNR_SERIAL_TRIALS").is_ok()
+        || std::env::var("BHDL_PNR_NO_SPECULATION").is_ok()
+    {
+        return preps
+            .iter()
+            .map(|p| run_tier_trials(board, config, trials, base_seed, *p))
+            .collect();
+    }
+    let total = ntier * trials;
+    let cap = std::env::var("BHDL_PNR_MAX_TRIAL_THREADS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4)
+        });
+    let workers = total.min(cap).max(1);
+    let next = AtomicUsize::new(0);
+    let out: std::sync::Mutex<Vec<(usize, Result<PnrResult>)>> =
+        std::sync::Mutex::new(Vec::with_capacity(total));
+    std::thread::scope(|sc| {
+        for _ in 0..workers {
+            sc.spawn(|| loop {
+                let job = next.fetch_add(1, Ordering::SeqCst);
+                if job >= total {
+                    break;
+                }
+                let (ti, tr) = (job / trials, job % trials);
+                let mut tb = board.clone();
+                (preps[ti])(&mut tb);
+                let r = place_and_route(
+                    tb,
+                    config.clone(),
+                    base_seed.wrapping_add(tr as u64),
+                );
+                out.lock().expect("trial results poisoned").push((job, r));
+            });
+        }
+    });
+    let mut done = out.into_inner().expect("trial results poisoned");
+    done.sort_by_key(|(j, _)| *j);
+    let mut tiers: Vec<Vec<Result<PnrResult>>> =
+        (0..ntier).map(|_| Vec::with_capacity(trials)).collect();
+    for (j, r) in done {
+        tiers[j / trials].push(r);
+    }
+    tiers
+}
+
 /// Run multiple placement+routing trials with different initializations,
 /// return the best result (highest routability, then lowest HPWL; on
 /// boards with measured IBIS edges, lower measured crosstalk breaks
@@ -190,7 +277,32 @@ pub fn place_and_route_best_of(
     // byte-identity.
     let has_measured = board.nets.iter().any(|n| n.edge_swing_v.is_some());
 
-    let tier = run_tier_trials(&board, &config, trials, base_seed, &|_b| {});
+    // The five tiers below are a FALLBACK CHAIN, not a dependency
+    // chain: each prep touches only config knobs on a clone of this
+    // same board, and none reads a previous tier's result. Computing
+    // them together turns five barriers into one and lets the pool
+    // fill the machine; a tier that never gets consumed is discarded
+    // exactly as surplus trials already are. Only the noise-feedback
+    // tier further down genuinely depends on `best`, so it stays put.
+    let p_base: &(dyn Fn(&mut Board) + Sync) = &|_b: &mut Board| {};
+    let p_si: &(dyn Fn(&mut Board) + Sync) =
+        &|b: &mut Board| b.config.si_return_cost = true;
+    let p_fan: &(dyn Fn(&mut Board) + Sync) =
+        &|b: &mut Board| b.config.fanout_first = true;
+    let p_amp: &(dyn Fn(&mut Board) + Sync) =
+        &|b: &mut Board| b.config.cheap_amputation = true;
+    let p_esc: &(dyn Fn(&mut Board) + Sync) = &|b: &mut Board| {
+        b.config.escape_demand = 2.0;
+        b.config.fanout_first = true;
+    };
+    let mut spec = run_tiers_speculative(
+        &board,
+        &config,
+        trials,
+        base_seed,
+        &[p_base, p_si, p_fan, p_amp, p_esc],
+    );
+    let tier = std::mem::take(&mut spec[0]);
     for (trial, result) in tier.into_iter().enumerate() {
         info!("=== Trial {}/{} ===", trial + 1, trials);
         let result = result?;
@@ -263,9 +375,7 @@ pub fn place_and_route_best_of(
             || legalization::residual_pad_overlaps(&b.board) > 0
     });
     if best_imperfect {
-        let tier = run_tier_trials(&board, &config, trials, base_seed, &|b| {
-            b.config.si_return_cost = true;
-        });
+        let tier = std::mem::take(&mut spec[1]);
         for (trial, result) in tier.into_iter().enumerate() {
             info!("=== SI-cost trial {}/{} ===", trial + 1, trials);
             let result = result?;
@@ -317,9 +427,7 @@ pub fn place_and_route_best_of(
             || legalization::residual_pad_overlaps(&b.board) > 0
     });
     if still_imperfect {
-        let tier = run_tier_trials(&board, &config, trials, base_seed, &|b| {
-            b.config.fanout_first = true;
-        });
+        let tier = std::mem::take(&mut spec[2]);
         for (trial, result) in tier.into_iter().enumerate() {
             info!("=== Fanout-first trial {}/{} ===", trial + 1, trials);
             let result = result?;
@@ -374,9 +482,7 @@ pub fn place_and_route_best_of(
             || legalization::residual_pad_overlaps(&b.board) > 0
     });
     if still_imperfect2 {
-        let tier = run_tier_trials(&board, &config, trials, base_seed, &|b| {
-            b.config.cheap_amputation = true;
-        });
+        let tier = std::mem::take(&mut spec[3]);
         for (trial, result) in tier.into_iter().enumerate() {
             info!("=== Cheap-amputation trial {}/{} ===", trial + 1, trials);
             let result = result?;
@@ -435,10 +541,7 @@ pub fn place_and_route_best_of(
             || legalization::residual_pad_overlaps(&b.board) > 0
     });
     if pre_escape_imperfect {
-        let tier = run_tier_trials(&board, &config, trials, base_seed, &|b| {
-            b.config.escape_demand = 2.0;
-            b.config.fanout_first = true;
-        });
+        let tier = std::mem::take(&mut spec[4]);
         for (trial, result) in tier.into_iter().enumerate() {
             info!("=== Escape-demand trial {}/{} ===", trial + 1, trials);
             let result = result?;
