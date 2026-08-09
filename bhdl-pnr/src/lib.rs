@@ -8539,6 +8539,21 @@ fn signal_net_continuity_repair(board: &Board, final_routes: &mut Vec<Route>) ->
 /// the honest move: by definition nothing connects through it.
 /// Mid-span contact with non-group copper (an unsplit T) keeps the
 /// chain — endpoint adjacency alone must never justify deletion.
+fn dsu_find(p: &mut [usize], mut a: usize) -> usize {
+    while p[a] != a {
+        p[a] = p[p[a]];
+        a = p[a];
+    }
+    a
+}
+
+fn dsu_union(p: &mut [usize], a: usize, b: usize) {
+    let (ra, rb) = (dsu_find(p, a), dsu_find(p, b));
+    if ra != rb {
+        p[ra] = rb;
+    }
+}
+
 fn pour_orphan_chain_sweep(board: &Board, final_routes: &mut [Route]) -> usize {
     let via_r = board.layer_stack.via.pad_mm / 2.0;
     let mut swept = 0usize;
@@ -8590,7 +8605,7 @@ fn pour_orphan_chain_sweep(board: &Board, final_routes: &mut [Route]) -> usize {
                     None => (0.5, 0.5),
                 };
                 let (pw, ph) = if quarter == 1 { (ph, pw) } else { (pw, ph) };
-                own_pads.push((gx, gy, pw / 2.0 + 0.05, ph / 2.0 + 0.05));
+                own_pads.push((gx, gy, pw / 2.0, ph / 2.0));
             }
         }
         let bboxes: Vec<(f64, f64, f64, f64)> = polys
@@ -8604,7 +8619,10 @@ fn pour_orphan_chain_sweep(board: &Board, final_routes: &mut [Route]) -> usize {
                 )
             })
             .collect();
-        let in_fill = |x: f64, y: f64| -> bool {
+        // Fragment-RESOLVING membership: which piece of fill covers
+        // this point. The identity matters — "touches some same-net
+        // fill" is not connectivity once the fill is in pieces.
+        let fill_hit = |x: f64, y: f64| -> Option<usize> {
             for (pi, poly) in polys.iter().enumerate() {
                 let (x0, y0, x1, y1) = bboxes[pi];
                 if x < x0 || x > x1 || y < y0 || y > y1 {
@@ -8622,186 +8640,225 @@ fn pour_orphan_chain_sweep(board: &Board, final_routes: &mut [Route]) -> usize {
                     }
                 }
                 if inside {
-                    return true;
+                    return Some(pi);
                 }
             }
-            false
+            None
         };
-        // Group segments by same-layer endpoint adjacency.
-        let n = final_routes[ni].segments.len();
-        let key = |x: f64, y: f64| ((x / 0.01).round() as i64, (y / 0.01).round() as i64);
-        let mut grid: crate::det::HashMap<(i64, i64, usize), Vec<usize>> =
+        if polys.is_empty() {
+            continue;
+        }
+        // ONE union-find whose nodes are SEGMENTS, VIAS and FILL
+        // FRAGMENTS. The sweep used to group segments only and read a
+        // via as a self-evident anchor; that is wrong in both
+        // directions. Measured: an F.Cu fill fragment holding no pad,
+        // tied by a single via to an equally stranded B.Cu fragment,
+        // shipped as a KiCad zone island — the pad-driven island
+        // bridge could not see it (no pad to bridge from) and this
+        // sweep kept its stub alive because the stub touched "some"
+        // fill. Deleting the stub alone would not have helped either:
+        // the via still anchored the fragment. A via is a NODE, not a
+        // verdict, and copper is grounded only when its whole
+        // component reaches a pad or the main pour body.
+        let segs = final_routes[ni].segments.clone();
+        let vias: Vec<(f64, f64)> =
+            final_routes[ni].vias.iter().map(|v| (v.x, v.y)).collect();
+        let n = segs.len();
+        let (nv, np) = (vias.len(), polys.len());
+        let mut dsu: Vec<usize> = (0..n + nv + np).collect();
+        // Spatial index: walk each segment rather than filling its
+        // bbox, so a long diagonal costs its length and not its area.
+        let mut sgrid: crate::det::HashMap<(i64, i64, usize), Vec<usize>> =
             Default::default();
-        for (i, sg) in final_routes[ni].segments.iter().enumerate() {
-            for &(x, y) in &[sg.start, sg.end] {
-                let (kx, ky) = key(x, y);
-                grid.entry((kx, ky, sg.layer)).or_default().push(i);
-            }
-        }
-        let mut group = vec![usize::MAX; n];
-        let mut ng = 0usize;
-        for s0 in 0..n {
-            if group[s0] != usize::MAX {
-                continue;
-            }
-            let g = ng;
-            ng += 1;
-            let mut stack = vec![s0];
-            group[s0] = g;
-            while let Some(i) = stack.pop() {
-                let sg = final_routes[ni].segments[i].clone();
-                for &pt in &[sg.start, sg.end] {
-                    let (kx, ky) = key(pt.0, pt.1);
-                    for dx in -1..=1i64 {
-                        for dy in -1..=1i64 {
-                            let Some(c) = grid.get(&(kx + dx, ky + dy, sg.layer)) else {
-                                continue;
-                            };
-                            for &j in c {
-                                if group[j] != usize::MAX {
-                                    continue;
-                                }
-                                let o = &final_routes[ni].segments[j];
-                                if (o.start.0 - pt.0).hypot(o.start.1 - pt.1) <= 0.011
-                                    || (o.end.0 - pt.0).hypot(o.end.1 - pt.1) <= 0.011
-                                {
-                                    group[j] = g;
-                                    stack.push(j);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        // Other-face hole model: a via grounds a chain ONLY if its
-        // far end lands in that face's fill — a via inside a hole is
-        // dead copper and kept a dangling fragment alive (measured).
-        let pl = board.nets[ni].plane_layer.unwrap_or(0);
-        let n_layers = board.layer_stack.layers.len();
-        let other = if pl == 0 { n_layers.saturating_sub(1) } else { 0 };
-        let merged_b: Vec<(f64, f64, f64)> = if n_layers >= 2 {
-            output::kicad::merge_holes(output::kicad::plane_foreign_holes_on(
-                board,
-                final_routes,
-                board.nets[ni].id,
-                Some(other),
-                true,
-            ))
-        } else {
-            Vec::new()
-        };
-        // Judge each group.
-        let mut keep = vec![false; ng];
-        for (i, sg) in final_routes[ni].segments.iter().enumerate() {
-            if keep[group[i]] {
-                continue;
-            }
-            let mut ok = false;
-            for &pt in &[sg.start, sg.end] {
-                if final_routes[ni].vias.iter().any(|v| {
-                    (v.x - pt.0).hypot(v.y - pt.1) <= via_r + 0.05
-                        && (in_fill(v.x, v.y)
-                            || !output::kicad::plane_swallows(
-                                board, &merged_b, v.x, v.y, via_r, None,
-                            )
-                            // ROUTED continuation: on a routed net a
-                            // via joins track layers — the other
-                            // layer's copper grounds this chain even
-                            // with no fill anywhere near (requiring
-                            // fill-landing ate 1278 legitimate vbias
-                            // B.Cu segments and left their vias
-                            // dangling).
-                            || final_routes[ni].segments.iter().any(|o| {
-                                o.layer != sg.layer
-                                    && ((o.start.0 - v.x).hypot(o.start.1 - v.y)
-                                        <= via_r + 0.05
-                                        || (o.end.0 - v.x).hypot(o.end.1 - v.y)
-                                            <= via_r + 0.05)
-                            }))
-                }) || own_pads.iter().any(|&(cx, cy, hx, hy)| {
-                    (pt.0 - cx).abs() <= hx && (pt.1 - cy).abs() <= hy
-                }) {
-                    ok = true;
-                    break;
-                }
-            }
-            if !ok {
-                let len = (sg.end.0 - sg.start.0).hypot(sg.end.1 - sg.start.1);
-                let steps = ((len / 0.3).ceil() as usize).max(1);
-                for s in 0..=steps {
-                    let t = s as f64 / steps as f64;
-                    if in_fill(
-                        sg.start.0 + (sg.end.0 - sg.start.0) * t,
-                        sg.start.1 + (sg.end.1 - sg.start.1) * t,
-                    ) {
-                        ok = true;
-                        break;
-                    }
-                }
-            }
-            if ok {
-                if std::env::var("BHDL_PNR_PROBE").is_ok() {
-                    let via_t = final_routes[ni]
-                        .vias
-                        .iter()
-                        .any(|v| {
-                            (v.x - sg.start.0).hypot(v.y - sg.start.1) <= via_r + 0.05
-                                || (v.x - sg.end.0).hypot(v.y - sg.end.1) <= via_r + 0.05
-                        });
-                    log::info!(
-                        "orphan-sweep keep: '{}' g{} seg ({:.2},{:.2})->({:.2},{:.2}) via={via_t}",
-                        board.nets[ni].name, group[i],
-                        sg.start.0, sg.start.1, sg.end.0, sg.end.1
-                    );
-                }
-                keep[group[i]] = true;
-            }
-        }
-        // Unsplit T: an endpoint resting mid-span on OUT-of-group
-        // same-net copper means the chain is connected — keep.
-        for g in 0..ng {
-            if keep[g] {
-                continue;
-            }
-            'seg: for i in 0..n {
-                if group[i] != g {
+        for (i, sg) in segs.iter().enumerate() {
+            let len = (sg.end.0 - sg.start.0).hypot(sg.end.1 - sg.start.1);
+            let steps = ((len / 0.5).ceil() as usize).max(1);
+            let mut last = (i64::MIN, i64::MIN);
+            for s in 0..=steps {
+                let t = s as f64 / steps as f64;
+                let x = sg.start.0 + (sg.end.0 - sg.start.0) * t;
+                let y = sg.start.1 + (sg.end.1 - sg.start.1) * t;
+                let c = (x.floor() as i64, y.floor() as i64);
+                if c == last {
                     continue;
                 }
-                let sg = final_routes[ni].segments[i].clone();
-                for &pt in &[sg.start, sg.end] {
-                    for (j, o) in final_routes[ni].segments.iter().enumerate() {
-                        if group[j] == g || o.layer != sg.layer {
-                            continue;
-                        }
-                        if geom::segment_point_too_close(
+                last = c;
+                sgrid.entry((c.0, c.1, sg.layer)).or_default().push(i);
+            }
+        }
+        let near = |x: f64, y: f64, layer: usize| -> Vec<usize> {
+            let (cx, cy) = (x.floor() as i64, y.floor() as i64);
+            let mut out: Vec<usize> = Vec::new();
+            for dx in -1..=1i64 {
+                for dy in -1..=1i64 {
+                    if let Some(c) = sgrid.get(&(cx + dx, cy + dy, layer)) {
+                        out.extend_from_slice(c);
+                    }
+                }
+            }
+            out.sort_unstable();
+            out.dedup();
+            out
+        };
+        // seg <-> seg: a shared endpoint, or an endpoint resting
+        // mid-span on same-layer copper (the unsplit T).
+        for (i, sg) in segs.iter().enumerate() {
+            for &pt in &[sg.start, sg.end] {
+                for j in near(pt.0, pt.1, sg.layer) {
+                    if j == i {
+                        continue;
+                    }
+                    let o = &segs[j];
+                    if (o.start.0 - pt.0).hypot(o.start.1 - pt.1) <= 0.011
+                        || (o.end.0 - pt.0).hypot(o.end.1 - pt.1) <= 0.011
+                        || geom::segment_point_too_close(
                             o.start,
                             o.end,
                             pt,
                             (o.width_mm + sg.width_mm) / 2.0 + 0.01,
-                        ) {
-                            if std::env::var("BHDL_PNR_PROBE").is_ok() {
-                                log::info!(
-                                    "orphan-sweep keep: '{}' g{} T-touch at ({:.2},{:.2})",
-                                    board.nets[ni].name, g, pt.0, pt.1
-                                );
-                            }
-                            keep[g] = true;
-                            break 'seg;
-                        }
+                        )
+                    {
+                        dsu_union(&mut dsu, i, j);
                     }
                 }
             }
         }
-        let mut drop: Vec<usize> = (0..n).filter(|&i| !keep[group[i]]).collect();
+        // via <-> seg on ANY layer: that is what a via is for. This
+        // replaces the old "a via joins track layers, so keep the
+        // chain" special case with the structural fact.
+        for (vi, &(vx, vy)) in vias.iter().enumerate() {
+            for l in 0..board.layer_stack.layers.len() {
+                for j in near(vx, vy, l) {
+                    let o = &segs[j];
+                    if (o.start.0 - vx).hypot(o.start.1 - vy) <= via_r + 0.05
+                        || (o.end.0 - vx).hypot(o.end.1 - vy) <= via_r + 0.05
+                        || geom::segment_point_too_close(
+                            o.start,
+                            o.end,
+                            (vx, vy),
+                            via_r + o.width_mm / 2.0,
+                        )
+                    {
+                        dsu_union(&mut dsu, n + vi, j);
+                    }
+                }
+            }
+        }
+        // fill fragment <-> copper. Only pour-layer tracks can meet
+        // the primary-face fill; a via crosses every layer.
+        let pl = board.nets[ni].plane_layer.unwrap_or(0);
+        for (i, sg) in segs.iter().enumerate() {
+            if sg.layer != pl {
+                continue;
+            }
+            let len = (sg.end.0 - sg.start.0).hypot(sg.end.1 - sg.start.1);
+            let steps = ((len / 0.3).ceil() as usize).max(1);
+            for s in 0..=steps {
+                let t = s as f64 / steps as f64;
+                if let Some(pi) = fill_hit(
+                    sg.start.0 + (sg.end.0 - sg.start.0) * t,
+                    sg.start.1 + (sg.end.1 - sg.start.1) * t,
+                ) {
+                    dsu_union(&mut dsu, i, n + nv + pi);
+                }
+            }
+        }
+        for (vi, &(vx, vy)) in vias.iter().enumerate() {
+            if let Some(pi) = fill_hit(vx, vy) {
+                dsu_union(&mut dsu, n + vi, n + nv + pi);
+            }
+        }
+        // Grounding sources: a real pad of this net, and the main pour
+        // body itself (the largest fragment is the thing everything
+        // else has to reach; it cannot be asked to reach itself).
+        let mut grounded = vec![false; n + nv + np];
+        if let Some(main_pi) = polys
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, p)| p.len())
+            .map(|(i, _)| i)
+        {
+            grounded[n + nv + main_pi] = true;
+        }
+        for &(cx, cy, hx, hy) in &own_pads {
+            // A pad grounds the fragment its COPPER reaches, which is
+            // not simply the fragment under its centre: a thermally
+            // relieved pad sits in a void and meets the fill only at
+            // its spoke tips. Those tips are fill VERTICES sitting on
+            // the pad boundary — test for them, rather than casting
+            // rays outward, which happily jumps the relief gap and
+            // grounds a fragment the pad never touches.
+            if let Some(pi) = fill_hit(cx, cy) {
+                grounded[n + nv + pi] = true;
+            }
+            // ON OR INSIDE the pad edge, not merely near it. The void
+            // contour around a relieved pad hugs the pad at clearance
+            // distance, so any tolerance wider than the clearance
+            // grounds a fragment that never touches the pad — measured:
+            // a 158-vertex GND island next to the DC jack was declared
+            // grounded by a 0.15mm box and shipped as a zone island. A
+            // spoke tip overlaps the pad; a void contour does not.
+            for (pi, poly) in polys.iter().enumerate() {
+                if poly.iter().any(|&(vx, vy)| {
+                    (vx - cx).abs() <= hx + 0.001 && (vy - cy).abs() <= hy + 0.001
+                }) {
+                    grounded[n + nv + pi] = true;
+                }
+            }
+            for (i, sg) in segs.iter().enumerate() {
+                for &pt in &[sg.start, sg.end] {
+                    if (pt.0 - cx).abs() <= hx + 0.05 && (pt.1 - cy).abs() <= hy + 0.05 {
+                        grounded[i] = true;
+                    }
+                }
+            }
+            for (vi, &(vx, vy)) in vias.iter().enumerate() {
+                if (vx - cx).abs() <= hx + 0.05 && (vy - cy).abs() <= hy + 0.05 {
+                    grounded[n + vi] = true;
+                }
+            }
+        }
+        let mut root_ok: crate::det::HashSet<usize> = Default::default();
+        for k in 0..n + nv + np {
+            if grounded[k] {
+                let r = dsu_find(&mut dsu, k);
+                root_ok.insert(r);
+            }
+        }
+        if std::env::var("BHDL_PNR_PROBE").is_ok() && np > 1 {
+            for pi in 0..np {
+                let (x0, y0, x1, y1) = bboxes[pi];
+                log::info!(
+                    "[probe] frag '{}' #{pi} {} verts bbox {x0:.1},{y0:.1}-{x1:.1},{y1:.1} grounded={} root={}",
+                    board.nets[ni].name, polys[pi].len(),
+                    grounded[n + nv + pi],
+                    root_ok.contains(&dsu_find(&mut dsu, n + nv + pi))
+                );
+            }
+        }
+        let keep_seg: Vec<bool> = (0..n)
+            .map(|i| root_ok.contains(&dsu_find(&mut dsu, i)))
+            .collect();
+        let keep_via: Vec<bool> = (0..nv)
+            .map(|vi| root_ok.contains(&dsu_find(&mut dsu, n + vi)))
+            .collect();
+        let mut drop: Vec<usize> = (0..n).filter(|&i| !keep_seg[i]).collect();
         if std::env::var("BHDL_PNR_PROBE").is_ok() {
             for &i in &drop {
-                let sg = &final_routes[ni].segments[i];
+                let sg = &segs[i];
                 log::info!(
                     "[probe] orphan-sweep DROP '{}' l{} ({:.2},{:.2})->({:.2},{:.2})",
                     board.nets[ni].name, sg.layer,
                     sg.start.0, sg.start.1, sg.end.0, sg.end.1
                 );
+            }
+            for (vi, &(vx, vy)) in vias.iter().enumerate() {
+                if !keep_via[vi] {
+                    log::info!(
+                        "[probe] orphan-sweep DROP-VIA '{}' ({vx:.2},{vy:.2})",
+                        board.nets[ni].name
+                    );
+                }
             }
         }
         drop.sort_unstable_by(|a, b| b.cmp(a));
@@ -8817,6 +8874,11 @@ fn pour_orphan_chain_sweep(board: &Board, final_routes: &mut [Route]) -> usize {
             }
             swept += 1;
         }
+        // A via whose whole component reaches nothing is dead copper —
+        // and, left behind, it re-anchors the very fragment the sweep
+        // just tried to strand.
+        let mut vk = keep_via.iter();
+        final_routes[ni].vias.retain(|_| *vk.next().unwrap_or(&true));
     }
     swept
 }
