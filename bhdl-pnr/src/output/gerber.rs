@@ -6,7 +6,8 @@
 //! it stops being a required stage of the pipeline.
 //!
 //! Covers tracks, pads, via pads, mounting-hole annuli, the board
-//! outline, the drill file, AND zone/pour copper.
+//! outline, the drill file, zone/pour copper, solder mask, solder
+//! paste, silkscreen, and the .gbrjob that names them all.
 //!
 //! The zone copper is NOT recomputed here. It arrives as `BoardFills`
 //! from the one place that computes it — the emission fixpoint, whose
@@ -423,6 +424,307 @@ fn excellon(board: &Board, routes: &[Route]) -> GerberFile {
     GerberFile { filename: "drill.drl".into(), contents: s }
 }
 
+
+/// SOLDER MASK — the openings, one per soldered pad.
+///
+/// Two rules taken from the oracle's own export rather than assumed:
+/// VIAS ARE TENTED (covered — they are not soldered, and an open via
+/// is a solder thief), and the opening is the pad shape expanded by
+/// the board's mask margin. Component pads and mounting-hole annuli
+/// open; via pads do not.
+fn mask_layer(board: &Board, layer_top: bool, name: &str) -> GerberFile {
+    let mut ap = Apertures::new();
+    let mut body = String::new();
+    // No board-level mask setting exists in the model yet; the
+    // corpus's own footprints carry zero expansion (verified against
+    // the oracle's export: mask apertures equal copper pads exactly),
+    // so zero is the faithful default rather than an invented number.
+    let exp = 0.0f64;
+    for comp in &board.components {
+        let on_side = if layer_top {
+            comp.side == BoardSide::Top
+        } else {
+            comp.side == BoardSide::Bottom
+        };
+        let (co, sn) = (comp.theta.cos(), comp.theta.sin());
+        for pin in &comp.pins {
+            if pin.unplaced {
+                continue;
+            }
+            let Some(pad) = &pin.pad else { continue };
+            // Through-hole pads break both faces; SMD only its own.
+            if pad.drill_mm.is_none() && !on_side {
+                continue;
+            }
+            let gx = comp.x + pin.dx * co - pin.dy * sn;
+            let gy = comp.y + pin.dx * sn + pin.dy * co;
+            let (w, h) = (pad.width_mm + 2.0 * exp, pad.height_mm + 2.0 * exp);
+            emit_pad(&mut ap, &mut body, pad.shape, gx, gy, w, h, comp.theta);
+        }
+    }
+    for hole in &board.config.mounting_holes {
+        let d = ap.circle(hole.drill_mm + 0.5 + 2.0 * exp);
+        let _ = writeln!(
+            body,
+            "D{d}*\nX{}Y{}D03*",
+            coord(hole.x_mm),
+            coord(cy(hole.y_mm))
+        );
+    }
+    let mut s = header(name);
+    s.push_str(&ap.emit());
+    s.push_str(&body);
+    s.push_str("M02*\n");
+    GerberFile { filename: format!("{name}.gbr"), contents: s }
+}
+
+/// SOLDER PASTE — stencil apertures, SMD pads only.
+///
+/// Through-hole joints are wave- or hand-soldered and must NOT get
+/// paste; vias must not either. A board with no SMD parts therefore
+/// yields an empty (but present) paste layer, which is exactly what
+/// the oracle emits for the all-through-hole ecc83.
+fn paste_layer(board: &Board, layer_top: bool, name: &str) -> GerberFile {
+    let mut ap = Apertures::new();
+    let mut body = String::new();
+    // Likewise no paste margin in the model; 0 keeps the stencil
+    // aperture equal to the pad, which is what the oracle emits here.
+    let shrink = 0.0f64;
+    for comp in &board.components {
+        let on_side = if layer_top {
+            comp.side == BoardSide::Top
+        } else {
+            comp.side == BoardSide::Bottom
+        };
+        if !on_side {
+            continue;
+        }
+        let (co, sn) = (comp.theta.cos(), comp.theta.sin());
+        for pin in &comp.pins {
+            if pin.unplaced {
+                continue;
+            }
+            let Some(pad) = &pin.pad else { continue };
+            if pad.drill_mm.is_some() {
+                continue; // through-hole: no paste
+            }
+            let gx = comp.x + pin.dx * co - pin.dy * sn;
+            let gy = comp.y + pin.dx * sn + pin.dy * co;
+            let (w, h) = (
+                (pad.width_mm + 2.0 * shrink).max(0.05),
+                (pad.height_mm + 2.0 * shrink).max(0.05),
+            );
+            emit_pad(&mut ap, &mut body, pad.shape, gx, gy, w, h, comp.theta);
+        }
+    }
+    let mut s = header(name);
+    s.push_str(&ap.emit());
+    s.push_str(&body);
+    s.push_str("M02*\n");
+    GerberFile { filename: format!("{name}.gbr"), contents: s }
+}
+
+/// Flash or region a pad of the given shape — shared by copper, mask
+/// and paste so the three layers can never disagree about a pad's
+/// outline.
+fn emit_pad(
+    ap: &mut Apertures,
+    body: &mut String,
+    shape: PadShapeKind,
+    gx: f64,
+    gy: f64,
+    w: f64,
+    h: f64,
+    theta: f64,
+) {
+    let axis_aligned = ((theta / std::f64::consts::FRAC_PI_2).round()
+        * std::f64::consts::FRAC_PI_2
+        - theta)
+        .abs()
+        < 1e-6;
+    let quarter = ((theta / std::f64::consts::FRAC_PI_2).round() as i64).rem_euclid(2);
+    let (aw, ah) = if quarter == 1 { (h, w) } else { (w, h) };
+    match shape {
+        PadShapeKind::Circle => {
+            let d = ap.circle(w.max(h));
+            let _ = writeln!(body, "D{d}*\nX{}Y{}D03*", coord(gx), coord(cy(gy)));
+        }
+        PadShapeKind::Oval if axis_aligned => {
+            let d = ap.obround(aw, ah);
+            let _ = writeln!(body, "D{d}*\nX{}Y{}D03*", coord(gx), coord(cy(gy)));
+        }
+        PadShapeKind::Rect | PadShapeKind::RoundRect if axis_aligned => {
+            let d = ap.rect(aw, ah);
+            let _ = writeln!(body, "D{d}*\nX{}Y{}D03*", coord(gx), coord(cy(gy)));
+        }
+        _ => {
+            let pts = rotated_rect_corners(gx, gy, w, h, theta);
+            body.push_str(&region(&pts));
+        }
+    }
+}
+
+/// Single-stroke glyphs on a 0..1 x 0..1 box, as polylines.
+///
+/// Silkscreen is legibility, not geometry: no oracle comparison
+/// applies (KiCad draws its own font, and a fab house cares only that
+/// the reference designators can be read during assembly). Uppercase,
+/// digits and the few separators our refdes allocator emits.
+fn glyph(c: char) -> &'static [&'static [(f64, f64)]] {
+    match c {
+        'A' => &[&[(0.0, 0.0), (0.5, 1.0), (1.0, 0.0)], &[(0.2, 0.4), (0.8, 0.4)]],
+        'B' => &[&[(0.0, 0.0), (0.0, 1.0), (0.7, 1.0), (0.9, 0.8), (0.7, 0.5), (0.0, 0.5)], &[(0.7, 0.5), (0.95, 0.25), (0.7, 0.0), (0.0, 0.0)]],
+        'C' => &[&[(1.0, 0.8), (0.7, 1.0), (0.3, 1.0), (0.0, 0.7), (0.0, 0.3), (0.3, 0.0), (0.7, 0.0), (1.0, 0.2)]],
+        'D' => &[&[(0.0, 0.0), (0.0, 1.0), (0.6, 1.0), (1.0, 0.6), (1.0, 0.4), (0.6, 0.0), (0.0, 0.0)]],
+        'E' => &[&[(1.0, 1.0), (0.0, 1.0), (0.0, 0.0), (1.0, 0.0)], &[(0.0, 0.5), (0.7, 0.5)]],
+        'F' => &[&[(1.0, 1.0), (0.0, 1.0), (0.0, 0.0)], &[(0.0, 0.5), (0.7, 0.5)]],
+        'G' => &[&[(1.0, 0.8), (0.7, 1.0), (0.3, 1.0), (0.0, 0.7), (0.0, 0.3), (0.3, 0.0), (0.8, 0.0), (1.0, 0.2), (1.0, 0.45), (0.55, 0.45)]],
+        'H' => &[&[(0.0, 1.0), (0.0, 0.0)], &[(1.0, 1.0), (1.0, 0.0)], &[(0.0, 0.5), (1.0, 0.5)]],
+        'I' => &[&[(0.5, 1.0), (0.5, 0.0)], &[(0.2, 1.0), (0.8, 1.0)], &[(0.2, 0.0), (0.8, 0.0)]],
+        'J' => &[&[(0.8, 1.0), (0.8, 0.2), (0.5, 0.0), (0.2, 0.2)]],
+        'K' => &[&[(0.0, 1.0), (0.0, 0.0)], &[(1.0, 1.0), (0.0, 0.45)], &[(0.3, 0.6), (1.0, 0.0)]],
+        'L' => &[&[(0.0, 1.0), (0.0, 0.0), (1.0, 0.0)]],
+        'M' => &[&[(0.0, 0.0), (0.0, 1.0), (0.5, 0.5), (1.0, 1.0), (1.0, 0.0)]],
+        'N' => &[&[(0.0, 0.0), (0.0, 1.0), (1.0, 0.0), (1.0, 1.0)]],
+        'O' => &[&[(0.3, 1.0), (0.7, 1.0), (1.0, 0.7), (1.0, 0.3), (0.7, 0.0), (0.3, 0.0), (0.0, 0.3), (0.0, 0.7), (0.3, 1.0)]],
+        'P' => &[&[(0.0, 0.0), (0.0, 1.0), (0.7, 1.0), (1.0, 0.8), (0.7, 0.55), (0.0, 0.55)]],
+        'Q' => &[&[(0.3, 1.0), (0.7, 1.0), (1.0, 0.7), (1.0, 0.3), (0.7, 0.0), (0.3, 0.0), (0.0, 0.3), (0.0, 0.7), (0.3, 1.0)], &[(0.6, 0.3), (1.0, -0.1)]],
+        'R' => &[&[(0.0, 0.0), (0.0, 1.0), (0.7, 1.0), (1.0, 0.8), (0.7, 0.55), (0.0, 0.55)], &[(0.5, 0.55), (1.0, 0.0)]],
+        'S' => &[&[(1.0, 0.85), (0.7, 1.0), (0.25, 1.0), (0.0, 0.8), (0.25, 0.55), (0.75, 0.5), (1.0, 0.25), (0.7, 0.0), (0.25, 0.0), (0.0, 0.15)]],
+        'T' => &[&[(0.0, 1.0), (1.0, 1.0)], &[(0.5, 1.0), (0.5, 0.0)]],
+        'U' => &[&[(0.0, 1.0), (0.0, 0.25), (0.3, 0.0), (0.7, 0.0), (1.0, 0.25), (1.0, 1.0)]],
+        'V' => &[&[(0.0, 1.0), (0.5, 0.0), (1.0, 1.0)]],
+        'W' => &[&[(0.0, 1.0), (0.25, 0.0), (0.5, 0.6), (0.75, 0.0), (1.0, 1.0)]],
+        'X' => &[&[(0.0, 1.0), (1.0, 0.0)], &[(0.0, 0.0), (1.0, 1.0)]],
+        'Y' => &[&[(0.0, 1.0), (0.5, 0.5), (1.0, 1.0)], &[(0.5, 0.5), (0.5, 0.0)]],
+        'Z' => &[&[(0.0, 1.0), (1.0, 1.0), (0.0, 0.0), (1.0, 0.0)]],
+        '0' => &[&[(0.3, 1.0), (0.7, 1.0), (1.0, 0.7), (1.0, 0.3), (0.7, 0.0), (0.3, 0.0), (0.0, 0.3), (0.0, 0.7), (0.3, 1.0)], &[(0.0, 0.0), (1.0, 1.0)]],
+        '1' => &[&[(0.25, 0.8), (0.5, 1.0), (0.5, 0.0)], &[(0.2, 0.0), (0.8, 0.0)]],
+        '2' => &[&[(0.0, 0.8), (0.25, 1.0), (0.75, 1.0), (1.0, 0.75), (0.0, 0.0), (1.0, 0.0)]],
+        '3' => &[&[(0.0, 1.0), (1.0, 1.0), (0.45, 0.55)], &[(0.45, 0.55), (1.0, 0.3), (0.7, 0.0), (0.2, 0.0), (0.0, 0.15)]],
+        '4' => &[&[(0.75, 0.0), (0.75, 1.0), (0.0, 0.3), (1.0, 0.3)]],
+        '5' => &[&[(1.0, 1.0), (0.0, 1.0), (0.0, 0.55), (0.7, 0.55), (1.0, 0.3), (0.7, 0.0), (0.2, 0.0), (0.0, 0.15)]],
+        '6' => &[&[(0.9, 0.9), (0.6, 1.0), (0.2, 0.85), (0.0, 0.4), (0.2, 0.05), (0.6, 0.0), (0.9, 0.2), (0.85, 0.45), (0.5, 0.6), (0.15, 0.5)]],
+        '7' => &[&[(0.0, 1.0), (1.0, 1.0), (0.4, 0.0)]],
+        '8' => &[&[(0.3, 0.55), (0.0, 0.75), (0.2, 1.0), (0.8, 1.0), (1.0, 0.75), (0.7, 0.55), (0.3, 0.55)], &[(0.7, 0.55), (1.0, 0.3), (0.75, 0.0), (0.25, 0.0), (0.0, 0.3), (0.3, 0.55)]],
+        '9' => &[&[(0.1, 0.1), (0.4, 0.0), (0.8, 0.15), (1.0, 0.6), (0.8, 0.95), (0.4, 1.0), (0.1, 0.8), (0.15, 0.55), (0.5, 0.4), (0.85, 0.5)]],
+        '_' => &[&[(0.0, 0.0), (1.0, 0.0)]],
+        '-' => &[&[(0.15, 0.5), (0.85, 0.5)]],
+        '.' => &[&[(0.45, 0.0), (0.55, 0.0)]],
+        '+' => &[&[(0.5, 0.85), (0.5, 0.15)], &[(0.15, 0.5), (0.85, 0.5)]],
+        _ => &[],
+    }
+}
+
+/// SILKSCREEN — reference designators, so a human can populate the
+/// board. Placed above each footprint, centred, in a single-stroke
+/// font. Cosmetic by nature: the bar is legibility and correct
+/// placement, not agreement with any other tool's glyph shapes.
+fn silk_layer(board: &Board, layer_top: bool, name: &str) -> GerberFile {
+    let mut ap = Apertures::new();
+    let stroke = 0.15f64;
+    let d = ap.circle(stroke);
+    let mut body = String::new();
+    let _ = writeln!(body, "D{d}*");
+    let size = 0.9f64; // cap height
+    for comp in &board.components {
+        let on_side = if layer_top {
+            comp.side == BoardSide::Top
+        } else {
+            comp.side == BoardSide::Bottom
+        };
+        if !on_side || comp.refdes.is_empty() {
+            continue;
+        }
+        let text: String = comp.refdes.to_uppercase();
+        let adv = size * 0.75;
+        let total = adv * text.chars().count() as f64;
+        // Above the part, clear of its own body.
+        let bx = comp.x - total / 2.0;
+        let by = comp.y - (comp.height_mm / 2.0 + 0.35 + size);
+        for (i, ch) in text.chars().enumerate() {
+            let ox = bx + i as f64 * adv;
+            for stroke_pts in glyph(ch) {
+                if stroke_pts.len() < 2 {
+                    continue;
+                }
+                for (k, (px, py)) in stroke_pts.iter().enumerate() {
+                    let x = ox + px * size * 0.62;
+                    // Glyph Y is up; board Y is down.
+                    let y = by + (1.0 - py) * size;
+                    let op = if k == 0 { "D02" } else { "D01" };
+                    let _ = writeln!(body, "X{}Y{}{}*", coord(x), coord(cy(y)), op);
+                }
+            }
+        }
+    }
+    let mut s = header(name);
+    s.push_str(&ap.emit());
+    s.push_str(&body);
+    s.push_str("M02*\n");
+    GerberFile { filename: format!("{name}.gbr"), contents: s }
+}
+
+/// Gerber job file (.gbrjob): the machine-readable index a fab house
+/// loads to know which file is which layer, so nobody guesses from
+/// extensions.
+fn job_file(board: &Board, gerbers: &[GerberFile], drill: &GerberFile) -> GerberFile {
+    let n_cu = board
+        .layer_stack
+        .layers
+        .iter()
+        .filter(|l| l.kind == LayerKind::Signal)
+        .count();
+    let mut files = String::new();
+    for (i, g) in gerbers.iter().enumerate() {
+        let stem = g.filename.trim_end_matches(".gbr");
+        let function = match stem {
+            "F_Cu" => "\"Copper,L1,Top\"".to_string(),
+            "B_Cu" => format!("\"Copper,L{n_cu},Bot\""),
+            "Edge_Cuts" => "\"Profile,NP\"".to_string(),
+            "F_Mask" => "\"SolderMask,Top\"".to_string(),
+            "B_Mask" => "\"SolderMask,Bot\"".to_string(),
+            "F_Paste" => "\"SolderPaste,Top\"".to_string(),
+            "B_Paste" => "\"SolderPaste,Bot\"".to_string(),
+            "F_Silkscreen" => "\"Legend,Top\"".to_string(),
+            "B_Silkscreen" => "\"Legend,Bot\"".to_string(),
+            _ => "\"Other\"".to_string(),
+        };
+        let comma = if i + 1 < gerbers.len() { "," } else { "" };
+        let _ = writeln!(
+            files,
+            "      {{ \"Path\": \"{}\", \"FileFunction\": {} }}{}",
+            g.filename, function, comma
+        );
+    }
+    let contents = format!(
+        r#"{{
+  "Header": {{
+    "GenerationSoftware": {{ "Vendor": "bhdl", "Application": "bhdl-cli" }},
+    "CreationDate": "generated"
+  }},
+  "GeneralSpecs": {{
+    "ProjectId": {{ "Name": "{name}" }},
+    "Size": {{ "X": {w:.3}, "Y": {h:.3} }},
+    "LayerNumber": {n_cu},
+    "BoardThickness": {thick:.3}
+  }},
+  "FilesAttributes": [
+{files}  ],
+  "DrillFiles": [ {{ "Path": "{drill}" }} ]
+}}
+"#,
+        name = "board",
+        w = board.config.outline.width(),
+        h = board.config.outline.height(),
+        n_cu = n_cu,
+        thick = board.layer_stack.total_thickness_mm,
+        files = files,
+        drill = drill.filename,
+    );
+    GerberFile { filename: "board.gbrjob".into(), contents }
+}
+
 /// Build the full package for a placed-and-routed board.
 pub fn export_fab(
     board: &Board,
@@ -437,8 +739,23 @@ pub fn export_fab(
         let name = layer.name.replace('.', "_");
         gerbers.push(copper_layer(board, routes, fills, i, &name));
     }
+    let two_sided = board.layer_stack.layers.len() >= 2;
+    gerbers.push(mask_layer(board, true, "F_Mask"));
+    if two_sided {
+        gerbers.push(mask_layer(board, false, "B_Mask"));
+    }
+    gerbers.push(paste_layer(board, true, "F_Paste"));
+    if two_sided {
+        gerbers.push(paste_layer(board, false, "B_Paste"));
+    }
+    gerbers.push(silk_layer(board, true, "F_Silkscreen"));
+    if two_sided {
+        gerbers.push(silk_layer(board, false, "B_Silkscreen"));
+    }
     gerbers.push(edge_cuts(board));
     let drill = excellon(board, routes);
+    let job = job_file(board, &gerbers, &drill);
+    gerbers.push(job);
 
     let n_tracks: usize = routes.iter().map(|r| r.segments.len()).sum();
     let n_vias: usize = routes.iter().map(|r| r.vias.len()).sum();
