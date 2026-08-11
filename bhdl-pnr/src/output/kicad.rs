@@ -1260,6 +1260,21 @@ pub(crate) fn clip_poly_to_rect(
 /// and emission cannot diverge.
 const VOID_CELL: f64 = 0.05;
 
+/// Coarse phase timers for the fill, behind BHDL_PNR_TIMING. Explicit
+/// spans because sample(1)'s child attribution proved untrustworthy
+/// here: it blamed hypot for ~30% of the fill and removing every one
+/// of those calls bought 3%.
+pub(crate) static FILL_MS_GRID: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+pub(crate) static FILL_MS_SPOKE: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+pub(crate) static FILL_MS_MORPH: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+pub(crate) static FILL_MS_LABEL: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+pub(crate) static FILL_CELLS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 /// The shared copper raster. Returns (cells, cols, rows) where a
 /// true cell is copper. Deterministic; row-major.
 pub(crate) fn fill_copper_grid(
@@ -1685,7 +1700,14 @@ fn fracture_fill_spoked(
 ) -> Vec<Vec<(f64, f64)>> {
     // ONE VOID ENGINE: raster copper, trace copper components, punch
     // hole loops via the keyhole forest. See fill_copper_grid.
+    let _tg = std::time::Instant::now();
     let (mut copper, cols, rows) = fill_copper_grid_masked(x0, y0, x1, y1, holes, rects, mask);
+    FILL_MS_GRID.fetch_add(
+        _tg.elapsed().as_millis() as u64,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    FILL_CELLS.fetch_add((rows * cols) as u64, std::sync::atomic::Ordering::Relaxed);
+    let _tsp = std::time::Instant::now();
     // PRIORITY BACKFILL support: a caller-supplied void grid (same
     // raster dims) — the higher-priority pour's CLAIM, clearance-
     // dilated; this fill flows around it, KiCad-style.
@@ -1698,6 +1720,48 @@ fn fracture_fill_spoked(
         }
     }
     if !spokes.is_empty() && mask.is_none() {
+        // SPATIAL INDEX over spoke_mask. This predicate is evaluated
+        // once per raster cell per pad window, and it used to scan
+        // EVERY mask entry: cost went as pads x window cells x
+        // |spoke_mask|. Measured with explicit phase timers, this
+        // block was 88.8s of the mixer's 187s of fill work — the
+        // single biggest item, and 6.5x the erode/dilate pass I had
+        // assumed was the problem.
+        //
+        // Bucketing is EXACT, not an approximation: an entry is
+        // registered in every cell its own influence radius reaches,
+        // so a bucket holds a superset of the entries that could
+        // satisfy the test there, and `any` is order-independent.
+        let mask_cell = 1.0_f64;
+        let mmcols = (((x1 - x0) / mask_cell).ceil() as usize).max(1);
+        let mmrows = (((y1 - y0) / mask_cell).ceil() as usize).max(1);
+        let mut mbuckets: Vec<Vec<u32>> = vec![Vec::new(); mmcols * mmrows];
+        for (mi, &(hx, hy, hr)) in spoke_mask.iter().enumerate() {
+            let rr = hr * 1.082 + 0.19;
+            let c0 = (((hx - rr - x0) / mask_cell).floor().max(0.0) as usize)
+                .min(mmcols - 1);
+            let c1 = (((hx + rr - x0) / mask_cell).floor().max(0.0) as usize)
+                .min(mmcols - 1);
+            let r0 = (((hy - rr - y0) / mask_cell).floor().max(0.0) as usize)
+                .min(mmrows - 1);
+            let r1 = (((hy + rr - y0) / mask_cell).floor().max(0.0) as usize)
+                .min(mmrows - 1);
+            for rb in r0..=r1 {
+                for cb in c0..=c1 {
+                    mbuckets[rb * mmcols + cb].push(mi as u32);
+                }
+            }
+        }
+        let mask_hit = |px: f64, py: f64| -> bool {
+            let cb = (((px - x0) / mask_cell).floor().max(0.0) as usize)
+                .min(mmcols - 1);
+            let rb = (((py - y0) / mask_cell).floor().max(0.0) as usize)
+                .min(mmrows - 1);
+            mbuckets[rb * mmcols + cb].iter().any(|&mi| {
+                let (hx, hy, hr) = spoke_mask[mi as usize];
+                (hx - px).hypot(hy - py) < hr * 1.082 + 0.19
+            })
+        };
         let hw = 0.25f64; // spoke half-width (bridge 0.5 — the demo's own)
         let s2 = std::f64::consts::SQRT_2;
         // Pre-paint snapshot: spoke tips must land in REAL fill. An
@@ -1813,9 +1877,7 @@ fn fracture_fill_spoked(
                         if !in_bar {
                             continue;
                         }
-                        let fh = spoke_mask.iter().any(|&(hx, hy, hr)| {
-                            (hx - px).hypot(hy - py) < hr * 1.082 + 0.19
-                        });
+                        let fh = mask_hit(px, py);
                         if fh {
                             continue;
                         }
@@ -1862,9 +1924,7 @@ fn fracture_fill_spoked(
                     }
                     // Never repaint real clearance: pre-thermal holes
                     // (engine-inflated) and cutout rects stay void.
-                    let fh = spoke_mask.iter().any(|&(hx, hy, hr)| {
-                        (hx - px).hypot(hy - py) < hr * 1.082 + 0.19
-                    });
+                    let fh = mask_hit(px, py);
                     if fh {
                         continue;
                     }
@@ -1893,6 +1953,7 @@ fn fracture_fill_spoked(
             .filter(|&(dr, dc)| dr * dr + dc * dc <= rad * rad)
             .collect();
         let mut eroded = vec![false; rows * cols];
+        let _tm = std::time::Instant::now();
         for r in 0..rows {
             for c in 0..cols {
                 if !copper[r * cols + c] {
@@ -1925,7 +1986,16 @@ fn fracture_fill_spoked(
             }
         }
         copper = dilated;
+        FILL_MS_MORPH.fetch_add(
+            _tm.elapsed().as_millis() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
     }
+    FILL_MS_SPOKE.fetch_add(
+        _tsp.elapsed().as_millis() as u64,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    let _tl = std::time::Instant::now();
     // Label copper components (4-connectivity), row-major BFS.
     let mut label = vec![0u32; rows * cols];
     let mut next = 0u32;
@@ -2015,6 +2085,10 @@ fn fracture_fill_spoked(
         punch_interior_rings(&mut poly, rings);
         out.push(poly);
     }
+    FILL_MS_LABEL.fetch_add(
+        _tl.elapsed().as_millis() as u64,
+        std::sync::atomic::Ordering::Relaxed,
+    );
     out
 }
 

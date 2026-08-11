@@ -4762,6 +4762,17 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                 output::kicad::EMISSION_CALLS.load(std::sync::atomic::Ordering::Relaxed),
                 output::kicad::EMISSION_MS.load(std::sync::atomic::Ordering::Relaxed),
             );
+            {
+                use std::sync::atomic::Ordering::Relaxed as R;
+                eprintln!(
+                    "[timing]   fill phases: grid {}ms, spoke {}ms (of which morph {}ms), label+trace {}ms, cells {}M",
+                    output::kicad::FILL_MS_GRID.load(R),
+                    output::kicad::FILL_MS_SPOKE.load(R),
+                    output::kicad::FILL_MS_MORPH.load(R),
+                    output::kicad::FILL_MS_LABEL.load(R),
+                    output::kicad::FILL_CELLS.load(R) / 1_000_000,
+                );
+            }
         }
         pour_bridge_residual = round_residual;
         // Re-scan whenever ANY bridge landed: this round's own
