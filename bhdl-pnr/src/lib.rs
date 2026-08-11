@@ -5333,6 +5333,12 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
     }
 
     {
+        let n = pour_unserved_pad_route(&board, &mut final_routes);
+        if n > 0 {
+            info!("unserved-pad route: {n} pad(s) joined");
+        }
+    }
+    {
         let pruned = signal_free_end_trim(&board, &mut final_routes);
         if pruned > 0 {
             info!("post-everything free-end trim: {pruned} segment(s) removed");
@@ -8093,6 +8099,197 @@ fn probe_dangling_vias(board: &Board, final_routes: &[Route], tag: &str) {
 /// span bookkeeping can strand half a routed tree while the sink
 /// counter still reads complete (ch3_a_out shipped in two pieces,
 /// 3.7mm apart, invisible to every existing check).
+/// A pour is an OPTIMIZATION, not a connectivity guarantee — and
+/// signal_net_continuity_repair skips every net that HAS a plane_layer
+/// (`plane_layer.is_some() => continue`), so a pour net's pad that the
+/// fill never reaches had no pass looking after it at all.
+///
+/// Measured on the mixer at seed 7: vbias pad U20.IN_B_P at
+/// (23.88,90.74) sits outside all three of its net's F.Cu fill
+/// fragments with its nearest same-net track 4.825mm away, while its
+/// sibling 4.95mm along is track-connected at 0.000. The engine was
+/// honest about it — "pour defects (trial currency): 5", all five
+/// tiers run — it simply had no rung left to try.
+///
+/// Serve exactly those pads: NEITHER fill-contained NOR touching
+/// copper, routed to the nearest same-net copper with the ordinary
+/// escape/maze ladder. Runs last, on the copper actually being
+/// shipped, so it judges the real fill rather than an early model.
+fn pour_unserved_pad_route(board: &Board, final_routes: &mut Vec<Route>) -> usize {
+    let mut joined = 0usize;
+    // Phase 1 is read-only: the fill mirror borrows final_routes, so
+    // collect every repair before touching anything.
+    struct Job {
+        ni: usize,
+        src: (f64, f64),
+        dst: (f64, f64),
+        width: f64,
+        layer: usize,
+    }
+    let mut jobs: Vec<Job> = Vec::new();
+    for ni in 0..board.nets.len() {
+        let Some(layer) = board.nets[ni].plane_layer else {
+            continue;
+        };
+        if board.nets[ni].pins.len() < 2 {
+            continue;
+        }
+        let net_id = board.nets[ni].id;
+        let polys = output::kicad::emission_fill_polys(board, final_routes, ni)
+            .unwrap_or_default();
+        let inside = |poly: &[(f64, f64)], x: f64, y: f64| -> bool {
+            let mut ins = false;
+            let m = poly.len();
+            for k in 0..m {
+                let (x1, y1) = poly[k];
+                let (x2, y2) = poly[(k + 1) % m];
+                if (y1 > y) != (y2 > y) && x < (x2 - x1) * (y - y1) / (y2 - y1) + x1 {
+                    ins = !ins;
+                }
+            }
+            ins
+        };
+        for comp in &board.components {
+            let (co, sn) = (comp.theta.cos(), comp.theta.sin());
+            let quarter =
+                ((comp.theta / std::f64::consts::FRAC_PI_2).round() as i64).rem_euclid(2);
+            for pin in &comp.pins {
+                if pin.net != Some(net_id) || pin.unplaced {
+                    continue;
+                }
+                let gx = comp.x + pin.dx * co - pin.dy * sn;
+                let gy = comp.y + pin.dx * sn + pin.dy * co;
+                let (pw, ph) = match &pin.pad {
+                    Some(p) => (p.width_mm, p.height_mm),
+                    None => (0.5, 0.5),
+                };
+                let (hx, hy) = if quarter == 1 {
+                    (ph / 2.0, pw / 2.0)
+                } else {
+                    (pw / 2.0, ph / 2.0)
+                };
+                // Served by the pour? Sample the pad face, because a
+                // thermally relieved pad's CENTRE sits in the void.
+                let mut fill_served = false;
+                'fs: for dx in [-0.6, -0.3, 0.0, 0.3, 0.6] {
+                    for dy in [-0.6, -0.3, 0.0, 0.3, 0.6] {
+                        let (sx, sy) = (gx + dx * hx, gy + dy * hy);
+                        if polys.iter().any(|p| inside(p, sx, sy)) {
+                            fill_served = true;
+                            break 'fs;
+                        }
+                    }
+                }
+                if fill_served {
+                    continue;
+                }
+                // Served by a track?
+                let touched = final_routes[ni].segments.iter().any(|sg| {
+                    geom::segment_point_too_close(
+                        sg.start,
+                        sg.end,
+                        (gx, gy),
+                        hx.max(hy) + sg.width_mm / 2.0,
+                    )
+                });
+                if touched {
+                    continue;
+                }
+                // Nearest same-net copper: a point on one of this
+                // net's own segments, or a vertex of its fill.
+                let mut best: Option<((f64, f64), f64, usize, f64)> = None;
+                for sg in &final_routes[ni].segments {
+                    let (ax, ay) = sg.start;
+                    let (bx, by) = sg.end;
+                    let (dx, dy) = (bx - ax, by - ay);
+                    let l2 = dx * dx + dy * dy;
+                    let t = if l2 <= 0.0 {
+                        0.0
+                    } else {
+                        (((gx - ax) * dx + (gy - ay) * dy) / l2).clamp(0.0, 1.0)
+                    };
+                    let q = (ax + t * dx, ay + t * dy);
+                    let d = (q.0 - gx).hypot(q.1 - gy);
+                    if best.map_or(true, |(.., bd)| d < bd) {
+                        best = Some((q, sg.width_mm, sg.layer, d));
+                    }
+                }
+                for poly in &polys {
+                    for &(vx, vy) in poly {
+                        let d = (vx - gx).hypot(vy - gy);
+                        if best.map_or(true, |(.., bd)| d < bd) {
+                            best = Some((
+                                (vx, vy),
+                                board.config.min_trace_width_mm,
+                                layer,
+                                d,
+                            ));
+                        }
+                    }
+                }
+                let Some((dst, width, dlayer, d)) = best else {
+                    continue;
+                };
+                // Same cap the continuity repair uses: past this, a
+                // "repair" is really a reroute and belongs upstream.
+                if d > 20.0 || dlayer != layer {
+                    continue;
+                }
+                jobs.push(Job {
+                    ni,
+                    src: (gx, gy),
+                    dst,
+                    width: width.max(board.config.min_trace_width_mm),
+                    layer,
+                });
+            }
+        }
+    }
+    for job in jobs {
+        let net_id = board.nets[job.ni].id;
+        let idx = geom::ClearanceIndex::build(board, final_routes, Some(net_id));
+        let path = geom::route_escape(&idx, job.src, job.dst, job.width, job.layer, net_id)
+            .or_else(|| {
+                geom::route_tunnel(&idx, job.src, job.dst, job.width, job.layer, net_id)
+            });
+        drop(idx);
+        let Some(path) = path else {
+            log::warn!(
+                "unserved pad: '{}' pad ({:.2},{:.2}) reaches neither fill nor track — no legal route (honest)",
+                board.nets[job.ni].name, job.src.0, job.src.1
+            );
+            continue;
+        };
+        let route = &mut final_routes[job.ni];
+        let seg_start = route.segments.len();
+        for w in path.windows(2) {
+            if (w[0].0 - w[1].0).hypot(w[0].1 - w[1].1) > 1e-9 {
+                route.segments.push(RouteSegment {
+                    layer: job.layer,
+                    start: w[0],
+                    end: w[1],
+                    width_mm: job.width,
+                });
+            }
+        }
+        if route.segments.len() > seg_start {
+            route
+                .path_spans
+                .push((seg_start, route.segments.len() - seg_start));
+            route.path_parents.push(None);
+            joined += 1;
+            info!(
+                "unserved pad: '{}' pad ({:.2},{:.2}) joined to same-net copper {:.2}mm away",
+                board.nets[job.ni].name,
+                job.src.0,
+                job.src.1,
+                (job.dst.0 - job.src.0).hypot(job.dst.1 - job.src.1)
+            );
+        }
+    }
+    joined
+}
+
 fn signal_net_continuity_repair(board: &Board, final_routes: &mut Vec<Route>) -> usize {
     let via_r = board.layer_stack.via.pad_mm / 2.0;
     let mut repaired = 0usize;
