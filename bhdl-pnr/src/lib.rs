@@ -9079,9 +9079,19 @@ fn pour_orphan_chain_sweep(board: &Board, final_routes: &mut [Route]) -> usize {
                 dsu_union(&mut dsu, n + vi, n + nv + pi);
             }
         }
-        // Grounding sources: a real pad of this net, and the main pour
-        // body itself (the largest fragment is the thing everything
-        // else has to reach; it cannot be asked to reach itself).
+        // Grounding: the main pour body is the ONE true source. A pad
+        // is NOT — it is a WITNESS, counted per component. Measured
+        // (the DC-jack island): a real GND pad fed a 0.6mm stub into a
+        // via-in-pad whose fragment pair reached nothing else. "A pad
+        // grounds its fragment" was locally true and globally wrong —
+        // the whole assembly floated, and KiCad reported zone<->zone
+        // precisely because the pad WAS connected to something. But a
+        // track chain joining TWO pads with no fill contact is real
+        // copper and must survive. So: a component is live if it
+        // contains the main fill, OR at least two DISTINCT pads. One
+        // pad alone anchors nothing — its copper is swept, and the
+        // bare pad falls through to pour_unserved_pad_route, which
+        // routes it to real copper instead.
         let mut grounded = vec![false; n + nv + np];
         if let Some(main_pi) = polys
             .iter()
@@ -9091,7 +9101,11 @@ fn pour_orphan_chain_sweep(board: &Board, final_routes: &mut [Route]) -> usize {
         {
             grounded[n + nv + main_pi] = true;
         }
-        for &(cx, cy, hx, hy) in &own_pads {
+        // Per-root distinct-pad witnesses (one pad counted once no
+        // matter how many segments, vias or fragments it touches).
+        let mut pad_roots: Vec<crate::det::HashSet<usize>> =
+            vec![Default::default(); own_pads.len()];
+        for (pad_i, &(cx, cy, hx, hy)) in own_pads.iter().enumerate() {
             // A pad grounds the fragment its COPPER reaches, which is
             // not simply the fragment under its centre: a thermally
             // relieved pad sits in a void and meets the fill only at
@@ -9100,7 +9114,8 @@ fn pour_orphan_chain_sweep(board: &Board, final_routes: &mut [Route]) -> usize {
             // rays outward, which happily jumps the relief gap and
             // grounds a fragment the pad never touches.
             if let Some(pi) = fill_hit(cx, cy) {
-                grounded[n + nv + pi] = true;
+                let r = dsu_find(&mut dsu, n + nv + pi);
+                pad_roots[pad_i].insert(r);
             }
             // ON OR INSIDE the pad edge, not merely near it. The void
             // contour around a relieved pad hugs the pad at clearance
@@ -9109,23 +9124,26 @@ fn pour_orphan_chain_sweep(board: &Board, final_routes: &mut [Route]) -> usize {
             // a 158-vertex GND island next to the DC jack was declared
             // grounded by a 0.15mm box and shipped as a zone island. A
             // spoke tip overlaps the pad; a void contour does not.
-            for (pi, poly) in polys.iter().enumerate() {
-                if poly.iter().any(|&(vx, vy)| {
+            for pi in 0..np {
+                if polys[pi].iter().any(|&(vx, vy)| {
                     (vx - cx).abs() <= hx + 0.001 && (vy - cy).abs() <= hy + 0.001
                 }) {
-                    grounded[n + nv + pi] = true;
+                    let r = dsu_find(&mut dsu, n + nv + pi);
+                    pad_roots[pad_i].insert(r);
                 }
             }
             for (i, sg) in segs.iter().enumerate() {
                 for &pt in &[sg.start, sg.end] {
                     if (pt.0 - cx).abs() <= hx + 0.05 && (pt.1 - cy).abs() <= hy + 0.05 {
-                        grounded[i] = true;
+                        let r = dsu_find(&mut dsu, i);
+                        pad_roots[pad_i].insert(r);
                     }
                 }
             }
             for (vi, &(vx, vy)) in vias.iter().enumerate() {
                 if (vx - cx).abs() <= hx + 0.05 && (vy - cy).abs() <= hy + 0.05 {
-                    grounded[n + vi] = true;
+                    let r = dsu_find(&mut dsu, n + vi);
+                    pad_roots[pad_i].insert(r);
                 }
             }
         }
@@ -9133,6 +9151,19 @@ fn pour_orphan_chain_sweep(board: &Board, final_routes: &mut [Route]) -> usize {
         for k in 0..n + nv + np {
             if grounded[k] {
                 let r = dsu_find(&mut dsu, k);
+                root_ok.insert(r);
+            }
+        }
+        // Two distinct pad witnesses make a component live even with
+        // no fill member at all (a plain routed pad-to-pad chain).
+        let mut root_pad_count: crate::det::HashMap<usize, usize> = Default::default();
+        for pr in &pad_roots {
+            for &r in pr.iter() {
+                *root_pad_count.entry(r).or_insert(0) += 1;
+            }
+        }
+        for (&r, &c) in root_pad_count.iter() {
+            if c >= 2 {
                 root_ok.insert(r);
             }
         }
