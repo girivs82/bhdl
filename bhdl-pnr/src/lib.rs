@@ -8445,11 +8445,83 @@ fn pour_severed_component_stitch(board: &Board, final_routes: &mut Vec<Route>) -
                 y += step;
             }
             if !placed {
-                log::warn!(
-                    "severed-component stitch: '{}' fragment ({} verts, bbox {fx0:.1},{fy0:.1}-{fx1:.1},{fy1:.1}) — no legal via site (honest)",
-                    board.nets[ni].name,
-                    polys[pi].len()
-                );
+                // PERIMETER escape: no far-plane coverage means a via
+                // cannot fix this piece — but the pad-local searches
+                // that failed here started from a handful of sealed
+                // pads, and the fragment's own boundary offers
+                // hundreds of departure points. Try a same-face track
+                // from perimeter vertices to the nearest main-fill
+                // vertices; a track touching both fills merges them
+                // (same-net contact is connection).
+                let main_poly = &polys[main_pi];
+                // Candidate pairs: subsampled perimeter vertices x
+                // their nearest main vertices, tried nearest-first.
+                let mut pairs: Vec<((f64, f64), (f64, f64), f64)> = Vec::new();
+                let stride = (polys[pi].len() / 48).max(1);
+                for (k, &(sx, sy)) in polys[pi].iter().enumerate() {
+                    if k % stride != 0 {
+                        continue;
+                    }
+                    let mut best: Option<((f64, f64), f64)> = None;
+                    for &(mx, my) in main_poly.iter() {
+                        let d = (mx - sx).hypot(my - sy);
+                        if best.map_or(true, |(_, bd)| d < bd) {
+                            best = Some(((mx, my), d));
+                        }
+                    }
+                    if let Some((m, d)) = best {
+                        if d <= 20.0 {
+                            pairs.push(((sx, sy), m, d));
+                        }
+                    }
+                }
+                pairs.sort_by(|a, b| {
+                    a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal)
+                });
+                let width = board.config.min_trace_width_mm;
+                let idx = geom::ClearanceIndex::build(board, final_routes, Some(net_id));
+                let mut joined_track = false;
+                for &(src, dst, d) in pairs.iter().take(24) {
+                    let path = geom::route_escape(&idx, src, dst, width, pl, net_id)
+                        .or_else(|| {
+                            geom::route_tunnel(&idx, src, dst, width, pl, net_id)
+                        });
+                    if let Some(path) = path {
+                        let route = &mut final_routes[ni];
+                        let seg_start = route.segments.len();
+                        for w in path.windows(2) {
+                            if (w[0].0 - w[1].0).hypot(w[0].1 - w[1].1) > 1e-9 {
+                                route.segments.push(RouteSegment {
+                                    layer: pl,
+                                    start: w[0],
+                                    end: w[1],
+                                    width_mm: width,
+                                });
+                            }
+                        }
+                        if route.segments.len() > seg_start {
+                            route
+                                .path_spans
+                                .push((seg_start, route.segments.len() - seg_start));
+                            route.path_parents.push(None);
+                            info!(
+                                "severed-component stitch: '{}' fragment ({} verts) joined to main by a {d:.2}mm perimeter track",
+                                board.nets[ni].name,
+                                polys[pi].len()
+                            );
+                            stitched += 1;
+                            joined_track = true;
+                            break;
+                        }
+                    }
+                }
+                if !joined_track {
+                    log::warn!(
+                        "severed-component stitch: '{}' fragment ({} verts, bbox {fx0:.1},{fy0:.1}-{fx1:.1},{fy1:.1}) — no via site, no perimeter route (honest)",
+                        board.nets[ni].name,
+                        polys[pi].len()
+                    );
+                }
             }
         }
     }
@@ -8639,6 +8711,16 @@ fn pour_unserved_pad_route(board: &Board, final_routes: &mut Vec<Route>) -> usiz
                 .and_then(|ps| ps.into_iter().max_by_key(|p| p.len()));
             let mut rip_budget = 1usize;
             if let Some(mp) = main_poly {
+                // VERIFY-AND-REVERT around the ladder. Its via rungs
+                // validate with plane_swallows — the optimistic hole
+                // model — and a drop can land on far copper that
+                // island removal strands (measured: U2.V_MINUS's
+                // rescue via at (68.78,50.80) shipped as the board's
+                // last dangling pair). The emitted far main fragment
+                // is the only honest referee; a "join" that fails it
+                // never happened.
+                let snapshot: Vec<Route> = final_routes.clone();
+                let vias_before = final_routes[job.ni].vias.len();
                 if island_bridge_pad(
                     board,
                     final_routes,
@@ -8650,12 +8732,177 @@ fn pour_unserved_pad_route(board: &Board, final_routes: &mut Vec<Route>) -> usiz
                     true,
                     &mut rip_budget,
                 ) {
-                    joined += 1;
-                    info!(
-                        "unserved pad: '{}' pad ({:.2},{:.2}) joined via the bridge ladder",
+                    let new_vias: Vec<(f64, f64)> = final_routes[job.ni].vias
+                        [vias_before..]
+                        .iter()
+                        .map(|v| (v.x, v.y))
+                        .collect();
+                    let verified = if new_vias.is_empty() {
+                        true // track-only join: same-face copper contact
+                    } else {
+                        let net_id = board.nets[job.ni].id;
+                        let n_layers = board.layer_stack.layers.len();
+                        let far = if job.layer == 0 { n_layers - 1 } else { 0 };
+                        let (_, fills) = output::kicad::export_kicad_pcb_with_fills(
+                            board,
+                            final_routes,
+                        );
+                        let far_main = fills
+                            .zones
+                            .iter()
+                            .filter(|z| z.net_id == net_id && z.layer == far)
+                            .flat_map(|z| z.polys.iter())
+                            .max_by_key(|p| p.len());
+                        match far_main {
+                            Some(fp) => new_vias.iter().all(|&(vx, vy)| {
+                                let mut ins = false;
+                                let m = fp.len();
+                                for k in 0..m {
+                                    let (x1, y1) = fp[k];
+                                    let (x2, y2) = fp[(k + 1) % m];
+                                    if (y1 > vy) != (y2 > vy)
+                                        && vx < (x2 - x1) * (vy - y1) / (y2 - y1) + x1
+                                    {
+                                        ins = !ins;
+                                    }
+                                }
+                                ins
+                            }),
+                            None => false,
+                        }
+                    };
+                    if verified {
+                        joined += 1;
+                        info!(
+                            "unserved pad: '{}' pad ({:.2},{:.2}) joined via the bridge ladder",
+                            board.nets[job.ni].name, job.src.0, job.src.1
+                        );
+                        continue;
+                    }
+                    *final_routes = snapshot;
+                    log::warn!(
+                        "unserved pad: '{}' pad ({:.2},{:.2}) ladder join FAILED far-main verification — reverted (honest)",
                         board.nets[job.ni].name, job.src.0, job.src.1
                     );
-                    continue;
+                }
+                // Last rung: OUR OWN via search with the honest
+                // referee up front. The ladder commits the first
+                // plane_swallows-blessed site; here every candidate
+                // must sit inside the EMITTED far main before a track
+                // is even attempted, so what commits is verified by
+                // construction.
+                let net_id = board.nets[job.ni].id;
+                let n_layers = board.layer_stack.layers.len();
+                let far = if job.layer == 0 { n_layers - 1 } else { 0 };
+                let far_sig = board
+                    .layer_stack
+                    .layers
+                    .get(far)
+                    .map(|l| l.kind == crate::types::LayerKind::Signal)
+                    .unwrap_or(false);
+                if far_sig {
+                    let (_, fills) =
+                        output::kicad::export_kicad_pcb_with_fills(board, final_routes);
+                    let far_main = fills
+                        .zones
+                        .iter()
+                        .filter(|z| z.net_id == net_id && z.layer == far)
+                        .flat_map(|z| z.polys.iter())
+                        .max_by_key(|p| p.len())
+                        .cloned();
+                    if let Some(fp) = far_main {
+                        let inside = |x: f64, y: f64| -> bool {
+                            let mut ins = false;
+                            let m = fp.len();
+                            for k in 0..m {
+                                let (x1, y1) = fp[k];
+                                let (x2, y2) = fp[(k + 1) % m];
+                                if (y1 > y) != (y2 > y)
+                                    && x < (x2 - x1) * (y - y1) / (y2 - y1) + x1
+                                {
+                                    ins = !ins;
+                                }
+                            }
+                            ins
+                        };
+                        let via_r = board.layer_stack.via.pad_mm / 2.0;
+                        let margin = via_r + 0.15;
+                        let idx = geom::ClearanceIndex::build(
+                            board,
+                            final_routes,
+                            Some(net_id),
+                        );
+                        let mut done = false;
+                        'rings: for ring in 0..24 {
+                            let rr = 0.6 + ring as f64 * 0.45;
+                            for k in 0..12 {
+                                let ang = k as f64 * std::f64::consts::PI / 6.0;
+                                let (vx, vy) =
+                                    (job.src.0 + rr * ang.cos(), job.src.1 + rr * ang.sin());
+                                let far_ok = (0..8).all(|q| {
+                                    let a = q as f64 * std::f64::consts::FRAC_PI_4;
+                                    inside(
+                                        vx + margin * a.cos(),
+                                        vy + margin * a.sin(),
+                                    )
+                                });
+                                if !far_ok
+                                    || idx.via_conflict(vx, vy, via_r, net_id).is_some()
+                                    || final_routes.iter().any(|r| {
+                                        r.vias.iter().any(|v| {
+                                            (v.x - vx).hypot(v.y - vy)
+                                                < board.layer_stack.via.drill_mm + 0.25
+                                        })
+                                    })
+                                {
+                                    continue;
+                                }
+                                let Some(path) = geom::route_escape(
+                                    &idx, job.src, (vx, vy), job.width, job.layer, net_id,
+                                )
+                                .or_else(|| {
+                                    geom::route_tunnel(
+                                        &idx, job.src, (vx, vy), job.width, job.layer,
+                                        net_id,
+                                    )
+                                }) else {
+                                    continue;
+                                };
+                                let route = &mut final_routes[job.ni];
+                                let seg_start = route.segments.len();
+                                for w in path.windows(2) {
+                                    if (w[0].0 - w[1].0).hypot(w[0].1 - w[1].1) > 1e-9 {
+                                        route.segments.push(RouteSegment {
+                                            layer: job.layer,
+                                            start: w[0],
+                                            end: w[1],
+                                            width_mm: job.width,
+                                        });
+                                    }
+                                }
+                                route.vias.push(RouteVia {
+                                    x: vx,
+                                    y: vy,
+                                    from_layer: job.layer.min(far),
+                                    to_layer: job.layer.max(far),
+                                });
+                                route
+                                    .path_spans
+                                    .push((seg_start, route.segments.len() - seg_start));
+                                route.path_parents.push(None);
+                                joined += 1;
+                                info!(
+                                    "unserved pad: '{}' pad ({:.2},{:.2}) via-dropped to VERIFIED far main at ({vx:.2},{vy:.2})",
+                                    board.nets[job.ni].name, job.src.0, job.src.1
+                                );
+                                done = true;
+                                break 'rings;
+                            }
+                        }
+                        if done {
+                            continue;
+                        }
+                    }
                 }
             }
             log::warn!(

@@ -880,9 +880,9 @@ fn generate_dc_jack_dc10a() -> ComponentFootprint {
     // reference board cuts 3.6 x 1.0. The slot runs along the barrel
     // axis (local X), matching the spade terminals.
     let pads = vec![
-        make_th_pad("1", -6.4, -1.2, 3.0, 1.6, true),
-        make_th_pad("2", -3.6, 3.5, 3.0, 1.6, false),
-        make_th_pad("3", -0.4, -1.2, 3.0, 1.6, false),
+        make_slot_pad("1", -6.4, -1.2, 4.3, 1.7, 3.6, 1.0, PadShape::RoundedRectangle),
+        make_slot_pad("2", -3.6, 3.5, 4.3, 1.7, 3.6, 1.0, PadShape::RoundedRectangle),
+        make_slot_pad("3", -0.4, -1.2, 4.3, 1.7, 3.6, 1.0, PadShape::RoundedRectangle),
     ];
     ComponentFootprint {
         footprint_name: "CLIFF_FC68148_DC10A".to_string(),
