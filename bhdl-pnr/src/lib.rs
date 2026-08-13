@@ -11726,6 +11726,16 @@ fn solve_channel_miniboard_attempt(
         .iter()
         .filter(|v| !matches!(v.kind, DrcViolationKind::UnroutedNet))
         .count();
+    if hard_drc > 0 && std::env::var("BHDL_PNR_PROBE").is_ok() {
+        for v in result
+            .drc_violations
+            .iter()
+            .filter(|v| !matches!(v.kind, DrcViolationKind::UnroutedNet))
+            .take(8)
+        {
+            log::info!("[probe] mini-solve hard drc: {v:?}");
+        }
+    }
     let certified = missed == 0 && hard_drc == 0;
     info!(
         "channel mini-solve: {}/{} mandatory pads, {} hard drc — {}",
