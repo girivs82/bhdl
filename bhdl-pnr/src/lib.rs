@@ -5333,15 +5333,33 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
     }
 
     {
-        let n = pour_unserved_pad_route(&board, &mut final_routes);
-        if n > 0 {
-            info!("unserved-pad route: {n} pad(s) joined");
-        }
-    }
-    {
         let pruned = signal_free_end_trim(&board, &mut final_routes);
         if pruned > 0 {
             info!("post-everything free-end trim: {pruned} segment(s) removed");
+        }
+    }
+    {
+        // AFTER the trim, not before: the trim removes segments and
+        // the fill reshapes around the removal. And ITERATED to a
+        // fixpoint, because the pass's own joins reshape the fill
+        // too — each net's verdicts are judged against a polys
+        // snapshot, and a join added later (same net or a neighbour)
+        // moves copper and voids alike. Measured: U2.V_MINUS on the
+        // jack board's seed 99 probed fill_served=true inside the
+        // pass and sat in NO fragment on the shipped board. A pass
+        // that mutates what it judges must re-judge until nothing
+        // moves; joins strictly decrease the unserved set, so this
+        // terminates (3 rounds is a backstop, not a tuning knob).
+        let st = pour_severed_component_stitch(&board, &mut final_routes);
+        if st > 0 {
+            info!("severed-component stitch: {st} via(s)");
+        }
+        for _ in 0..3 {
+            let n = pour_unserved_pad_route(&board, &mut final_routes);
+            if n == 0 {
+                break;
+            }
+            info!("unserved-pad route: {n} pad(s) joined");
         }
     }
     probe_dangling_vias(&board, &final_routes, "pre-metrics");
@@ -5489,6 +5507,15 @@ fn pour_defect_count(board: &Board, final_routes: &[Route]) -> usize {
             != Some(crate::types::LayerKind::Signal)
         {
             continue;
+        }
+        // (d) SEVERED live components on the EMISSION model — the
+        // raster in (a) is optimistic about clearances and measured
+        // blind to a real 3224-vertex severed assembly that KiCad
+        // reported as a zone island. Counting it here lets the trial
+        // machinery do what no local rung could: prefer a routing
+        // whose pour never fractured in the first place.
+        if let Some(polys) = output::kicad::emission_fill_polys(board, final_routes, ni) {
+            defects += pour_severed_fragments(board, final_routes, ni, &polys).len();
         }
         // (a) Stranded islands: anchors spread over >1 raster label
         // after all stitching (a routed bridge merges labels because
@@ -8115,6 +8142,320 @@ fn probe_dangling_vias(board: &Board, final_routes: &[Route], tag: &str) {
 /// copper, routed to the nearest same-net copper with the ordinary
 /// escape/maze ladder. Runs last, on the copper actually being
 /// shipped, so it judges the real fill rather than an early model.
+/// Join a live-but-severed piece of pour to the main body with ONE
+/// stitching via, where the other face's main plane runs beneath it.
+///
+/// The pad-level ladders cannot do this: measured (jack board, seed
+/// 99), a 3224-vertex F.Cu GND fragment with two pads, four tracks
+/// and a B.Cu partner was severed from the main pour, and every pad
+/// inside it failed "no legal bridge" — each pad's LOCAL neighbourhood
+/// is sealed, which is HOW the piece got severed. But the component
+/// itself sits on top of the whole-board B.Cu plane: one via anywhere
+/// inside the fragment where the far plane covers joins everything.
+///
+/// Connectivity-gated, not shape-gated: a fragment that already
+/// reaches the main body through tracks or vias (the ecc83 organic
+/// split serves fragments by TRACK on purpose) gets no via. Only a
+/// component that provably reaches nothing is stitched.
+/// Which fill fragments of this pour net fail to reach the main body
+/// through ANY copper — the emission-model ground truth the raster
+/// currency cannot see (measured: a 3224-vertex severed assembly
+/// registered zero raster defects while KiCad reported the island).
+fn pour_severed_fragments(
+    board: &Board,
+    final_routes: &[Route],
+    ni: usize,
+    polys: &[Vec<(f64, f64)>],
+) -> Vec<usize> {
+    let via_r = board.layer_stack.via.pad_mm / 2.0;
+    let Some(pl) = board.nets[ni].plane_layer else {
+        return Vec::new();
+    };
+    let np = polys.len();
+    if np < 2 {
+        return Vec::new();
+    }
+    let Some(main_pi) = polys
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, p)| p.len())
+        .map(|(i, _)| i)
+    else {
+        return Vec::new();
+    };
+    let inside = |poly: &[(f64, f64)], x: f64, y: f64| -> bool {
+        let mut ins = false;
+        let m = poly.len();
+        for k in 0..m {
+            let (x1, y1) = poly[k];
+            let (x2, y2) = poly[(k + 1) % m];
+            if (y1 > y) != (y2 > y) && x < (x2 - x1) * (y - y1) / (y2 - y1) + x1 {
+                ins = !ins;
+            }
+        }
+        ins
+    };
+    let segs = &final_routes[ni].segments;
+    let vias: Vec<(f64, f64)> =
+        final_routes[ni].vias.iter().map(|v| (v.x, v.y)).collect();
+    let (nseg, nv) = (segs.len(), vias.len());
+    let mut dsu: Vec<usize> = (0..nseg + nv + np).collect();
+    for i in 0..nseg {
+        for j in (i + 1)..nseg {
+            if segs[i].layer != segs[j].layer {
+                continue;
+            }
+            let close =
+                |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).hypot(a.1 - b.1) <= 0.011;
+            if close(segs[i].start, segs[j].start)
+                || close(segs[i].start, segs[j].end)
+                || close(segs[i].end, segs[j].start)
+                || close(segs[i].end, segs[j].end)
+                || geom::segment_point_too_close(
+                    segs[j].start,
+                    segs[j].end,
+                    segs[i].start,
+                    (segs[i].width_mm + segs[j].width_mm) / 2.0 + 0.01,
+                )
+                || geom::segment_point_too_close(
+                    segs[j].start,
+                    segs[j].end,
+                    segs[i].end,
+                    (segs[i].width_mm + segs[j].width_mm) / 2.0 + 0.01,
+                )
+            {
+                dsu_union(&mut dsu, i, j);
+            }
+        }
+    }
+    for (vi, &(vx, vy)) in vias.iter().enumerate() {
+        for (i, sg) in segs.iter().enumerate() {
+            if (sg.start.0 - vx).hypot(sg.start.1 - vy) <= via_r + 0.05
+                || (sg.end.0 - vx).hypot(sg.end.1 - vy) <= via_r + 0.05
+                || geom::segment_point_too_close(
+                    sg.start,
+                    sg.end,
+                    (vx, vy),
+                    via_r + sg.width_mm / 2.0,
+                )
+            {
+                dsu_union(&mut dsu, nseg + vi, i);
+            }
+        }
+        for (pi, poly) in polys.iter().enumerate() {
+            if inside(poly, vx, vy) {
+                dsu_union(&mut dsu, nseg + vi, nseg + nv + pi);
+            }
+        }
+    }
+    for (i, sg) in segs.iter().enumerate() {
+        if sg.layer != pl {
+            continue;
+        }
+        let len = (sg.end.0 - sg.start.0).hypot(sg.end.1 - sg.start.1);
+        let steps = ((len / 0.3).ceil() as usize).max(1);
+        for st in 0..=steps {
+            let t = st as f64 / steps as f64;
+            let (x, y) = (
+                sg.start.0 + (sg.end.0 - sg.start.0) * t,
+                sg.start.1 + (sg.end.1 - sg.start.1) * t,
+            );
+            for (pi, poly) in polys.iter().enumerate() {
+                if inside(poly, x, y) {
+                    dsu_union(&mut dsu, i, nseg + nv + pi);
+                }
+            }
+        }
+    }
+    let main_root = dsu_find(&mut dsu, nseg + nv + main_pi);
+    (0..np)
+        .filter(|&pi| pi != main_pi && dsu_find(&mut dsu, nseg + nv + pi) != main_root)
+        .collect()
+}
+
+fn pour_severed_component_stitch(board: &Board, final_routes: &mut Vec<Route>) -> usize {
+    let n_layers = board.layer_stack.layers.len();
+    if n_layers < 2 {
+        return 0;
+    }
+    let via_r = board.layer_stack.via.pad_mm / 2.0;
+    let mut stitched = 0usize;
+    for ni in 0..board.nets.len() {
+        let Some(pl) = board.nets[ni].plane_layer else {
+            continue;
+        };
+        let other = if pl == 0 { n_layers - 1 } else { 0 };
+        let other_sig = board
+            .layer_stack
+            .layers
+            .get(other)
+            .map(|l| l.kind == crate::types::LayerKind::Signal)
+            .unwrap_or(false);
+        if !other_sig {
+            continue;
+        }
+        let net_id = board.nets[ni].id;
+        let Some(polys) = output::kicad::emission_fill_polys(board, final_routes, ni)
+        else {
+            continue;
+        };
+        if polys.len() < 2 {
+            continue;
+        }
+        let Some(main_pi) = polys
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, p)| p.len())
+            .map(|(i, _)| i)
+        else {
+            continue;
+        };
+        let inside = |poly: &[(f64, f64)], x: f64, y: f64| -> bool {
+            let mut ins = false;
+            let m = poly.len();
+            for k in 0..m {
+                let (x1, y1) = poly[k];
+                let (x2, y2) = poly[(k + 1) % m];
+                if (y1 > y) != (y2 > y) && x < (x2 - x1) * (y - y1) / (y2 - y1) + x1 {
+                    ins = !ins;
+                }
+            }
+            ins
+        };
+        let severed = pour_severed_fragments(board, final_routes, ni, &polys);
+        if severed.is_empty() {
+            continue;
+        }
+        // Other-face model: the EMITTED secondary fill, not the hole
+        // model. plane_swallows answers "would the plane cover this
+        // point", which is OPTIMISTIC about what island removal keeps
+        // — the first stitch attempt used it and dropped its via into
+        // the severed assembly's OWN B.Cu partner, joining the island
+        // to itself (and this project has made that exact mistake
+        // before; it is in the ledger). Only membership in the far
+        // face's MAIN emitted fragment proves the via lands on copper
+        // that goes somewhere. Computed lazily — the full emission is
+        // ~1s per fill and severed fragments are rare.
+        let mut far_main: Option<Option<Vec<(f64, f64)>>> = None;
+        for pi in severed {
+            let fm = far_main
+                .get_or_insert_with(|| {
+                    let (_, fills) =
+                        output::kicad::export_kicad_pcb_with_fills(board, final_routes);
+                    fills
+                        .zones
+                        .iter()
+                        .filter(|z| z.net_id == net_id && z.layer == other)
+                        .flat_map(|z| z.polys.iter())
+                        .max_by_key(|p| p.len())
+                        .cloned()
+                })
+                .clone();
+            let Some(far_poly) = fm else {
+                log::warn!(
+                    "severed-component stitch: '{}' has no emitted {} fill — cannot stitch (honest)",
+                    board.nets[ni].name,
+                    board
+                        .layer_stack
+                        .layers
+                        .get(other)
+                        .map(|l| l.name.as_str())
+                        .unwrap_or("far")
+                );
+                break;
+            };
+            // First legal site scanning the fragment row-major: the
+            // via disc fully inside this fragment, landing in the
+            // other face's main plane, drill-rule clear of every
+            // existing hole. Deterministic by construction.
+            let (mut fx0, mut fy0, mut fx1, mut fy1) =
+                (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+            for &(x, y) in &polys[pi] {
+                fx0 = fx0.min(x);
+                fy0 = fy0.min(y);
+                fx1 = fx1.max(x);
+                fy1 = fy1.max(y);
+            }
+            let mut placed = false;
+            let step = 0.5f64;
+            let margin = via_r + 0.15;
+            let mut y = fy0 + margin;
+            'scan: while y <= fy1 - margin {
+                let mut x = fx0 + margin;
+                while x <= fx1 - margin {
+                    let disc_ok = (0..8).all(|k| {
+                        let a = k as f64 * std::f64::consts::FRAC_PI_4;
+                        inside(&polys[pi], x + margin * a.cos(), y + margin * a.sin())
+                    });
+                    let far_ok = disc_ok
+                        && (0..8).all(|k| {
+                            let a = k as f64 * std::f64::consts::FRAC_PI_4;
+                            inside(
+                                &far_poly,
+                                x + margin * a.cos(),
+                                y + margin * a.sin(),
+                            )
+                        });
+                    if far_ok
+                        && !final_routes.iter().any(|r| {
+                            r.vias.iter().any(|v| {
+                                (v.x - x).hypot(v.y - y)
+                                    < board.layer_stack.via.drill_mm + 0.25
+                            })
+                        })
+                        && !board.components.iter().any(|c| {
+                            let (co, sn) = (c.theta.cos(), c.theta.sin());
+                            c.pins.iter().any(|pin| {
+                                pin.pad
+                                    .as_ref()
+                                    .and_then(|pd| pd.drill_mm)
+                                    .map_or(false, |d| {
+                                        let gx = c.x + pin.dx * co - pin.dy * sn;
+                                        let gy = c.y + pin.dx * sn + pin.dy * co;
+                                        (gx - x).hypot(gy - y)
+                                            < (d + board.layer_stack.via.drill_mm) / 2.0
+                                                + 0.25
+                                    })
+                            })
+                        })
+                    {
+                        final_routes[ni].vias.push(RouteVia {
+                            x,
+                            y,
+                            from_layer: pl.min(other),
+                            to_layer: pl.max(other),
+                        });
+                        info!(
+                            "severed-component stitch: '{}' fragment ({} verts) joined to the {} plane by a via at ({x:.2},{y:.2})",
+                            board.nets[ni].name,
+                            polys[pi].len(),
+                            board
+                                .layer_stack
+                                .layers
+                                .get(other)
+                                .map(|l| l.name.as_str())
+                                .unwrap_or("other")
+                        );
+                        stitched += 1;
+                        placed = true;
+                        break 'scan;
+                    }
+                    x += step;
+                }
+                y += step;
+            }
+            if !placed {
+                log::warn!(
+                    "severed-component stitch: '{}' fragment ({} verts, bbox {fx0:.1},{fy0:.1}-{fx1:.1},{fy1:.1}) — no legal via site (honest)",
+                    board.nets[ni].name,
+                    polys[pi].len()
+                );
+            }
+        }
+    }
+    stitched
+}
+
 fn pour_unserved_pad_route(board: &Board, final_routes: &mut Vec<Route>) -> usize {
     let mut joined = 0usize;
     // Phase 1 is read-only: the fill mirror borrows final_routes, so
@@ -8180,6 +8521,22 @@ fn pour_unserved_pad_route(board: &Board, final_routes: &mut Vec<Route>) -> usiz
                         }
                     }
                 }
+                // TEMPORARY probe-at: name the verdict for one pad.
+                let probe_here = std::env::var("BHDL_PNR_PROBE_AT")
+                    .ok()
+                    .and_then(|v| {
+                        let (a, b) = v.split_once(',')?;
+                        Some((a.parse::<f64>().ok()?, b.parse::<f64>().ok()?))
+                    })
+                    .map_or(false, |(px, py)| {
+                        (gx - px).abs() < 0.5 && (gy - py).abs() < 0.5
+                    });
+                if probe_here {
+                    log::info!(
+                        "[probe-at] pad ({gx:.2},{gy:.2}) fill_served={fill_served} frags={}",
+                        polys.len()
+                    );
+                }
                 if fill_served {
                     continue;
                 }
@@ -8192,6 +8549,21 @@ fn pour_unserved_pad_route(board: &Board, final_routes: &mut Vec<Route>) -> usiz
                         hx.max(hy) + sg.width_mm / 2.0,
                     )
                 });
+                if probe_here && touched {
+                    for sg in final_routes[ni].segments.iter() {
+                        if geom::segment_point_too_close(
+                            sg.start,
+                            sg.end,
+                            (gx, gy),
+                            hx.max(hy) + sg.width_mm / 2.0,
+                        ) {
+                            log::info!(
+                                "[probe-at] touched by l{} ({:.2},{:.2})->({:.2},{:.2})",
+                                sg.layer, sg.start.0, sg.start.1, sg.end.0, sg.end.1
+                            );
+                        }
+                    }
+                }
                 if touched {
                     continue;
                 }
@@ -8254,6 +8626,38 @@ fn pour_unserved_pad_route(board: &Board, final_routes: &mut Vec<Route>) -> usiz
             });
         drop(idx);
         let Some(path) = path else {
+            // Single-layer escape/tunnel exhausted. Escalate to the
+            // island bridge's full ladder — near via, far via,
+            // via-in-pad, rip-negotiation — the same rungs an
+            // island pad gets, because this pad IS one, just found
+            // later. Measured: U2.V_MINUS on the jack board's seed
+            // 99, 17mm from the nearest same-net copper across a
+            // dense face with a whole-board B.Cu plane underneath;
+            // the single-layer maze failed six times where a via
+            // drop is the canonical fix.
+            let main_poly = output::kicad::emission_fill_polys(board, final_routes, job.ni)
+                .and_then(|ps| ps.into_iter().max_by_key(|p| p.len()));
+            let mut rip_budget = 1usize;
+            if let Some(mp) = main_poly {
+                if island_bridge_pad(
+                    board,
+                    final_routes,
+                    job.ni,
+                    job.src,
+                    &mp,
+                    job.layer,
+                    job.width,
+                    true,
+                    &mut rip_budget,
+                ) {
+                    joined += 1;
+                    info!(
+                        "unserved pad: '{}' pad ({:.2},{:.2}) joined via the bridge ladder",
+                        board.nets[job.ni].name, job.src.0, job.src.1
+                    );
+                    continue;
+                }
+            }
             log::warn!(
                 "unserved pad: '{}' pad ({:.2},{:.2}) reaches neither fill nor track — no legal route (honest)",
                 board.nets[job.ni].name, job.src.0, job.src.1
