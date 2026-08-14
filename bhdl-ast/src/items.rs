@@ -1527,6 +1527,31 @@ impl LayoutDef {
     }
 
     /// Tokens of a mech statement as (text) list, keyword + numbers etc.
+    /// Numeric values from a mech-statement token stream, SIGN-AWARE:
+    /// the lexer emits a standalone MINUS token, so "-4.875" arrives
+    /// as ["-", "4.875"] and per-token sign checks never fire.
+    /// Measured: every negative mech coordinate silently became
+    /// positive — the mixer's J_CH4 at x=-4.875 shipped at +4.875,
+    /// putting its CONNECTED contact pads off the board while the
+    /// deliberately-off-board unconnected normals came on.
+    fn mech_nums(toks: &[String]) -> Vec<f64> {
+        let mut out = Vec::new();
+        let mut neg = false;
+        for t in toks {
+            if t == "-" {
+                neg = true;
+                continue;
+            }
+            let core = t.trim_start_matches('-');
+            if let Ok(v) = core.parse::<f64>() {
+                let sign = if neg || t.starts_with('-') { -1.0 } else { 1.0 };
+                out.push(sign * v);
+            }
+            neg = false;
+        }
+        out
+    }
+
     fn mech_tokens(node: &rowan::SyntaxNode<crate::BhdlLanguage>) -> Vec<String> {
         node.children_with_tokens()
             .filter_map(|e| e.into_token())
@@ -1554,10 +1579,7 @@ impl LayoutDef {
             if !toks.iter().any(|t| t == "in") {
                 continue;
             }
-            let nums: Vec<f64> = toks
-                .iter()
-                .filter_map(|t| t.parse::<f64>().ok())
-                .collect();
+            let nums: Vec<f64> = Self::mech_nums(&toks);
             let handle = toks.get(1).cloned().unwrap_or_default();
             if !handle.is_empty() && nums.len() >= 4 {
                 out.push((handle, nums[0], nums[1], nums[2], nums[3]));
@@ -1579,12 +1601,7 @@ impl LayoutDef {
                 continue; // region form — see region_places()
             }
             // place <handle> at ( x , y ) [rot d]
-            let nums: Vec<f64> = toks
-                .iter()
-                .filter_map(|t| t.trim_start_matches('-').parse::<f64>().ok().map(|v| {
-                    if t.starts_with('-') { -v } else { v }
-                }))
-                .collect();
+            let nums: Vec<f64> = Self::mech_nums(&toks);
             let handle = toks.get(1).cloned().unwrap_or_default();
             if handle.is_empty() || nums.len() < 2 {
                 continue;
@@ -1609,12 +1626,7 @@ impl LayoutDef {
             .children()
             .find(|n| n.kind() == SyntaxKind::LAYOUT_OUTLINE)?;
         let toks = Self::mech_tokens(&n);
-        let nums: Vec<f64> = toks
-            .iter()
-            .filter_map(|t| t.trim_start_matches('-').parse::<f64>().ok().map(|v| {
-                if t.starts_with('-') { -v } else { v }
-            }))
-            .collect();
+        let nums: Vec<f64> = Self::mech_nums(&toks);
         if toks.iter().any(|t| t == "rect") && nums.len() >= 2 {
             Some(crate::LayoutOutline::Rect {
                 w: nums[0],
@@ -1638,10 +1650,7 @@ impl LayoutDef {
             .filter(|n| n.kind() == SyntaxKind::LAYOUT_MOUNTING_HOLE)
         {
             let toks = Self::mech_tokens(&n);
-            let nums: Vec<f64> = toks
-                .iter()
-                .filter_map(|t| t.parse::<f64>().ok())
-                .collect();
+            let nums: Vec<f64> = Self::mech_nums(&toks);
             if nums.len() >= 3 {
                 out.push((nums[0], nums[1], nums[2], nums.get(3).copied().unwrap_or(1.0)));
             }
@@ -1658,10 +1667,7 @@ impl LayoutDef {
             .filter(|n| n.kind() == SyntaxKind::LAYOUT_KEEPOUT)
         {
             let toks = Self::mech_tokens(&n);
-            let nums: Vec<f64> = toks
-                .iter()
-                .filter_map(|t| t.parse::<f64>().ok())
-                .collect();
+            let nums: Vec<f64> = Self::mech_nums(&toks);
             if nums.len() >= 4 {
                 out.push((nums[0], nums[1], nums[2], nums[3]));
             }
@@ -1678,10 +1684,7 @@ impl LayoutDef {
             .filter(|n| n.kind() == SyntaxKind::LAYOUT_CUTOUT)
         {
             let toks = Self::mech_tokens(&n);
-            let nums: Vec<f64> = toks
-                .iter()
-                .filter_map(|t| t.parse::<f64>().ok())
-                .collect();
+            let nums: Vec<f64> = Self::mech_nums(&toks);
             if nums.len() >= 4 {
                 out.push((nums[0], nums[1], nums[2], nums[3]));
             }

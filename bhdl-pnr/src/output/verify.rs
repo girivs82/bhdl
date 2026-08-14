@@ -86,61 +86,126 @@ pub fn verify(board: &Board, routes: &[Route]) -> VerifyReport {
     let bh = board.config.outline.height();
     let ec = board.config.edge_clearance_mm;
 
-    // 1. Boundary violations
+    // The report's verdict must be CALIBRATED TO THE ORACLE, or it is
+    // worse than useless: the envelope-box tests it used before failed
+    // the landed mixer (KiCad 0v/0unc) with 5 phantom overlaps and 2
+    // phantom boundary violations — partly because they centred boxes
+    // on comp.x/y and ignored the envelope OFFSET (bbox_dx/dy), partly
+    // because an envelope is not copper. A verdict that fails clean
+    // boards gates nothing, which is exactly how a 137-violation strip
+    // overflow shipped with exit code 0. Both tests now measure PAD
+    // COPPER, the same thing the oracle measures.
+
+    // Global pad rects (quarter-rotation idiom, like the emitter).
+    let pad_rects = |comp: &crate::types::Component| -> Vec<(f64, f64, f64, f64, Option<crate::types::NetId>, bool)> {
+        let (co, sn) = (comp.theta.cos(), comp.theta.sin());
+        let quarter =
+            ((comp.theta / std::f64::consts::FRAC_PI_2).round() as i64).rem_euclid(2);
+        comp.pins
+            .iter()
+            .filter(|p| !p.unplaced)
+            .map(|p| {
+                let gx = comp.x + p.dx * co - p.dy * sn;
+                let gy = comp.y + p.dx * sn + p.dy * co;
+                let (pw, ph) = p
+                    .pad
+                    .as_ref()
+                    .map(|pd| (pd.width_mm, pd.height_mm))
+                    .unwrap_or((0.5, 0.5));
+                let (hw2, hh2) = if quarter == 1 {
+                    (ph / 2.0, pw / 2.0)
+                } else {
+                    (pw / 2.0, ph / 2.0)
+                };
+                let tht = p.pad.as_ref().map_or(false, |pd| pd.drill_mm.is_some());
+                (gx, gy, hw2, hh2, p.net, tht)
+            })
+            .collect()
+    };
+
+    // 1. Boundary: pad copper against the edge-clearance band, the
+    // oracle's copper_edge_clearance.
     let mut boundary_violations = Vec::new();
     for comp in &board.components {
-        // Rotation-aware: a 90°-rotated part swaps its footprint w/h. The
-        // legalizer separates with rotated_bbox(); measuring here with the
-        // UNROTATED dims reported phantom violations on every rotated
-        // elongated part (and could miss real ones).
-        let (rw, rh) = comp.rotated_bbox();
-        let hw = rw / 2.0;
-        let hh = rh / 2.0;
-        let left = comp.x - hw;
-        let right = comp.x + hw;
-        let top = comp.y - hh;
-        let bottom = comp.y + hh;
-
-        let overshoot = [
-            -left,                // left edge outside
-            right - bw,          // right edge outside
-            -top,                // top edge outside
-            bottom - bh,         // bottom edge outside
-        ].iter().cloned().fold(0.0_f64, f64::max);
-
-        if overshoot > 0.01 {
+        let mut worst = 0.0f64;
+        for (gx, gy, hw2, hh2, net, _) in pad_rects(comp) {
+            // A panel-mount connector legitimately hangs its UNUSED
+            // pads off the board (the mixer demo ships its jacks
+            // exactly so). Copper that carries a net has no such
+            // excuse.
+            if net.is_none() {
+                continue;
+            }
+            let over = [
+                ec - (gx - hw2),
+                (gx + hw2) - (bw - ec),
+                ec - (gy - hh2),
+                (gy + hh2) - (bh - ec),
+            ]
+            .iter()
+            .cloned()
+            .fold(0.0f64, f64::max);
+            worst = worst.max(over);
+        }
+        if worst > 0.01 {
             boundary_violations.push(BoundaryViolation {
                 refdes: comp.refdes.clone(),
                 comp_x: comp.x,
                 comp_y: comp.y,
                 comp_w: comp.width_mm,
                 comp_h: comp.height_mm,
-                overshoot_mm: overshoot,
+                overshoot_mm: worst,
             });
         }
     }
 
-    // 2. Overlaps
+    // 2. Overlaps: pairwise PAD copper closer than min spacing, on
+    // nets that differ (same-net contact is connection, not a short —
+    // the oracle agrees). THT pads exist on every layer, so they
+    // compare regardless of mounting side.
+    let spacing = board.config.min_spacing_mm;
     let mut overlaps = Vec::new();
     for i in 0..board.components.len() {
         for j in (i + 1)..board.components.len() {
             let a = &board.components[i];
             let b = &board.components[j];
-            if !a.shares_surface(b) {
-                continue; // opposite-side SMD parts may share XY
+            let (ac, bc) = (a.envelope(), b.envelope());
+            // Cheap envelope pre-reject before the pad-pair scan.
+            if (ac.0 - bc.0).abs() > ac.2 + bc.2 + spacing + 0.1
+                || (ac.1 - bc.1).abs() > ac.3 + bc.3 + spacing + 0.1
+            {
+                continue;
             }
-            let (aw, ah) = a.rotated_bbox();
-            let (bw2, bh2) = b.rotated_bbox();
-            let dx = (a.x - b.x).abs();
-            let dy = (a.y - b.y).abs();
-            let min_dx = (aw + bw2) / 2.0 + 0.15; // min spacing, rotation-aware
-            let min_dy = (ah + bh2) / 2.0 + 0.15;
-            if dx < min_dx && dy < min_dy {
+            let share = a.shares_surface(b);
+            let ra = pad_rects(a);
+            let rb = pad_rects(b);
+            let mut worst: Option<(f64, f64)> = None;
+            for &(ax, ay, ahw, ahh, an, atht) in &ra {
+                for &(bx, by, bhw, bhh, bn, btht) in &rb {
+                    if !(share || atht || btht) {
+                        continue; // opposite faces, no barrels — no contact
+                    }
+                    if an.is_some() && an == bn {
+                        continue; // same net: contact is legal
+                    }
+                    let need_x = ahw + bhw + spacing;
+                    let need_y = ahh + bhh + spacing;
+                    let dx = (ax - bx).abs();
+                    let dy = (ay - by).abs();
+                    if dx < need_x && dy < need_y {
+                        let o = (need_x - dx, need_y - dy);
+                        if worst.map_or(true, |w| o.0 * o.1 > w.0 * w.1) {
+                            worst = Some(o);
+                        }
+                    }
+                }
+            }
+            if let Some((ox, oy)) = worst {
                 overlaps.push(OverlapViolation {
                     refdes_a: a.refdes.clone(),
                     refdes_b: b.refdes.clone(),
-                    overlap_x_mm: min_dx - dx,
-                    overlap_y_mm: min_dy - dy,
+                    overlap_x_mm: ox,
+                    overlap_y_mm: oy,
                 });
             }
         }
