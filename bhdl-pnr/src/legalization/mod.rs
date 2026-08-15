@@ -812,5 +812,98 @@ pub fn check_drc(board: &Board, routes: &[Route]) -> Vec<DrcViolation> {
         }
     }
 
+    for (na, sa, nb, sb, d, short) in copper_conflicts(board, routes) {
+        let a = &routes[na].segments[sa];
+        let b = &routes[nb].segments[sb];
+        violations.push(DrcViolation {
+            kind: DrcViolationKind::Spacing,
+            location: (
+                (a.start.0 + a.end.0 + b.start.0 + b.end.0) / 4.0,
+                (a.start.1 + a.end.1 + b.start.1 + b.end.1) / 4.0,
+            ),
+            description: format!(
+                "nets '{}' and '{}' {} on layer {} (gap {d:.3}mm)",
+                board.nets.get(na).map(|n| n.name.as_str()).unwrap_or("?"),
+                board.nets.get(nb).map(|n| n.name.as_str()).unwrap_or("?"),
+                if short { "SHORT" } else { "violate clearance" },
+                a.layer,
+            ),
+        });
+    }
+
     violations
+}
+
+/// Cross-net copper conflicts on the FINAL segments: (net_a, seg_a,
+/// net_b, seg_b, gap, is_short). Grid-bucketed; a gap below the
+/// spacing rule is a conflict, an outright copper overlap is a short.
+/// The DRC verdict and the shorting-stub amputation both read this,
+/// so they cannot drift apart.
+pub fn copper_conflicts(
+    board: &Board,
+    routes: &[Route],
+) -> Vec<(usize, usize, usize, usize, f64, bool)> {
+    let mut out = Vec::new();
+    // Cross-net COPPER: the checks above police component boxes and
+    // route existence — no copper geometry at all, so "DRC
+    // violations: 0" was true even with three track-track shorts on
+    // the board (measured: 0.3mm vbias stubs across a ch1_b_out
+    // track that KiCad flagged as shorting_items while this function
+    // said nothing). Grid-bucketed same-layer segment pairs on
+    // differing nets, flagged when copper comes closer than the
+    // spacing rule; an outright overlap is a short.
+    {
+        let cell = 2.0f64;
+        let mut grid: crate::det::HashMap<(i64, i64, usize), Vec<(usize, usize)>> =
+            Default::default();
+        for (ni, r) in routes.iter().enumerate() {
+            for (si, sg) in r.segments.iter().enumerate() {
+                let (x0, x1) = (sg.start.0.min(sg.end.0), sg.start.0.max(sg.end.0));
+                let (y0, y1) = (sg.start.1.min(sg.end.1), sg.start.1.max(sg.end.1));
+                let (cx0, cx1) = ((x0 / cell).floor() as i64, (x1 / cell).floor() as i64);
+                let (cy0, cy1) = ((y0 / cell).floor() as i64, (y1 / cell).floor() as i64);
+                for cx in cx0..=cx1 {
+                    for cy in cy0..=cy1 {
+                        grid.entry((cx, cy, sg.layer)).or_default().push((ni, si));
+                    }
+                }
+            }
+        }
+        let spacing = board.config.min_spacing_mm;
+        let mut seen: crate::det::HashSet<(usize, usize, usize, usize)> =
+            Default::default();
+        for ((cx, cy, layer), items) in grid.iter() {
+            for (ai, &(na, sa)) in items.iter().enumerate() {
+                // neighbours: same cell tail + the 4 forward cells
+                let mut cands: Vec<(usize, usize)> = items[ai + 1..].to_vec();
+                for (dx, dy) in [(1i64, 0i64), (0, 1), (1, 1), (1, -1)] {
+                    if let Some(v) = grid.get(&(cx + dx, cy + dy, *layer)) {
+                        cands.extend_from_slice(v);
+                    }
+                }
+                for (nb, sb) in cands {
+                    if na == nb {
+                        continue;
+                    }
+                    let key = if (na, sa) < (nb, sb) {
+                        (na, sa, nb, sb)
+                    } else {
+                        (nb, sb, na, sa)
+                    };
+                    if !seen.insert(key) {
+                        continue;
+                    }
+                    let a = &routes[na].segments[sa];
+                    let b = &routes[nb].segments[sb];
+                    let d = crate::geom::segment_segment_dist(a.start, a.end, b.start, b.end);
+                    let need = (a.width_mm + b.width_mm) / 2.0 + spacing;
+                    if d < need - 0.01 {
+                        let short = d < (a.width_mm + b.width_mm) / 2.0 - 0.001;
+                        out.push((na, sa, nb, sb, d, short));
+                    }
+                }
+            }
+        }
+    }
+    out
 }

@@ -3016,7 +3016,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
     if std::env::var("BHDL_PNR_DEBUG_CLEARANCE").is_ok() {
         debug_check_foreign_pads(&board, &final_routes, "final");
     }
-    let drc_violations = legalization::check_drc(&board, &final_routes);
+    let mut drc_violations = legalization::check_drc(&board, &final_routes);
 
     // 7. Metrics
     let hpwl = analytical::compute_hpwl(&board);
@@ -5361,6 +5361,78 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
             }
             info!("unserved-pad route: {n} pad(s) joined");
         }
+    }
+    {
+        // RE-JUDGE THE FINAL COPPER. The DRC above ran ~2300 lines and
+        // half a dozen repair rungs ago; everything the trim, stitch
+        // and unserved-route fixpoint committed since was invisible to
+        // the verdict — the engine reported "DRC violations: 0" on a
+        // board KiCad graded with 3 track shorts (0.3mm vbias stubs
+        // across a ch1_b_out track, mixer true-geometry seed 42). A
+        // verdict on copper you then keep editing is not a verdict;
+        // and the trial currency must price the late rungs' damage or
+        // dominance will keep picking winners that ship it.
+        // SHORTING-STUB AMPUTATION before the verdict: a cross-net
+        // SHORT whose party is a tiny stub is repair debris — cut the
+        // stub, then let the unserved-pad pass re-serve anything that
+        // just lost its copper (measured: three 0.3mm vbias stubs
+        // across a ch1_b_out track — no logged rung near them; they
+        // predate the late joins and nothing downstream re-judged
+        // them until now).
+        for _round in 0..3 {
+            let conflicts = legalization::copper_conflicts(&board, &final_routes);
+            let mut cut: Vec<(usize, usize)> = Vec::new();
+            for &(na, sa, nb, sb, _d, short) in &conflicts {
+                if !short {
+                    continue;
+                }
+                for (ni, si) in [(na, sa), (nb, sb)] {
+                    let sg = &final_routes[ni].segments[si];
+                    let len = (sg.end.0 - sg.start.0).hypot(sg.end.1 - sg.start.1);
+                    if len <= 0.6 && !cut.contains(&(ni, si)) {
+                        cut.push((ni, si));
+                    }
+                }
+            }
+            if cut.is_empty() {
+                break;
+            }
+            cut.sort_unstable_by(|a, b| b.cmp(a));
+            for (ni, si) in cut {
+                let sg = final_routes[ni].segments[si].clone();
+                info!(
+                    "shorting-stub amputation: '{}' {:.2}mm stub at ({:.2},{:.2}) cut",
+                    board.nets[ni].name,
+                    (sg.end.0 - sg.start.0).hypot(sg.end.1 - sg.start.1),
+                    sg.start.0,
+                    sg.start.1
+                );
+                let r = &mut final_routes[ni];
+                r.segments.remove(si);
+                for (qs, ql) in r.path_spans.iter_mut() {
+                    if *qs > si {
+                        *qs -= 1;
+                    } else if si < *qs + *ql {
+                        *ql = ql.saturating_sub(1);
+                    }
+                }
+            }
+            // Anything the amputation stranded gets the honest ladder.
+            for _ in 0..2 {
+                if pour_unserved_pad_route(&board, &mut final_routes) == 0 {
+                    break;
+                }
+            }
+        }
+        let recheck = legalization::check_drc(&board, &final_routes);
+        if recheck.len() != drc_violations.len() {
+            info!(
+                "final-copper DRC recheck: {} -> {} violation(s) after late repair rungs",
+                drc_violations.len(),
+                recheck.len()
+            );
+        }
+        drc_violations = recheck;
     }
     probe_dangling_vias(&board, &final_routes, "pre-metrics");
     let pour_defects = pour_defect_count(&board, &final_routes) + pour_bridge_residual;
@@ -8550,6 +8622,17 @@ fn pour_unserved_pad_route(board: &Board, final_routes: &mut Vec<Route>) -> usiz
         let net_id = board.nets[ni].id;
         let polys = output::kicad::emission_fill_polys(board, final_routes, ni)
             .unwrap_or_default();
+        // Fill-served means served by fill that GOES SOMEWHERE. The
+        // any-fragment test skipped pads whose only fill contact was
+        // a severed scrap (measured on the true-geometry mixer:
+        // C8.1/C6.2 sat in a GND fragment that reached nothing —
+        // "served", skipped, shipped as the board's zone-split pair).
+        // Membership in severed copper is not service — the same rule
+        // as the witness sweep and the stitch referee.
+        let severed: crate::det::HashSet<usize> =
+            pour_severed_fragments(board, final_routes, ni, &polys)
+                .into_iter()
+                .collect();
         let inside = |poly: &[(f64, f64)], x: f64, y: f64| -> bool {
             let mut ins = false;
             let m = poly.len();
@@ -8587,7 +8670,11 @@ fn pour_unserved_pad_route(board: &Board, final_routes: &mut Vec<Route>) -> usiz
                 'fs: for dx in [-0.6, -0.3, 0.0, 0.3, 0.6] {
                     for dy in [-0.6, -0.3, 0.0, 0.3, 0.6] {
                         let (sx, sy) = (gx + dx * hx, gy + dy * hy);
-                        if polys.iter().any(|p| inside(p, sx, sy)) {
+                        if polys
+                            .iter()
+                            .enumerate()
+                            .any(|(pi, p)| !severed.contains(&pi) && inside(p, sx, sy))
+                        {
                             fill_served = true;
                             break 'fs;
                         }
@@ -8900,6 +8987,109 @@ fn pour_unserved_pad_route(board: &Board, final_routes: &mut Vec<Route>) -> usiz
                             }
                         }
                         if done {
+                            continue;
+                        }
+                        // TRUE last rung: MULTI-LAYER maze to the far
+                        // main itself. The verified via search needs a
+                        // single-layer path to a ring site; in a dense
+                        // pocket none exists (measured: C8.1 at
+                        // (80.53,74.65) failed every rung on every
+                        // round — no fill, no track within 2mm, the
+                        // fractured pot-grid region walls it in on its
+                        // own face). The ML maze may dive under the
+                        // wall; every layer switch is drill-checked by
+                        // the maze itself, and the destination is a
+                        // far-main VERTEX, so the landing is on real
+                        // main copper by construction.
+                        let signal_layers: Vec<usize> = board
+                            .layer_stack
+                            .layers
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, l)| {
+                                l.kind == crate::types::LayerKind::Signal
+                            })
+                            .map(|(k, _)| k)
+                            .collect();
+                        let mut verts: Vec<((f64, f64), f64)> = fp
+                            .iter()
+                            .map(|&(vx, vy)| {
+                                (
+                                    (vx, vy),
+                                    (vx - job.src.0).hypot(vy - job.src.1),
+                                )
+                            })
+                            .collect();
+                        verts.sort_by(|a, b| {
+                            a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                        let idx2 = geom::ClearanceIndex::build(
+                            board,
+                            final_routes,
+                            Some(net_id),
+                        );
+                        let mut ml_done = false;
+                        for &(dst, d) in verts.iter().take(6) {
+                            if d > 20.0 {
+                                break;
+                            }
+                            let Some(way) = geom::route_tunnel_ml(
+                                &idx2,
+                                job.src,
+                                job.layer,
+                                dst,
+                                far,
+                                job.width,
+                                via_r,
+                                &signal_layers,
+                                net_id,
+                                12.0,
+                            ) else {
+                                continue;
+                            };
+                            let route = &mut final_routes[job.ni];
+                            let seg_start = route.segments.len();
+                            for w in way.windows(2) {
+                                let (a, b) = (w[0], w[1]);
+                                if a.2 == b.2 {
+                                    if (a.0 - b.0).hypot(a.1 - b.1) > 1e-9 {
+                                        route.segments.push(RouteSegment {
+                                            layer: a.2,
+                                            start: (a.0, a.1),
+                                            end: (b.0, b.1),
+                                            width_mm: job.width,
+                                        });
+                                    }
+                                } else {
+                                    let dup = route.vias.iter().any(|v| {
+                                        (v.x - a.0).hypot(v.y - a.1) < 1e-6
+                                    });
+                                    if !dup {
+                                        route.vias.push(RouteVia {
+                                            x: a.0,
+                                            y: a.1,
+                                            from_layer: job.layer.min(far),
+                                            to_layer: job.layer.max(far),
+                                        });
+                                    }
+                                }
+                            }
+                            if route.segments.len() > seg_start {
+                                route.path_spans.push((
+                                    seg_start,
+                                    route.segments.len() - seg_start,
+                                ));
+                                route.path_parents.push(None);
+                                joined += 1;
+                                info!(
+                                    "unserved pad: '{}' pad ({:.2},{:.2}) ML-mazed to far main {d:.2}mm away",
+                                    board.nets[job.ni].name, job.src.0, job.src.1
+                                );
+                                ml_done = true;
+                            }
+                            break;
+                        }
+                        if ml_done {
                             continue;
                         }
                     }
