@@ -5527,6 +5527,12 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                 }
             }
         }
+        {
+            let c = signal_seam_close(&board, &mut final_routes);
+            if c > 0 {
+                info!("seam close: {c} sliver(s) added");
+            }
+        }
         let recheck = legalization::check_drc(&board, &final_routes);
         if recheck.len() != drc_violations.len() {
             info!(
@@ -8219,6 +8225,153 @@ fn t_split_host_at(route: &mut Route, q: (f64, f64), layer: usize) {
 /// left it. Signal nets only: a board-wide ground's thousands of
 /// segments make the per-removal rescan intractable, and its classes
 /// are covered by the span machinery.
+
+/// A routed leg whose end stops a hair short of the same-net track it
+/// was meant to T into is a router seam, not a stub — KiCad grades it
+/// track_dangling and the free-end trim would CUT a live leg. Close
+/// the seam with the missing sliver instead.
+///
+/// The target model is the whole thing (a first cut snapped an end to
+/// its own colinear neighbour and shipped 2v):
+///   * candidates exclude the segment itself AND any segment sharing
+///     the free endpoint — those are the same chain, not a target;
+///   * the sliver must land on the target's INTERIOR (a genuine T),
+///     never at its endpoint (that is a corner of the same chain);
+///   * the sliver must be at least half a width long (else the end was
+///     already touching) and at most 2.5 widths (else it is not a
+///     seam, it is a gap the router meant).
+/// Layer-aware pad anchors, same as the trim.
+fn signal_seam_close(board: &Board, final_routes: &mut Vec<Route>) -> usize {
+    let via_r = board.layer_stack.via.pad_mm / 2.0;
+    let mut closed = 0usize;
+    for i in 0..board.nets.len() {
+        if board.nets[i].plane_layer.is_some() || final_routes[i].segments.is_empty() {
+            continue;
+        }
+        let mut own_pads: Vec<(f64, f64, f64, f64, bool, usize)> = Vec::new();
+        for comp in &board.components {
+            let (co, sn) = (comp.theta.cos(), comp.theta.sin());
+            let quarter =
+                ((comp.theta / std::f64::consts::FRAC_PI_2).round() as i64).rem_euclid(2);
+            for pin in &comp.pins {
+                if pin.net != Some(board.nets[i].id) || pin.unplaced {
+                    continue;
+                }
+                let gx = comp.x + pin.dx * co - pin.dy * sn;
+                let gy = comp.y + pin.dx * sn + pin.dy * co;
+                let (pw, ph) = match &pin.pad {
+                    Some(pd) => (pd.width_mm, pd.height_mm),
+                    None => (0.5, 0.5),
+                };
+                let (pw, ph) = if quarter == 1 { (ph, pw) } else { (pw, ph) };
+                let tht = pin.pad.as_ref().map_or(false, |pd| pd.drill_mm.is_some());
+                let face = match comp.side {
+                    BoardSide::Top => 0usize,
+                    BoardSide::Bottom => board.layer_stack.layers.len().saturating_sub(1),
+                };
+                own_pads.push((gx, gy, pw / 2.0, ph / 2.0, tht, face));
+            }
+        }
+        let mut adds: Vec<RouteSegment> = Vec::new();
+        {
+            let r = &final_routes[i];
+            for (sk, sg) in r.segments.iter().enumerate() {
+                for &e in &[sg.start, sg.end] {
+                    let shares = |s2: &RouteSegment| {
+                        (s2.start.0 - e.0).hypot(s2.start.1 - e.1) <= 0.011
+                            || (s2.end.0 - e.0).hypot(s2.end.1 - e.1) <= 0.011
+                    };
+                    let anchored = r.segments.iter().enumerate().any(|(sj, s2)| {
+                        sj != sk
+                            && s2.layer == sg.layer
+                            && !shares(s2)
+                            && geom::point_segment_dist(e, s2.start, s2.end) <= 0.05
+                    }) || r.segments.iter().enumerate().any(|(sj, s2)| {
+                        // Continuation of the same chain: not free.
+                        sj != sk && s2.layer == sg.layer && shares(s2)
+                    }) || r
+                        .vias
+                        .iter()
+                        .any(|v| (v.x - e.0).hypot(v.y - e.1) <= via_r)
+                        || own_pads.iter().any(|&(cx, cy, hx, hy, tht, face)| {
+                            (tht || face == sg.layer)
+                                && (e.0 - cx).abs() <= hx
+                                && (e.1 - cy).abs() <= hy
+                        });
+                    if anchored {
+                        continue;
+                    }
+                    let mut best: Option<((f64, f64), f64)> = None;
+                    for (sj, s2) in r.segments.iter().enumerate() {
+                        if sj == sk || s2.layer != sg.layer || shares(s2) {
+                            continue;
+                        }
+                        let (ax, ay) = s2.start;
+                        let (bx, by) = s2.end;
+                        let (dx, dy) = (bx - ax, by - ay);
+                        let l2 = dx * dx + dy * dy;
+                        if l2 <= 1e-12 {
+                            continue;
+                        }
+                        let t = ((e.0 - ax) * dx + (e.1 - ay) * dy) / l2;
+                        // A genuine T lands on the target's INTERIOR — or
+                        // on a JUNCTION where the target continues into
+                        // another segment (copper runs straight through
+                        // it). A lone chain END is a corner of the same
+                        // chain and never a target. Measured: the seam
+                        // sat exactly above the junction of two
+                        // collinear track pieces; interior-only rejected
+                        // it.
+                        let tc = t.clamp(0.0, 1.0);
+                        let q = (ax + tc * dx, ay + tc * dy);
+                        if t <= 0.05 || t >= 0.95 {
+                            let junction = r.segments.iter().enumerate().any(|(sm, s3)| {
+                                sm != sj
+                                    && sm != sk
+                                    && s3.layer == sg.layer
+                                    && ((s3.start.0 - q.0).hypot(s3.start.1 - q.1) <= 0.011
+                                        || (s3.end.0 - q.0).hypot(s3.end.1 - q.1) <= 0.011)
+                            });
+                            if !junction {
+                                continue;
+                            }
+                        }
+                        let d = (q.0 - e.0).hypot(q.1 - e.1);
+                        if d >= sg.width_mm * 0.5 && d <= sg.width_mm * 2.5 + 0.1 {
+                            if best.map_or(true, |(_, bd)| d < bd) {
+                                best = Some((q, d));
+                            }
+                        }
+                    }
+                    if let Some((q, _)) = best {
+                        adds.push(RouteSegment {
+                            layer: sg.layer,
+                            start: e,
+                            end: q,
+                            width_mm: sg.width_mm,
+                        });
+                    }
+                }
+            }
+        }
+        if !adds.is_empty() {
+            let route = &mut final_routes[i];
+            for a in adds {
+                info!(
+                    "seam close: '{}' l{} ({:.2},{:.2}) -> ({:.2},{:.2})",
+                    board.nets[i].name, a.layer, a.start.0, a.start.1, a.end.0, a.end.1
+                );
+                let seg_start = route.segments.len();
+                route.segments.push(a);
+                route.path_spans.push((seg_start, 1));
+                route.path_parents.push(None);
+                closed += 1;
+            }
+        }
+    }
+    closed
+}
+
 fn signal_free_end_trim(board: &Board, final_routes: &mut [Route]) -> usize {
     let via_r = board.layer_stack.via.pad_mm / 2.0;
     let mut pruned = 0usize;
