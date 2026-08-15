@@ -8226,7 +8226,7 @@ fn signal_free_end_trim(board: &Board, final_routes: &mut [Route]) -> usize {
         if board.nets[i].plane_layer.is_some() || final_routes[i].segments.is_empty() {
             continue;
         }
-        let mut own_pads: Vec<(f64, f64, f64, f64)> = Vec::new();
+        let mut own_pads: Vec<(f64, f64, f64, f64, bool, usize)> = Vec::new();
         for comp in &board.components {
             let (co, sn) = (comp.theta.cos(), comp.theta.sin());
             let quarter =
@@ -8242,7 +8242,20 @@ fn signal_free_end_trim(board: &Board, final_routes: &mut [Route]) -> usize {
                     None => (0.5, 0.5),
                 };
                 let (pw, ph) = if quarter == 1 { (ph, pw) } else { (pw, ph) };
-                own_pads.push((gx, gy, pw / 2.0, ph / 2.0));
+                // WHICH LAYERS this pad's copper is on: a THT pad is on
+                // every layer, an SMD pad only on its component's face.
+                // The anchor test was layer-blind and called a B.Cu
+                // free end "anchored" by an F.Cu-only SMD pad it can
+                // never touch (measured: U25.IN_A_N, 1.85mm wide, over
+                // a B.Cu leg start 0.30mm shy of its T — shipped as
+                // track_dangling on the rigid mixer, and the near-miss
+                // close never fired because the end read "anchored").
+                let tht = pin.pad.as_ref().map_or(false, |pd| pd.drill_mm.is_some());
+                let face = match comp.side {
+                    BoardSide::Top => 0usize,
+                    BoardSide::Bottom => board.layer_stack.layers.len().saturating_sub(1),
+                };
+                own_pads.push((gx, gy, pw / 2.0, ph / 2.0, tht, face));
             }
         }
         loop {
@@ -8258,8 +8271,10 @@ fn signal_free_end_trim(board: &Board, final_routes: &mut [Route]) -> usize {
                         .vias
                         .iter()
                         .any(|v| (v.x - e.0).hypot(v.y - e.1) <= via_r)
-                        || own_pads.iter().any(|&(cx, cy, hx, hy)| {
-                            (e.0 - cx).abs() <= hx && (e.1 - cy).abs() <= hy
+                        || own_pads.iter().any(|&(cx, cy, hx, hy, tht, face)| {
+                            (tht || face == sg.layer)
+                                && (e.0 - cx).abs() <= hx
+                                && (e.1 - cy).abs() <= hy
                         });
                     if !anchored {
                         drop = Some(sk);

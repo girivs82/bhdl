@@ -768,30 +768,80 @@ fn push_out_of_shape(comp: &mut Component, shape: &ZoneShape) {
 pub fn check_drc(board: &Board, routes: &[Route]) -> Vec<DrcViolation> {
     let mut violations = Vec::new();
 
-    // Check component spacing
+    // Component spacing on PAD COPPER, the thing the oracle measures.
+    // The envelope-box test this replaces (rotated_bbox + spacing,
+    // centred on comp.x/y) is not calibrated to anything physical:
+    // the pad-inclusive envelope of a lugged pot is 12.8mm on a
+    // 9.8mm body, so two parts whose copper clears by millimetres
+    // "overlap" — and because this verdict is the channel
+    // mini-solve's certification currency, a rigid strip with real
+    // lugs could never certify (measured: every attempt "3-6 hard
+    // drc — not routable", all of them box pairs; the packer then
+    // overflowed and shipped 137 real shorts). Same recalibration
+    // the verify report got: pairwise pad rects under min spacing on
+    // differing nets, THT pads on every layer.
+    let spacing = board.config.min_spacing_mm;
+    let pad_rects = |comp: &crate::types::Component| -> Vec<(f64, f64, f64, f64, Option<crate::types::NetId>, bool)> {
+        let (co, sn) = (comp.theta.cos(), comp.theta.sin());
+        let quarter =
+            ((comp.theta / std::f64::consts::FRAC_PI_2).round() as i64).rem_euclid(2);
+        comp.pins
+            .iter()
+            .filter(|p| !p.unplaced)
+            .map(|p| {
+                let gx = comp.x + p.dx * co - p.dy * sn;
+                let gy = comp.y + p.dx * sn + p.dy * co;
+                let (pw, ph) = p
+                    .pad
+                    .as_ref()
+                    .map(|pd| (pd.width_mm, pd.height_mm))
+                    .unwrap_or((0.5, 0.5));
+                let (hw2, hh2) = if quarter == 1 {
+                    (ph / 2.0, pw / 2.0)
+                } else {
+                    (pw / 2.0, ph / 2.0)
+                };
+                let tht = p.pad.as_ref().map_or(false, |pd| pd.drill_mm.is_some());
+                (gx, gy, hw2, hh2, p.net, tht)
+            })
+            .collect()
+    };
     let n = board.components.len();
     for i in 0..n {
         for j in (i + 1)..n {
             let ci = &board.components[i];
             let cj = &board.components[j];
-            if ci.side != cj.side {
+            let (ai, aj) = (ci.envelope(), cj.envelope());
+            if (ai.0 - aj.0).abs() > ai.2 + aj.2 + spacing + 0.1
+                || (ai.1 - aj.1).abs() > ai.3 + aj.3 + spacing + 0.1
+            {
                 continue;
             }
-
-            let (bwi, bhi) = ci.rotated_bbox();
-            let (bwj, bhj) = cj.rotated_bbox();
-
-            let dx = (cj.x - ci.x).abs();
-            let dy = (cj.y - ci.y).abs();
-            let min_dx = (bwi + bwj) / 2.0 + board.config.min_spacing_mm;
-            let min_dy = (bhi + bhj) / 2.0 + board.config.min_spacing_mm;
-
-            if dx < min_dx && dy < min_dy {
+            let share = ci.shares_surface(cj);
+            let (ri, rj) = (pad_rects(ci), pad_rects(cj));
+            let mut hit = false;
+            'pp: for &(ax, ay, ahw, ahh, an, atht) in &ri {
+                for &(bx, by, bhw, bhh, bn, btht) in &rj {
+                    if !(share || atht || btht) {
+                        continue;
+                    }
+                    if an.is_some() && an == bn {
+                        continue;
+                    }
+                    if (ax - bx).abs() < ahw + bhw + spacing
+                        && (ay - by).abs() < ahh + bhh + spacing
+                    {
+                        hit = true;
+                        break 'pp;
+                    }
+                }
+            }
+            if hit {
                 violations.push(DrcViolation {
                     kind: DrcViolationKind::Spacing,
                     location: ((ci.x + cj.x) / 2.0, (ci.y + cj.y) / 2.0),
                     description: format!(
-                        "{} and {} overlap or violate spacing",
+                        "{} and {} pad copper under min spacing",
                         ci.refdes, cj.refdes
                     ),
                 });
