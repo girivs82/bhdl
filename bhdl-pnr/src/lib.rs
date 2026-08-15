@@ -5402,6 +5402,12 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         // verdict on copper you then keep editing is not a verdict;
         // and the trial currency must price the late rungs' damage or
         // dominance will keep picking winners that ship it.
+        {
+            let j = pour_split_group_join(&board, &mut final_routes);
+            if j > 0 {
+                info!("split-group join: {j} group(s) joined");
+            }
+        }
         // DANGLING-VIA PRUNE against the emitted fills: a via whose
         // barrel meets same-net copper on at most ONE layer connects
         // nothing across layers — it is dead drill (measured: a GND
@@ -8718,6 +8724,433 @@ fn pour_severed_component_stitch(board: &Board, final_routes: &mut Vec<Route>) -
         }
     }
     stitched
+}
+
+
+/// Join every pad-holding group of a pour net to its main body.
+///
+/// The witness rule (main fill or >=2 distinct pads) is a REMOVAL
+/// criterion: copper failing it is dead and gets swept. It is the
+/// wrong criterion for JOINING — measured on the true-geometry mixer,
+/// seed 99: a pocket-sink pad at (43.68,27.91), spoke-served by its
+/// own fill fragment plus a 0.35mm stub, formed a one-pad component
+/// disconnected from main. One pad makes a component worth
+/// CONNECTING, not worth deleting; a first cut of this pass required
+/// two and silently skipped the exact group it existed to fix.
+///
+/// Components are built with the witness DSU on final copper
+/// (segments + vias + fill fragments); every component holding at
+/// least one pad witness and not holding the main fragment is routed
+/// to main. The nearest point-pair usually straddles the very blocker
+/// that split the fill (a 0.81mm gap refused: the gap IS the foreign
+/// clearance), so several pairs are ranked and the multi-layer maze
+/// is the last resort — it dives under the blocker.
+fn pour_split_group_join(board: &Board, final_routes: &mut Vec<Route>) -> usize {
+    let via_r = board.layer_stack.via.pad_mm / 2.0;
+    let mut joined = 0usize;
+    for ni in 0..board.nets.len() {
+        let Some(pl) = board.nets[ni].plane_layer else { continue };
+        let Some(polys) = output::kicad::emission_fill_polys(board, final_routes, ni)
+        else {
+            continue;
+        };
+        if polys.is_empty() {
+            continue;
+        }
+        let net_id = board.nets[ni].id;
+        let segs = final_routes[ni].segments.clone();
+        let vias: Vec<(f64, f64)> =
+            final_routes[ni].vias.iter().map(|v| (v.x, v.y)).collect();
+        let (n, nv, np) = (segs.len(), vias.len(), polys.len());
+        let bboxes: Vec<(f64, f64, f64, f64)> = polys
+            .iter()
+            .map(|p| {
+                p.iter().fold(
+                    (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY),
+                    |(x0, y0, x1, y1), &(x, y)| (x0.min(x), y0.min(y), x1.max(x), y1.max(y)),
+                )
+            })
+            .collect();
+        let fill_hit = |x: f64, y: f64| -> Option<usize> {
+            for (pi, poly) in polys.iter().enumerate() {
+                let (x0, y0, x1, y1) = bboxes[pi];
+                if x < x0 || x > x1 || y < y0 || y > y1 {
+                    continue;
+                }
+                let mut ins = false;
+                let m = poly.len();
+                for k in 0..m {
+                    let (px1, py1) = poly[k];
+                    let (px2, py2) = poly[(k + 1) % m];
+                    if (py1 > y) != (py2 > y)
+                        && x < (px2 - px1) * (y - py1) / (py2 - py1) + px1
+                    {
+                        ins = !ins;
+                    }
+                }
+                if ins {
+                    return Some(pi);
+                }
+            }
+            None
+        };
+        let mut dsu: Vec<usize> = (0..n + nv + np).collect();
+        for i in 0..n {
+            for j in (i + 1)..n {
+                if segs[i].layer != segs[j].layer {
+                    continue;
+                }
+                let (a, b) = (&segs[i], &segs[j]);
+                let close = [a.start, a.end].iter().any(|&pt| {
+                    (b.start.0 - pt.0).hypot(b.start.1 - pt.1) <= 0.011
+                        || (b.end.0 - pt.0).hypot(b.end.1 - pt.1) <= 0.011
+                        || geom::segment_point_too_close(
+                            b.start,
+                            b.end,
+                            pt,
+                            (a.width_mm + b.width_mm) / 2.0 + 0.01,
+                        )
+                }) || [b.start, b.end].iter().any(|&pt| {
+                    geom::segment_point_too_close(
+                        a.start,
+                        a.end,
+                        pt,
+                        (a.width_mm + b.width_mm) / 2.0 + 0.01,
+                    )
+                });
+                if close {
+                    dsu_union(&mut dsu, i, j);
+                }
+            }
+        }
+        for (vi, &(vx, vy)) in vias.iter().enumerate() {
+            for (i, sg) in segs.iter().enumerate() {
+                if (sg.start.0 - vx).hypot(sg.start.1 - vy) <= via_r + sg.width_mm / 2.0
+                    || (sg.end.0 - vx).hypot(sg.end.1 - vy) <= via_r + sg.width_mm / 2.0
+                    || geom::segment_point_too_close(
+                        sg.start,
+                        sg.end,
+                        (vx, vy),
+                        via_r + sg.width_mm / 2.0,
+                    )
+                {
+                    dsu_union(&mut dsu, n + vi, i);
+                }
+            }
+            if let Some(pi) = fill_hit(vx, vy) {
+                dsu_union(&mut dsu, n + vi, n + nv + pi);
+            }
+        }
+        for (i, sg) in segs.iter().enumerate() {
+            if sg.layer != pl {
+                continue;
+            }
+            let len = (sg.end.0 - sg.start.0).hypot(sg.end.1 - sg.start.1);
+            let steps = ((len / 0.3).ceil() as usize).max(1);
+            for st in 0..=steps {
+                let t = st as f64 / steps as f64;
+                if let Some(pi) = fill_hit(
+                    sg.start.0 + (sg.end.0 - sg.start.0) * t,
+                    sg.start.1 + (sg.end.1 - sg.start.1) * t,
+                ) {
+                    dsu_union(&mut dsu, i, n + nv + pi);
+                }
+            }
+        }
+        // Pad witnesses: through segment endpoints on the pad face, or
+        // through the fragment the pad's relief spokes feed (walk the
+        // spoke directions — the pad centre itself sits in the void).
+        let mut root_pads: crate::det::HashMap<usize, usize> = Default::default();
+        let mut main_root_opt: Option<usize> = None;
+        if let Some(main_pi) = polys
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, p)| p.len())
+            .map(|(i, _)| i)
+        {
+            main_root_opt = Some(dsu_find(&mut dsu, n + nv + main_pi));
+        }
+        for comp in &board.components {
+            let (co, sn) = (comp.theta.cos(), comp.theta.sin());
+            let quarter =
+                ((comp.theta / std::f64::consts::FRAC_PI_2).round() as i64).rem_euclid(2);
+            for pin in &comp.pins {
+                if pin.net != Some(net_id) || pin.unplaced {
+                    continue;
+                }
+                let gx = comp.x + pin.dx * co - pin.dy * sn;
+                let gy = comp.y + pin.dx * sn + pin.dy * co;
+                let (pw, ph) = pin
+                    .pad
+                    .as_ref()
+                    .map(|p| (p.width_mm, p.height_mm))
+                    .unwrap_or((0.5, 0.5));
+                let (hx, hy) = if quarter == 1 {
+                    (ph / 2.0, pw / 2.0)
+                } else {
+                    (pw / 2.0, ph / 2.0)
+                };
+                let mut roots: crate::det::HashSet<usize> = Default::default();
+                for (i, sg) in segs.iter().enumerate() {
+                    for &pt in &[sg.start, sg.end] {
+                        if (pt.0 - gx).abs() <= hx + 0.05 && (pt.1 - gy).abs() <= hy + 0.05
+                        {
+                            roots.insert(dsu_find(&mut dsu, i));
+                        }
+                    }
+                }
+                // ON OR INSIDE the pad edge — the sweep's calibrated
+                // test. An outward ray-walk jumps the relief gap and
+                // claims the pad onto a NEIGHBOUR fragment (measured
+                // twice now: first in the witness sweep's history, and
+                // again here — the walk invented stray pad-groups on
+                // clean boards, broke the ecc83 byte-guard and put 1v
+                // on seeds 42/7 via spurious joins). A spoke tip
+                // overlaps the pad; a void contour does not.
+                if let Some(pi) = fill_hit(gx, gy) {
+                    roots.insert(dsu_find(&mut dsu, n + nv + pi));
+                }
+                for pi in 0..np {
+                    if polys[pi].iter().any(|&(vx, vy)| {
+                        (vx - gx).abs() <= hx + 0.001 && (vy - gy).abs() <= hy + 0.001
+                    }) {
+                        roots.insert(dsu_find(&mut dsu, n + nv + pi));
+                    }
+                }
+                // A pad IS copper: it BRIDGES everything it touches.
+                // Witness-only pads left a truth gap — ecc83's pocket
+                // chain reaches the pour THROUGH its far-anchor pad,
+                // and with no pad nodes the chain graded stranded and
+                // drew a spurious join that broke the byte-guard.
+                let mut it = roots.iter();
+                if let Some(&first) = it.next() {
+                    for &r in it {
+                        dsu_union(&mut dsu, first, r);
+                    }
+                    let merged = dsu_find(&mut dsu, first);
+                    *root_pads.entry(merged).or_insert(0) += 1;
+                }
+            }
+        }
+        // Re-canonicalise witness counts after pad bridging: earlier
+        // entries may now share a root.
+        let mut canon: crate::det::HashMap<usize, usize> = Default::default();
+        for (r, c) in root_pads.drain() {
+            *canon.entry(dsu_find(&mut dsu, r)).or_insert(0) += c;
+        }
+        let root_pads = canon;
+        let Some(main_root) = main_root_opt.map(|r| dsu_find(&mut dsu, r)) else {
+            continue;
+        };
+        let strays: Vec<usize> = root_pads
+            .keys()
+            .copied()
+            .filter(|&r| r != main_root)
+            .collect();
+        if strays.is_empty() {
+            continue;
+        }
+        let points_of = |dsu: &mut Vec<usize>, root: usize| -> Vec<(f64, f64)> {
+            let mut out = Vec::new();
+            for (i, sg) in segs.iter().enumerate() {
+                if dsu_find(dsu, i) == root {
+                    out.push(sg.start);
+                    out.push(sg.end);
+                }
+            }
+            for pi in 0..np {
+                if dsu_find(dsu, n + nv + pi) == root {
+                    let stride = (polys[pi].len() / 64).max(1);
+                    for (k, &v) in polys[pi].iter().enumerate() {
+                        if k % stride == 0 {
+                            out.push(v);
+                        }
+                    }
+                }
+            }
+            out
+        };
+        let main_pts = points_of(&mut dsu, main_root);
+        for stray in strays {
+            let stray_pts = points_of(&mut dsu, stray);
+            if stray_pts.is_empty() || main_pts.is_empty() {
+                continue;
+            }
+            let mut pairs: Vec<((f64, f64), (f64, f64), f64)> = Vec::new();
+            for &sp in &stray_pts {
+                let mut bm: Option<((f64, f64), f64)> = None;
+                for &mp in &main_pts {
+                    let dd = (sp.0 - mp.0).hypot(sp.1 - mp.1);
+                    if bm.map_or(true, |(_, bd)| dd < bd) {
+                        bm = Some((mp, dd));
+                    }
+                }
+                if let Some((mp, dd)) = bm {
+                    if dd <= 25.0 {
+                        pairs.push((sp, mp, dd));
+                    }
+                }
+            }
+            pairs.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
+            pairs.truncate(8);
+            if pairs.is_empty() {
+                continue;
+            }
+            let width = board.config.min_trace_width_mm;
+            let idx = geom::ClearanceIndex::build(board, final_routes, Some(net_id));
+            let mut done = false;
+            for &(sp, mp, dd) in &pairs {
+                let path2 = geom::route_escape(&idx, sp, mp, width, pl, net_id)
+                    .or_else(|| geom::route_tunnel(&idx, sp, mp, width, pl, net_id));
+                if let Some(path) = path2 {
+                    let route = &mut final_routes[ni];
+                    let seg_start = route.segments.len();
+                    for w in path.windows(2) {
+                        if (w[0].0 - w[1].0).hypot(w[0].1 - w[1].1) > 1e-9 {
+                            route.segments.push(RouteSegment {
+                                layer: pl,
+                                start: w[0],
+                                end: w[1],
+                                width_mm: width,
+                            });
+                        }
+                    }
+                    if route.segments.len() > seg_start {
+                        route
+                            .path_spans
+                            .push((seg_start, route.segments.len() - seg_start));
+                        route.path_parents.push(None);
+                        joined += 1;
+                        info!(
+                            "split-group join: '{}' pad group joined to main ({dd:.2}mm)",
+                            board.nets[ni].name
+                        );
+                        done = true;
+                        break;
+                    }
+                }
+            }
+            if !done {
+                let signal_layers: Vec<usize> = board
+                    .layer_stack
+                    .layers
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, l)| l.kind == crate::types::LayerKind::Signal)
+                    .map(|(k, _)| k)
+                    .collect();
+                // Drill-rule validation: every layer-switch point must
+                // clear EVERY existing hole (any net's via, any THT
+                // barrel) by drill+0.25 — the oracle's hole_to_hole.
+                // Committing raw maze output put two GND vias 0.206mm
+                // apart (measured, seeds 42/7).
+                let drill = board.layer_stack.via.drill_mm;
+                let mut holes_all: Vec<(f64, f64)> = Vec::new();
+                for r in final_routes.iter() {
+                    for v in &r.vias {
+                        holes_all.push((v.x, v.y));
+                    }
+                }
+                for comp in &board.components {
+                    let (co2, sn2) = (comp.theta.cos(), comp.theta.sin());
+                    for pin in &comp.pins {
+                        if pin.pad.as_ref().and_then(|p| p.drill_mm).is_some() {
+                            holes_all.push((
+                                comp.x + pin.dx * co2 - pin.dy * sn2,
+                                comp.y + pin.dx * sn2 + pin.dy * co2,
+                            ));
+                        }
+                    }
+                }
+                let way_legal = |way: &Vec<(f64, f64, usize)>| -> bool {
+                    let mut switches: Vec<(f64, f64)> = Vec::new();
+                    for w in way.windows(2) {
+                        if w[0].2 != w[1].2 {
+                            switches.push((w[0].0, w[0].1));
+                        }
+                    }
+                    for (i, &(x, y)) in switches.iter().enumerate() {
+                        if holes_all
+                            .iter()
+                            .any(|&(hx, hy)| (hx - x).hypot(hy - y) < drill + 0.25)
+                        {
+                            return false;
+                        }
+                        if switches[i + 1..]
+                            .iter()
+                            .any(|&(x2, y2)| (x2 - x).hypot(y2 - y) < drill + 0.25)
+                        {
+                            return false;
+                        }
+                    }
+                    true
+                };
+                for &(sp, mp, dd) in pairs.iter().take(4) {
+                    let Some(way) = geom::route_tunnel_ml(
+                        &idx,
+                        sp,
+                        pl,
+                        mp,
+                        pl,
+                        width,
+                        via_r,
+                        &signal_layers,
+                        net_id,
+                        12.0,
+                    )
+                    .filter(&way_legal) else {
+                        continue;
+                    };
+                    let route = &mut final_routes[ni];
+                    let seg_start = route.segments.len();
+                    for w in way.windows(2) {
+                        let (a, b) = (w[0], w[1]);
+                        if a.2 == b.2 {
+                            if (a.0 - b.0).hypot(a.1 - b.1) > 1e-9 {
+                                route.segments.push(RouteSegment {
+                                    layer: a.2,
+                                    start: (a.0, a.1),
+                                    end: (b.0, b.1),
+                                    width_mm: width,
+                                });
+                            }
+                        } else if !route
+                            .vias
+                            .iter()
+                            .any(|v| (v.x - a.0).hypot(v.y - a.1) < 1e-6)
+                        {
+                            route.vias.push(RouteVia {
+                                x: a.0,
+                                y: a.1,
+                                from_layer: 0,
+                                to_layer: board.layer_stack.layers.len() - 1,
+                            });
+                        }
+                    }
+                    if route.segments.len() > seg_start {
+                        route
+                            .path_spans
+                            .push((seg_start, route.segments.len() - seg_start));
+                        route.path_parents.push(None);
+                        joined += 1;
+                        info!(
+                            "split-group join: '{}' pad group ML-joined to main ({dd:.2}mm)",
+                            board.nets[ni].name
+                        );
+                        done = true;
+                        break;
+                    }
+                }
+            }
+            if !done {
+                log::warn!(
+                    "split-group join: '{}' pad group stranded from main — no legal route (honest)",
+                    board.nets[ni].name
+                );
+            }
+        }
+    }
+    joined
 }
 
 fn pour_unserved_pad_route(board: &Board, final_routes: &mut Vec<Route>) -> usize {

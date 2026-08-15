@@ -2062,7 +2062,7 @@ fn fracture_fill_spoked(
         }
         // Island removal: a component holding NO same-net barrel is
         // electrically dead copper.
-        let anchored = anchors.iter().any(|&(ax, ay)| {
+        let keeper = anchors.iter().find(|&&(ax, ay)| {
             let c = ((ax - x0) / VOID_CELL) as i64;
             let r = ((ay - y0) / VOID_CELL) as i64;
             c >= 0
@@ -2071,7 +2071,23 @@ fn fracture_fill_spoked(
                 && (r as usize) < rows
                 && label[r as usize * cols + c as usize] == comp
         });
-        if !anchored {
+        if std::env::var("BHDL_PNR_PROBE_ANCHORS").is_ok() {
+            let (mut bx0, mut by0, mut bx1, mut by1) =
+                (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+            for &(lx, ly) in &loops[outer_i] {
+                let x = x0 + lx as f64 * VOID_CELL;
+                let y = y0 + ly as f64 * VOID_CELL;
+                bx0 = bx0.min(x);
+                by0 = by0.min(y);
+                bx1 = bx1.max(x);
+                by1 = by1.max(y);
+            }
+            log::info!(
+                "[probe] fracture comp bbox {bx0:.1},{by0:.1}-{bx1:.1},{by1:.1} keeper={:?}",
+                keeper
+            );
+        }
+        if keeper.is_none() {
             continue;
         }
         let mut rings: Vec<RingKind> = Vec::new();
