@@ -674,6 +674,36 @@ pub fn place_and_route_best_of(
         }
     }
 
+    // WINNER-ONLY mirror dump: the per-trial tail runs many times and
+    // its files hold whichever trial finished last — never diff those
+    // against the export (that mistake produced a phantom
+    // mirror-vs-export divergence spanning half the board).
+    if let Ok(dir) = std::env::var("BHDL_PNR_DUMP_FINAL_MIRROR") {
+        if let Some(res) = &best {
+            use std::io::Write;
+            for ni in 0..res.board.nets.len() {
+                if res.board.nets[ni].plane_layer.is_none() {
+                    continue;
+                }
+                let Some(polys) =
+                    output::kicad::emission_fill_polys(&res.board, &res.routes, ni)
+                else {
+                    continue;
+                };
+                if let Ok(mut f) = std::fs::File::create(format!(
+                    "{dir}/final_mirror_{}.txt",
+                    res.board.nets[ni].name.replace('/', "_")
+                )) {
+                    for p in &polys {
+                        for (x, y) in p {
+                            let _ = writeln!(f, "{x} {y}");
+                        }
+                        let _ = writeln!(f, "---");
+                    }
+                }
+            }
+        }
+    }
     best.ok_or_else(|| anyhow::anyhow!("No trials completed"))
 }
 
@@ -5500,6 +5530,29 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
             );
         }
         drc_violations = recheck;
+    }
+    if let Ok(dir) = std::env::var("BHDL_PNR_DUMP_FINAL_MIRROR") {
+        use std::io::Write;
+        for ni in 0..board.nets.len() {
+            if board.nets[ni].plane_layer.is_none() {
+                continue;
+            }
+            let Some(polys) = output::kicad::emission_fill_polys(&board, &final_routes, ni)
+            else {
+                continue;
+            };
+            if let Ok(mut f) = std::fs::File::create(format!(
+                "{dir}/final_mirror_{}.txt",
+                board.nets[ni].name.replace('/', "_")
+            )) {
+                for p in &polys {
+                    for (x, y) in p {
+                        let _ = writeln!(f, "{x} {y}");
+                    }
+                    let _ = writeln!(f, "---");
+                }
+            }
+        }
     }
     probe_dangling_vias(&board, &final_routes, "pre-metrics");
     let pour_defects = pour_defect_count(&board, &final_routes) + pour_bridge_residual;
