@@ -5372,6 +5372,73 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
         // verdict on copper you then keep editing is not a verdict;
         // and the trial currency must price the late rungs' damage or
         // dominance will keep picking winners that ship it.
+        // DANGLING-VIA PRUNE against the emitted fills: a via whose
+        // barrel meets same-net copper on at most ONE layer connects
+        // nothing across layers — it is dead drill (measured: a GND
+        // via at (45.8,43.1) whose far end landed in a void shipped
+        // as seed 99's via_dangling). Removing such a via cannot
+        // disconnect anything, by construction: whatever touches it
+        // on the one live layer stays touching itself. Judged, like
+        // everything now, on the copper actually being shipped.
+        {
+            let (_, fills) =
+                output::kicad::export_kicad_pcb_with_fills(&board, &final_routes);
+            let via_r = board.layer_stack.via.pad_mm / 2.0;
+            let pip = |poly: &[(f64, f64)], x: f64, y: f64| -> bool {
+                let mut ins = false;
+                let m = poly.len();
+                for k in 0..m {
+                    let (x1, y1) = poly[k];
+                    let (x2, y2) = poly[(k + 1) % m];
+                    if (y1 > y) != (y2 > y)
+                        && x < (x2 - x1) * (y - y1) / (y2 - y1) + x1
+                    {
+                        ins = !ins;
+                    }
+                }
+                ins
+            };
+            for ni in 0..board.nets.len() {
+                if final_routes[ni].vias.is_empty() {
+                    continue;
+                }
+                let net_id = board.nets[ni].id;
+                let keep: Vec<bool> = final_routes[ni]
+                    .vias
+                    .iter()
+                    .map(|v| {
+                        let mut layers: crate::det::HashSet<usize> = Default::default();
+                        for sg in &final_routes[ni].segments {
+                            if (sg.start.0 - v.x).hypot(sg.start.1 - v.y)
+                                <= via_r + sg.width_mm / 2.0
+                                || (sg.end.0 - v.x).hypot(sg.end.1 - v.y)
+                                    <= via_r + sg.width_mm / 2.0
+                            {
+                                layers.insert(sg.layer);
+                            }
+                        }
+                        for z in fills.zones.iter().filter(|z| z.net_id == net_id) {
+                            if layers.contains(&z.layer) {
+                                continue;
+                            }
+                            if z.polys.iter().any(|p| pip(p, v.x, v.y)) {
+                                layers.insert(z.layer);
+                            }
+                        }
+                        layers.len() >= 2
+                    })
+                    .collect();
+                let dropped = keep.iter().filter(|&&k| !k).count();
+                if dropped > 0 {
+                    info!(
+                        "dangling-via prune: '{}' {} via(s) meet copper on <=1 layer — removed",
+                        board.nets[ni].name, dropped
+                    );
+                    let mut it = keep.iter();
+                    final_routes[ni].vias.retain(|_| *it.next().unwrap_or(&true));
+                }
+            }
+        }
         // SHORTING-STUB AMPUTATION before the verdict: a cross-net
         // SHORT whose party is a tiny stub is repair debris — cut the
         // stub, then let the unserved-pad pass re-serve anything that
