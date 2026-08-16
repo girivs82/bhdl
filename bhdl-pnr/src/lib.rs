@@ -102,6 +102,20 @@ fn trial_dominated(result: &PnrResult, best: &PnrResult, has_measured: bool) -> 
     if r_pd != b_pd {
         return r_pd > b_pd;
     }
+    // SHIPPED DRC, priced. Since ee681c3 the verdict is re-taken on
+    // final copper with a copper-aware check_drc, so this is what the
+    // oracle will see — and until now it did not enter the currency
+    // at all. A trial could reconnect one sink and ship four dangling
+    // chains and DOMINATE a clean board (measured: span-only
+    // amputation gated behind cheap_amputation moved no-post seed 42
+    // from 0v/0unc to 1v/4unc, because sinks rank first and the
+    // debris ranked nowhere). Byte-neutral wherever every trial ships
+    // 0 — the whole corpus and ecc83 today.
+    let r_drc = result.drc_violations.len();
+    let b_drc = best.drc_violations.len();
+    if r_drc != b_drc {
+        return r_drc > b_drc;
+    }
     if has_measured {
         let rn = measured_noise_mv(result).unwrap_or(0.0);
         let bn = measured_noise_mv(best).unwrap_or(0.0);
