@@ -5734,6 +5734,86 @@ fn pour_defect_count(board: &Board, final_routes: &[Route]) -> usize {
         // whose pour never fractured in the first place.
         if let Some(polys) = output::kicad::emission_fill_polys(board, final_routes, ni) {
             defects += pour_severed_fragments(board, final_routes, ni, &polys).len();
+            // (d) DANGLING TRACK ENDS on the pour net — the oracle's
+            // track_dangling. The fill is already in hand here, so
+            // this is the one place the test is affordable inside the
+            // per-trial currency (check_drc exempts pour nets for
+            // exactly that reason). A pour-side end is free if it
+            // touches no same-net track on its layer, no via, no
+            // same-net pad copper on that layer, AND is not inside the
+            // emitted fill on the pour layer. Measured: a span-only
+            // amputation tier won seed 99 on connected sinks while
+            // shipping four 0.3mm vbias stubs the currency did not
+            // see; a better-connected board with more debris must not
+            // dominate a clean one.
+            let via_r = board.layer_stack.via.pad_mm / 2.0;
+            let pl = board.nets[ni].plane_layer.unwrap_or(0);
+            let net_id = board.nets[ni].id;
+            let last = board.layer_stack.layers.len().saturating_sub(1);
+            let mut pads: Vec<(f64, f64, f64, f64, Option<usize>)> = Vec::new();
+            for comp in &board.components {
+                let (co, sn) = (comp.theta.cos(), comp.theta.sin());
+                let quarter =
+                    ((comp.theta / std::f64::consts::FRAC_PI_2).round() as i64).rem_euclid(2);
+                let face = match comp.side {
+                    BoardSide::Top => 0usize,
+                    BoardSide::Bottom => last,
+                };
+                for p in comp.pins.iter().filter(|p| !p.unplaced && p.net == Some(net_id)) {
+                    let gx = comp.x + p.dx * co - p.dy * sn;
+                    let gy = comp.y + p.dx * sn + p.dy * co;
+                    let (pw, ph) = p
+                        .pad
+                        .as_ref()
+                        .map(|pd| (pd.width_mm, pd.height_mm))
+                        .unwrap_or((0.5, 0.5));
+                    let (hx, hy) = if quarter == 1 { (ph / 2.0, pw / 2.0) } else { (pw / 2.0, ph / 2.0) };
+                    let tht = p.pad.as_ref().map_or(false, |pd| pd.drill_mm.is_some());
+                    pads.push((gx, gy, hx, hy, if tht { None } else { Some(face) }));
+                }
+            }
+            let inside = |x: f64, y: f64| -> bool {
+                polys.iter().any(|poly| {
+                    let mut ins = false;
+                    let m = poly.len();
+                    for k in 0..m {
+                        let (x1, y1) = poly[k];
+                        let (x2, y2) = poly[(k + 1) % m];
+                        if (y1 > y) != (y2 > y) && x < (x2 - x1) * (y - y1) / (y2 - y1) + x1 {
+                            ins = !ins;
+                        }
+                    }
+                    ins
+                })
+            };
+            let r = &final_routes[ni];
+            for (si, sg) in r.segments.iter().enumerate() {
+                for &e in &[sg.start, sg.end] {
+                    let on_track = r.segments.iter().enumerate().any(|(sj, s2)| {
+                        sj != si
+                            && s2.layer == sg.layer
+                            && geom::point_segment_dist(e, s2.start, s2.end)
+                                <= (s2.width_mm + sg.width_mm) / 2.0 - 0.001
+                    });
+                    if on_track {
+                        continue;
+                    }
+                    if r.vias.iter().any(|v| (v.x - e.0).hypot(v.y - e.1) <= via_r + sg.width_mm / 2.0) {
+                        continue;
+                    }
+                    if pads.iter().any(|&(cx, cy, hx, hy, layer)| {
+                        layer.map_or(true, |l| l == sg.layer)
+                            && (e.0 - cx).abs() <= hx + sg.width_mm / 2.0
+                            && (e.1 - cy).abs() <= hy + sg.width_mm / 2.0
+                    }) {
+                        continue;
+                    }
+                    if sg.layer == pl && inside(e.0, e.1) {
+                        continue;
+                    }
+                    defects += 1;
+                }
+            }
         }
         // (a) Stranded islands: anchors spread over >1 raster label
         // after all stitching (a routed bridge merges labels because
