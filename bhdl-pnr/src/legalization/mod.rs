@@ -862,6 +862,100 @@ pub fn check_drc(board: &Board, routes: &[Route]) -> Vec<DrcViolation> {
         }
     }
 
+    // DANGLING TRACK ENDS: the oracle's track_dangling. A segment end
+    // that touches no same-net segment on its layer, no via, and no
+    // same-net pad copper on that layer is a free end. Pour nets are
+    // exempt only where the end lands inside their emitted fill — but
+    // this function has no fill; the caller's currency includes
+    // pour_defects for that. Here: judge every net's TRACK ends, and
+    // for pour nets skip the test entirely (their free ends are what
+    // the pour-side rungs police; the copper conflict scan above still
+    // covers them for shorts). Measured: a span-only amputation trial
+    // won a seed on connected sinks while shipping FOUR 0.3mm dangling
+    // stubs the verdict here reported as 0 — the oracle disagreed.
+    {
+        let via_r = board.layer_stack.via.pad_mm / 2.0;
+        // Same-net pad copper per layer: (net, x, y, hx, hy, layer_or_all)
+        let mut pads: Vec<(Option<crate::types::NetId>, f64, f64, f64, f64, Option<usize>)> =
+            Vec::new();
+        let last = board.layer_stack.layers.len().saturating_sub(1);
+        for comp in &board.components {
+            let (co, sn) = (comp.theta.cos(), comp.theta.sin());
+            let quarter =
+                ((comp.theta / std::f64::consts::FRAC_PI_2).round() as i64).rem_euclid(2);
+            let face = match comp.side {
+                crate::types::BoardSide::Top => 0usize,
+                crate::types::BoardSide::Bottom => last,
+            };
+            for p in comp.pins.iter().filter(|p| !p.unplaced) {
+                let gx = comp.x + p.dx * co - p.dy * sn;
+                let gy = comp.y + p.dx * sn + p.dy * co;
+                let (pw, ph) = p
+                    .pad
+                    .as_ref()
+                    .map(|pd| (pd.width_mm, pd.height_mm))
+                    .unwrap_or((0.5, 0.5));
+                let (hx, hy) = if quarter == 1 { (ph / 2.0, pw / 2.0) } else { (pw / 2.0, ph / 2.0) };
+                let tht = p.pad.as_ref().map_or(false, |pd| pd.drill_mm.is_some());
+                pads.push((p.net, gx, gy, hx, hy, if tht { None } else { Some(face) }));
+            }
+        }
+        for (ni, r) in routes.iter().enumerate() {
+            let Some(net) = board.nets.get(ni) else { continue };
+            // Pour nets are judged elsewhere: a routed end may land
+            // inside the emitted fill (contact), and the fill is 1.24s
+            // to compute — not affordable inside the verdict, which
+            // runs per trial. pour_defect_count already prices pour-
+            // side copper in the same currency, and the tail's witness
+            // sweep + free-end trim police pour-net stubs on the copper
+            // being shipped. Signal nets get the exact test here.
+            if net.plane_layer.is_some() {
+                continue;
+            }
+            let pour_layer: Option<usize> = None;
+            let in_fill = |_x: f64, _y: f64| -> bool { false };
+            for (si, sg) in r.segments.iter().enumerate() {
+                for &e in &[sg.start, sg.end] {
+                    let on_track = r.segments.iter().enumerate().any(|(sj, s2)| {
+                        sj != si
+                            && s2.layer == sg.layer
+                            && crate::geom::point_segment_dist(e, s2.start, s2.end)
+                                <= (s2.width_mm + sg.width_mm) / 2.0 - 0.001
+                    });
+                    if on_track {
+                        continue;
+                    }
+                    let on_via = r
+                        .vias
+                        .iter()
+                        .any(|v| (v.x - e.0).hypot(v.y - e.1) <= via_r + sg.width_mm / 2.0);
+                    if on_via {
+                        continue;
+                    }
+                    let on_pad = pads.iter().any(|&(pn, cx, cy, hx, hy, layer)| {
+                        pn == Some(net.id)
+                            && layer.map_or(true, |l| l == sg.layer)
+                            && (e.0 - cx).abs() <= hx + sg.width_mm / 2.0
+                            && (e.1 - cy).abs() <= hy + sg.width_mm / 2.0
+                    });
+                    if on_pad {
+                        continue;
+                    }
+                    if pour_layer == Some(sg.layer) && in_fill(e.0, e.1) {
+                        continue;
+                    }
+                    violations.push(DrcViolation {
+                        kind: DrcViolationKind::Spacing,
+                        location: e,
+                        description: format!(
+                            "net '{}' track end dangling at ({:.2},{:.2}) on layer {}",
+                            net.name, e.0, e.1, sg.layer
+                        ),
+                    });
+                }
+            }
+        }
+    }
     for (na, sa, nb, sb, d, short) in copper_conflicts(board, routes) {
         let a = &routes[na].segments[sa];
         let b = &routes[nb].segments[sb];
