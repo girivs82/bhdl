@@ -725,6 +725,28 @@ pub fn place_and_route_best_of(
 ///
 /// Input: a fully constructed `Board` (from semantic preprocessing).
 /// Output: `PnrResult` with final placement, routes, metrics, and DRC.
+/// Debug tracer: BHDL_PNR_TRACE_NEAR=x,y,r prints every segment/via of
+/// every net within r mm of (x,y) at each tagged tail phase. Diagnoses
+/// "who moved my copper" between rungs without a debugger.
+fn trace_near(tag: &str, board: &Board, routes: &[Route]) {
+    let Ok(v) = std::env::var("BHDL_PNR_TRACE_NEAR") else { return };
+    let mut it = v.split(',').filter_map(|t| t.trim().parse::<f64>().ok());
+    let (Some(x), Some(y), Some(r)) = (it.next(), it.next(), it.next()) else { return };
+    for (ni, rt) in routes.iter().enumerate() {
+        let name = board.nets.get(ni).map(|n| n.name.as_str()).unwrap_or("?");
+        for sg in &rt.segments {
+            if (sg.start.0 - x).hypot(sg.start.1 - y) <= r || (sg.end.0 - x).hypot(sg.end.1 - y) <= r {
+                info!("[trace {tag}] '{name}' seg L{} ({:.2},{:.2})->({:.2},{:.2})", sg.layer, sg.start.0, sg.start.1, sg.end.0, sg.end.1);
+            }
+        }
+        for vv in &rt.vias {
+            if (vv.x - x).hypot(vv.y - y) <= r {
+                info!("[trace {tag}] '{name}' via ({:.2},{:.2})", vv.x, vv.y);
+            }
+        }
+    }
+}
+
 pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result<PnrResult> {
     // Residual emission-model strandings the island-bridge pass
     // (5.998) could not close — added to pour_defects so trial
@@ -5404,6 +5426,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                 break;
             }
             info!("unserved-pad route: {n} pad(s) joined");
+            trace_near("after-unserved", &board, &final_routes);
         }
     }
     {
@@ -5421,6 +5444,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
             if j > 0 {
                 info!("split-group join: {j} group(s) joined");
             }
+            trace_near("after-split-join", &board, &final_routes);
         }
         // DANGLING-VIA PRUNE against the emitted fills: a via whose
         // barrel meets same-net copper on at most ONE layer connects
@@ -5489,6 +5513,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                 }
             }
         }
+        trace_near("after-via-prune", &board, &final_routes);
         // SHORTING-STUB AMPUTATION before the verdict: a cross-net
         // SHORT whose party is a tiny stub is repair debris — cut the
         // stub, then let the unserved-pad pass re-serve anything that
@@ -5547,6 +5572,7 @@ pub fn place_and_route(mut board: Board, config: PnrConfig, seed: u64) -> Result
                 info!("seam close: {c} sliver(s) added");
             }
         }
+        trace_near("after-seam-close", &board, &final_routes);
         let recheck = legalization::check_drc(&board, &final_routes);
         if recheck.len() != drc_violations.len() {
             info!(
@@ -9118,6 +9144,21 @@ fn pour_split_group_join(board: &Board, final_routes: &mut Vec<Route>) -> usize 
                     dsu_union(&mut dsu, i, n + nv + pi);
                 }
             }
+            // A track whose END sits ON the fill boundary is connected
+            // (its half-width overlaps the copper) but a point-in-
+            // polygon test on a vertex is a coin flip — the ML rungs
+            // target boundary VERTICES by construction. Sample a ring
+            // of half-width around each endpoint.
+            let hw = sg.width_mm / 2.0 - 0.01;
+            for &(ex, ey) in &[sg.start, sg.end] {
+                for q in 0..8 {
+                    let a = q as f64 * std::f64::consts::FRAC_PI_4;
+                    if let Some(pi) = fill_hit(ex + hw * a.cos(), ey + hw * a.sin()) {
+                        dsu_union(&mut dsu, i, n + nv + pi);
+                        break;
+                    }
+                }
+            }
         }
         // Pad witnesses: through segment endpoints on the pad face, or
         // through the fragment the pad's relief spokes feed (walk the
@@ -9212,10 +9253,17 @@ fn pour_split_group_join(board: &Board, final_routes: &mut Vec<Route>) -> usize 
         if strays.is_empty() {
             continue;
         }
+        // Join endpoints must be copper ON THE PLANE LAYER: both the
+        // single-layer maze and the ML maze start on `pl`. A stray
+        // group's B.Cu-only endpoint used to be offered as a start and
+        // the F.Cu track then began in air (measured: C4's ML route on
+        // the mixer, F->via->B->via->F, was graded a stray — its F.Cu
+        // end sat exactly on a fill VERTEX — and the join drew a 14mm
+        // F.Cu track from its B.Cu bend, shipped as track_dangling).
         let points_of = |dsu: &mut Vec<usize>, root: usize| -> Vec<(f64, f64)> {
             let mut out = Vec::new();
             for (i, sg) in segs.iter().enumerate() {
-                if dsu_find(dsu, i) == root {
+                if sg.layer == pl && dsu_find(dsu, i) == root {
                     out.push(sg.start);
                     out.push(sg.end);
                 }
@@ -9545,6 +9593,17 @@ fn pour_unserved_pad_route(board: &Board, final_routes: &mut Vec<Route>) -> usiz
                 // net's own segments, or a vertex of its fill.
                 let mut best: Option<((f64, f64), f64, usize, f64)> = None;
                 for sg in &final_routes[ni].segments {
+                    // Only copper on the pad's own layer is a target
+                    // for the single-layer first rung; a nearer B.Cu
+                    // stub used to win the search and the pad was
+                    // then DROPPED by the layer guard below — never a
+                    // job, never a rung, silently unserved (measured:
+                    // C6.2 on the mixer, F.Cu main 7mm away, a GND
+                    // stub 6.9mm away on B.Cu; probe said
+                    // fill_served=false, no log line ever named it).
+                    if sg.layer != layer {
+                        continue;
+                    }
                     let (ax, ay) = sg.start;
                     let (bx, by) = sg.end;
                     let (dx, dy) = (bx - ax, by - ay);
@@ -9560,7 +9619,14 @@ fn pour_unserved_pad_route(board: &Board, final_routes: &mut Vec<Route>) -> usiz
                         best = Some((q, sg.width_mm, sg.layer, d));
                     }
                 }
-                for poly in &polys {
+                // Nearest LIVE fill copper only: a severed scrap is
+                // not service (same rule as the fill_served test above
+                // and the witness sweep) — targeting one made the
+                // first rung "join" a pad to its own thermal disc.
+                for (pi, poly) in polys.iter().enumerate() {
+                    if severed.contains(&pi) {
+                        continue;
+                    }
                     for &(vx, vy) in poly {
                         let d = (vx - gx).hypot(vy - gy);
                         if best.map_or(true, |(.., bd)| d < bd) {
@@ -9826,17 +9892,42 @@ fn pour_unserved_pad_route(board: &Board, final_routes: &mut Vec<Route>) -> usiz
                             })
                             .map(|(k, _)| k)
                             .collect();
-                        let mut verts: Vec<((f64, f64), f64)> = fp
+                        // Targets: vertices of the far main AND of the
+                        // pad's OWN-layer main. The maze is multi-layer
+                        // either way; restricting the destination to
+                        // the far face left a pad whose own-face main
+                        // was 8.6mm away unserved because the far main
+                        // was 24.8mm away (measured: C4 on the mixer
+                        // with demo-true jacks — F.Cu main at 8.6mm,
+                        // B.Cu main at 24.8mm, "no legal route").
+                        let own_main = fills
+                            .zones
+                            .iter()
+                            .filter(|z| z.net_id == net_id && z.layer == job.layer)
+                            .flat_map(|z| z.polys.iter())
+                            .max_by_key(|p| p.len())
+                            .cloned();
+                        let mut verts: Vec<((f64, f64), usize, f64)> = fp
                             .iter()
                             .map(|&(vx, vy)| {
                                 (
                                     (vx, vy),
+                                    far,
                                     (vx - job.src.0).hypot(vy - job.src.1),
                                 )
                             })
                             .collect();
+                        if let Some(om) = own_main.as_ref() {
+                            verts.extend(om.iter().map(|&(vx, vy)| {
+                                (
+                                    (vx, vy),
+                                    job.layer,
+                                    (vx - job.src.0).hypot(vy - job.src.1),
+                                )
+                            }));
+                        }
                         verts.sort_by(|a, b| {
-                            a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+                            a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal)
                         });
                         let idx2 = geom::ClearanceIndex::build(
                             board,
@@ -9844,7 +9935,7 @@ fn pour_unserved_pad_route(board: &Board, final_routes: &mut Vec<Route>) -> usiz
                             Some(net_id),
                         );
                         let mut ml_done = false;
-                        for &(dst, d) in verts.iter().take(6) {
+                        for &(dst, dst_layer, d) in verts.iter().take(6) {
                             if d > 20.0 {
                                 break;
                             }
@@ -9853,7 +9944,7 @@ fn pour_unserved_pad_route(board: &Board, final_routes: &mut Vec<Route>) -> usiz
                                 job.src,
                                 job.layer,
                                 dst,
-                                far,
+                                dst_layer,
                                 job.width,
                                 via_r,
                                 &signal_layers,

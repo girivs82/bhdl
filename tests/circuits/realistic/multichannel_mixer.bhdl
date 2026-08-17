@@ -227,15 +227,15 @@ layout MultichannelMixer {
     // Real Neutrik jacks with body-centered footprints, placed so
     // the TIP pad lands on the demo's own footprint origin (demo
     // coordinates minus its Edge.Cuts origin 89.46/43.66), contacts
-    // running toward the top edge. J_CH4 is the
-    // demo's J9: its switch-normal column lands at x = −12.9 — off
-    // the board, exactly as in the demo, whose Neutrik bodies hang
-    // over the panel edge (those pads are unconnected).
-    place J_CH1 at (39.225, 14.125) rot 90;
-    place J_CH2 at (17.225, 14.125) rot 90;
-    place J_CH3 at (61.225, 14.125) rot 90;
-    place J_CH4 at (-4.875, 14.125) rot 90;
-    place J_OUT at (83.025, 14.075) rot 90;
+    // running toward the top edge and the switch-normal column
+    // inboard (+x, 16.23 from the tip) — where the demo has it for
+    // every jack (J9's normals sit at board-local x = 19.6, not off
+    // the edge). Origins = tip + (8.1, −7.85) under rot 270.
+    place J_CH1 at (55.425, 14.125) rot 270;
+    place J_CH2 at (33.425, 14.125) rot 270;
+    place J_CH3 at (77.425, 14.125) rot 270;
+    place J_CH4 at (11.325, 14.125) rot 270;
+    place J_OUT at (99.225, 14.075) rot 270;
     // CLIFF entry on the right edge, barrel opening grazing x=110
     // like the demo (local frame is already barrel-toward-+X).
     place J_PWR at (102.225, 44.925);

@@ -818,29 +818,35 @@ fn generate_pot_rk09k_v() -> ComponentFootprint {
 }
 
 /// Neutrik NMJ6HCD2 horizontal 6.35mm jack. Local frame = the
-/// ST-NMJ6HCD2 drawing frame mirrored in X: T at origin, the contact
-/// row (R, S) along −X toward the jack opening, the switch-normal
-/// row 16.23mm away at +Y. Under the engine's `rot 90` transform
-/// (dx,dy)→(−dy,+dx) this lands every pad at the demo board's
-/// positions (contacts running up toward the top edge, normals
-/// column beside them). Recommended hole ø1.4 (printed on the
-/// drawing) → pad 3.0. Pads named per the drawing: T/R/S plug
-/// contacts, TN/RN/SN normally-closed switch contacts.
+/// ST-NMJ6HCD2 drawing frame, UNMIRRORED (the same frame as KiCad's
+/// Jack_6.35mm_Neutrik_NMJ6HCD2_Horizontal): T nearest the jack
+/// opening, the contact row R, S running along +X deeper into the
+/// body, the switch-normal row 16.23mm away at +Y. Under the engine's
+/// `rot 270` transform (dx,dy)→(+dy,−dx) this lands every pad at the
+/// demo board's positions: contacts running up toward the top edge,
+/// normals column INBOARD (+X) beside them. The previous frame was
+/// mirrored in X ("contacts along −X"), which put every normal column
+/// on the outboard side — invisible to DRC (the normals are
+/// unconnected) until fab preflight measured J_CH4's SN/RN/TN 13mm
+/// off the board edge while the demo has them 19.6mm inside it.
+/// Recommended hole ø1.4 (printed on the drawing) → pad 3.0. Pads
+/// named per the drawing: T/R/S plug contacts, TN/RN/SN
+/// normally-closed switch contacts.
 fn generate_jack_nmj6hcd2_h() -> ComponentFootprint {
     // Local frame centered on the BODY: 23.5 along the barrel (X:
     // 20.61 shell + bushing block) x 18.2 across the pin columns
-    // (Y). Contacts T/R/S run along -X toward the jack opening
-    // (barrel toward -X), the switch-normal column 16.23 away at +Y;
-    // the whole pin field sits off-center because the shell extends
-    // 4mm past the S contact and the bushing beyond that.
+    // (Y). Contacts T/R/S run along +X from the jack opening (barrel
+    // toward -X), the switch-normal column 16.23 away at +Y; the
+    // whole pin field sits off-center because the shell extends 4mm
+    // past the S contact and the bushing beyond that.
     let mut pads = Vec::new();
     for (i, (name, x, y)) in [
-        ("T", 7.85, -8.1),
-        ("R", 1.5, -8.1),
-        ("S", -4.85, -8.1),
-        ("TN", 7.85, 8.13),
-        ("RN", 1.5, 8.13),
-        ("SN", -4.85, 8.13),
+        ("T", -7.85, -8.1),
+        ("R", -1.5, -8.1),
+        ("S", 4.85, -8.1),
+        ("TN", -7.85, 8.13),
+        ("RN", -1.5, 8.13),
+        ("SN", 4.85, 8.13),
     ]
     .iter()
     .enumerate()
