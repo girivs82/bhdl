@@ -4,4 +4,5 @@
 pub mod gerber;
 pub mod html;
 pub mod kicad;
+pub mod preflight;
 pub mod verify;

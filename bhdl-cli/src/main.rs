@@ -289,6 +289,13 @@ enum Commands {
         /// path. See the package manifest for coverage.
         #[arg(long)]
         fab: bool,
+
+        /// Fab-house capability profile to preflight the shipped copper
+        /// against (standard | fine | coarse). Preflight always runs
+        /// and reports against "standard"; naming a profile makes its
+        /// verdict part of the sign-off gate.
+        #[arg(long)]
+        fab_profile: Option<String>,
     },
 
     /// Transcribe a MCAD DXF (positional FILE) into layout-block
@@ -606,8 +613,8 @@ async fn main() -> Result<()> {
             run_simulation(&source_file, testbench, output, &format).await?;
         }
 
-        Some(Commands::Layout { output, trials, max_iterations, html, fab, seed }) => {
-            run_layout(&source_file, output, trials, max_iterations, html, fab, &cli.input, seed).await?;
+        Some(Commands::Layout { output, trials, max_iterations, html, fab, seed, fab_profile }) => {
+            run_layout(&source_file, output, trials, max_iterations, html, fab, &cli.input, seed, fab_profile.as_deref()).await?;
         }
 
         Some(Commands::Doc { output, bom_only, budget_only, no_tree, no_patterns }) => {
@@ -1753,6 +1760,7 @@ async fn run_layout(
     fab: bool,
     source_path: &Path,
     seed: u64,
+    fab_profile: Option<&str>,
 ) -> Result<()> {
     use bhdl_pnr::semantic::{self, SemanticConfig};
     use bhdl_pnr::types::PnrConfig;
@@ -2173,11 +2181,33 @@ async fn run_layout(
     println!("  Via count:     {}", result.metrics.via_count);
     println!("  Routability:   {:.1}%", result.metrics.routability_pct);
     println!("  DRC violations: {}", result.drc_violations.len());
+    if result.metrics.pour_defects > 0 {
+        // Trial currency, not an oracle count: relative between
+        // trials (a board can ship 0 unc with a nonzero score). Shown
+        // so a nonzero winner is visible, not gated.
+        println!("  Pour defects (currency): {}", result.metrics.pour_defects);
+    }
 
     // 10. Export KiCad PCB
     // Verification report
     let report = bhdl_pnr::output::verify::verify(&result.board, &result.routes);
     let verify_pass = bhdl_pnr::output::verify::print_report(&report);
+
+    // Fab preflight: the shipped copper against a manufacturing
+    // capability profile. Always reported (against "standard" when
+    // none is named); GATING only when the user names the profile —
+    // a fab's floors are the user's choice, not the tool's.
+    let (profile, preflight_gates) = match fab_profile {
+        Some(name) => match bhdl_pnr::output::preflight::FabProfile::by_name(name) {
+            Some(p) => (p, true),
+            None => anyhow::bail!(
+                "unknown --fab-profile '{name}' (known: standard, fine, coarse)"
+            ),
+        },
+        None => (bhdl_pnr::output::preflight::FabProfile::STANDARD, false),
+    };
+    let pre = bhdl_pnr::output::preflight::preflight(&result.board, &result.routes, &profile);
+    let preflight_pass = bhdl_pnr::output::preflight::print_report(&pre);
 
     let pcb = bhdl_pnr::output::kicad::export_kicad_pcb(&result.board, &result.routes);
     // Sibling .kicad_pro: KiCad stores netclass rules in the PROJECT
@@ -2295,12 +2325,15 @@ async fn run_layout(
     // and a script (CI, the corpus sweep, a fab hand-off) must not be
     // able to mistake it for one. BHDL_SIGNOFF_ADVISORY=1 demotes the
     // gate to a warning for exploration runs.
-    let signoff_ok = verify_pass && result.drc_violations.is_empty();
+    let signoff_ok =
+        verify_pass && result.drc_violations.is_empty() && (preflight_pass || !preflight_gates);
     if !signoff_ok {
         let why = format!(
-            "sign-off FAILED: verify={}, shipped DRC violations={}",
+            "sign-off FAILED: verify={}, shipped DRC violations={}, preflight[{}]={}",
             if verify_pass { "PASS" } else { "FAIL" },
-            result.drc_violations.len()
+            result.drc_violations.len(),
+            profile.name,
+            if preflight_pass { "PASS" } else { "FAIL" }
         );
         if std::env::var("BHDL_SIGNOFF_ADVISORY").map(|v| v == "1").unwrap_or(false) {
             println!("\n  {} {} (advisory)", "!".yellow(), why);
