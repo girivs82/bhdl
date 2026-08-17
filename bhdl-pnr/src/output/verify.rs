@@ -349,7 +349,10 @@ pub fn verify(board: &Board, routes: &[Route]) -> VerifyReport {
 }
 
 /// Print the verification report.
-pub fn print_report(report: &VerifyReport) {
+/// Print the sign-off report and return its verdict. The verdict is
+/// what a caller GATES on: a board that fails its own geometry
+/// sign-off must not exit 0 as if it were fab-ready.
+pub fn print_report(report: &VerifyReport) -> bool {
     let s = &report.summary;
     println!("=== PnR Verification Report ===");
     println!();
@@ -413,6 +416,7 @@ pub fn print_report(report: &VerifyReport) {
         && report.overlaps.is_empty()
         && s.routability_pct >= 50.0;
     println!("\n  Result: {}", if pass { "PASS" } else { "FAIL" });
+    pass
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────

@@ -255,7 +255,12 @@ enum Commands {
         format: String,
     },
 
-    /// Run PCB place & route and export KiCad PCB
+    /// Run PCB place & route and export KiCad PCB.
+    ///
+    /// Exit status is the sign-off verdict: 0 only when the shipped
+    /// board has zero DRC violations and passes geometry verification.
+    /// Artifacts are always written; set BHDL_SIGNOFF_ADVISORY=1 to
+    /// demote a failed sign-off to a warning (exit 0).
     Layout {
         /// Output .kicad_pcb file
         #[arg(short, long)]
@@ -2172,7 +2177,7 @@ async fn run_layout(
     // 10. Export KiCad PCB
     // Verification report
     let report = bhdl_pnr::output::verify::verify(&result.board, &result.routes);
-    bhdl_pnr::output::verify::print_report(&report);
+    let verify_pass = bhdl_pnr::output::verify::print_report(&report);
 
     let pcb = bhdl_pnr::output::kicad::export_kicad_pcb(&result.board, &result.routes);
     // Sibling .kicad_pro: KiCad stores netclass rules in the PROJECT
@@ -2281,6 +2286,28 @@ async fn run_layout(
         let html_path = output_path.with_extension("html");
         std::fs::write(&html_path, &html_content)?;
         println!("  {} HTML board: {} ({} bytes)", "✓".green(), html_path.display(), html_content.len());
+    }
+
+    // SIGN-OFF GATE. Every artifact above is written regardless — a
+    // failing board on disk is diagnosable, an absent one is not — but
+    // the exit status tells the truth: a board that ships DRC
+    // violations or fails its own geometry sign-off is not fab-ready,
+    // and a script (CI, the corpus sweep, a fab hand-off) must not be
+    // able to mistake it for one. BHDL_SIGNOFF_ADVISORY=1 demotes the
+    // gate to a warning for exploration runs.
+    let signoff_ok = verify_pass && result.drc_violations.is_empty();
+    if !signoff_ok {
+        let why = format!(
+            "sign-off FAILED: verify={}, shipped DRC violations={}",
+            if verify_pass { "PASS" } else { "FAIL" },
+            result.drc_violations.len()
+        );
+        if std::env::var("BHDL_SIGNOFF_ADVISORY").map(|v| v == "1").unwrap_or(false) {
+            println!("\n  {} {} (advisory)", "!".yellow(), why);
+        } else {
+            println!("\n  {} {}", "✗".red(), why);
+            std::process::exit(1);
+        }
     }
 
     Ok(())
