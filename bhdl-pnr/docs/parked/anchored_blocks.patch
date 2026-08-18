@@ -1,0 +1,131 @@
+diff --git a/bhdl-pnr/src/placement/blocks.rs b/bhdl-pnr/src/placement/blocks.rs
+index d377474..92ace4e 100644
+--- a/bhdl-pnr/src/placement/blocks.rs
++++ b/bhdl-pnr/src/placement/blocks.rs
+@@ -38,6 +38,14 @@ pub struct PlacementBlock {
+     pub x: f64,
+     pub y: f64,
+     pub internal_positions: Vec<(f64, f64, f64)>,
++    /// A group with position-FIXED members (a channel whose pots are
++    /// pinned to the front panel) is anchored where those members
++    /// are: the block seeds at their centroid instead of a shelf slot,
++    /// so its free parts start next to the geometry they serve. Shelf
++    /// packing put the mixer's 25-member channel block (221mm wide,
++    /// four 20mm pots stacked in one row) wherever it fell and the
++    /// channel's op-amp seeded 30mm from its own column.
++    pub anchored_at: Option<(f64, f64)>,
+ }
+ 
+ /// Form blocks from the board's functional groups and standalone components.
+@@ -77,6 +85,23 @@ pub fn form_blocks(
+             assigned.insert(idx);
+         }
+ 
++        let fixed_pts: Vec<(f64, f64)> = member_indices
++            .iter()
++            .filter_map(|&i| match board.components[i].placement {
++                crate::types::PlacementConstraint::Fixed { x, y, .. }
++                | crate::types::PlacementConstraint::FixedPosition { x, y } => Some((x, y)),
++                _ => None,
++            })
++            .collect();
++        let anchored_at = if fixed_pts.is_empty() {
++            None
++        } else {
++            let k = fixed_pts.len() as f64;
++            Some((
++                fixed_pts.iter().map(|p| p.0).sum::<f64>() / k,
++                fixed_pts.iter().map(|p| p.1).sum::<f64>() / k,
++            ))
++        };
+         let mut block = PlacementBlock {
+             name: group.name.clone(),
+             members: member_indices,
+@@ -86,6 +111,7 @@ pub fn form_blocks(
+             x: 0.0,
+             y: 0.0,
+             internal_positions: Vec::new(),
++            anchored_at,
+         };
+ 
+         // Try datasheet placement recipe first, fall back to netlist-driven
+@@ -112,6 +138,7 @@ pub fn form_blocks(
+             x: 0.0,
+             y: 0.0,
+             internal_positions: vec![(0.0, 0.0, 0.0)],
++            anchored_at: None,
+         });
+     }
+ 
+@@ -296,9 +323,50 @@ fn place_side_children(
+     // Distribute children evenly along the side
+     let start = -(total_children as f64 - 1.0) * spacing * 1.5;
+ 
++    // LANE WRAP: a side whose single stack would run far past the IC
++    // becomes a strip the packer cannot fit (mixer channel: 25
++    // children, one row, 221mm on a 110mm board). Wrap into lanes
++    // once the stack exceeds max(2×IC span, 30mm); each new lane
++    // steps outward by the previous lane's depth. Small decoupling
++    // blocks never reach the threshold — byte-identical.
++    let wrap_len = (2.0 * span).max(30.0);
++    let stack_len: f64 = children
++        .iter()
++        .map(|cp| {
++            let c = &board.components[members[cp.local_idx]];
++            c.height_mm.max(c.width_mm) + spacing
++        })
++        .sum();
++    let lanes = if stack_len > wrap_len {
++        (stack_len / wrap_len).ceil().max(1.0) as usize
++    } else {
++        1
++    };
++    let per_lane = (total_children + lanes - 1) / lanes;
++    let mut lane_depth: Vec<f64> = vec![0.0; lanes];
++    for (i, cp) in children.iter().enumerate() {
++        let c = &board.components[members[cp.local_idx]];
++        let depth = if horizontal { c.width_mm } else { c.height_mm };
++        let l = i / per_lane;
++        lane_depth[l] = lane_depth[l].max(depth + spacing);
++    }
++    let mut lane_offset: Vec<f64> = vec![0.0; lanes];
++    for l in 1..lanes {
++        lane_offset[l] = lane_offset[l - 1] + lane_depth[l - 1];
++    }
++    let mut lane_cursor: Vec<f64> = vec![0.0; lanes];
++
+     for (i, cp) in children.iter().enumerate() {
+         let comp = &board.components[members[cp.local_idx]];
+-        let stack_pos = start + i as f64 * (comp.height_mm.max(comp.width_mm) + spacing);
++        let lane = if lanes > 1 { i / per_lane } else { 0 };
++        let stack_pos = if lanes > 1 {
++            let p = -wrap_len / 2.0 + lane_cursor[lane] + comp.height_mm.max(comp.width_mm) / 2.0;
++            lane_cursor[lane] += comp.height_mm.max(comp.width_mm) + spacing;
++            p
++        } else {
++            start + i as f64 * (comp.height_mm.max(comp.width_mm) + spacing)
++        };
++        let offset = if offset < 0.0 { offset - lane_offset[lane] } else { offset + lane_offset[lane] };
+ 
+         let (x, y, theta) = if horizontal {
+             // Left/Right side: offset along X, stack along Y
+@@ -369,6 +437,19 @@ pub fn place_blocks(blocks: &mut [PlacementBlock], board_w: f64, board_h: f64, e
+     let mut shelf_height = 0.0_f64;
+ 
+     for &idx in &order {
++        if let Some((ax, ay)) = blocks[idx].anchored_at {
++            // Seed at the fixed members' centroid, clamped inside the
++            // board; the shelf never sees this block.
++            let bw = blocks[idx].width;
++            let bh = blocks[idx].height;
++            blocks[idx].x = ax.clamp((bw / 2.0 + ec).min(board_w / 2.0), (board_w - bw / 2.0 - ec).max(board_w / 2.0));
++            blocks[idx].y = ay.clamp((bh / 2.0 + ec).min(board_h / 2.0), (board_h - bh / 2.0 - ec).max(board_h / 2.0));
++            log::info!(
++                "  Block '{}': anchored at fixed-member centroid ({:.1},{:.1})",
++                blocks[idx].name, blocks[idx].x, blocks[idx].y
++            );
++            continue;
++        }
+         let bw = blocks[idx].width;
+         let bh = blocks[idx].height;
+ 

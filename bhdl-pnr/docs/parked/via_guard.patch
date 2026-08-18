@@ -1,0 +1,43 @@
+diff --git a/bhdl-pnr/src/routing/pathfinder.rs b/bhdl-pnr/src/routing/pathfinder.rs
+index c88a979..8f1f962 100644
+--- a/bhdl-pnr/src/routing/pathfinder.rs
++++ b/bhdl-pnr/src/routing/pathfinder.rs
+@@ -1226,6 +1226,38 @@ fn dijkstra_to_any_inner(
+                 {
+                     continue;
+                 }
++                // Same rule against the PATH BEING SEARCHED: the keepout
++                // above holds vias this net already committed, but a
++                // Dijkstra path can change layer, run one cell, and
++                // change back — two drills 0.30mm apart (measured:
++                // ch1_a_in on the mixer with anchored channel blocks,
++                // shipped as hole_to_hole; the oracle's rule is
++                // drill+0.25). Walk the settled predecessor chain back
++                // within hole_gap and refuse a via if that stretch
++                // already contains one.
++                {
++                    let mut cur = cell;
++                    let mut ok = true;
++                    loop {
++                        let pi = s.prev[ci(cur)];
++                        if pi == u32::MAX {
++                            break;
++                        }
++                        let p = decode(pi);
++                        if p.layer != cur.layer {
++                            ok = false;
++                            break;
++                        }
++                        let (px, py) = grid.cell_center(p);
++                        if (px - vx).hypot(py - vy) >= hole_gap {
++                            break;
++                        }
++                        cur = p;
++                    }
++                    if !ok {
++                        continue;
++                    }
++                }
+                 // Fill-boundary punchability (mirrors via_conflict).
+                 let punch = stack.via.pad_mm / 2.0 + 0.35;
+                 if no_via_zones.iter().any(|(zn, rects)| {
