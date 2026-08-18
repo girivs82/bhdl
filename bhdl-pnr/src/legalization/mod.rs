@@ -849,6 +849,65 @@ pub fn check_drc(board: &Board, routes: &[Route]) -> Vec<DrcViolation> {
         }
     }
 
+    // HOLE-TO-HOLE: the oracle's hole_to_hole, on the copper we ship.
+    // Every via against every other via and every THT barrel — the
+    // late repair rungs each drill-check their OWN additions but not
+    // each other's, and a pair of same-net vias 0.30mm apart shipped
+    // with "DRC violations: 0" (measured: ch1_a_in on the mixer with
+    // anchored channel blocks). Priced here so the trial currency
+    // sees it and dominance refuses it. Same rule every rung uses:
+    // centre distance >= (d1 + d2)/2 + 0.25.
+    {
+        let mut holes: Vec<(f64, f64, f64, String)> = Vec::new();
+        let vd = board.layer_stack.via.drill_mm;
+        for (ni, r) in routes.iter().enumerate() {
+            let nname = board.nets.get(ni).map(|n| n.name.as_str()).unwrap_or("?");
+            for v in &r.vias {
+                holes.push((v.x, v.y, vd, format!("via '{nname}'")));
+            }
+        }
+        let n_vias = holes.len();
+        for comp in &board.components {
+            let (co, sn) = (comp.theta.cos(), comp.theta.sin());
+            for p in &comp.pins {
+                if p.unplaced { continue; }
+                let Some(pd) = p.pad.as_ref() else { continue };
+                let Some(d) = pd.drill_mm else { continue };
+                // Slots: conservative on the MAJOR axis is wrong here
+                // (false hole_to_hole against a via beside the narrow
+                // face — preflight learned that); use the minor axis
+                // and let preflight's capsule test carry slots.
+                let dd = pd.drill_slot_mm.map(|(w, h)| w.min(h)).unwrap_or(d);
+                holes.push((
+                    comp.x + p.dx * co - p.dy * sn,
+                    comp.y + p.dx * sn + p.dy * co,
+                    dd,
+                    format!("{} pad {}", comp.refdes, p.name),
+                ));
+            }
+        }
+        // Vias against everything; pad-pad pairs are footprint
+        // geometry the placer already legalises.
+        for i in 0..n_vias {
+            for j in (i + 1)..holes.len() {
+                let (ax, ay, ad, _) = &holes[i];
+                let (bx, by, bd, _) = &holes[j];
+                let need = (ad + bd) / 2.0 + 0.25;
+                let c = (ax - bx).hypot(ay - by);
+                if c + 1e-6 < need {
+                    violations.push(DrcViolation {
+                        kind: DrcViolationKind::Clearance,
+                        location: ((ax + bx) / 2.0, (ay + by) / 2.0),
+                        description: format!(
+                            "hole-to-hole {} vs {}: {:.3}mm < {:.3}mm",
+                            holes[i].3, holes[j].3, c - (ad + bd) / 2.0, 0.25
+                        ),
+                    });
+                }
+            }
+        }
+    }
+
     // Check for unrouted nets (skip plane-connected power/ground)
     for (i, net) in board.nets.iter().enumerate() {
         if net.pins.len() >= 2 && !net.is_plane_connected(&board.layer_stack) {
