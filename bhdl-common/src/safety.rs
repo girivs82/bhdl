@@ -1,243 +1,425 @@
-//! Safety annotation types for ISO 26262 / IEC 61508 compliance.
+//! Functional-safety semantic model (docs/spec/Functional_Safety.md §3).
 //!
-//! Provides data structures for safety goals, safety mechanisms,
-//! fault injection tests, and component derating annotations.
+//! Built by the synthesizer from the `safety <Name> [of E] as ns { }`
+//! blocks and library `safety_goal` definitions, resolved against the
+//! synthesized netlist. Phase 1 carries goals, effects, mechanisms,
+//! faults (declared, not run), waivers, assumptions, the per-instance
+//! part table and the gap list — and NO metrics: nothing here is a
+//! number that was not measured or sourced.
+//!
+//! ISO 26262 (ASIL) and IEC 61508 (SIL) share this model; only metric
+//! definitions and targets (Phase 3/4) differ.
 
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
-/// ASIL (Automotive Safety Integrity Level) per ISO 26262.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum AsilLevel {
-    /// Quality Management (no safety requirement)
+/// Safety integrity level. One enum for both standards so the model
+/// stays shared; `standard()` tells them apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum Level {
     QM,
-    /// ASIL A (lowest safety level)
-    A,
-    /// ASIL B
-    B,
-    /// ASIL C
-    C,
-    /// ASIL D (highest safety level)
-    D,
+    AsilA,
+    AsilB,
+    AsilC,
+    AsilD,
+    Sil1,
+    Sil2,
+    Sil3,
+    Sil4,
 }
 
-impl AsilLevel {
-    /// Parse from a string (case-insensitive).
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s.to_uppercase().as_str() {
-            "QM" => Some(AsilLevel::QM),
-            "A" | "ASIL_A" => Some(AsilLevel::A),
-            "B" | "ASIL_B" => Some(AsilLevel::B),
-            "C" | "ASIL_C" => Some(AsilLevel::C),
-            "D" | "ASIL_D" => Some(AsilLevel::D),
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Standard {
+    Iso26262,
+    Iec61508,
+}
+
+impl Level {
+    /// Parse the level token as written in source (`ASIL_B`, `QM`, `SIL3`, …).
+    pub fn parse(s: &str) -> Option<Level> {
+        match s.to_ascii_uppercase().as_str() {
+            "QM" => Some(Level::QM),
+            "ASIL_A" | "A" => Some(Level::AsilA),
+            "ASIL_B" | "B" => Some(Level::AsilB),
+            "ASIL_C" | "C" => Some(Level::AsilC),
+            "ASIL_D" | "D" => Some(Level::AsilD),
+            "SIL1" | "SIL_1" => Some(Level::Sil1),
+            "SIL2" | "SIL_2" => Some(Level::Sil2),
+            "SIL3" | "SIL_3" => Some(Level::Sil3),
+            "SIL4" | "SIL_4" => Some(Level::Sil4),
             _ => None,
         }
     }
 
-    /// ASIL ordering: QM < A < B < C < D
-    pub fn level(&self) -> u8 {
+    pub fn standard(self) -> Standard {
         match self {
-            AsilLevel::QM => 0,
-            AsilLevel::A => 1,
-            AsilLevel::B => 2,
-            AsilLevel::C => 3,
-            AsilLevel::D => 4,
+            Level::Sil1 | Level::Sil2 | Level::Sil3 | Level::Sil4 => Standard::Iec61508,
+            _ => Standard::Iso26262,
+        }
+    }
+
+    /// ISO 26262-5 requires latent-fault coverage (an LSM) from ASIL C
+    /// up; IEC 61508 analogously from SIL 3. Phase-1 gap `PSM_WITHOUT_LSM`.
+    pub fn requires_lsm(self) -> bool {
+        matches!(self, Level::AsilC | Level::AsilD | Level::Sil3 | Level::Sil4)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Level::QM => "QM",
+            Level::AsilA => "ASIL_A",
+            Level::AsilB => "ASIL_B",
+            Level::AsilC => "ASIL_C",
+            Level::AsilD => "ASIL_D",
+            Level::Sil1 => "SIL1",
+            Level::Sil2 => "SIL2",
+            Level::Sil3 => "SIL3",
+            Level::Sil4 => "SIL4",
         }
     }
 }
 
-/// SIL (Safety Integrity Level) per IEC 61508.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum SilLevel {
-    SIL1,
-    SIL2,
-    SIL3,
-    SIL4,
+/// Severity class of a failure effect (ISO 26262-3 S0..S3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum Severity {
+    S0,
+    S1,
+    S2,
+    S3,
 }
 
-impl SilLevel {
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s.to_uppercase().as_str() {
-            "SIL1" | "1" => Some(SilLevel::SIL1),
-            "SIL2" | "2" => Some(SilLevel::SIL2),
-            "SIL3" | "3" => Some(SilLevel::SIL3),
-            "SIL4" | "4" => Some(SilLevel::SIL4),
+impl Severity {
+    pub fn parse(s: &str) -> Option<Severity> {
+        match s.to_ascii_uppercase().as_str() {
+            "S0" => Some(Severity::S0),
+            "S1" => Some(Severity::S1),
+            "S2" => Some(Severity::S2),
+            "S3" => Some(Severity::S3),
             _ => None,
         }
     }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Severity::S0 => "S0",
+            Severity::S1 => "S1",
+            Severity::S2 => "S2",
+            Severity::S3 => "S3",
+        }
+    }
 }
 
-/// A safety goal declaration.
-///
-/// ```bhdl
-/// safety_goal SG_OVP {
-///     id: "SG-001";
-///     title: "Prevent output overvoltage";
-///     asil: B;
-///     ftti: 10ms;
-/// }
-/// ```
-#[derive(Debug, Clone)]
-pub struct SafetyGoal {
-    /// Internal name (e.g., "SG_OVP")
+/// A failure effect: a predicate over the design's nets/pins, with the
+/// source text of the expression (the Phase-3 campaign evaluates it on
+/// the simulated operating point) and the handles it references.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Effect {
     pub name: String,
-    /// Formal ID (e.g., "SG-001")
+    pub expr: String,
+    pub severity: Severity,
+    /// Resolved design references in the expression (`rail_a_mon.nOUT`,
+    /// net `V5_A`, …) — what the campaign must monitor.
+    pub refs: Vec<String>,
+}
+
+/// A safety goal as instantiated on one design element (entity instance
+/// or board). Library goals are expanded here with their formals bound.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Goal {
+    /// Local goal name (`SG_OV`).
+    pub name: String,
+    /// Fully qualified: `<scope>.<name>` (`rail_a.SG_OV`, `SG_SUPPLY`).
+    pub path: String,
+    /// Library goal type, if instantiated from one.
+    pub library_type: Option<String>,
+    pub level: Level,
+    pub title: String,
     pub id: Option<String>,
-    /// Human-readable title
-    pub title: Option<String>,
-    /// Required ASIL level
-    pub asil: Option<AsilLevel>,
-    /// Fault Tolerant Time Interval in seconds
-    pub ftti_s: Option<f64>,
-    /// Optional description
-    pub description: Option<String>,
-    /// Additional properties
-    pub properties: HashMap<String, String>,
+    pub ftti: Option<String>,
+    pub safe_state: Option<String>,
+    pub effects: Vec<Effect>,
+    /// `refines <parent goal path>`.
+    pub refines: Option<String>,
 }
 
-/// A safety mechanism annotation.
-///
-/// ```bhdl
-/// #[safety_mechanism(type: ovp_monitor, dc: 99%, implements: SG_OVP)]
-/// ```
-#[derive(Debug, Clone)]
-pub struct SafetyMechanism {
-    /// Mechanism type (e.g., "ovp_monitor", "watchdog", "voting")
-    pub mechanism_type: String,
-    /// Diagnostic Coverage (0.0 - 1.0)
-    pub diagnostic_coverage: Option<f64>,
-    /// Latent Coverage (0.0 - 1.0)
-    pub latent_coverage: Option<f64>,
-    /// Detection mode
-    pub detection_mode: DetectionMode,
-    /// Response time in microseconds
-    pub response_time_us: Option<f64>,
-    /// Safety goal IDs this mechanism implements
-    pub implements: Vec<String>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum MechanismKind {
+    Psm,
+    Lsm,
 }
 
-/// How a safety mechanism detects faults.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DetectionMode {
-    /// Continuous monitoring
-    Continuous,
-    /// Checked at boot
-    Boot,
-    /// Periodic check
-    Periodic,
-    /// Checked on demand
-    OnDemand,
+/// A design element declared as a safety mechanism for a goal.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Mechanism {
+    /// Resolved netlist instance (`rail_a_mon`).
+    pub instance: String,
+    /// As written (`dut.mon`), for the report.
+    pub handle: String,
+    pub kind: MechanismKind,
+    /// Goal path this mechanism serves.
+    pub goal: String,
+    pub detects: Vec<String>,
+    /// LSM: the PSM instance it protects.
+    pub protects: Option<String>,
+    pub claimed_dc: Option<f64>,
+    pub dc_source: Option<String>,
+    pub interval: Option<String>,
+    pub latency: Option<String>,
 }
 
-impl DetectionMode {
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "continuous" => Some(DetectionMode::Continuous),
-            "boot" => Some(DetectionMode::Boot),
-            "periodic" => Some(DetectionMode::Periodic),
-            "on_demand" | "ondemand" => Some(DetectionMode::OnDemand),
-            _ => None,
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Fault {
+    /// `short` | `open` | `drift` | `state`
+    pub kind: String,
+    /// Resolved targets.
+    pub targets: Vec<String>,
+    /// `<goal path>.<effect>`
+    pub expect: String,
+    pub detected_by: Option<String>,
+    pub within: Option<String>,
+    /// Phase 3 fills this in; Phase 1 = false (`FAULT_UNRUN`).
+    pub run: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Waiver {
+    pub instance: String,
+    pub handle: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum AssumptionStatus {
+    Open,
+    SatisfiedBy(String),
+    Waived(String),
+}
+
+/// An assumption of use declared by a scope, discharged (or not) by a
+/// parent scope.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Assumption {
+    pub id: String,
+    /// Fully qualified `<scope>.<id>`.
+    pub path: String,
+    pub text: String,
+    pub status: AssumptionStatus,
+}
+
+/// What kind of safety data a physical part carries (Phase 2 fills the
+/// variants; Phase 1 can only see `None` and waivers).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum PartData {
+    /// Behavioral model with declared failure states.
+    Behavioral { failure_states: usize, source: String },
+    /// Black box with SEooC data.
+    Seooc { lambda_fit: Option<f64>, source: String },
+    /// Handbook class data (passives).
+    Handbook { class: String, source: String },
+    /// Waived out of the argument with a reason.
+    Waived { reason: String },
+    /// Nothing — gap `PART_NO_SAFETY_DATA`.
+    None,
+}
+
+/// One physical instance in the analysed scope.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Part {
+    /// Netlist instance name (`rail_a_mon`).
+    pub instance: String,
+    /// Entity/component type (`VoltageSupervisor`).
+    pub type_name: String,
+    /// The safety part (entity instance) it belongs to (`rail_a`), or
+    /// `None` for top-level parts.
+    pub parent: Option<String>,
+    pub data: PartData,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum GapClass {
+    EffectUndetected,
+    PsmWithoutLsm,
+    DcUnsourced,
+    AssumptionOpen,
+    PartNoSafetyData,
+    FaultUnrun,
+}
+
+impl GapClass {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            GapClass::EffectUndetected => "EFFECT_UNDETECTED",
+            GapClass::PsmWithoutLsm => "PSM_WITHOUT_LSM",
+            GapClass::DcUnsourced => "DC_UNSOURCED",
+            GapClass::AssumptionOpen => "ASSUMPTION_OPEN",
+            GapClass::PartNoSafetyData => "PART_NO_SAFETY_DATA",
+            GapClass::FaultUnrun => "FAULT_UNRUN",
         }
     }
 }
 
-/// A fault injection test definition.
-///
-/// ```bhdl
-/// fault_inject short(reg.VOUT, VIN) -> verify {
-///     assert comparator.OUT == low within 100us;
-/// }
-/// ```
-#[derive(Debug, Clone)]
-pub struct FaultInjection {
-    /// Type of fault to inject
-    pub fault_type: FaultType,
-    /// Assertions to verify after fault injection
-    pub assertions: Vec<SafetyAssertion>,
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Gap {
+    pub class: GapClass,
+    /// Goal path the gap counts against (or the scope, for part gaps).
+    pub goal: String,
+    /// Where: effect name / instance / assumption id.
+    pub subject: String,
+    /// One-line fix.
+    pub fix: String,
 }
 
-/// Types of faults that can be injected.
-#[derive(Debug, Clone)]
-pub enum FaultType {
-    /// Short circuit between two nodes
-    Short(String, String),
-    /// Open circuit (break a connection)
-    Open(String),
-    /// Value drift by a percentage or absolute amount
-    Drift(String, f64),
-    /// Stuck at a specific value
-    StuckAt(String, String),
+/// One analysed scope: an entity instance or a board that has a
+/// `safety` block (directly or inherited from its entity).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Scope {
+    /// Instance path (`rail_a`) or the board name for the root.
+    pub path: String,
+    /// The entity whose `safety` block applies.
+    pub entity: String,
+    /// Namespace name used in the block (`dut`, `brd`), for the report.
+    pub ns: String,
+    pub goals: Vec<Goal>,
+    pub mechanisms: Vec<Mechanism>,
+    pub faults: Vec<Fault>,
+    pub waivers: Vec<Waiver>,
+    pub assumptions: Vec<Assumption>,
 }
 
-/// An assertion in a fault injection test.
-#[derive(Debug, Clone)]
-pub struct SafetyAssertion {
-    /// The expression being asserted
-    pub expression: String,
-    /// Optional timing constraint (within X time)
-    pub within_us: Option<f64>,
+/// The whole model for one top-level board.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SafetyModel {
+    pub board: String,
+    pub scopes: Vec<Scope>,
+    pub parts: Vec<Part>,
+    pub gaps: Vec<Gap>,
+    /// Hard errors found while resolving (unknown handle, unbound formal…).
+    pub errors: Vec<String>,
 }
 
-/// Component derating annotations.
-///
-/// ```bhdl
-/// #[safety(derating: voltage=80%, current=70%, temperature=85C_max)]
-/// ```
-#[derive(Debug, Clone)]
-pub struct DeratingAnnotation {
-    /// Voltage derating factor (0.0 - 1.0)
-    pub voltage: Option<f64>,
-    /// Current derating factor (0.0 - 1.0)
-    pub current: Option<f64>,
-    /// Maximum temperature in Celsius
-    pub max_temperature_c: Option<f64>,
-    /// Power derating factor
-    pub power: Option<f64>,
-}
+impl SafetyModel {
+    pub fn verdict_pass(&self) -> bool {
+        self.errors.is_empty() && self.gaps.is_empty()
+    }
 
-/// Redundancy annotation for safety-critical components.
-///
-/// ```bhdl
-/// #[safety(redundant, voting: 2_of_3)]
-/// ```
-#[derive(Debug, Clone)]
-pub struct RedundancyAnnotation {
-    /// Voting scheme (e.g., "2_of_3", "1_of_2")
-    pub voting: Option<VotingScheme>,
-    /// Whether this is hot standby or cold standby
-    pub standby_mode: Option<StandbyMode>,
-}
-
-/// Voting scheme for redundant components.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VotingScheme {
-    /// 1-out-of-2 (any one must agree)
-    OneOfTwo,
-    /// 2-out-of-3 (majority voting)
-    TwoOfThree,
-    /// 2-out-of-4
-    TwoOfFour,
-    /// Custom M-of-N
-    MOfN(u32, u32),
-}
-
-impl VotingScheme {
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "1_of_2" | "1of2" => Some(VotingScheme::OneOfTwo),
-            "2_of_3" | "2of3" => Some(VotingScheme::TwoOfThree),
-            "2_of_4" | "2of4" => Some(VotingScheme::TwoOfFour),
-            _ => None,
+    /// Stable, sorted view for the baseline/delta (§5): everything a
+    /// later build can be diffed against, keyed by path.
+    pub fn baseline(&self) -> Baseline {
+        let mut b = Baseline::default();
+        for p in &self.parts {
+            b.parts.insert(p.instance.clone(), format!("{} {:?}", p.type_name, p.data));
         }
+        for s in &self.scopes {
+            for g in &s.goals {
+                b.goals.insert(g.path.clone(), format!("{} {}", g.level.as_str(), g.title));
+                for e in &g.effects {
+                    b.effects.insert(format!("{}.{}", g.path, e.name), e.expr.clone());
+                }
+            }
+            for m in &s.mechanisms {
+                b.mechanisms.insert(
+                    format!("{}:{}", m.goal, m.instance),
+                    format!("{:?} detects={:?} dc={:?}", m.kind, m.detects, m.claimed_dc),
+                );
+            }
+            for a in &s.assumptions {
+                b.assumptions.insert(a.path.clone(), format!("{:?}", a.status));
+            }
+            for f in &s.faults {
+                b.faults.insert(
+                    format!("{}:{}({})", s.path, f.kind, f.targets.join(",")),
+                    format!("expect {} run={}", f.expect, f.run),
+                );
+            }
+        }
+        for g in &self.gaps {
+            b.gaps.insert(format!("{}:{}:{}", g.class.as_str(), g.goal, g.subject), g.fix.clone());
+        }
+        b.verdict_pass = self.verdict_pass();
+        b
     }
 }
 
-/// Standby mode for redundant components.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StandbyMode {
-    /// Both active simultaneously
-    Hot,
-    /// Backup activated on failure
-    Cold,
+/// Diffable snapshot (docs/spec/Functional_Safety.md §5). BTreeMaps so
+/// serialisation is deterministic.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Baseline {
+    pub parts: BTreeMap<String, String>,
+    pub goals: BTreeMap<String, String>,
+    pub effects: BTreeMap<String, String>,
+    pub mechanisms: BTreeMap<String, String>,
+    pub assumptions: BTreeMap<String, String>,
+    pub faults: BTreeMap<String, String>,
+    pub gaps: BTreeMap<String, String>,
+    pub verdict_pass: bool,
+}
+
+/// One section of a baseline delta.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DeltaSection {
+    pub added: Vec<(String, String)>,
+    pub removed: Vec<(String, String)>,
+    pub changed: Vec<(String, String, String)>,
+}
+
+impl DeltaSection {
+    fn of(old: &BTreeMap<String, String>, new: &BTreeMap<String, String>) -> DeltaSection {
+        let mut d = DeltaSection::default();
+        for (k, v) in new {
+            match old.get(k) {
+                None => d.added.push((k.clone(), v.clone())),
+                Some(ov) if ov != v => d.changed.push((k.clone(), ov.clone(), v.clone())),
+                _ => {}
+            }
+        }
+        for (k, v) in old {
+            if !new.contains_key(k) {
+                d.removed.push((k.clone(), v.clone()));
+            }
+        }
+        d
+    }
+    pub fn is_empty(&self) -> bool {
+        self.added.is_empty() && self.removed.is_empty() && self.changed.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Delta {
+    pub parts: DeltaSection,
+    pub goals: DeltaSection,
+    pub effects: DeltaSection,
+    pub mechanisms: DeltaSection,
+    pub assumptions: DeltaSection,
+    pub faults: DeltaSection,
+    pub gaps: DeltaSection,
+    pub verdict_before: bool,
+    pub verdict_after: bool,
+}
+
+impl Delta {
+    pub fn between(old: &Baseline, new: &Baseline) -> Delta {
+        Delta {
+            parts: DeltaSection::of(&old.parts, &new.parts),
+            goals: DeltaSection::of(&old.goals, &new.goals),
+            effects: DeltaSection::of(&old.effects, &new.effects),
+            mechanisms: DeltaSection::of(&old.mechanisms, &new.mechanisms),
+            assumptions: DeltaSection::of(&old.assumptions, &new.assumptions),
+            faults: DeltaSection::of(&old.faults, &new.faults),
+            gaps: DeltaSection::of(&old.gaps, &new.gaps),
+            verdict_before: old.verdict_pass,
+            verdict_after: new.verdict_pass,
+        }
+    }
+    pub fn is_empty(&self) -> bool {
+        self.parts.is_empty()
+            && self.goals.is_empty()
+            && self.effects.is_empty()
+            && self.mechanisms.is_empty()
+            && self.assumptions.is_empty()
+            && self.faults.is_empty()
+            && self.gaps.is_empty()
+            && self.verdict_before == self.verdict_after
+    }
 }
 
 #[cfg(test)]
@@ -245,91 +427,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_asil_level_parsing() {
-        assert_eq!(AsilLevel::from_str("QM"), Some(AsilLevel::QM));
-        assert_eq!(AsilLevel::from_str("A"), Some(AsilLevel::A));
-        assert_eq!(AsilLevel::from_str("B"), Some(AsilLevel::B));
-        assert_eq!(AsilLevel::from_str("C"), Some(AsilLevel::C));
-        assert_eq!(AsilLevel::from_str("D"), Some(AsilLevel::D));
-        assert_eq!(AsilLevel::from_str("ASIL_B"), Some(AsilLevel::B));
-        assert_eq!(AsilLevel::from_str("X"), None);
+    fn levels_parse_and_classify() {
+        assert_eq!(Level::parse("ASIL_B"), Some(Level::AsilB));
+        assert_eq!(Level::parse("sil3"), Some(Level::Sil3));
+        assert_eq!(Level::parse("QM"), Some(Level::QM));
+        assert_eq!(Level::parse("ASIL_E"), None);
+        assert_eq!(Level::AsilB.standard(), Standard::Iso26262);
+        assert_eq!(Level::Sil2.standard(), Standard::Iec61508);
+        assert!(!Level::AsilB.requires_lsm());
+        assert!(Level::AsilC.requires_lsm());
+        assert!(Level::Sil3.requires_lsm());
     }
 
     #[test]
-    fn test_asil_ordering() {
-        assert!(AsilLevel::QM.level() < AsilLevel::A.level());
-        assert!(AsilLevel::A.level() < AsilLevel::B.level());
-        assert!(AsilLevel::B.level() < AsilLevel::C.level());
-        assert!(AsilLevel::C.level() < AsilLevel::D.level());
-    }
-
-    #[test]
-    fn test_sil_level_parsing() {
-        assert_eq!(SilLevel::from_str("SIL1"), Some(SilLevel::SIL1));
-        assert_eq!(SilLevel::from_str("SIL4"), Some(SilLevel::SIL4));
-        assert_eq!(SilLevel::from_str("1"), Some(SilLevel::SIL1));
-        assert_eq!(SilLevel::from_str("invalid"), None);
-    }
-
-    #[test]
-    fn test_detection_mode_parsing() {
-        assert_eq!(DetectionMode::from_str("continuous"), Some(DetectionMode::Continuous));
-        assert_eq!(DetectionMode::from_str("boot"), Some(DetectionMode::Boot));
-        assert_eq!(DetectionMode::from_str("periodic"), Some(DetectionMode::Periodic));
-        assert_eq!(DetectionMode::from_str("on_demand"), Some(DetectionMode::OnDemand));
-    }
-
-    #[test]
-    fn test_voting_scheme_parsing() {
-        assert_eq!(VotingScheme::from_str("2_of_3"), Some(VotingScheme::TwoOfThree));
-        assert_eq!(VotingScheme::from_str("1_of_2"), Some(VotingScheme::OneOfTwo));
-        assert_eq!(VotingScheme::from_str("2_of_4"), Some(VotingScheme::TwoOfFour));
-    }
-
-    #[test]
-    fn test_safety_goal_creation() {
-        let goal = SafetyGoal {
-            name: "SG_OVP".to_string(),
-            id: Some("SG-001".to_string()),
-            title: Some("Prevent output overvoltage".to_string()),
-            asil: Some(AsilLevel::B),
-            ftti_s: Some(0.01), // 10ms
-            description: None,
-            properties: HashMap::new(),
-        };
-        assert_eq!(goal.asil.unwrap().level(), 2);
-    }
-
-    #[test]
-    fn test_safety_mechanism_creation() {
-        let mechanism = SafetyMechanism {
-            mechanism_type: "ovp_monitor".to_string(),
-            diagnostic_coverage: Some(0.99),
-            latent_coverage: None,
-            detection_mode: DetectionMode::Continuous,
-            response_time_us: Some(100.0),
-            implements: vec!["SG-001".to_string()],
-        };
-        assert_eq!(mechanism.diagnostic_coverage.unwrap(), 0.99);
-    }
-
-    #[test]
-    fn test_fault_injection_creation() {
-        let injection = FaultInjection {
-            fault_type: FaultType::Short("VOUT".to_string(), "VIN".to_string()),
-            assertions: vec![
-                SafetyAssertion {
-                    expression: "comparator.OUT == low".to_string(),
-                    within_us: Some(100.0),
-                },
-            ],
-        };
-        match &injection.fault_type {
-            FaultType::Short(a, b) => {
-                assert_eq!(a, "VOUT");
-                assert_eq!(b, "VIN");
-            }
-            _ => panic!("Expected Short fault type"),
-        }
+    fn delta_reports_added_removed_changed() {
+        let mut a = Baseline::default();
+        a.parts.insert("r1".into(), "Res".into());
+        a.parts.insert("r2".into(), "Res".into());
+        let mut b = a.clone();
+        b.parts.remove("r2");
+        b.parts.insert("r3".into(), "Res".into());
+        b.parts.insert("r1".into(), "Res waived".into());
+        let d = Delta::between(&a, &b);
+        assert_eq!(d.parts.added.len(), 1);
+        assert_eq!(d.parts.removed.len(), 1);
+        assert_eq!(d.parts.changed.len(), 1);
+        assert!(!d.is_empty());
+        assert!(Delta::between(&a, &a).is_empty());
     }
 }

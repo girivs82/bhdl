@@ -2,8 +2,6 @@
 
 pub mod safety_analysis;
 pub mod requirement_hierarchy;
-pub mod fmea_analysis;
-pub mod redundancy_analysis;
 pub mod instance_registry;
 pub mod power_domain_expansion;
 pub mod monomorphization;
@@ -27,22 +25,6 @@ pub use requirement_hierarchy::{
     ASILLevel,
 };
 
-pub use fmea_analysis::{
-    FMEAAnalysis,
-    FailureMode,
-    FailureType,
-    FailureEffect,
-    SafetyMetrics,
-    FMEAEntry,
-    analyze_fmea,
-};
-
-pub use redundancy_analysis::{
-    RedundancyAnalyzer,
-    RedundancyConfig,
-    RedundancyType,
-    RedundancyReport,
-};
 
 pub use instance_registry::{
     InstanceRegistry,

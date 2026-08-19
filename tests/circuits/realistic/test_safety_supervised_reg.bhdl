@@ -5,7 +5,8 @@
 // Phase-1 model and gaps. No library goals yet (they come with the
 // stdlib safety catalogue) — goals here are inline.
 
-import { Res, Cap } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
 import { LM317 } from "bhdl-stdlib/power/lm317.bhdl";
 import { TVSDiode } from "bhdl-stdlib/protection/tvs.bhdl";
 
@@ -22,23 +23,33 @@ entity VoltageSupervisor(vlo: voltage = 4.5V, vhi: voltage = 5.5V) {
 // ───────────────────────── the design ────────────────────────────────
 
 entity SupervisedReg5V(vout: voltage = 5V) {
-    pin VIN:    power in;
-    pin VOUT:   power out;
-    pin GND:    ground;
-    pin nFAULT: signal out;
+    // Composition: virtual pins, the expansion children are the copper
+    // (same idiom as the mixer's ChannelStrip). This is what makes the
+    // entity a real hierarchy level — every instance elaborates its own
+    // reg/mon/r_fb_*, and a part added here belongs to every instance.
+    pin VIN:    power in   virtual;
+    pin VOUT:   power out  virtual;
+    pin GND:    ground     virtual;
+    pin nFAULT: signal out virtual;
+    attribute component_class = "ic";   // composite: expansion carries parts
 
-    @VIN    -> reg: LM317(5V).VIN;
-    reg.VOUT -> @VOUT;
-    @VOUT   -> r_fb_top: Res(240Ω).1; r_fb_top.2 -> reg.ADJ;
-    reg.ADJ -> r_fb_bot: Res(720Ω).1; r_fb_bot.2 -> @GND;
-    reg.GND -> @GND;
-    @VOUT   -> c_out: Cap(10µF).1; c_out.2 -> @GND;
+    expansion {
+        internal adj: net;
 
-    @VOUT   -> mon: VoltageSupervisor(4.5V, 5.5V).VDD;
-    @VOUT   -> mon.SENSE;
-    mon.nOUT -> @nFAULT;
-    mon.GND -> @GND;
-    @VOUT   -> r_pu: Res(10kΩ).1; r_pu.2 -> @nFAULT;
+        VIN  -> reg: LM317(5V).VIN;
+        reg.VOUT -> VOUT;
+        reg.ADJ -> adj;
+        VOUT -> r_fb_top: Res(240Ω).1; r_fb_top.2 -> adj;
+        adj  -> r_fb_bot: Res(720Ω).1; r_fb_bot.2 -> GND;
+        reg.GND -> GND;
+        VOUT -> c_out: Cap(10µF).1; c_out.2 -> GND;
+
+        VOUT -> mon: VoltageSupervisor(4.5V, 5.5V).VDD;
+        VOUT -> mon.SENSE;
+        mon.nOUT -> nFAULT;
+        mon.GND -> GND;
+        VOUT -> r_pu: Res(10kΩ).1; r_pu.2 -> nFAULT;
+    }
 }
 
 // ───────────────────────── the safety part ───────────────────────────
@@ -79,7 +90,7 @@ board DualRail {
 
     @VBAT -> rail_a: SupervisedReg5V().VIN;  rail_a.VOUT -> @V5_A;  rail_a.GND -> @GND;
     @VBAT -> rail_b: SupervisedReg5V().VIN;  rail_b.VOUT -> @V5_B;  rail_b.GND -> @GND;
-    @VBAT -> tvs: TVSDiode(24V).K; tvs.A -> @GND;
+    @VBAT -> tvs: TVSDiode(24V).A; tvs.K -> @GND;
     rail_a.nFAULT -> r_flag_a: Res(10kΩ).1; r_flag_a.2 -> @GND;   // stand-in loads for the flags
     rail_b.nFAULT -> r_flag_b: Res(10kΩ).1; r_flag_b.2 -> @GND;
 }

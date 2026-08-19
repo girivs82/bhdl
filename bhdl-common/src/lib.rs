@@ -48,9 +48,10 @@ pub use bhdl_type::BhdlType;
 pub use diagnostic::{DiagnosticKind, Severity, DiagnosticHint, SuggestedFix, RelatedInfo};
 pub use generics::{GenericParam, GenericParamType, Constraint, ConstraintExpr, ConstraintOp};
 pub use safety::{
-    AsilLevel, SilLevel, SafetyGoal, SafetyMechanism, DetectionMode,
-    FaultInjection, FaultType, SafetyAssertion, DeratingAnnotation,
-    RedundancyAnnotation, VotingScheme, StandbyMode,
+    Assumption, AssumptionStatus, Baseline, Delta, DeltaSection, Effect, Fault, Gap, GapClass,
+    Goal, Level, Mechanism, MechanismKind, Part, PartData, SafetyModel, Scope,
+    Severity as SafetySeverity,
+    Standard, Waiver,
 };
 pub use expansion::{
     ExpansionRecipe, ExpansionInstance, ExpansionConnection, ExpansionEndpoint,

@@ -130,6 +130,29 @@ enum Commands {
         output: Option<PathBuf>,
     },
     
+    /// Functional-safety model and gap report (docs/spec/Functional_Safety.md §4).
+    ///
+    /// Resolves every `safety <Name> [of E] as ns { }` block against the
+    /// synthesized board — goals, effects, mechanisms, faults, waivers,
+    /// assumptions, the per-instance parts table — and prints the Phase-1
+    /// gap list. No metrics are computed (nothing unmeasured is printed
+    /// as a number). The input may be the board file or a sidecar that
+    /// imports the board. Exit status 1 when the model has errors or gaps
+    /// (BHDL_SIGNOFF_ADVISORY=1 demotes to a warning).
+    Safety {
+        /// Baseline file (JSON). If absent it is WRITTEN from this run;
+        /// if present the run is COMPARED against it and the delta printed
+        /// (docs/spec/Functional_Safety.md §5). `--update-baseline` rewrites it.
+        #[arg(long)]
+        baseline: Option<PathBuf>,
+        /// With --baseline: overwrite the baseline with this run.
+        #[arg(long)]
+        update_baseline: bool,
+        /// Also dump the full model as JSON to this path.
+        #[arg(long)]
+        json: Option<PathBuf>,
+    },
+
     /// Generate interactive schematic visualization (HTML)
     Visualize {
         /// Output HTML file
@@ -531,6 +554,10 @@ async fn main() -> Result<()> {
 
         Some(Commands::Freeze { output }) => {
             run_freeze(&source_file, &cli.input, output, frozen_libraries).await?;
+        }
+
+        Some(Commands::Safety { baseline, update_baseline, json }) => {
+            run_safety(&source_file, &cli.input, baseline, update_baseline, json).await?;
         }
         
         Some(Commands::Visualize { output, json, svg_v4, binder }) => {
@@ -1395,6 +1422,244 @@ async fn run_freeze(
     println!("  Nets:       {}", frozen.nets.len());
     println!("  Libraries:  {}", frozen.provenance.libraries.len());
     println!("  Output:     {}", out.display());
+    Ok(())
+}
+
+/// `bhdl-cli safety` — build the functional-safety model and print the
+/// Phase-1 report (docs/spec/Functional_Safety.md §4, §5).
+async fn run_safety(
+    source_file: &SourceFile,
+    source_path: &Path,
+    baseline: Option<PathBuf>,
+    update_baseline: bool,
+    json_out: Option<PathBuf>,
+) -> Result<()> {
+    use bhdl_common::safety::{AssumptionStatus, Baseline, Delta, MechanismKind, PartData};
+    use bhdl_synthesizer::safety_model::build_safety_model;
+
+    // Which board? A `safety X as ns` block names an entity; if X is a
+    // board defined in THIS file we synthesize this file. Otherwise look
+    // for X as a board in the files this one imports (sidecar form) and
+    // synthesize that file, applying the safety blocks from this one.
+    let root = source_file.syntax().clone();
+    let safety_targets: Vec<String> = root
+        .descendants()
+        .filter(|n| n.kind() == bhdl_parser::SyntaxKind::SAFETY_DEF)
+        .filter_map(|n| {
+            let link = n.children().find(|c| c.kind() == bhdl_parser::SyntaxKind::SAFETY_LINK);
+            let name_of = |node: &bhdl_ast::SyntaxNode<bhdl_ast::BhdlLanguage>| {
+                node.children_with_tokens()
+                    .filter_map(|e| e.into_token())
+                    .find(|t| t.kind() == bhdl_parser::SyntaxKind::IDENT)
+                    .map(|t| t.text().to_string())
+            };
+            link.and_then(|l| name_of(&l)).or_else(|| name_of(&n))
+        })
+        .collect();
+    if safety_targets.is_empty() {
+        println!("{}", "no `safety <Name> as <ns> { }` blocks in this file — nothing to analyse".yellow());
+        return Ok(());
+    }
+    let boards_here: Vec<String> = root
+        .descendants()
+        .filter(|n| n.kind() == bhdl_parser::SyntaxKind::BOARD_DEF)
+        .filter_map(|n| {
+            n.children_with_tokens()
+                .filter_map(|e| e.into_token())
+                .find(|t| t.kind() == bhdl_parser::SyntaxKind::IDENT)
+                .map(|t| t.text().to_string())
+        })
+        .collect();
+
+    // Locate the board file.
+    let mut board_sf: Option<(SourceFile, PathBuf)> = None;
+    if !boards_here.is_empty() {
+        board_sf = Some((source_file.clone(), source_path.to_path_buf()));
+    } else {
+        // sidecar: scan imports for a file defining a board named in a safety block
+        let import_paths: Vec<String> = root
+            .descendants()
+            .filter(|n| n.kind() == bhdl_parser::SyntaxKind::IMPORT_STMT)
+            .filter_map(|n| {
+                n.descendants_with_tokens()
+                    .filter_map(|e| e.into_token())
+                    .find(|t| t.kind() == bhdl_parser::SyntaxKind::STRING)
+                    .map(|t| t.text().trim_matches('"').to_string())
+            })
+            .collect();
+        let base = source_path.parent().unwrap_or(Path::new("."));
+        for ip in import_paths {
+            let cand = base.join(&ip);
+            let Ok(text) = fs::read_to_string(&cand) else { continue };
+            let pr = parse(&text);
+            if !pr.errors().is_empty() { continue; }
+            let r = pr.syntax();
+            let has_board = r
+                .descendants()
+                .filter(|n| n.kind() == bhdl_parser::SyntaxKind::BOARD_DEF)
+                .filter_map(|n| {
+                    n.children_with_tokens()
+                        .filter_map(|e| e.into_token())
+                        .find(|t| t.kind() == bhdl_parser::SyntaxKind::IDENT)
+                        .map(|t| t.text().to_string())
+                })
+                .any(|b| safety_targets.contains(&b));
+            if has_board {
+                if let Some(sf) = SourceFile::cast(r) {
+                    board_sf = Some((sf, cand));
+                    break;
+                }
+            }
+        }
+    }
+    let Some((board_source, board_path)) = board_sf else {
+        anyhow::bail!(
+            "no board found: this file defines no board and no imported file defines a board named in a safety block ({})",
+            safety_targets.join(", ")
+        );
+    };
+
+    // Synthesize the board (same path as freeze).
+    let analysis = analyze(&board_source);
+    gate_constructor_args(&analysis)?;
+    let mut generator = NetlistGenerator::new();
+    generator.set_refdes_lut_path(board_path.with_extension("bhdl.refdes"));
+    let netlist = generator
+        .generate_from_ast_and_analysis(&board_source, &analysis)
+        .await
+        .context("Failed to synthesize netlist for safety analysis")?;
+
+    // Sources for the model: the input (safety blocks + library goals) and
+    // the board file (its own inline blocks, if any).
+    let mut sources: Vec<&SourceFile> = vec![source_file];
+    if board_path != source_path {
+        sources.push(&board_source);
+    }
+    let model = build_safety_model(&netlist, &sources);
+
+    // ── Report ───────────────────────────────────────────────────────
+    println!("{}", format!("Functional safety — {}", model.board).bold().cyan());
+    if !model.errors.is_empty() {
+        println!("\n  {} {} error(s):", "✗".red(), model.errors.len());
+        for e in &model.errors {
+            println!("    {}", e);
+        }
+    }
+    for s in &model.scopes {
+        let label = if s.path.is_empty() { format!("board {} ({})", model.board, s.ns) } else { format!("{}  {} ({})", s.path, s.entity, s.ns) };
+        println!("\n  {}", label.bold());
+        for g in &s.goals {
+            let lt = g.library_type.as_deref().map(|t| format!("  [{t}]")).unwrap_or_default();
+            let refines = g.refines.as_deref().map(|r| format!("  refines {r}")).unwrap_or_default();
+            println!("    {}  {}  \"{}\"{}{}", g.name.bold(), g.level.as_str(), g.title, lt, refines);
+            for e in &g.effects {
+                let psms: Vec<&str> = s
+                    .mechanisms
+                    .iter()
+                    .filter(|m| m.kind == MechanismKind::Psm && m.goal == g.path && m.detects.contains(&e.name))
+                    .map(|m| m.handle.as_str())
+                    .collect();
+                let cov = if psms.is_empty() { "  <- (no psm)".red().to_string() } else { format!("  <- psm {}", psms.join(", ")) };
+                println!("      effect {:<18} {}  {}{}", e.name, e.severity.as_str(), e.expr, cov);
+            }
+        }
+        for m in &s.mechanisms {
+            let dc = match (m.claimed_dc, &m.dc_source) {
+                (Some(d), Some(src)) => format!("claimed dc {:.2} ({})", d, src),
+                (Some(d), None) => format!("claimed dc {:.2} (UNSOURCED)", d),
+                _ => "no dc claimed".to_string(),
+            };
+            let kind = match m.kind { MechanismKind::Psm => "psm", MechanismKind::Lsm => "lsm" };
+            println!("    mechanism {} [{}]: {} {} detects={:?}  {}", m.handle, m.instance, kind, m.goal, m.detects, dc);
+        }
+        if !s.faults.is_empty() {
+            let run = s.faults.iter().filter(|f| f.run).count();
+            println!("    faults    {} declared, {} run", s.faults.len(), run);
+            for f in &s.faults {
+                println!("      {}({}) expect {}{}{}", f.kind, f.targets.join(", "), f.expect,
+                    f.detected_by.as_deref().map(|d| format!(" detected_by {d}")).unwrap_or_default(),
+                    f.within.as_deref().map(|w| format!(" within {w}")).unwrap_or_default());
+            }
+        }
+        for w in &s.waivers {
+            println!("    waived    {} [{}]: \"{}\"", w.handle, w.instance, w.reason);
+        }
+        for a in &s.assumptions {
+            let st = match &a.status {
+                AssumptionStatus::Open => "OPEN".red().to_string(),
+                AssumptionStatus::SatisfiedBy(h) => format!("satisfied_by {h}"),
+                AssumptionStatus::Waived(r) => format!("waived \"{r}\""),
+            };
+            println!("    assume    {}  \"{}\"  {}", a.id, a.text, st);
+        }
+    }
+
+    println!("\n  {} ({})", "parts".bold(), model.parts.len());
+    println!("    {:<26} {:<22} {:<12} {}", "instance", "type", "safety part", "safety data");
+    for p in &model.parts {
+        let data = match &p.data {
+            PartData::Behavioral { failure_states, source } => format!("behavioral, {failure_states} failure states  {source}"),
+            PartData::Seooc { lambda_fit, source } => format!("seooc{}  {source}", lambda_fit.map(|l| format!(" λ={l} FIT")).unwrap_or_default()),
+            PartData::Handbook { class, source } => format!("handbook {class}  {source}"),
+            PartData::Waived { reason } => format!("waived qm \"{reason}\""),
+            PartData::None => "NONE".red().to_string(),
+        };
+        println!("    {:<26} {:<22} {:<12} {}", p.instance, p.type_name, p.parent.as_deref().unwrap_or("-"), data);
+    }
+
+    println!("\n  {} ({})", "gaps".bold(), model.gaps.len());
+    for g in &model.gaps {
+        println!("    {:<22} {:<28} {:<28} {}", g.class.as_str(), g.goal, g.subject, g.fix);
+    }
+    println!("  metrics: not computed (Phase 1 — SPFM/LFM/PMHF and SFF/PFH need the fault campaign)");
+    let pass = model.verdict_pass();
+    println!("  verdict: {}", if pass { "PASS".green().bold().to_string() } else { "FAIL".red().bold().to_string() });
+
+    if let Some(jp) = json_out {
+        fs::write(&jp, serde_json::to_string_pretty(&model)?)?;
+        println!("  model json: {}", jp.display());
+    }
+
+    // ── Baseline / delta ─────────────────────────────────────────────
+    if let Some(bp) = baseline {
+        let now = model.baseline();
+        if bp.exists() && !update_baseline {
+            let old: Baseline = serde_json::from_str(&fs::read_to_string(&bp)?)
+                .with_context(|| format!("reading baseline {}", bp.display()))?;
+            let d = Delta::between(&old, &now);
+            println!("\n  since baseline {}:", bp.display());
+            if d.is_empty() {
+                println!("    no change");
+            } else {
+                let sec = |name: &str, s: &bhdl_common::safety::DeltaSection| {
+                    if s.is_empty() { return; }
+                    println!("    {:<12} +{} -{} ~{}", name, s.added.len(), s.removed.len(), s.changed.len());
+                    for (k, v) in &s.added { println!("      + {}  {}", k, v); }
+                    for (k, v) in &s.removed { println!("      - {}  {}", k, v); }
+                    for (k, a, b) in &s.changed { println!("      ~ {}  {}  ->  {}", k, a, b); }
+                };
+                sec("parts", &d.parts);
+                sec("goals", &d.goals);
+                sec("effects", &d.effects);
+                sec("mechanisms", &d.mechanisms);
+                sec("assumptions", &d.assumptions);
+                sec("faults", &d.faults);
+                sec("gaps", &d.gaps);
+                println!("    verdict      {} -> {}", if d.verdict_before { "PASS" } else { "FAIL" }, if d.verdict_after { "PASS" } else { "FAIL" });
+            }
+        } else {
+            fs::write(&bp, serde_json::to_string_pretty(&now)?)?;
+            println!("\n  baseline written: {}", bp.display());
+        }
+    }
+
+    if !pass {
+        if std::env::var("BHDL_SIGNOFF_ADVISORY").map(|v| v == "1").unwrap_or(false) {
+            println!("\n  {} safety verdict FAIL (advisory)", "!".yellow());
+        } else {
+            std::process::exit(1);
+        }
+    }
     Ok(())
 }
 
