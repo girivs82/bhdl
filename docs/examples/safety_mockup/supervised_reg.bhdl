@@ -1,0 +1,171 @@
+// ─────────────────────────────────────────────────────────────────────
+// MOCKUP — not yet parsed by the toolchain. A holistic read of the
+// Functional_Safety.md surface on a small, real block.
+//
+// The design entity IS the safety part. `safety X of X as dut` links a
+// safety block to the entity explicitly and exports the design under
+// the `dut` namespace — every design handle is reached as `dut.<h>`,
+// so nothing in the safety block is referred to without being visible.
+// ─────────────────────────────────────────────────────────────────────
+
+import { Res, Cap } from "bhdl-stdlib/passives/resistor.bhdl";
+import { TPS7A4701 } from "bhdl-stdlib/power/ldo_ti.bhdl";        // LDO: behavioral model + failure states
+import { TPS3700 }   from "bhdl-stdlib/power/supervisors_ti.bhdl"; // window supervisor: behavioral model
+
+// Reusable, parameterised goals live in a library and are imported like
+// entities — no copy-paste of "no undetected overvoltage" per rail.
+import { RailOvervoltage, RailBrownout } from "bhdl-stdlib/safety/power_rails.bhdl";
+import { ASM_SUPPLY_WITHIN_ABSMAX, ASM_LOAD_REACTS_TO_FLAG } from "bhdl-stdlib/safety/assumptions.bhdl";
+
+// ───────────────────────── the design (designer's file) ──────────────
+
+entity SupervisedReg5V(vout: voltage = 5V, iout_max: current = 1A) {
+    port VIN:    power in;
+    port VOUT:   power out = vout @ iout_max;
+    port GND:    ground;
+    port nFAULT: signal out;      // open-drain, low = rail out of window
+    port EN:     signal in;
+
+    @VIN  -> reg: TPS7A4701().IN;
+    reg.OUT -> @VOUT;
+    @VOUT -> r_fb_top: Res(100k).1; r_fb_top.2 -> reg.FB;
+    reg.FB -> r_fb_bot: Res(33.2k).1; r_fb_bot.2 -> @GND;
+    @EN   -> reg.EN;
+    reg.GND -> @GND;
+    @VOUT -> c_out: Cap(10uF).1; c_out.2 -> @GND;
+
+    @VOUT -> mon: TPS3700(vlo=4.5V, vhi=5.5V).VDD;
+    @VOUT -> mon.SENSE;
+    mon.nOUT -> @nFAULT;
+    mon.GND -> @GND;
+    @VOUT -> r_pu: Res(10k).1; r_pu.2 -> @nFAULT;
+}
+
+// ───────────────────────── the safety part (safety engineer's file) ──
+// `of SupervisedReg5V` links; `as dut` names the design namespace.
+// Travels with every instance of the entity.
+
+safety SupervisedReg5V of SupervisedReg5V as dut {
+
+    // Goals from the library, instantiated like entities: parameters in
+    // parens, the goal's formal signals bound to design handles in the
+    // braces. Local one-off goals use the inline form (see DualRail).
+    SG_OV: RailOvervoltage(vmax=5.5V, level=ASIL_B)
+               { RAIL: dut.VOUT; FLAG: dut.nFAULT; }
+               (id="SG-REG-001", ftti=10ms, safe_state="nFAULT low; load shall disable");
+    SG_UV: RailBrownout(vmin=4.5V, level=ASIL_A)
+               { RAIL: dut.VOUT; EN: dut.EN; FLAG: dut.nFAULT; }
+               (id="SG-REG-002", ftti=50ms);
+
+    // Mechanisms: "dut.mon IS a primary safety mechanism for SG_OV".
+    mechanism dut.mon: psm(SG_OV, detects=[overvoltage, silent_ov],
+                           dc=0.90, source="TPS3700 datasheet §7.3 (threshold accuracy, no self-test)");
+    mechanism dut.mon: psm(SG_UV, detects=[silent_uv], dc=0.90, source="TPS3700 datasheet §7.3");
+    // No LSM: not required at ASIL B (the report flags PSM_WITHOUT_LSM at C/D).
+
+    // Faults the safety engineer insists on, on top of the automatic
+    // campaign over every part. Board-side = netlist mutation; the
+    // healthy LDO model reacts to FB = 0 V on its own. IC-internal =
+    // a state the vendor's model declares.
+    fault short(dut.r_fb_bot.1, dut.r_fb_bot.2) expect SG_OV.overvoltage detected_by dut.mon within 10ms;
+    fault open(dut.r_fb_top)                    expect SG_OV.overvoltage detected_by dut.mon within 10ms;
+    fault open(dut.r_pu)                        expect SG_UV.silent_uv;          // flag can never pull high -> latent
+    fault state(dut.reg, "ref_drift_high")      expect SG_OV.overvoltage detected_by dut.mon;
+    fault state(dut.mon, "output_stuck_high")   expect SG_OV.silent_ov;          // the PSM's own failure: uncovered here, and said so
+
+    // Deliberately out of the argument, with the reason on record.
+    // Everything else is in the fault universe whether mentioned or not.
+    waive dut.c_out qm "output cap: open -> ripple, short -> UV which SG_UV covers";
+
+    // Assumptions of use this block makes of its environment, from the
+    // library catalogue; the integrator must satisfy or waive each.
+    assume ASM_SUPPLY_WITHIN_ABSMAX(dut.VIN, 36V);
+    assume ASM_LOAD_REACTS_TO_FLAG(dut.nFAULT, within=10ms);
+}
+
+// ───────────────────────── the library goal, for reference ───────────
+// bhdl-stdlib/safety/power_rails.bhdl (excerpt)
+//
+// safety_goal RailOvervoltage(vmax: voltage, level: asil = ASIL_B)
+//     "No undetected overvoltage on the rail"
+// {
+//     signal RAIL: power;      // formals — the ONLY abstraction in the system,
+//     signal FLAG: signal;     // same shape as entity ports
+//     effect overvoltage = RAIL > vmax                 severity S3;
+//     effect silent_ov   = RAIL > vmax && FLAG == 1    severity S3;
+// }
+//
+// safety_goal RailBrownout(vmin: voltage, level: asil = ASIL_A)
+//     "Loss of the rail is signalled"
+// {
+//     signal RAIL: power; signal EN: signal; signal FLAG: signal;
+//     effect silent_uv = RAIL < vmin && EN == 1 && FLAG == 1   severity S2;
+// }
+
+// ───────────────────────── a board using it twice ────────────────────
+
+board DualRail {
+    power VBAT = 12V @ 3A;
+    ground GND;
+    power V5_A = 5V @ 1A;
+    power V5_B = 5V @ 1A;
+    power MCU_EN = 3.3V @ 10mA;
+
+    @VBAT -> rail_a: SupervisedReg5V().VIN;  rail_a.VOUT -> @V5_A;  rail_a.GND -> @GND;
+    @VBAT -> rail_b: SupervisedReg5V().VIN;  rail_b.VOUT -> @V5_B;  rail_b.GND -> @GND;
+    @MCU_EN -> rail_a.EN; @MCU_EN -> rail_b.EN;
+    rail_a.nFAULT -> mcu: SomeMcu().GPIO3;
+    rail_b.nFAULT -> mcu.GPIO4;
+    @VBAT -> tvs: TvsDiode(SMBJ24A).A; tvs.K -> @GND;
+}
+
+// ───────────────────────── board-level sidecar (its own file) ────────
+// import { DualRail } from "dual_rail.bhdl";
+
+safety DualRail of DualRail as brd {
+    // A local, one-off goal (inline form), refined by the rails' goals.
+    goal SG_SUPPLY: ASIL_B "Neither 5V rail overvolts undetected" (id="SG-SYS-010", ftti=10ms) {
+        // no effects of its own: it is the parent of the two rail goals
+    }
+    brd.rail_a.SG_OV refines SG_SUPPLY;
+    brd.rail_b.SG_OV refines SG_SUPPLY;
+
+    // Discharge the rails' assumptions of use with board elements.
+    brd.rail_a.ASM_SUPPLY_WITHIN_ABSMAX satisfied_by brd.tvs;   // clamp keeps VIN < 36V
+    brd.rail_b.ASM_SUPPLY_WITHIN_ABSMAX satisfied_by brd.tvs;
+    brd.rail_a.ASM_LOAD_REACTS_TO_FLAG  satisfied_by brd.mcu;   // SW responsibility, traced
+    brd.rail_b.ASM_LOAD_REACTS_TO_FLAG  satisfied_by brd.mcu;
+
+    // brd.mcu is a black box: its SEooC data (lambda, classes, assumptions,
+    // terminal contract) lives in SomeMcu's entity (Phase 2) — nothing to
+    // write here unless the board must discharge one of ITS assumptions.
+}
+
+// ───────────────────────── what `bhdl-cli safety dual_rail.bhdl` prints (Phase 1) ──
+//
+// safety DualRail (brd)
+//   SG_SUPPLY  ASIL_B  refined by brd.rail_a.SG_OV, brd.rail_b.SG_OV
+//
+//   brd.rail_a  SupervisedReg5V (dut)
+//     SG_OV  ASIL_B  RailOvervoltage(vmax=5.5V) "No undetected overvoltage on the rail"
+//       effects   overvoltage  <- psm dut.mon  (claimed dc 0.90, TPS3700 ds §7.3)
+//                 silent_ov    <- psm dut.mon
+//       faults    5 declared, 0 run                          FAULT_UNRUN (Phase 3)
+//       assume    ASM_SUPPLY_WITHIN_ABSMAX  satisfied_by brd.tvs
+//                 ASM_LOAD_REACTS_TO_FLAG   satisfied_by brd.mcu
+//     SG_UV  ASIL_A  RailBrownout(vmin=4.5V) ...
+//   brd.rail_b  (identical)
+//
+//   parts (14)                 safety data                          source
+//     brd.rail_a.reg  TPS7A4701  behavioral, 6 failure states        TI FIT report 2023
+//     brd.rail_a.mon  TPS3700    behavioral, 4 failure states        TI FIT report 2024
+//     brd.rail_a.r_fb_top Res    class handbook R: open/short/drift  SN 29500-4 tbl 3   (Phase 2)
+//     brd.rail_a.c_out  Cap      waived qm "output cap: ..."
+//     ...
+//     brd.mcu  SomeMcu           NONE                                 PART_NO_SAFETY_DATA
+//     brd.tvs  TvsDiode          NONE                                 PART_NO_SAFETY_DATA
+//
+//   gaps (3): PART_NO_SAFETY_DATA brd.mcu, PART_NO_SAFETY_DATA brd.tvs, FAULT_UNRUN (10)
+//   metrics: not computed (Phase 1)            verdict: FAIL (gaps)
+//
+// since baseline dual_rail.safety-baseline.json (2026-08-20): no change

@@ -46,161 +46,132 @@ targets.
 ### 2.1 The `safety` block — one new top-level form
 
 ```bhdl
-safety Reg5V {
-    // ... goal, effect, mechanism and fault statements (2.2–2.5) ...
+safety SupervisedReg5V as dut { ... }                       // short form: block named after the entity
+safety Reg5V_ASIL_B of SupervisedReg5V as dut { ... }       // long form: a differently named analysis of the entity
+safety DualRail as brd { ... }                              // boards are entities too
+```
+
+`safety <Name> [of <Entity>] as <ns> { ... }` links a safety block to
+an entity (a board is an entity) **explicitly** and exports the design
+under the namespace `<ns>`: every design handle, port and net is
+reached as `<ns>.<handle>` (`dut.mon`, `dut.VOUT`, `brd.rail_a.mon`).
+Nothing in a safety block is referred to without being visible; an
+`<ns>.x` that the entity does not have is a hard error. `of <Entity>`
+may be omitted when the block's name is the entity's name. Several
+blocks for the same entity merge into one analysis.
+
+The block may sit in the same file as the entity or in a sidecar that
+imports it (`import { SupervisedReg5V } from "reg.bhdl";`). Either way
+the entity's file never has to contain safety text. The analysis
+travels with the entity: every instance carries it (the SEooC idea at
+block granularity), and a parent block composes the instances' goals
+and assumptions through the namespace (`brd.rail_a.SG_OV`).
+
+### 2.2 Goals — library instances or inline
+
+Reusable, parameterised goals live in library files and are imported
+like entities:
+
+```bhdl
+// bhdl-stdlib/safety/power_rails.bhdl
+safety_goal RailOvervoltage(vmax: voltage, level: asil = ASIL_B)
+    "No undetected overvoltage on the rail"
+{
+    signal RAIL: power;     // formals — bound per instance, same shape as entity ports
+    signal FLAG: signal;
+    effect overvoltage = RAIL > vmax               severity S3;
+    effect silent_ov   = RAIL > vmax && FLAG == 1  severity S3;
 }
 ```
 
-`safety <BoardName> { ... }` is a top-level item that refers to the
-named board's nets (`@VOUT`) and instance handles (`mon`, `reg.EN`) by
-name. It may appear in the same file as the board or in a separate
-file that imports the board:
-
 ```bhdl
-// reg5v.safety.bhdl — owned by the safety engineer
-import { Reg5V } from "reg5v.bhdl";
+import { RailOvervoltage } from "bhdl-stdlib/safety/power_rails.bhdl";
 
-safety Reg5V {
-    // ...
+safety SupervisedReg5V as dut {
+    SG_OV: RailOvervoltage(vmax=5.5V, level=ASIL_B)
+               { RAIL: dut.VOUT; FLAG: dut.nFAULT; }
+               (id="SG-REG-001", ftti=10ms, safe_state="nFAULT low; load shall disable");
 }
 ```
 
-Several `safety` blocks for the same board merge (they are parts of
-one analysis); a `safety` block for a board that is not defined or not
-imported is a hard error, as is any net or handle it names that the
-board does not have. Everything inside is the board's vocabulary — no
-abstract signals, no binding step. Handles address into the hierarchy
-with the usual dotted paths: `ch1.u` is the op-amp inside instance
-`ch1`, `ch1.u.OUT` its pin.
+`<Name>: <Goal>(<params>) { <formal>: <ns>.<handle>; ... } (<kwargs>);`
+— params in parens, the goal's formals bound in braces, per-instance
+metadata (`id`, `ftti`, `safe_state`, `standard`) in the trailing
+kwargs. Unbound formal, unknown formal, unknown kwarg: hard errors.
 
-`safety <Entity> { ... }` is the same form applied to an entity: its
-statements are written against the entity's own ports and internal
-handles, and they travel with the entity — every instance carries the
-analysis (the SEooC idea at board-block granularity). A board-level
-block composes them: it may add effects over instance pins, attach
-mechanisms by path, and bind the entities' assumptions of use. An
-entity's `safety` block may sit inside the entity body (the vendor
-ships it with the model) or in a sidecar, same as for boards.
-
-Goal refinement follows the tree: board goals are refined by entity
-goals (`goal SG_CH: ASIL_B "..." refines Board.SG_OVP;`), which is the
-ISO safety-goal → FSR → TSR → HSR ladder mapped onto board → entity →
-sub-entity. Traceability is the instance tree; the report and the
-delta (§5) are grouped by entity and by instance.
-
-### 2.2 Goals
+Inline one-off goals:
 
 ```bhdl
-    goal SG_OVP: ASIL_B "No undetected overvoltage on VOUT" (ftti=10ms, safe_state="EN low, output off");
-    goal SG_UV:  ASIL_A "VOUT brown-out is signalled"        (ftti=50ms);
+    goal SG_SUPPLY: ASIL_B "Neither 5V rail overvolts undetected" (id="SG-SYS-010", ftti=10ms) {
+        effect any_ov = brd.V5_A > 5.5V || brd.V5_B > 5.5V   severity S3;
+    }
 ```
 
-`goal <Name>: <Level> "<title>" (<kwargs>);` — the same shape as an
-instance declaration with constructor kwargs. Level: `ASIL_A`..`ASIL_D`,
-`QM`, `SIL1`..`SIL4` (the standard is implied; `standard=iec61508` may
-be given explicitly). Recognised kwargs: `id`, `ftti`, `safe_state`,
-`standard`, and — in an entity block — `refines=<Board>.<Goal>` (or a
-trailing `refines <Goal>` clause). Unknown kwargs are hard errors (E0403
-discipline).
+Level: `ASIL_A`..`ASIL_D`, `QM`, `SIL1`..`SIL4` (standard implied;
+`standard=iec61508` explicit if wanted). Refinement follows the
+hierarchy — `<ns>.<inst>.<Goal> refines <Goal>;` in a parent block —
+which is the ISO safety-goal → FSR → TSR → HSR ladder on board →
+entity → sub-entity.
 
-### 2.3 Effects — predicates over real nets and pins
+### 2.3 Effects
+
+`effect <name> = <expr> severity <S0|S1|S2|S3>;` inside a goal. The
+expression grammar is the board's own (`when (cond)`, `stress`):
+`<ns>.<net|port|inst.PIN>`, numbers with units, comparisons,
+`&&`/`||`/`!`. *(Phase 3)* adds `for > <duration>`. Duplicate effect
+names within a goal are errors.
+
+### 2.4 Mechanisms
 
 ```bhdl
-    SG_OVP.effect overvoltage = @VOUT > 5.5V                      severity S3;
-    SG_OVP.effect silent_ov   = @VOUT > 5.5V && mon.nRESET == 1   severity S3;
-    SG_OVP.effect no_output   = @VOUT < 4.5V && reg.EN == 1       severity S1;
-    SG_UV.effect  brownout_unsignalled = @VOUT < 4.5V && mon.nRESET == 1 severity S2;
+    mechanism dut.mon: psm(SG_OV, detects=[overvoltage, silent_ov], dc=0.90,
+                           source="TPS3700 datasheet §7.3");
+    mechanism dut.wdt: lsm(SG_OV, protects=dut.mon, interval=100ms, latency=1ms,
+                           dc=0.85, source="TPS3430 datasheet §8.2");
 ```
 
-`<Goal>.effect <name> = <expr> severity <S0|S1|S2|S3>;` — the
-expression grammar is the board's own (the one `when (cond)` and
-`stress` blocks use): nets `@NET`, instance pins `inst.PIN`, numbers
-with units, comparisons, `&&`/`||`/`!`. *(Phase 3)* adds the temporal
-qualifier `for > <duration>`. Every effect names a declared goal;
-duplicate effect names within a goal are errors.
+`mechanism <ns>.<handle>: psm(<Goal>, ...) | lsm(<Goal>, ...);` —
+"this design element IS a mechanism for that goal". Fields: `detects`
+(effect names, required for `psm`), `protects` (mechanism handle,
+required for `lsm`), `dc` (claimed 0..1), `source` (required with `dc`;
+claimed DC without source = gap `DC_UNSOURCED`), `interval`/`latency`
+(`lsm`). Unknown fields/goals/effects/handles: hard errors. A measured
+DC *(Phase 3)* always overrides the claim; both are reported.
 
-### 2.4 Mechanisms — instance attributes, written from the sidecar
+### 2.5 Faults, waivers, assumptions
 
 ```bhdl
-    mon.safety_mechanism = psm(SG_OVP, detects=[overvoltage, silent_ov], dc=0.90,
-                               source="TPS3700 datasheet §7.3");
-    wdt.safety_mechanism = lsm(SG_OVP, protects=mon, interval=100ms, latency=1ms,
-                               dc=0.85, source="TPS3430 datasheet §8.2");
+    fault short(dut.r_fb_bot.1, dut.r_fb_bot.2) expect SG_OV.overvoltage detected_by dut.mon within 10ms;
+    fault open(dut.r_pu)                        expect SG_UV.silent_uv;
+    fault state(dut.reg, "ref_drift_high")      expect SG_OV.overvoltage detected_by dut.mon;
+
+    waive dut.c_out qm "output cap: open -> ripple, short -> UV which SG_UV covers";
+
+    assume ASM_SUPPLY_WITHIN_ABSMAX(dut.VIN, 36V);             // from an assumptions catalogue
+    assume ASM_LOCAL_007 "EN is driven, never left floating";   // inline
 ```
 
-`<handle>.safety_mechanism = psm(<Goal>, ...) | lsm(<Goal>, ...);`
-sets the attribute on the board instance from the safety block, so the
-board file stays safety-free. (Inline in the board, the equivalent is
-the ordinary kwarg form `mon: TPS3700(4.5V, 5.5V, safety_mechanism=psm(SG_OVP, detects=[...]))`
-— same attribute, same transport as `erc_waive`.) Fields: `detects`
-(list of effect names, required for `psm`), `protects` (mechanism
-handle, required for `lsm`), `dc` (claimed 0..1), `source` (required
-whenever `dc` is given — a claimed DC without a source is a **gap**),
-`interval`/`latency` (durations, `lsm`). Unknown fields, unknown
-goals/effects/handles are hard errors.
+`fault <kind>(<targets>) expect <Goal>.<effect> [detected_by <ns>.<h>] [within <duration>];`
+— explicit injections on top of the automatic campaign *(Phase 3)*;
+kinds `short(a, b)`, `open(pin|part)`, `drift(part, ±pct)`,
+`state(part, "<model failure state>")`. Listed as `FAULT_UNRUN` until
+the campaign exists.
 
-### 2.5 Fault injections and assumptions
+`waive <ns>.<handle> qm "<reason>";` takes a part out of the argument
+with the reason on record (ERC-waiver idiom). Every other physical
+part is in the fault universe whether mentioned or not.
 
-```bhdl
-    fault short(r_fb_bot.1, @GND)  expect SG_OVP.overvoltage detected_by mon within 10ms;
-    fault open(reg.EN)             expect SG_OVP.no_output;
-    fault state(reg, "ref_drift_high") expect SG_OVP.overvoltage detected_by mon;
+`assume <Id>(<args>) | <Id> "<text>";` declares an assumption of use
+(typically from a SEooC catalogue or a SKALP safety manual). A parent
+block discharges it: `<ns>.<inst>.<Id> satisfied_by <ns>.<h>;` or
+`... waived "<reason>";`. Open assumptions are gaps.
 
-    assume ASM_PWR_001 "VIN stays within 9..16V" satisfied_by @VIN;   // SEooC assumption of use
-```
+### 2.6 Complete example
 
-`fault <kind>(<targets>) expect <Goal>.<effect> [detected_by <handle>] [within <duration>];`
-declares a specific injection the safety engineer insists on; the
-automatic campaign *(Phase 3)* covers the fault universe regardless.
-Kinds: `short(a, b)`, `open(pin)`, `drift(part, ±pct)`,
-`state(part, "<model failure state>")`. Until the campaign exists these
-are listed as "declared, not run" (gap `FAULT_UNRUN`).
-
-`assume <Id> "<text>" satisfied_by <handle|@net> | waived "<reason>";`
-records an assumption of use (typically imported from a part's SEooC
-data or a SKALP safety manual) and binds it to the board element that
-discharges it. Unsatisfied, unwaived assumptions are gaps.
-
-### 2.6 Complete example (sidecar form)
-
-```bhdl
-// reg5v.safety.bhdl
-import { Reg5V } from "reg5v.bhdl";
-
-safety Reg5V {
-    goal SG_OVP: ASIL_B "No undetected overvoltage on VOUT" (ftti=10ms, safe_state="EN low, output off");
-
-    SG_OVP.effect overvoltage = @VOUT > 5.5V                    severity S3;
-    SG_OVP.effect silent_ov   = @VOUT > 5.5V && mon.nRESET == 1 severity S3;
-    SG_OVP.effect no_output   = @VOUT < 4.5V && reg.EN == 1     severity S1;
-
-    mon.safety_mechanism = psm(SG_OVP, detects=[overvoltage, silent_ov], dc=0.90,
-                               source="TPS3700 datasheet §7.3");
-
-    fault short(r_fb_bot.1, @GND) expect SG_OVP.overvoltage detected_by mon within 10ms;
-    fault open(reg.EN)            expect SG_OVP.no_output;
-}
-```
-
-The board file `reg5v.bhdl` contains only the circuit. The inline form
-(a `safety Reg5V { }` block in the same file) is legal and identical in
-meaning; the sidecar is the recommended style.
-
-Entity-level block — the safety part *is* the entity, and the analysis
-rides with every instance (here `Channel` from the mixer; four
-instances, one declaration):
-
-```bhdl
-safety Channel {
-    goal SG_CH_BIAS: ASIL_A "Channel output stays within the rail" (ftti=50ms);
-    SG_CH_BIAS.effect rail_hit = OUT > VCC - 0.2V || OUT < 0.2V   severity S1;   // entity ports
-    r_fb.safety = qm "feedback divider — worst case is gain error, not a hazard";  // waiver with reason
-}
-```
-
-A part added inside `Channel` later (say `r_snub`) is automatically in
-the fault universe of all four instances and shows up in the delta
-under each `chN`.
+See `docs/examples/safety_mockup/supervised_reg.bhdl`: a supervised
+regulator entity with its own safety block, a board instantiating it
+twice, the board-level sidecar composing both, and the Phase-1 report
+the CLI prints for it.
 
 ### 2.7 Part failure data *(Phase 2)*
 
@@ -210,8 +181,8 @@ On entities (stdlib/vendor models), in the same style as `simulation`:
 entity TPS3700 {
     // ...
     safety {
-        failure_state ref_drift_high  fit=12 of 60 source="TI TPS3700 FIT report 2023";
-        failure_state output_stuck_high fit=8 of 60 source="...";
+        failure_state ref_drift_high    fit=12 of 60 source="TI TPS3700 FIT report 2023";
+        failure_state output_stuck_high fit=8  of 60 source="...";
         // or, for a black box:
         seooc lambda=240 spfm=0.97 lfm=0.80 source="Vendor Safety Manual rev C";
         assumption ASM_PWR_001 "VIN within 9..16V";
