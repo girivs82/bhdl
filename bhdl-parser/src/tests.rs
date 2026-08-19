@@ -510,6 +510,70 @@ mod tests {
         assert!(board.is_some(), "Expected BOARD_DEF with safety_goal");
     }
 
+    /// docs/spec/Functional_Safety.md §2: the `safety <Name> [of E] as ns { }`
+    /// block with every statement kind, plus a library `safety_goal` with
+    /// formals + effects. Must parse with zero errors and produce one node
+    /// per statement.
+    #[test]
+    fn parse_safety_block_all_statements() {
+        let input = r#"
+safety_goal RailOvervoltage(vmax: voltage, level: asil = ASIL_B)
+    "No undetected overvoltage on the rail"
+{
+    signal RAIL: power;
+    signal FLAG: signal;
+    effect overvoltage = RAIL > vmax               severity S3;
+    effect silent_ov   = RAIL > vmax && FLAG == 1  severity S3;
+}
+
+entity Reg { pin VOUT: power out; pin nFAULT: signal out; }
+
+safety Reg as dut {
+    SG_OV: RailOvervoltage(vmax=5.5V) { RAIL: dut.VOUT; FLAG: dut.nFAULT; } (id="SG-1", ftti=10ms);
+    goal SG_UV: ASIL_A "Loss of VOUT is signalled" (ftti=50ms) {
+        effect silent_uv = dut.VOUT < 4.5V && dut.nFAULT == 1 severity S2;
+    }
+    mechanism dut.mon: psm(SG_OV, detects=[overvoltage, silent_ov], dc=0.90, source="ds");
+    fault short(dut.r_fb_bot.1, dut.r_fb_bot.2) expect SG_OV.overvoltage detected_by dut.mon within 10ms;
+    fault state(dut.reg, "ref_drift_high") expect SG_OV.overvoltage;
+    waive dut.c_out qm "not in the argument";
+    assume ASM_1 "VIN within abs-max";
+}
+
+safety Sys of Board as brd {
+    brd.rail_a.SG_OV refines SG_SYS;
+    brd.rail_a.ASM_1 satisfied_by brd.tvs;
+    brd.rail_b.ASM_1 waived "bench fixture";
+}
+        "#;
+        let result = parse(input);
+        assert!(result.errors.is_empty(), "parse errors: {:?}", result.errors);
+        let root = result.syntax();
+        assert_eq!(find_all_nodes(&root, SAFETY_GOAL_DEF).len(), 1);
+        assert_eq!(find_all_nodes(&root, SAFETY_SIGNAL_DECL).len(), 2);
+        assert_eq!(find_all_nodes(&root, SAFETY_EFFECT).len(), 3);
+        assert_eq!(find_all_nodes(&root, SAFETY_DEF).len(), 2);
+        assert_eq!(find_all_nodes(&root, SAFETY_LINK).len(), 1);
+        assert_eq!(find_all_nodes(&root, SAFETY_NS).len(), 2);
+        assert_eq!(find_all_nodes(&root, SAFETY_GOAL_INST).len(), 1);
+        assert_eq!(find_all_nodes(&root, SAFETY_BIND_ITEM).len(), 2);
+        assert_eq!(find_all_nodes(&root, SAFETY_GOAL_INLINE).len(), 1);
+        assert_eq!(find_all_nodes(&root, SAFETY_MECHANISM).len(), 1);
+        assert_eq!(find_all_nodes(&root, SAFETY_FAULT).len(), 2);
+        assert_eq!(find_all_nodes(&root, SAFETY_WAIVE).len(), 1);
+        assert_eq!(find_all_nodes(&root, SAFETY_ASSUME).len(), 1);
+        assert_eq!(find_all_nodes(&root, SAFETY_REFINES).len(), 1);
+        assert_eq!(find_all_nodes(&root, SAFETY_SATISFIED).len(), 2);
+    }
+
+    /// `safety` as a bare word elsewhere must not break anything: the
+    /// header without `as` is an error, not a hang.
+    #[test]
+    fn parse_safety_block_missing_namespace_is_an_error() {
+        let result = parse("entity E {}\nsafety E { }");
+        assert!(!result.errors.is_empty());
+    }
+
     #[test]
     fn parse_generic_entity_with_alias() {
         let input = r#"

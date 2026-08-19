@@ -124,6 +124,7 @@ pub enum SyntaxKind {
     TRAIT_KW,     // trait (for interface traits)
     IMPL_KW,      // impl (for trait implementations on components)
     SAFETY_GOAL_KW,   // safety_goal
+    SAFETY_KW,        // safety (top-level `safety X as ns { }` block; entity-level `safety { }` data block)
     FAULT_INJECT_KW,  // fault_inject
     SATISFIES_KW, // satisfies (for safety requirement compliance)
     VIA_KW,       // via (for satisfies declarations)
@@ -435,7 +436,22 @@ pub enum SyntaxKind {
     SATISFIES_DETAILS, // { field: value, ... }
     
     // Hierarchical requirement nodes
-    SAFETY_GOAL_DEF,    // safety_goal SG_001 { ... }
+    SAFETY_GOAL_DEF,    // safety_goal Name(params) "title" { signal ..; effect ..; }  (library goal definition)
+    SAFETY_GOAL_PARAMS, // (vmax: voltage, level: asil = ASIL_B)
+    SAFETY_SIGNAL_DECL, // signal RAIL: power;      (goal formal)
+    SAFETY_EFFECT,      // effect name = expr severity S3;
+    SAFETY_DEF,         // safety Name [of Entity] as ns { ... }
+    SAFETY_LINK,        // `of Entity`
+    SAFETY_NS,          // `as ns`
+    SAFETY_GOAL_INST,   // SG: Goal(params) { formal: ns.h; ... } (kwargs);
+    SAFETY_GOAL_INLINE, // goal SG: LEVEL "title" (kwargs) { effect ...; }
+    SAFETY_BIND_ITEM,   // formal: ns.handle;
+    SAFETY_MECHANISM,   // mechanism ns.h: psm(Goal, ...);
+    SAFETY_FAULT,       // fault kind(targets) expect Goal.effect [detected_by ns.h] [within dur];
+    SAFETY_WAIVE,       // waive ns.h qm "reason";
+    SAFETY_ASSUME,      // assume Id(args) | Id "text";
+    SAFETY_REFINES,     // ns.inst.Goal refines Goal;
+    SAFETY_SATISFIED,   // ns.inst.Id satisfied_by ns.h;  |  ... waived "reason";
     FAULT_INJECT_DEF,   // fault_inject short(a, b) -> verify { ... }
     SAFETY_ATTR,        // #[safety(...)] or #[safety_mechanism(...)]
     FUNCTIONAL_REQ_DEF, // functional_requirement FSR_001 { ... }

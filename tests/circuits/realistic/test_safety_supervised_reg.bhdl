@@ -1,0 +1,98 @@
+// Functional-safety surface fixture (docs/spec/Functional_Safety.md):
+// a supervised 5V regulator ENTITY that is its own safety part, a board
+// instantiating it twice, and the board-level safety block composing the
+// instances. Parses + synthesizes today; `bhdl-cli safety` reports the
+// Phase-1 model and gaps. No library goals yet (they come with the
+// stdlib safety catalogue) — goals here are inline.
+
+import { Res, Cap } from "bhdl-stdlib/passives/resistor.bhdl";
+import { LM317 } from "bhdl-stdlib/power/lm317.bhdl";
+import { TVSDiode } from "bhdl-stdlib/protection/tvs.bhdl";
+
+// Minimal window supervisor stand-in (the stdlib part lands in Phase 2).
+entity VoltageSupervisor(vlo: voltage = 4.5V, vhi: voltage = 5.5V) {
+    pin VDD:   power in;
+    pin SENSE: signal in;
+    pin nOUT:  signal out;     // open-drain, low = out of window
+    pin GND:   ground;
+    attribute component_class = "supervisor";
+    attribute data_source = "class-point: TI TPS3700 (window thresholds)";
+}
+
+// ───────────────────────── the design ────────────────────────────────
+
+entity SupervisedReg5V(vout: voltage = 5V) {
+    pin VIN:    power in;
+    pin VOUT:   power out;
+    pin GND:    ground;
+    pin nFAULT: signal out;
+
+    @VIN    -> reg: LM317(5V).VIN;
+    reg.VOUT -> @VOUT;
+    @VOUT   -> r_fb_top: Res(240Ω).1; r_fb_top.2 -> reg.ADJ;
+    reg.ADJ -> r_fb_bot: Res(720Ω).1; r_fb_bot.2 -> @GND;
+    reg.GND -> @GND;
+    @VOUT   -> c_out: Cap(10µF).1; c_out.2 -> @GND;
+
+    @VOUT   -> mon: VoltageSupervisor(4.5V, 5.5V).VDD;
+    @VOUT   -> mon.SENSE;
+    mon.nOUT -> @nFAULT;
+    mon.GND -> @GND;
+    @VOUT   -> r_pu: Res(10kΩ).1; r_pu.2 -> @nFAULT;
+}
+
+// ───────────────────────── the safety part ───────────────────────────
+
+safety SupervisedReg5V as dut {
+    goal SG_OV: ASIL_B "No undetected overvoltage on VOUT"
+                (id="SG-REG-001", ftti=10ms, safe_state="nFAULT low; load shall disable") {
+        effect overvoltage = dut.VOUT > 5.5V                    severity S3;
+        effect silent_ov   = dut.VOUT > 5.5V && dut.nFAULT == 1 severity S3;
+    }
+    goal SG_UV: ASIL_A "Loss of VOUT is signalled" (id="SG-REG-002", ftti=50ms) {
+        effect silent_uv = dut.VOUT < 4.5V && dut.nFAULT == 1   severity S2;
+    }
+
+    mechanism dut.mon: psm(SG_OV, detects=[overvoltage, silent_ov], dc=0.90,
+                           source="TI TPS3700 datasheet §7.3 (threshold accuracy, no self-test)");
+    mechanism dut.mon: psm(SG_UV, detects=[silent_uv], dc=0.90, source="TI TPS3700 datasheet §7.3");
+
+    fault short(dut.r_fb_bot.1, dut.r_fb_bot.2) expect SG_OV.overvoltage detected_by dut.mon within 10ms;
+    fault open(dut.r_fb_top)                    expect SG_OV.overvoltage detected_by dut.mon within 10ms;
+    fault open(dut.r_pu)                        expect SG_UV.silent_uv;
+    fault state(dut.reg, "ref_drift_high")      expect SG_OV.overvoltage detected_by dut.mon;
+    fault state(dut.mon, "output_stuck_high")   expect SG_OV.silent_ov;
+
+    waive dut.c_out qm "output cap: open -> ripple, short -> UV which SG_UV covers";
+
+    assume ASM_SUPPLY_WITHIN_ABSMAX "VIN stays below the LM317 abs-max (40V in-out)";
+    assume ASM_LOAD_REACTS_TO_FLAG  "the load disables itself while nFAULT is low within FTTI";
+}
+
+// ───────────────────────── a board using it twice ────────────────────
+
+board DualRail {
+    power VBAT = 12V @ 3A;
+    ground GND;
+    power V5_A = 5V @ 1A;
+    power V5_B = 5V @ 1A;
+
+    @VBAT -> rail_a: SupervisedReg5V().VIN;  rail_a.VOUT -> @V5_A;  rail_a.GND -> @GND;
+    @VBAT -> rail_b: SupervisedReg5V().VIN;  rail_b.VOUT -> @V5_B;  rail_b.GND -> @GND;
+    @VBAT -> tvs: TVSDiode(24V).K; tvs.A -> @GND;
+    rail_a.nFAULT -> r_flag_a: Res(10kΩ).1; r_flag_a.2 -> @GND;   // stand-in loads for the flags
+    rail_b.nFAULT -> r_flag_b: Res(10kΩ).1; r_flag_b.2 -> @GND;
+}
+
+safety DualRail as brd {
+    goal SG_SUPPLY: ASIL_B "Neither 5V rail overvolts undetected" (id="SG-SYS-010", ftti=10ms) {
+        effect any_ov = brd.V5_A > 5.5V || brd.V5_B > 5.5V   severity S3;
+    }
+    brd.rail_a.SG_OV refines SG_SUPPLY;
+    brd.rail_b.SG_OV refines SG_SUPPLY;
+
+    brd.rail_a.ASM_SUPPLY_WITHIN_ABSMAX satisfied_by brd.tvs;
+    brd.rail_b.ASM_SUPPLY_WITHIN_ABSMAX satisfied_by brd.tvs;
+    brd.rail_a.ASM_LOAD_REACTS_TO_FLAG  waived "bench fixture: flags drive resistive loads, no consumer to disable";
+    brd.rail_b.ASM_LOAD_REACTS_TO_FLAG  waived "bench fixture: flags drive resistive loads, no consumer to disable";
+}

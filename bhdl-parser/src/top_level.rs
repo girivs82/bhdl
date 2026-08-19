@@ -25,6 +25,7 @@ impl<'t> Parser<'t> {
                 SyntaxKind::TRAIT_KW => self.parse_trait_def(),
                 SyntaxKind::IMPL_KW => self.parse_trait_impl(),
                 SyntaxKind::SAFETY_GOAL_KW => self.parse_safety_goal_def(),
+                SyntaxKind::SAFETY_KW => self.parse_safety_def(),
                 SyntaxKind::FAULT_INJECT_KW => self.parse_fault_inject_def(),
                 SyntaxKind::SYMBOL_KW => self.parse_symbol_def(),
                 SyntaxKind::LAYOUT_KW => self.parse_layout_def(),
@@ -3131,55 +3132,411 @@ impl<'t> Parser<'t> {
     ///     ftti: 10ms;
     /// }
     /// ```
+    /// Library safety-goal definition (docs/spec/Functional_Safety.md §2.2):
+    /// ```bhdl
+    /// safety_goal RailOvervoltage(vmax: voltage, level: asil = ASIL_B)
+    ///     "No undetected overvoltage on the rail"
+    /// {
+    ///     signal RAIL: power;
+    ///     effect overvoltage = RAIL > vmax severity S3;
+    /// }
+    /// ```
+    /// Legacy flat bodies (`key: value;`) still parse as items so older
+    /// fixtures do not break; the semantic pass ignores them.
     pub(crate) fn parse_safety_goal_def(&mut self) {
         self.builder.start_node(SyntaxKind::SAFETY_GOAL_DEF.into());
         self.expect(SyntaxKind::SAFETY_GOAL_KW);
         self.skip_trivia();
-
-        // Safety goal name
         if self.peek() == Some(SyntaxKind::IDENT) {
             self.bump();
         } else {
             self.error("Expected safety goal name".to_string());
         }
-
         self.skip_trivia();
-
-        // Body with key-value pairs
+        // Optional parameter list, same shape as entity parameters.
+        if self.peek() == Some(SyntaxKind::L_PAREN) {
+            self.builder.start_node(SyntaxKind::SAFETY_GOAL_PARAMS.into());
+            self.parse_entity_parameters();
+            self.builder.finish_node();
+            self.skip_trivia();
+        }
+        // Optional title string.
+        if self.peek() == Some(SyntaxKind::STRING) {
+            self.bump();
+            self.skip_trivia();
+        }
         if self.peek() == Some(SyntaxKind::L_BRACE) {
             self.bump();
+            self.parse_safety_goal_body();
+            self.expect(SyntaxKind::R_BRACE);
+        } else {
+            self.error("Expected '{' in safety goal definition".to_string());
+        }
+        self.builder.finish_node();
+    }
 
+    /// Body shared by library goals and inline goals:
+    /// `signal NAME: kind;` | `effect NAME = expr severity Sx;` | legacy `key: value;`
+    fn parse_safety_goal_body(&mut self) {
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) | None => break,
+                Some(SyntaxKind::SIGNAL_KW) => {
+                    self.builder.start_node(SyntaxKind::SAFETY_SIGNAL_DECL.into());
+                    self.bump();
+                    self.skip_trivia();
+                    self.expect(SyntaxKind::IDENT);
+                    self.skip_trivia();
+                    if self.peek() == Some(SyntaxKind::COLON) {
+                        self.bump();
+                        self.skip_trivia();
+                        // kind: power | signal | ground | ident
+                        self.bump_any();
+                    }
+                    self.skip_trivia();
+                    self.expect(SyntaxKind::SEMI);
+                    self.builder.finish_node();
+                }
+                Some(SyntaxKind::IDENT) if self.peek_text().as_deref() == Some("effect") => {
+                    self.parse_safety_effect();
+                }
+                Some(SyntaxKind::IDENT) => {
+                    // legacy `key: value;`
+                    self.builder.start_node(SyntaxKind::REQ_PROPERTY.into());
+                    self.bump();
+                    self.skip_trivia();
+                    if self.peek() == Some(SyntaxKind::COLON) {
+                        self.bump();
+                    }
+                    self.skip_trivia();
+                    self.parse_expression();
+                    self.skip_trivia();
+                    if self.peek() == Some(SyntaxKind::SEMI) {
+                        self.bump();
+                    }
+                    self.builder.finish_node();
+                }
+                _ => {
+                    self.error("Expected `signal`, `effect` or `key: value;` in safety goal body".to_string());
+                    self.bump_any();
+                }
+            }
+        }
+    }
+
+    /// `effect NAME = expr severity Sx;`
+    fn parse_safety_effect(&mut self) {
+        self.builder.start_node(SyntaxKind::SAFETY_EFFECT.into());
+        self.bump(); // `effect`
+        self.skip_trivia();
+        self.expect(SyntaxKind::IDENT); // effect name
+        self.skip_trivia();
+        self.expect(SyntaxKind::EQ);
+        self.skip_trivia();
+        self.parse_expression();
+        self.skip_trivia();
+        if self.peek_text().as_deref() == Some("severity") {
+            self.bump();
+            self.skip_trivia();
+            if self.peek() == Some(SyntaxKind::IDENT) {
+                self.bump(); // S0..S3
+            } else {
+                self.error("Expected severity class (S0..S3)".to_string());
+            }
+        } else {
+            self.error("Expected `severity Sx` after effect expression".to_string());
+        }
+        self.skip_trivia();
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+
+    /// `safety Name [of Entity] as ns { statements }` (docs/spec/Functional_Safety.md §2.1)
+    pub(crate) fn parse_safety_def(&mut self) {
+        self.builder.start_node(SyntaxKind::SAFETY_DEF.into());
+        self.expect(SyntaxKind::SAFETY_KW);
+        self.skip_trivia();
+        if self.peek() == Some(SyntaxKind::IDENT) {
+            self.bump(); // block name
+        } else {
+            self.error("Expected safety block name".to_string());
+        }
+        self.skip_trivia();
+        if self.peek_text().as_deref() == Some("of") {
+            self.builder.start_node(SyntaxKind::SAFETY_LINK.into());
+            self.bump();
+            self.skip_trivia();
+            self.expect(SyntaxKind::IDENT);
+            self.builder.finish_node();
+            self.skip_trivia();
+        }
+        if self.peek() == Some(SyntaxKind::AS_KW) {
+            self.builder.start_node(SyntaxKind::SAFETY_NS.into());
+            self.bump();
+            self.skip_trivia();
+            self.expect(SyntaxKind::IDENT);
+            self.builder.finish_node();
+            self.skip_trivia();
+        } else {
+            self.error("Expected `as <namespace>` in safety block header (e.g. `safety Reg as dut { }`)".to_string());
+        }
+        self.expect(SyntaxKind::L_BRACE);
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) | None => break,
+                Some(SyntaxKind::IDENT) => {
+                    let head = self.peek_text().unwrap_or_default();
+                    match head.as_str() {
+                        "goal" => self.parse_safety_goal_inline(),
+                        "mechanism" => self.parse_safety_mechanism(),
+                        "fault" => self.parse_safety_fault(),
+                        "waive" => self.parse_safety_waive(),
+                        "assume" => self.parse_safety_assume(),
+                        _ => {
+                            // `SG: Goal(...) { ... } (...);`  or
+                            // `ns.inst.Goal refines SG;`      or
+                            // `ns.inst.Id satisfied_by ns.h;` / `... waived "...";`
+                            let mut k = 1;
+                            while matches!(self.peek_nth(k), Some(SyntaxKind::WHITESPACE) | Some(SyntaxKind::COMMENT)) { k += 1; }
+                            if self.peek_nth(k) == Some(SyntaxKind::COLON) {
+                                self.parse_safety_goal_inst();
+                            } else {
+                                self.parse_safety_compose_stmt();
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    self.error("Expected a safety statement (goal, mechanism, fault, waive, assume, `SG: Goal(...)`, `x refines y`, `x satisfied_by y`)".to_string());
+                    self.bump_any();
+                }
+            }
+        }
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
+    /// `goal SG: LEVEL "title" (kwargs) { body }`
+    fn parse_safety_goal_inline(&mut self) {
+        self.builder.start_node(SyntaxKind::SAFETY_GOAL_INLINE.into());
+        self.bump(); // `goal`
+        self.skip_trivia();
+        self.expect(SyntaxKind::IDENT);
+        self.skip_trivia();
+        if self.peek() == Some(SyntaxKind::COLON) {
+            self.bump();
+            self.skip_trivia();
+            self.expect(SyntaxKind::IDENT); // level
+            self.skip_trivia();
+        }
+        if self.peek() == Some(SyntaxKind::STRING) {
+            self.bump();
+            self.skip_trivia();
+        }
+        if self.peek() == Some(SyntaxKind::L_PAREN) {
+            self.parse_param_list_expr();
+            self.skip_trivia();
+        }
+        if self.peek() == Some(SyntaxKind::L_BRACE) {
+            self.bump();
+            self.parse_safety_goal_body();
+            self.expect(SyntaxKind::R_BRACE);
+        } else {
+            self.expect(SyntaxKind::SEMI);
+        }
+        self.builder.finish_node();
+    }
+
+    /// `SG: Goal(params) { formal: ns.h; ... } (kwargs);`
+    fn parse_safety_goal_inst(&mut self) {
+        self.builder.start_node(SyntaxKind::SAFETY_GOAL_INST.into());
+        self.expect(SyntaxKind::IDENT); // instance name
+        self.skip_trivia();
+        self.expect(SyntaxKind::COLON);
+        self.skip_trivia();
+        self.expect(SyntaxKind::IDENT); // goal type
+        self.skip_trivia();
+        if self.peek() == Some(SyntaxKind::L_PAREN) {
+            self.parse_param_list_expr();
+            self.skip_trivia();
+        }
+        if self.peek() == Some(SyntaxKind::L_BRACE) {
+            self.bump();
             loop {
                 self.skip_trivia();
                 match self.peek() {
                     Some(SyntaxKind::R_BRACE) | None => break,
                     Some(SyntaxKind::IDENT) => {
-                        // key: value;
-                        self.bump(); // key
+                        self.builder.start_node(SyntaxKind::SAFETY_BIND_ITEM.into());
+                        self.bump(); // formal
                         self.skip_trivia();
-                        if self.peek() == Some(SyntaxKind::COLON) {
-                            self.bump();
-                        }
+                        self.expect(SyntaxKind::COLON);
                         self.skip_trivia();
-                        // value (may be string, ident, or expression)
-                        self.parse_expression();
+                        self.parse_safety_path(); // ns.handle / @net
                         self.skip_trivia();
-                        if self.peek() == Some(SyntaxKind::SEMI) {
-                            self.bump();
-                        }
+                        self.expect(SyntaxKind::SEMI);
+                        self.builder.finish_node();
                     }
                     _ => {
-                        self.error("Expected key-value pair in safety goal".to_string());
+                        self.error("Expected `formal: ns.handle;` in goal binding".to_string());
                         self.bump_any();
                     }
                 }
             }
-
             self.expect(SyntaxKind::R_BRACE);
-        } else {
-            self.error("Expected '{' after safety goal name".to_string());
+            self.skip_trivia();
         }
+        if self.peek() == Some(SyntaxKind::L_PAREN) {
+            self.parse_param_list_expr(); // per-instance kwargs
+            self.skip_trivia();
+        }
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
 
+    /// Dotted handle path: `ns.inst.pin` / `ns.r.1` — IDENT (`.` IDENT|NUMBER)*.
+    /// Used where `parse_expression` would mis-read `x: Y(...)` as a named
+    /// declaration (mechanism subjects) or swallow trailing keywords.
+    fn parse_safety_path(&mut self) {
+        self.builder.start_node(SyntaxKind::NET_REF.into());
+        if self.peek() == Some(SyntaxKind::AT) {
+            self.bump();
+        }
+        self.expect(SyntaxKind::IDENT);
+        loop {
+            if self.peek() == Some(SyntaxKind::DOT) {
+                self.bump();
+                match self.peek() {
+                    Some(SyntaxKind::IDENT) | Some(SyntaxKind::NUMBER) | Some(SyntaxKind::UNIT_IDENTIFIER) => self.bump(),
+                    _ => { self.error("Expected identifier after '.' in path".to_string()); break; }
+                }
+            } else {
+                break;
+            }
+        }
+        self.builder.finish_node();
+    }
+
+    /// `mechanism ns.h: psm(Goal, ...);`
+    fn parse_safety_mechanism(&mut self) {
+        self.builder.start_node(SyntaxKind::SAFETY_MECHANISM.into());
+        self.bump(); // `mechanism`
+        self.skip_trivia();
+        self.parse_safety_path(); // ns.handle
+        self.skip_trivia();
+        self.expect(SyntaxKind::COLON);
+        self.skip_trivia();
+        self.parse_expression(); // psm(...) / lsm(...)
+        self.skip_trivia();
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+
+    /// `fault kind(targets) expect Goal.effect [detected_by ns.h] [within dur];`
+    fn parse_safety_fault(&mut self) {
+        self.builder.start_node(SyntaxKind::SAFETY_FAULT.into());
+        self.bump(); // `fault`
+        self.skip_trivia();
+        self.parse_expression(); // kind(targets)
+        self.skip_trivia();
+        if self.peek_text().as_deref() == Some("expect") {
+            self.bump();
+            self.skip_trivia();
+            self.parse_safety_path(); // Goal.effect
+            self.skip_trivia();
+        } else {
+            self.error("Expected `expect Goal.effect` in fault statement".to_string());
+        }
+        loop {
+            match self.peek_text().as_deref() {
+                Some("detected_by") => {
+                    self.bump();
+                    self.skip_trivia();
+                    self.parse_safety_path();
+                    self.skip_trivia();
+                }
+                Some("within") => {
+                    self.bump();
+                    self.skip_trivia();
+                    self.parse_expression(); // duration
+                    self.skip_trivia();
+                }
+                _ => break,
+            }
+        }
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+
+    /// `waive ns.h qm "reason";`
+    fn parse_safety_waive(&mut self) {
+        self.builder.start_node(SyntaxKind::SAFETY_WAIVE.into());
+        self.bump(); // `waive`
+        self.skip_trivia();
+        self.parse_safety_path(); // ns.handle
+        self.skip_trivia();
+        if self.peek() == Some(SyntaxKind::IDENT) {
+            self.bump(); // qm
+            self.skip_trivia();
+        }
+        if self.peek() == Some(SyntaxKind::STRING) {
+            self.bump();
+        } else {
+            self.error("Expected reason string in waive".to_string());
+        }
+        self.skip_trivia();
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+
+    /// `assume Id(args);` | `assume Id "text";`
+    fn parse_safety_assume(&mut self) {
+        self.builder.start_node(SyntaxKind::SAFETY_ASSUME.into());
+        self.bump(); // `assume`
+        self.skip_trivia();
+        self.parse_expression(); // Id(args) or Id
+        self.skip_trivia();
+        if self.peek() == Some(SyntaxKind::STRING) {
+            self.bump();
+            self.skip_trivia();
+        }
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+
+    /// `ns.inst.Goal refines SG;` | `ns.inst.Id satisfied_by ns.h;` | `ns.inst.Id waived "reason";`
+    fn parse_safety_compose_stmt(&mut self) {
+        let checkpoint = self.builder.checkpoint();
+        self.parse_safety_path(); // subject path
+        self.skip_trivia();
+        match self.peek_text().as_deref() {
+            Some("refines") => {
+                self.builder.start_node_at(checkpoint, SyntaxKind::SAFETY_REFINES.into());
+                self.bump();
+                self.skip_trivia();
+                self.parse_safety_path();
+            }
+            Some("satisfied_by") => {
+                self.builder.start_node_at(checkpoint, SyntaxKind::SAFETY_SATISFIED.into());
+                self.bump();
+                self.skip_trivia();
+                self.parse_safety_path();
+            }
+            Some("waived") => {
+                self.builder.start_node_at(checkpoint, SyntaxKind::SAFETY_SATISFIED.into());
+                self.bump();
+                self.skip_trivia();
+                if self.peek() == Some(SyntaxKind::STRING) { self.bump(); } else { self.error("Expected reason string after `waived`".to_string()); }
+            }
+            _ => {
+                self.builder.start_node_at(checkpoint, SyntaxKind::SAFETY_REFINES.into());
+                self.error("Expected `refines`, `satisfied_by` or `waived` after path".to_string());
+            }
+        }
+        self.skip_trivia();
+        self.expect(SyntaxKind::SEMI);
         self.builder.finish_node();
     }
 
