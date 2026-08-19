@@ -256,7 +256,7 @@ Component failure data lives on entities (stdlib or vendor), e.g.
 | # | deliverable | notes |
 |---|---|---|
 | 0 | this doc + `docs/spec/Functional_Safety.md` (normative subset of §3–§6) | 1 sitting |
-| 1 | semantic model: parse → `bhdl-common::safety` types attached to the board; binding + errors; `bhdl-cli safety` prints the model and *gaps* (no metrics yet) | replaces the placeholder FMEA pass; delete `fmea_analysis.rs` example data |
+| 1 | **DONE (c6c0eff, 345d4e6)** — grammar (`safety <Name> [of E] as ns { }`, library `safety_goal`), semantic model (`bhdl_common::safety`), `bhdl-cli safety` gap report + `--baseline` delta; placeholder FMEA/redundancy passes deleted | spec `docs/spec/Functional_Safety.md` |
 | 2 | data campaign on the models the examples use: (a) terminal-range probe + honest-off-nominal fixes for behavioral models (regulator, supervisor, op-amp); (b) vendor-sourced `failure_modes` states where published; (c) SEooC blocks for one MCU/SoC from its safety manual (λ, classes, assumptions of use, terminal contract); (d) passives/discretes from a named handbook table the user provides (SN 29500 / IEC 62380 excerpts) | "the datasheet/safety manual IS the model"; no FIT table of our own |
 | 3 | fault universe + campaign on GLACIER; effect evaluation; measured DC; FMEDA + gap report; verdict + exit gate | the core; reuse `fault_injection.rs`, testbench runner, trial-tier parallelism |
 | 4 | LSM/latent modelling, PMHF uncertainty, IEC 61508 metrics, SEooC checklist emission + import from SKALP | shared core proves itself here |
