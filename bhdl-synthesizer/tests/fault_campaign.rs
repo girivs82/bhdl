@@ -259,8 +259,13 @@ async fn fmeda_export_serializes_the_measured_model() {
     let csvs = bhdl_synthesizer::fault_campaign::export_fmeda(&model);
 
     // worksheet: header + one row per universe fault (14 in the mock)
+    // + the stated inter-part-bridge exclusion row
     let wlines: Vec<&str> = csvs.worksheet.trim_end().lines().collect();
-    assert_eq!(wlines.len(), 1 + model.universe.len(), "{}", csvs.worksheet);
+    assert_eq!(wlines.len(), 1 + model.universe.len() + 1, "{}", csvs.worksheet);
+    assert!(
+        wlines.last().unwrap().contains("EXCLUDED") && wlines.last().unwrap().contains("short_inter_part"),
+        "{}", csvs.worksheet
+    );
     assert!(wlines[0].starts_with("scope,part,entity,part_lambda_fit"));
     // vendor states carry their real λ shares; classification column present
     assert!(csvs.worksheet.contains("state") && csvs.worksheet.contains("6.0000"), "{}", csvs.worksheet);

@@ -2050,6 +2050,15 @@ async fn run_safety(
                 println!("    {} {}({})  not run: {}", u.part, u.mode, u.targets.join(", "), u.note.as_deref().unwrap_or("?"));
             }
         }
+        // A stated exclusion, not measured coverage: bridge faults
+        // between DIFFERENT parts' pads need placement — which pads
+        // neighbour which is a layout outcome, and this analysis does
+        // not consume layout. Silence here would read as coverage.
+        println!(
+            "    {}",
+            "excluded: inter-part bridge faults — pad adjacency between different parts requires placement, not consumed here"
+                .yellow()
+        );
     }
     println!("\n  {} ({})", "gaps".bold(), model.gaps.len());
     for g in &model.gaps {

@@ -1582,6 +1582,16 @@ pub fn export_fmeda(model: &bhdl_common::safety::SafetyModel) -> FmedaCsvs {
             s("part not represented in the fault universe — see gaps"),
         ]));
     }
+    // Stated coverage exclusion — a worksheet ROW, so the assessor
+    // sees it in the artifact itself, not only in the terminal report.
+    // Not a UniverseFault: it must not enter the λ arithmetic or the
+    // unmeasured-fault count (it is an exclusion, not an unrun fault).
+    w.push(csv_row(&[
+        String::new(), s("(board)"), String::new(), String::new(), String::new(),
+        s("short_inter_part"), String::new(), String::new(), s("false"), s("EXCLUDED"),
+        String::new(), String::new(), String::new(),
+        s("EXCLUDED from this analysis: bridge faults between different parts' pads require placement (pad adjacency across parts is a layout outcome); this analysis does not consume layout"),
+    ]));
     // mechanisms: claimed vs measured
     let mut m: Vec<String> = Vec::new();
     m.push(csv_row(&[

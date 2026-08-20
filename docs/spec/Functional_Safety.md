@@ -205,6 +205,17 @@ MEASURED DC side by side with sources) and `<stem>_metrics.csv`
 serializes the measured model — nothing is computed at export time,
 and empty cells mean the datum does not exist, never zero.
 
+**Stated exclusion — inter-part bridges**: the universe's bridge
+faults are INTRA-package only. A bridge between DIFFERENT parts' pads
+(or a pad and another net's track/via) is just as real, but which
+pads neighbour which is a placement outcome, and this analysis does
+not consume layout — enumerating such pairs without placement would
+be invented data. The report prints the exclusion under the fault
+universe and the FMEDA worksheet carries an `EXCLUDED
+short_inter_part` row (outside the λ arithmetic), so the artifact
+itself says what is not covered. Planned: opportunistic consumption
+of a placement artifact when one exists.
+
 ### 2.5 Faults, waivers, assumptions
 
 ```bhdl
