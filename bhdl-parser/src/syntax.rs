@@ -440,6 +440,7 @@ pub enum SyntaxKind {
     SAFETY_GOAL_DEF,    // safety_goal Name(params) "title" { signal ..; effect ..; }  (library goal definition)
     SAFETY_ASSUMPTION_DEF, // safety_assumption Name(params) "text";  (library assumption-of-use definition)
     SAFETY_MISSION,     // mission { ambient = 55degC; on_hours = 8760; }  (board mission profile)
+    SAFETY_MISSION_PHASE, // phase driving { time = 8%; ambient = 60degC; }  (one histogram phase)
     SAFETY_GOAL_PARAMS, // (vmax: voltage, level: asil = ASIL_B)
     SAFETY_SIGNAL_DECL, // signal RAIL: power;      (goal formal)
     SAFETY_EFFECT,      // effect name = expr severity S3;

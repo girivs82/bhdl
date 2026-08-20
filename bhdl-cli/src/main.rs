@@ -1587,6 +1587,42 @@ async fn run_safety(
     // margin table uses — never estimated here. Any missing ingredient
     // leaves the FIT uncomputed and adds a FIT_UNCOMPUTED gap.
     {
+        // Named mission profile (project tunable): resolve from
+        // mission_profiles.toml with the same 3-tier order as the
+        // coefficient tables. Explicit mission items win over the
+        // profile's fields.
+        if model.mission.as_ref().map(|m| m.profile.is_some()).unwrap_or(false) {
+            let mut cands: Vec<PathBuf> = Vec::new();
+            if let Ok(dir) = std::env::var("BHDL_SAFETY_TABLES") { cands.push(PathBuf::from(dir).join("mission_profiles.toml")); }
+            for rel in ["bhdl-stdlib/safety/mission_profiles.local.toml", "bhdl-stdlib/safety/mission_profiles.toml"] {
+                if let Ok(lr) = std::env::var("BHDL_LIB_PATH") { cands.push(PathBuf::from(lr).join(rel)); }
+                if let Some(base) = board_path.parent() { cands.push(base.join(rel)); }
+                cands.push(PathBuf::from(rel));
+            }
+            let mut resolved = false;
+            for c in cands {
+                if let Ok(text) = fs::read_to_string(&c) {
+                    match bhdl_synthesizer::reliability::MissionProfileFile::from_toml(&text) {
+                        Ok(f) => {
+                            let m = model.mission.as_mut().unwrap();
+                            match bhdl_synthesizer::reliability::resolve_mission_profile(m, &f) {
+                                Ok(src) => println!("  mission profile {}: {} [{}]", m.profile.as_deref().unwrap_or(""), c.display(), src),
+                                Err(e) => model.errors.push(format!("mission profile: {e}")),
+                            }
+                        }
+                        Err(e) => eprintln!("  ! bad mission_profiles {}: {}", c.display(), e),
+                    }
+                    resolved = true;
+                    break;
+                }
+            }
+            if !resolved {
+                model.errors.push(format!(
+                    "mission profile '{}' named but no mission_profiles.toml found (BHDL_SAFETY_TABLES / bhdl-stdlib/safety/)",
+                    model.mission.as_ref().and_then(|m| m.profile.as_deref()).unwrap_or("")
+                ));
+            }
+        }
         // Coefficient tables: bhdl-stdlib/safety/<standard>.toml, resolved
         // like imports (BHDL_LIB_PATH, then relative to the board file, cwd).
         let mut tables: HashMap<String, bhdl_synthesizer::reliability::ReliabilityTable> = HashMap::new();
@@ -1747,9 +1783,17 @@ async fn run_safety(
     }
 
     if let Some(m) = &model.mission {
-        let extras = [m.on_hours.map(|h| format!("on_hours={h}")), m.cycles.map(|c| format!("cycles={c}"))]
-            .into_iter().flatten().collect::<Vec<_>>().join(", ");
-        println!("\n  mission: ambient={}°C{}", m.ambient_c, if extras.is_empty() { String::new() } else { format!(", {extras}") });
+        let extras = [
+            m.on_hours.map(|h| format!("on_hours={h}")),
+            m.cycles.map(|c| format!("cycles={c}")),
+            m.environment.as_ref().map(|e| format!("environment={e}")),
+            m.quality.as_ref().map(|q| format!("quality={q}")),
+            m.profile.as_ref().map(|p| format!("profile={p}")),
+        ].into_iter().flatten().collect::<Vec<_>>().join(", ");
+        println!("\n  mission: ambient={:.1}°C{}", m.ambient_c, if extras.is_empty() { String::new() } else { format!(", {extras}") });
+        for ph in &m.phases {
+            println!("    phase {:<14} {:>5.1}% @ {:.0}°C{}", ph.name, ph.frac * 100.0, ph.ambient_c, if ph.powered { "" } else { "  (unpowered)" });
+        }
     }
     println!("\n  {} ({})", "parts".bold(), model.parts.len());
     println!("    {:<26} {:<22} {:<12} {}", "instance", "type", "safety part", "safety data");

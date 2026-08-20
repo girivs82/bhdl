@@ -1,0 +1,65 @@
+# Named mission profiles for the bhdl reliability engine
+# (docs/spec/Functional_Safety.md §2.8) — the PROJECT TUNABLE.
+#
+# A board's safety block picks one by name:
+#
+#     mission { profile = passenger_compartment; }
+#
+# and can override any field explicitly (explicit items win):
+#
+#     mission { profile = motor_control; quality = P; }
+#
+# A profile is a temperature/time histogram over the product's life
+# plus the π_E environment and π_Q quality defaults. The engine
+# computes the time-weighted λ over powered phases; unpowered phases
+# contribute zero (the shipped models carry no dormant term — that is
+# printed, not hidden). `time_basis = operating` (default) reports λ
+# per operating hour — the FMEDA/PMHF convention; `calendar` averages
+# over total life.
+#
+# ┌─────────────────────────────────────────────────────────────────┐
+# │ The profiles below are EXAMPLES — plausibly-shaped histograms   │
+# │ to make the machinery concrete, NOT transcribed from any OEM    │
+# │ spec. A real program replaces them with its own mission spec    │
+# │ (LV 124 / VW 80000-style histograms, agreed FTTI environment)   │
+# │ in mission_profiles.local.toml (gitignored, takes precedence)   │
+# │ or $BHDL_SAFETY_TABLES/mission_profiles.toml.                   │
+# └─────────────────────────────────────────────────────────────────┘
+
+source = "bhdl EXAMPLE profiles — illustrative shapes, not an OEM mission spec"
+
+# Automotive electronics in the passenger compartment: vehicle parked
+# most of its life; moderate cabin temperatures while driving.
+[profiles.passenger_compartment]
+environment = "GM"      # ground mobile (MIL-HDBK-217F Table 3-2)
+time_basis = "operating"
+source = "EXAMPLE shape — replace with your OEM cabin mission spec"
+phases = [
+    { name = "parked",       time = 0.90, ambient = 23.0, powered = false },
+    { name = "drive_normal", time = 0.08, ambient = 40.0 },
+    { name = "drive_hot",    time = 0.015, ambient = 65.0 },
+    { name = "hot_soak",     time = 0.005, ambient = 85.0 },
+]
+
+# Motor-control / near-powertrain electronics: hotter operating bins,
+# same parked share.
+[profiles.motor_control]
+environment = "GM"
+time_basis = "operating"
+source = "EXAMPLE shape — replace with your inverter/underhood mission spec"
+phases = [
+    { name = "parked",     time = 0.90, ambient = 23.0, powered = false },
+    { name = "run_normal", time = 0.07, ambient = 70.0 },
+    { name = "run_peak",   time = 0.025, ambient = 95.0 },
+    { name = "hot_soak",   time = 0.005, ambient = 105.0 },
+]
+
+# Always-on industrial equipment in a controlled room.
+[profiles.industrial_continuous]
+environment = "GB"
+time_basis = "operating"
+source = "EXAMPLE shape — replace with your site's environmental spec"
+phases = [
+    { name = "run",     time = 0.97, ambient = 45.0 },
+    { name = "service", time = 0.03, ambient = 25.0, powered = false },
+]

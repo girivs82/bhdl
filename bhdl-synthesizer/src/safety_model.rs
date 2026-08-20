@@ -912,6 +912,9 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
                     let mut cycles: Option<f64> = None;
                     let mut environment: Option<String> = None;
                     let mut quality: Option<String> = None;
+                    let mut profile: Option<String> = None;
+                    let mut time_basis: Option<String> = None;
+                    let mut phases: Vec<bhdl_common::safety::MissionPhase> = Vec::new();
                     let leading_num = |v: &str| -> Option<f64> {
                         let end = v.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+')).unwrap_or(v.len());
                         v[..end].parse::<f64>().ok()
@@ -922,19 +925,58 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
                             model.errors.push(format!("safety {}: mission item '{}' is not `key = value`", blk.name, t));
                             continue;
                         };
-                        let (k, v) = (k.trim(), v.trim());
+                        let (k, v) = (k.trim(), v.trim().trim_end_matches(';').trim());
                         match k {
                             "ambient" => ambient = leading_num(v),
                             "on_hours" => on_hours = leading_num(v),
                             "cycles" => cycles = leading_num(v),
                             "environment" => environment = Some(v.trim_matches('"').to_string()),
                             "quality" => quality = Some(v.trim_matches('"').to_string()),
-                            other => model.errors.push(format!("safety {}: unknown mission item '{}' (ambient|on_hours|cycles|environment|quality)", blk.name, other)),
+                            "profile" => profile = Some(v.trim_matches('"').to_string()),
+                            "time_basis" => time_basis = Some(v.trim_matches('"').to_string()),
+                            other => model.errors.push(format!("safety {}: unknown mission item '{}' (ambient|on_hours|cycles|environment|quality|profile|time_basis)", blk.name, other)),
                         }
                     }
-                    match ambient {
-                        Some(a) => model.mission = Some(bhdl_common::safety::Mission { ambient_c: a, on_hours, cycles, environment, quality }),
-                        None => model.errors.push(format!("safety {}: mission {{ }} has no `ambient = <temp>`", blk.name)),
+                    // Inline phases: `phase NAME { time = 8%; ambient = 60degC; powered = false; }`
+                    for ph in child_nodes(st, SyntaxKind::SAFETY_MISSION_PHASE) {
+                        let pname = idents(&ph).first().cloned().unwrap_or_default();
+                        let (mut frac, mut amb, mut powered): (Option<f64>, Option<f64>, bool) = (None, None, true);
+                        for item in child_nodes(&ph, SyntaxKind::SAFETY_DATA_ITEM) {
+                            let t = text_of(&item);
+                            let Some((k, v)) = t.split_once('=') else { continue };
+                            let v = v.trim().trim_end_matches(';');
+                            match k.trim() {
+                                "time" => {
+                                    frac = leading_num(v.trim());
+                                    if v.contains('%') { frac = frac.map(|f| f / 100.0); }
+                                }
+                                "ambient" => amb = leading_num(v.trim()),
+                                "powered" => powered = v.trim() != "false",
+                                other => model.errors.push(format!("safety {}: phase {}: unknown item '{}' (time|ambient|powered)", blk.name, pname, other)),
+                            }
+                        }
+                        match (frac, amb) {
+                            (Some(f), Some(a)) => phases.push(bhdl_common::safety::MissionPhase { name: pname, frac: f, ambient_c: a, powered }),
+                            _ => model.errors.push(format!("safety {}: phase {} needs `time = <frac>` and `ambient = <temp>`", blk.name, pname)),
+                        }
+                    }
+                    // Inline phases must cover the whole life. A named
+                    // profile's phases are validated after resolution (CLI).
+                    if !phases.is_empty() {
+                        let sum: f64 = phases.iter().map(|p| p.frac).sum();
+                        if (sum - 1.0).abs() > 0.02 {
+                            model.errors.push(format!("safety {}: mission phases sum to {:.3}, not 1.0", blk.name, sum));
+                        }
+                    }
+                    if ambient.is_none() && !phases.is_empty() {
+                        // display ambient = time-weighted mean of the phases
+                        let sum: f64 = phases.iter().map(|p| p.frac).sum::<f64>().max(1e-9);
+                        ambient = Some(phases.iter().map(|p| p.frac * p.ambient_c).sum::<f64>() / sum);
+                    }
+                    match (ambient, &profile) {
+                        (Some(a), _) => model.mission = Some(bhdl_common::safety::Mission { ambient_c: a, on_hours, cycles, environment, quality, profile, time_basis, phases }),
+                        (None, Some(_)) => model.mission = Some(bhdl_common::safety::Mission { ambient_c: f64::NAN, on_hours, cycles, environment, quality, profile, time_basis, phases }),
+                        (None, None) => model.errors.push(format!("safety {}: mission {{ }} has no `ambient = <temp>`, no phases and no profile", blk.name)),
                     }
                 }
                 SyntaxKind::SAFETY_ASSUME => {

@@ -305,12 +305,28 @@ pub struct Scope {
     pub assumptions: Vec<Assumption>,
 }
 
+/// One phase of a mission profile: a fraction of life at one ambient.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MissionPhase {
+    pub name: String,
+    /// Fraction of calendar life (0..1). Phases must sum to ~1.
+    pub frac: f64,
+    /// Ambient temperature in °C during this phase.
+    pub ambient_c: f64,
+    /// Powered? Unpowered phases contribute no operating failure rate
+    /// (the shipped models carry no dormant term — stated, not hidden).
+    pub powered: bool,
+}
+
 /// Board-level mission profile (spec §2.8): the environment every
 /// per-standard FIT equation evaluates against. Declared once in the
-/// board's safety block; absent ⇒ handbook FITs are not computed.
+/// board's safety block — either a single `ambient` (one implicit
+/// phase) or a named `profile` / inline `phase { }` histogram; the
+/// engine computes the time-weighted λ over powered phases.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Mission {
-    /// Ambient temperature in °C.
+    /// Ambient temperature in °C (single-phase shorthand; ignored when
+    /// `phases` is non-empty).
     pub ambient_c: f64,
     /// Powered hours per year (8760 = always on).
     pub on_hours: Option<f64>,
@@ -323,6 +339,17 @@ pub struct Mission {
     /// Quality level for π_Q lookups (S/R/P/M/mil_spec/lower). Absent ⇒
     /// engine default "lower" (COTS), printed in the basis.
     pub quality: Option<String>,
+    /// Named profile to resolve from mission_profiles.toml (project
+    /// tunable — "passenger_compartment", "motor_control", …).
+    /// Explicit mission items override the profile's fields.
+    pub profile: Option<String>,
+    /// Temperature/time histogram. Empty ⇒ one implicit phase at
+    /// `ambient_c`.
+    pub phases: Vec<MissionPhase>,
+    /// λ averaging basis: "operating" (default — λ per operating hour,
+    /// the FMEDA/PMHF convention) or "calendar" (unpowered time counts
+    /// as zero-rate time).
+    pub time_basis: Option<String>,
 }
 
 /// The whole model for one top-level board.

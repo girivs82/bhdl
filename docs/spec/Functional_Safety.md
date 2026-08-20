@@ -267,6 +267,31 @@ all explicit, none guessed:
    feed standards whose models use them (MIL-HDBK-217F); the applied
    defaults are printed in every FIT basis.
 
+   A real mission is not one ambient — it is a temperature/time
+   histogram. Two ways to declare it:
+
+   ```bhdl
+   mission { profile = passenger_compartment; }         // named project tunable
+   mission {                                            // or inline phases
+       phase parked  { time = 90%; ambient = 23degC; powered = false; }
+       phase driving { time = 8%;  ambient = 40degC; }
+       phase hot     { time = 2%;  ambient = 85degC; }
+   }
+   ```
+
+   Named profiles live in `mission_profiles.toml` (resolved through the
+   same 3-tier overlay as the coefficient tables — the shipped file
+   carries clearly-labelled EXAMPLE shapes: `passenger_compartment`,
+   `motor_control`, `industrial_continuous`; a real program replaces
+   them with its OEM mission spec in the gitignored `.local.toml`).
+   Explicit mission items override the profile's fields. The engine
+   computes the time-weighted λ over powered phases; unpowered phases
+   contribute zero (the shipped models carry no dormant term — printed,
+   not hidden). `time_basis = operating` (default) reports λ per
+   operating hour — the FMEDA/PMHF convention; `calendar` averages over
+   total life. Phases must sum to 1.0 (hard error otherwise), and the
+   full per-phase breakdown is printed in the FIT basis.
+
    Board-level only: an entity block is applied per instance, and a
    per-instance environment would be a contradiction (hard error).
 

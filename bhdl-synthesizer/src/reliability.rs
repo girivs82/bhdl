@@ -175,6 +175,70 @@ impl ReliabilityTable {
     }
 }
 
+/// A named mission profile from mission_profiles.toml — the project
+/// tunable ("passenger_compartment", "motor_control", …). Explicit
+/// mission items in the safety block override the profile's fields.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct MissionProfileFile {
+    pub source: String,
+    pub profiles: BTreeMap<String, MissionProfileDef>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct MissionProfileDef {
+    pub environment: Option<String>,
+    pub quality: Option<String>,
+    pub time_basis: Option<String>,
+    pub source: String,
+    pub phases: Vec<ProfilePhaseDef>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct ProfilePhaseDef {
+    pub name: String,
+    /// Fraction of calendar life (0..1).
+    pub time: f64,
+    /// Ambient °C.
+    pub ambient: f64,
+    #[serde(default = "default_true")]
+    pub powered: bool,
+}
+
+fn default_true() -> bool { true }
+
+impl MissionProfileFile {
+    pub fn from_toml(text: &str) -> Result<MissionProfileFile, String> {
+        toml::from_str(text).map_err(|e| e.to_string())
+    }
+}
+
+/// Resolve `mission.profile` against a profile file: fill phases and
+/// (only where the board did not say otherwise) environment / quality /
+/// time_basis. Returns an error string for an unknown profile or a
+/// histogram that does not cover the life.
+pub fn resolve_mission_profile(mission: &mut Mission, file: &MissionProfileFile) -> Result<String, String> {
+    let Some(name) = mission.profile.clone() else { return Ok(String::new()) };
+    let Some(def) = file.profiles.get(&name) else {
+        return Err(format!("profile '{}' not in mission_profiles ({})", name, file.profiles.keys().cloned().collect::<Vec<_>>().join(", ")));
+    };
+    if mission.phases.is_empty() {
+        mission.phases = def.phases.iter().map(|p| bhdl_common::safety::MissionPhase {
+            name: p.name.clone(), frac: p.time, ambient_c: p.ambient, powered: p.powered,
+        }).collect();
+    }
+    let sum: f64 = mission.phases.iter().map(|p| p.frac).sum();
+    if (sum - 1.0).abs() > 0.02 {
+        return Err(format!("profile '{}' phases sum to {:.3}, not 1.0", name, sum));
+    }
+    if mission.environment.is_none() { mission.environment = def.environment.clone(); }
+    if mission.quality.is_none() { mission.quality = def.quality.clone(); }
+    if mission.time_basis.is_none() { mission.time_basis = def.time_basis.clone(); }
+    if mission.ambient_c.is_nan() {
+        mission.ambient_c = mission.phases.iter().map(|p| p.frac * p.ambient_c).sum::<f64>() / sum;
+    }
+    Ok(def.source.clone())
+}
+
 /// Per-instance sim-derived inputs: applied and rated stress in the
 /// class's axis units (W for resistors), plus the resistance from the
 /// netlist attribute — straight from sign-off rows and the netlist,
@@ -216,20 +280,65 @@ pub fn apply_reliability(
         }
         if let (Some(table), Some(m), Some(st)) = (table, m, st) {
             if st.rated > 0.0 {
-                let inp = FitInputs {
+                let mk_inp = |ambient_c: f64| FitInputs {
                     stress_ratio: st.applied / st.rated,
-                    ambient_c: m.ambient_c,
+                    ambient_c,
                     resistance_ohm: st.resistance_ohm,
                     quality: m.quality.clone(),
                     environment: m.environment.clone(),
                 };
-                match table.fit_for(class, &inp) {
-                    Ok((f, basis)) => {
+                if m.phases.is_empty() && m.ambient_c.is_nan() {
+                    missing.push("mission profile named but unresolved (no phases, no ambient)".to_string());
+                } else if m.phases.is_empty() {
+                    match table.fit_for(class, &mk_inp(m.ambient_c)) {
+                        Ok((f, basis)) => {
+                            *fit = Some(f);
+                            *fit_basis = Some(basis);
+                            continue;
+                        }
+                        Err(e) => missing.push(e),
+                    }
+                } else {
+                    // Time-weighted λ over the histogram. Unpowered
+                    // phases contribute zero (the shipped models have no
+                    // dormant term — stated, not hidden). Basis:
+                    // "operating" (default) divides by powered time —
+                    // λ per operating hour, the FMEDA/PMHF convention;
+                    // "calendar" divides by total time.
+                    let mut weighted = 0.0f64;
+                    let mut err: Option<String> = None;
+                    let mut parts_txt: Vec<String> = Vec::new();
+                    let powered_frac: f64 = m.phases.iter().filter(|p| p.powered).map(|p| p.frac).sum();
+                    for ph in &m.phases {
+                        if !ph.powered {
+                            parts_txt.push(format!("{} {:.0}%@{:.0}°C off", ph.name, ph.frac * 100.0, ph.ambient_c));
+                            continue;
+                        }
+                        match table.fit_for(class, &mk_inp(ph.ambient_c)) {
+                            Ok((f, _)) => {
+                                weighted += ph.frac * f;
+                                parts_txt.push(format!("{} {:.0}%@{:.0}°C→{:.1}", ph.name, ph.frac * 100.0, ph.ambient_c, f));
+                            }
+                            Err(e) => { err = Some(e); break; }
+                        }
+                    }
+                    if let Some(e) = err {
+                        missing.push(e);
+                    } else {
+                        let basis_kind = m.time_basis.clone().unwrap_or_else(|| "operating".to_string());
+                        let f = match basis_kind.as_str() {
+                            "calendar" => weighted,
+                            _ => if powered_frac > 0.0 { weighted / powered_frac } else { 0.0 },
+                        };
+                        let profile_txt = m.profile.as_deref().map(|p| format!(" profile={p}")).unwrap_or_default();
                         *fit = Some(f);
-                        *fit_basis = Some(basis);
+                        *fit_basis = Some(format!(
+                            "λ={:.1} FIT ({} basis{}) = Σ[{}] / powered {:.0}% @ S={:.2} per {}",
+                            f, basis_kind, profile_txt, parts_txt.join(", "), powered_frac * 100.0,
+                            st.applied / st.rated, table.standard
+                        ));
                         continue;
                     }
-                    Err(e) => missing.push(e),
                 }
             } else {
                 missing.push("part has no rating (stress ratio undefined)".to_string());
@@ -376,7 +485,7 @@ source = "MIL-HDBK-217F §9.1 (RC/RCR), p.9-2"
         };
         let mut model = SafetyModel {
             board: "B".into(),
-            mission: Some(Mission { ambient_c: 40.0, on_hours: None, cycles: None, environment: None, quality: None }),
+            mission: Some(Mission { ambient_c: 40.0, on_hours: None, cycles: None, environment: None, quality: None, profile: None, phases: vec![], time_basis: None }),
             scopes: vec![], gaps: vec![], errors: vec![],
             parts: vec![
                 Part { instance: "r1".into(), type_name: "Res".into(), parent: None, data: hb(Some("IEC62380")) },
@@ -395,6 +504,62 @@ source = "MIL-HDBK-217F §9.1 (RC/RCR), p.9-2"
         assert_eq!(fit_gaps.len(), 1, "only the standard-naming part without stress gaps");
         assert_eq!(fit_gaps[0].subject, "r2");
         assert!(fit_gaps[0].fix.contains("no sim-derived stress"));
+    }
+
+    #[test]
+    fn phase_weighted_mission_and_profile_resolution() {
+        use bhdl_common::safety::{Mission, MissionPhase, Part, SafetyModel};
+        let t = ReliabilityTable::from_toml(M217_TABLE).unwrap();
+        let tables: HashMap<String, ReliabilityTable> = [("MILHDBK217F".to_string(), t.clone())].into();
+        let phases = vec![
+            MissionPhase { name: "parked".into(), frac: 0.9, ambient_c: 23.0, powered: false },
+            MissionPhase { name: "drive".into(), frac: 0.1, ambient_c: 60.0, powered: true },
+        ];
+        let mut model = SafetyModel {
+            board: "B".into(),
+            mission: Some(Mission { ambient_c: 26.7, on_hours: None, cycles: None, environment: Some("GB".into()), quality: Some("M".into()), profile: Some("p".into()), phases: phases.clone(), time_basis: None }),
+            scopes: vec![], gaps: vec![], errors: vec![],
+            parts: vec![Part { instance: "r1".into(), type_name: "Res".into(), parent: None, data: PartData::Handbook {
+                class: "res_fixed_film".into(), source: "t".into(), per: Some("MILHDBK217F".into()), fit: None, fit_basis: None } }],
+        };
+        let stress: StressMap = [("r1".to_string(), InstanceStress { applied: 0.1, rated: 1.0, resistance_ohm: Some(1e3) })].into();
+        apply_reliability(&mut model, &stress, &tables);
+        let PartData::Handbook { fit: Some(f), fit_basis: Some(basis), .. } = &model.parts[0].data else { panic!("no fit") };
+        // operating basis: unpowered 90% contributes 0, division by the
+        // powered 10% ⇒ λ equals the 60°C point-value exactly.
+        let inp = FitInputs { stress_ratio: 0.1, ambient_c: 60.0, resistance_ohm: Some(1e3), quality: Some("M".into()), environment: Some("GB".into()) };
+        let (point, _) = t.fit_for("res_fixed_film", &inp).unwrap();
+        assert!((f - point).abs() < 1e-9, "operating-basis λ {f} must equal the powered phase point value {point}");
+        assert!(basis.contains("operating") && basis.contains("profile=p") && basis.contains("off"));
+        // calendar basis scales by the powered fraction
+        model.parts[0].data = PartData::Handbook { class: "res_fixed_film".into(), source: "t".into(), per: Some("MILHDBK217F".into()), fit: None, fit_basis: None };
+        model.gaps.clear();
+        model.mission.as_mut().unwrap().time_basis = Some("calendar".into());
+        apply_reliability(&mut model, &stress, &tables);
+        let PartData::Handbook { fit: Some(fc), .. } = &model.parts[0].data else { panic!("no fit") };
+        assert!((fc - point * 0.1).abs() < 1e-9, "calendar basis = powered_frac × point value");
+
+        // profile resolution: fills phases + env, explicit items win, bad sums error
+        let file = MissionProfileFile::from_toml(r#"
+source = "test"
+[profiles.cabin]
+environment = "GM"
+source = "test profile"
+phases = [ { name = "parked", time = 0.9, ambient = 23.0, powered = false },
+           { name = "drive", time = 0.1, ambient = 60.0 } ]
+[profiles.broken]
+source = "broken"
+phases = [ { name = "half", time = 0.5, ambient = 23.0 } ]
+"#).unwrap();
+        let mut m = Mission { ambient_c: f64::NAN, on_hours: None, cycles: None, environment: Some("GB".into()), quality: None, profile: Some("cabin".into()), phases: vec![], time_basis: None };
+        resolve_mission_profile(&mut m, &file).unwrap();
+        assert_eq!(m.phases.len(), 2);
+        assert_eq!(m.environment.as_deref(), Some("GB"), "explicit board environment beats the profile's");
+        assert!(!m.ambient_c.is_nan());
+        let mut bad = Mission { ambient_c: f64::NAN, on_hours: None, cycles: None, environment: None, quality: None, profile: Some("broken".into()), phases: vec![], time_basis: None };
+        assert!(resolve_mission_profile(&mut bad, &file).unwrap_err().contains("sum"));
+        let mut unk = Mission { ambient_c: f64::NAN, on_hours: None, cycles: None, environment: None, quality: None, profile: Some("nope".into()), phases: vec![], time_basis: None };
+        assert!(resolve_mission_profile(&mut unk, &file).unwrap_err().contains("nope"));
     }
 
     #[test]

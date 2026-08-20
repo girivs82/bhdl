@@ -19,5 +19,9 @@ board FitDemo {
 }
 
 safety FitDemo as brd {
-    mission { ambient = 55degC; on_hours = 8760; }
+    // Named mission profile (project tunable, bhdl-stdlib/safety/
+    // mission_profiles.toml): temperature/time histogram + π_E/π_Q
+    // defaults. λ = time-weighted over powered phases, per operating
+    // hour. Explicit items here would override the profile's fields.
+    mission { profile = passenger_compartment; }
 }

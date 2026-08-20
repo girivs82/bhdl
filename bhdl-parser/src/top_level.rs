@@ -3226,6 +3226,38 @@ impl<'t> Parser<'t> {
             self.skip_trivia();
             match self.peek() {
                 Some(SyntaxKind::R_BRACE) | None => break,
+                Some(SyntaxKind::IDENT) if self.peek_text().as_deref() == Some("phase") => {
+                    // `phase driving { time = 8%; ambient = 60degC; powered = true; }`
+                    self.builder.start_node(SyntaxKind::SAFETY_MISSION_PHASE.into());
+                    self.bump(); // `phase`
+                    self.skip_trivia();
+                    self.expect(SyntaxKind::IDENT); // phase name
+                    self.skip_trivia();
+                    self.expect(SyntaxKind::L_BRACE);
+                    loop {
+                        self.skip_trivia();
+                        match self.peek() {
+                            Some(SyntaxKind::R_BRACE) | None => break,
+                            Some(_) => {
+                                self.builder.start_node(SyntaxKind::SAFETY_DATA_ITEM.into());
+                                while self.peek() != Some(SyntaxKind::SEMI)
+                                    && self.peek() != Some(SyntaxKind::R_BRACE)
+                                    && self.peek().is_some()
+                                {
+                                    self.bump_any();
+                                }
+                                if self.peek() == Some(SyntaxKind::SEMI) {
+                                    self.bump();
+                                } else {
+                                    self.error("Expected ';' after phase item".to_string());
+                                }
+                                self.builder.finish_node();
+                            }
+                        }
+                    }
+                    self.expect(SyntaxKind::R_BRACE);
+                    self.builder.finish_node();
+                }
                 Some(_) => {
                     self.builder.start_node(SyntaxKind::SAFETY_DATA_ITEM.into());
                     while self.peek() != Some(SyntaxKind::SEMI)
