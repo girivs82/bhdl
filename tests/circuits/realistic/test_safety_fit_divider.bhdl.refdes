@@ -1,6 +1,16 @@
 {
   "version": 1,
   "mappings": {
+    "C": {
+      "c_filt": "C1"
+    },
+    "D": {
+      "tvs_gap": "D1",
+      "tvs_ok": "D2"
+    },
+    "L": {
+      "l_filt": "L1"
+    },
     "R": {
       "r_easy": "R1",
       "r_hot": "R2"

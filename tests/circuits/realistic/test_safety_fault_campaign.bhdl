@@ -1,3 +1,4 @@
+// bhdl-sweep: skip — safety-engine fixture, not a layout target
 // Phase-3 fault-campaign fixture (docs/spec/Functional_Safety.md §2.5):
 // a resistive divider whose GLACIER DC solve converges, with declared
 // faults the campaign RUNS — each fault mutates a clone of the netlist

@@ -3209,6 +3209,18 @@ fn process_flow_parts(
                     let new_net_id = netlist.add_net(Some(net_name.clone()));
                     log::debug!("Created intermediate net '{}' ({:?})", net_name, new_net_id);
                     new_net_id
+                } else if let Some(existing) = netlist
+                    .find_pin_instance(inst_id, pin_name)
+                    .and_then(|pi_id| netlist.get_pin_instance(pi_id))
+                    .and_then(|pi| pi.net)
+                {
+                    // First element is a pin that a PREVIOUS chain already
+                    // connected (`r_top.2 -> r_bot…; r_top.2 -> r_m1…`):
+                    // reuse its net. Creating a second auto-net here minted
+                    // DUPLICATE nets with the same name — one shared node in
+                    // the solver, two NetIds for anyone keying by id.
+                    log::debug!("Reusing existing net {:?} for chain-opening pin {}.{}", existing, instance_name, pin_name);
+                    existing
                 } else {
                     // First element in the chain is a pin reference (e.g. `led1.K -> GND`).
                     // Create a temporary auto-net; it will be merged with the real net
@@ -3361,12 +3373,22 @@ fn thread_chain_through_instance(
     let entry_net = match incoming_net {
         Some(net) => net,
         None => {
-            // Chain opens on the part (`R1 -> GND`): fresh auto-net for the
-            // entry pin, merged later if a net reference follows elsewhere.
-            let name = format!("auto_{}_{}", endpoint, pin_names[0]).replace('.', "_");
-            let net = netlist.add_net(Some(name.clone()));
-            log::debug!("Created auto-net '{}' ({:?}) for chain-opening instance", name, net);
-            net
+            // Chain opens on the part (`R1 -> GND`). If a previous chain
+            // already connected this entry pin, REUSE its net — a fresh
+            // auto-net here would duplicate the name under a new NetId.
+            if let Some(existing) = netlist
+                .find_pin_instance(inst_id, &pin_names[0])
+                .and_then(|pi_id| netlist.get_pin_instance(pi_id))
+                .and_then(|pi| pi.net)
+            {
+                log::debug!("Reusing existing net {:?} for chain-opening pin {}.{}", existing, endpoint, pin_names[0]);
+                existing
+            } else {
+                let name = format!("auto_{}_{}", endpoint, pin_names[0]).replace('.', "_");
+                let net = netlist.add_net(Some(name.clone()));
+                log::debug!("Created auto-net '{}' ({:?}) for chain-opening instance", name, net);
+                net
+            }
         }
     };
     connect_pin_to_net(netlist, inst_id, &pin_names[0], entry_net,

@@ -1,3 +1,4 @@
+// bhdl-sweep: skip — safety-engine fixture, not a layout target
 // Reliability-engine fixture (docs/spec/Functional_Safety.md §2.8):
 // a board whose GLACIER DC solve converges, so passive handbook FITs
 // are COMPUTED (and the semiconductor rows demonstrate the honest

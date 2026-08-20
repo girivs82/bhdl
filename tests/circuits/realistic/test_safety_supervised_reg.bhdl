@@ -1,3 +1,4 @@
+// bhdl-sweep: skip — safety-engine fixture, not a layout target
 // Functional-safety surface fixture (docs/spec/Functional_Safety.md):
 // a supervised 5V regulator ENTITY that is its own safety part, a board
 // instantiating it twice, and the board-level safety block composing the

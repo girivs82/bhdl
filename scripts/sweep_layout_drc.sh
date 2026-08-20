@@ -31,6 +31,13 @@ mkdir -p "$outdir"
 total_v=0; total_u=0; boards=0; failed=0
 for f in tests/circuits/realistic/*.bhdl; do
   b=$(basename "$f" .bhdl)
+  # Fixtures that exist for the SAFETY engine (fault campaign, FIT
+  # demos) are not layout targets — they opt out of the layout oracle
+  # with an explicit marker instead of polluting the 0-failed baseline.
+  if grep -q "bhdl-sweep: skip" "$f" 2>/dev/null; then
+    echo "$b: SKIPPED (bhdl-sweep: skip)"
+    continue
+  fi
   pcb="$outdir/$b.kicad_pcb"
   # 900s ceiling: the LQFP-100 board (test_stm32_vb_panel) is the
   # slowest at ~6.5 min after the conflict-scan perf arc (was 18 min
