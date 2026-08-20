@@ -54,6 +54,14 @@ entity MOSFET(
     attribute qg_nc           = qg_nc;
     attribute ciss_pf         = ciss_pf;
     attribute kicad_symbol    = "Device:Q_NMOS_GDS";
+    // Reliability class (spec §2.8): §6.4 MOSFET, small-signal
+    // switching (π_A=.70). T_J needs θ_JA — declare `attribute
+    // theta_ja = <°C/W>;` from the package datasheet, else the FIT
+    // stays uncomputed. A power stage (Pr ≥ 2W) should use a class
+    // with the §6.4 power π_A instead.
+    safety {
+        handbook class="fet_mosfet" per="MILHDBK217F" source="MIL-HDBK-217F §6.4 MOSFET (small-signal switching)";
+    }
 }
 
 // SKU aliases bind the datasheet values positionally (same alias-with-

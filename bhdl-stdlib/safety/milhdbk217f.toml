@@ -129,3 +129,143 @@ pi_sr = [[0.8, 0.066], [0.6, 0.10], [0.4, 0.13], [0.2, 0.20], [0.1, 0.27], [0.0,
 pi_q = { D = 0.001, C = 0.01, S = 0.03, B = 0.03, R = 0.1, P = 0.3, M = 1.0, L = 1.5, lower = 10.0 }   # §10.12 p.10-21
 pi_e = { GB = 1.0, GF = 2.0, GM = 8.0, NS = 5.0, NU = 14.0, AIC = 4.0, AIF = 5.0, AUC = 12.0, AUF = 20.0, ARW = 24.0, SF = 0.4, MF = 11.0, ML = 29.0, CL = 530.0 }   # §10.12 p.10-21
 source = "MIL-HDBK-217F N2 §10.12 (CSR MIL-C-39003), p.10-21"
+
+# ── Discrete semiconductors (§6) ─────────────────────────────────────
+# Model: λ_p = λ_b·π_T·π_A·π_R·π_S·π_C·π_Q·π_E failures/10⁶h,
+# FIT = 1000·λ_p; π_T = exp(−t_const·(1/(T_J+273) − 1/298)) with
+# T_J = T_ambient + θ_JA·P (P sim-derived; θ_JA from the instance's
+# theta_ja attribute — absent ⇒ FIT_UNCOMPUTED, never a guessed θ).
+# COTS default quality = "plastic" (the handbook's own category).
+
+# §6.1 diode, general purpose analog.
+[classes.diode_gp]
+model = "mil217f_semiconductor"
+lambda_b = 0.0038   # §6.1 p.6-2
+t_const = 3091.0    # π_T group: gp/switching/fast/rectifier/TVS   §6.1 p.6-2
+pi_s_mode = "diode" # .054 (Vs≤.3) else Vs^2.43 (reverse-V ratio)  §6.1 p.6-3
+pi_a = 1.0
+pi_c = 1.0          # metallurgically bonded                        §6.1 p.6-3
+pi_q = { JANTXV = 0.7, JANTX = 1.0, JAN = 2.4, lower = 5.5, plastic = 8.0 }   # §6.1 p.6-3
+default_quality = "plastic"
+pi_e = { GB = 1.0, GF = 6.0, GM = 9.0, NS = 9.0, NU = 19.0, AIC = 13.0, AIF = 29.0, AUC = 20.0, AUF = 43.0, ARW = 24.0, SF = 0.5, MF = 14.0, ML = 32.0, CL = 320.0 }   # §6.1 p.6-3
+source = "MIL-HDBK-217F N2 §6.1 (general purpose analog), p.6-2/6-3"
+
+# §6.1 diode, switching.
+[classes.diode_switching]
+model = "mil217f_semiconductor"
+lambda_b = 0.0010   # §6.1 p.6-2
+t_const = 3091.0
+pi_s_mode = "diode"
+pi_a = 1.0
+pi_c = 1.0
+pi_q = { JANTXV = 0.7, JANTX = 1.0, JAN = 2.4, lower = 5.5, plastic = 8.0 }
+default_quality = "plastic"
+pi_e = { GB = 1.0, GF = 6.0, GM = 9.0, NS = 9.0, NU = 19.0, AIC = 13.0, AIF = 29.0, AUC = 20.0, AUF = 43.0, ARW = 24.0, SF = 0.5, MF = 14.0, ML = 32.0, CL = 320.0 }
+source = "MIL-HDBK-217F N2 §6.1 (switching), p.6-2/6-3"
+
+# §6.1 transient suppressor / varistor (π_S = 1 by the handbook).
+[classes.diode_tvs]
+model = "mil217f_semiconductor"
+lambda_b = 0.0013   # §6.1 p.6-2
+t_const = 3091.0
+pi_s_mode = "one"   # TVS/vreg/vref/current-reg: π_S = 1            §6.1 p.6-3
+pi_a = 1.0
+pi_c = 1.0
+pi_q = { JANTXV = 0.7, JANTX = 1.0, JAN = 2.4, lower = 5.5, plastic = 8.0 }
+default_quality = "plastic"
+pi_e = { GB = 1.0, GF = 6.0, GM = 9.0, NS = 9.0, NU = 19.0, AIC = 13.0, AIF = 29.0, AUC = 20.0, AUF = 43.0, ARW = 24.0, SF = 0.5, MF = 14.0, ML = 32.0, CL = 320.0 }
+source = "MIL-HDBK-217F N2 §6.1 (transient suppressor/varistor), p.6-2/6-3"
+
+# §6.1 voltage regulator / voltage reference (avalanche and zener).
+[classes.diode_vreg_vref]
+model = "mil217f_semiconductor"
+lambda_b = 0.0020   # §6.1 p.6-2
+t_const = 1925.0    # π_T group: vreg/vref/current-reg              §6.1 p.6-2
+pi_s_mode = "one"
+pi_a = 1.0
+pi_c = 1.0
+pi_q = { JANTXV = 0.7, JANTX = 1.0, JAN = 2.4, lower = 5.5, plastic = 8.0 }
+default_quality = "plastic"
+pi_e = { GB = 1.0, GF = 6.0, GM = 9.0, NS = 9.0, NU = 19.0, AIC = 13.0, AIF = 29.0, AUC = 20.0, AUF = 43.0, ARW = 24.0, SF = 0.5, MF = 14.0, ML = 32.0, CL = 320.0 }
+source = "MIL-HDBK-217F N2 §6.1 (voltage regulator/reference), p.6-2/6-3"
+
+# §6.3 bipolar transistor, NPN/PNP, SWITCHING application (π_A = .70;
+# a linear-amplification stage uses bjt_npn_pnp_linear).
+[classes.bjt_npn_pnp]
+model = "mil217f_semiconductor"
+lambda_b = 0.00074  # §6.3 p.6-6
+t_const = 2114.0
+pi_s_mode = "bjt"   # π_S = .045·e^{3.1·Vs}, Vs = VCE/VCEO          §6.3 p.6-7
+pi_a = 0.70         # switching                                     §6.3 p.6-6
+pi_r_mode = "bjt"   # π_R = .43 (≤.1W) else Pr^.37                  §6.3 p.6-6
+pi_q = { JANTXV = 0.7, JANTX = 1.0, JAN = 2.4, lower = 5.5, plastic = 8.0 }   # §6.3 p.6-7
+default_quality = "plastic"
+pi_e = { GB = 1.0, GF = 6.0, GM = 9.0, NS = 9.0, NU = 19.0, AIC = 13.0, AIF = 29.0, AUC = 20.0, AUF = 43.0, ARW = 24.0, SF = 0.5, MF = 14.0, ML = 32.0, CL = 320.0 }   # §6.3 p.6-7
+source = "MIL-HDBK-217F N2 §6.3 (NPN/PNP, switching π_A=.70), p.6-6/6-7"
+
+[classes.bjt_npn_pnp_linear]
+model = "mil217f_semiconductor"
+lambda_b = 0.00074
+t_const = 2114.0
+pi_s_mode = "bjt"
+pi_a = 1.5          # linear amplification                          §6.3 p.6-6
+pi_r_mode = "bjt"
+pi_q = { JANTXV = 0.7, JANTX = 1.0, JAN = 2.4, lower = 5.5, plastic = 8.0 }
+default_quality = "plastic"
+pi_e = { GB = 1.0, GF = 6.0, GM = 9.0, NS = 9.0, NU = 19.0, AIC = 13.0, AIF = 29.0, AUC = 20.0, AUF = 43.0, ARW = 24.0, SF = 0.5, MF = 14.0, ML = 32.0, CL = 320.0 }
+source = "MIL-HDBK-217F N2 §6.3 (NPN/PNP, linear π_A=1.5), p.6-6/6-7"
+
+# §6.4 Si FET, MOSFET, small-signal switching (π_A = .70). Power FETs
+# (Pr ≥ 2W non-linear) carry larger π_A — see §6.4 p.6-8 (2.0/4.0/8.0/10
+# by rated power) and declare a dedicated class when needed.
+[classes.fet_mosfet]
+model = "mil217f_semiconductor"
+lambda_b = 0.012    # §6.4 p.6-8
+t_const = 1925.0
+pi_s_mode = "one"   # no π_S in the §6.4 model
+pi_a = 0.70         # small-signal switching                        §6.4 p.6-8
+pi_q = { JANTXV = 0.7, JANTX = 1.0, JAN = 2.4, lower = 5.5, plastic = 8.0 }   # §6.4 p.6-8
+default_quality = "plastic"
+pi_e = { GB = 1.0, GF = 6.0, GM = 9.0, NS = 9.0, NU = 19.0, AIC = 13.0, AIF = 29.0, AUC = 20.0, AUF = 43.0, ARW = 24.0, SF = 0.5, MF = 14.0, ML = 32.0, CL = 320.0 }   # §6.4 p.6-8
+source = "MIL-HDBK-217F N2 §6.4 (MOSFET, small-signal switching π_A=.70), p.6-8"
+
+[classes.fet_jfet]
+model = "mil217f_semiconductor"
+lambda_b = 0.0045   # §6.4 p.6-8
+t_const = 1925.0
+pi_s_mode = "one"
+pi_a = 0.70
+pi_q = { JANTXV = 0.7, JANTX = 1.0, JAN = 2.4, lower = 5.5, plastic = 8.0 }
+default_quality = "plastic"
+pi_e = { GB = 1.0, GF = 6.0, GM = 9.0, NS = 9.0, NU = 19.0, AIC = 13.0, AIF = 29.0, AUC = 20.0, AUF = 43.0, ARW = 24.0, SF = 0.5, MF = 14.0, ML = 32.0, CL = 320.0 }
+source = "MIL-HDBK-217F N2 §6.4 (JFET), p.6-8"
+
+# ── Inductive devices (§11) ──────────────────────────────────────────
+# Model: λ_p = λ_b·π_C·π_Q·π_E, λ_b = a·exp(((T_HS+273)/nt)^p) with the
+# hot spot T_HS = T_A + 1.1·ΔT (§11.3); ΔT comes from the instance's
+# temp_rise attribute (or the base spec's temperature-rise test) —
+# absent ⇒ FIT_UNCOMPUTED, never a guessed rise.
+
+# §11.2 fixed RF coil / inductor, insulation class B (125°C) model —
+# the generic default for molded inductors.
+[classes.coil_fixed]
+model = "mil217f_inductive"
+a = 0.000319        # λ_b = .000319·exp(((T_HS+273)/364)^8.7)       §11.2 p.11-3 (class B)
+nt = 364.0
+p = 8.7
+pi_c = 1.0          # fixed                                          §11.2 p.11-3
+pi_q = { S = 0.03, R = 0.1, P = 0.3, M = 1.0, mil_spec = 4.0, lower = 20.0 }   # §11.2 p.11-3 (mil_spec = MIL-C-15305)
+default_quality = "lower"
+pi_e = { GB = 1.0, GF = 4.0, GM = 12.0, NS = 5.0, NU = 16.0, AIC = 5.0, AIF = 7.0, AUC = 6.0, AUF = 8.0, ARW = 24.0, SF = 0.5, MF = 13.0, ML = 34.0, CL = 610.0 }   # §11.2 p.11-4
+source = "MIL-HDBK-217F N2 §11.2 (fixed coil, insulation class B model), p.11-3/11-4"
+
+# §11.1 power transformer / filter, insulation class S (130°C) model.
+[classes.xfmr_power]
+model = "mil217f_inductive"
+a = 0.0018          # λ_b = .0018·exp(((T_HS+273)/364)^8.7)          §11.1 p.11-1 (class S/130°C)
+nt = 364.0
+p = 8.7
+pi_q = { mil_spec = 8.0, lower = 30.0 }   # power transformers & filters   §11.1 p.11-2
+default_quality = "lower"
+pi_e = { GB = 1.0, GF = 6.0, GM = 12.0, NS = 5.0, NU = 16.0, AIC = 6.0, AIF = 8.0, AUC = 7.0, AUF = 9.0, ARW = 24.0, SF = 0.5, MF = 13.0, ML = 34.0, CL = 610.0 }   # §11.1 p.11-2
+source = "MIL-HDBK-217F N2 §11.1 (power transformer/filter, insulation class S 130°C model), p.11-1/11-2"

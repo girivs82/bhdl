@@ -36,6 +36,9 @@ use bhdl_common::safety::{Gap, GapClass, Mission, PartData, SafetyModel};
 /// Boltzmann constant in eV/K.
 const K_EV: f64 = 8.617_333e-5;
 
+fn one_f64() -> f64 { 1.0 }
+fn mode_one() -> String { "one".to_string() }
+
 /// One class row of a prediction-standard coefficient table.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(tag = "model")]
@@ -54,6 +57,48 @@ pub enum ClassModel {
         /// Stress exponent.
         stress_exp: f64,
         /// Per-row provenance — printed verbatim in the report.
+        source: String,
+    },
+    /// MIL-HDBK-217F discrete-semiconductor part-stress model (§6):
+    /// λ_p = λ_b·π_T·π_A·π_R·π_S·π_C·π_Q·π_E failures/10⁶ h with
+    /// π_T = exp(−t_const·(1/(T_J+273) − 1/298)), T_J = T_A + θ_JA·P
+    /// (sim-derived power; θ_JA from the netlist attribute).
+    #[serde(rename = "mil217f_semiconductor")]
+    Mil217fSemiconductor {
+        lambda_b: f64,
+        /// π_T exponential constant (3091 diodes, 1925 vreg/FET, 2114 BJT).
+        t_const: f64,
+        /// "one" | "diode" (.054 / Vs^2.43) | "bjt" (.045·e^{3.1·Vs}).
+        pi_s_mode: String,
+        /// Application factor with its handbook label (e.g. 0.70 switching).
+        pi_a: f64,
+        /// Contact construction (diodes; 1.0 metallurgically bonded).
+        #[serde(default = "one_f64")]
+        pi_c: f64,
+        /// "one" | "bjt" (.43 for ≤0.1W else Pr^0.37; needs rated power).
+        #[serde(default = "mode_one")]
+        pi_r_mode: String,
+        pi_q: BTreeMap<String, f64>,
+        /// π_Q key applied when the mission declares none ("plastic" for
+        /// COTS semiconductors).
+        default_quality: String,
+        pi_e: BTreeMap<String, f64>,
+        source: String,
+    },
+    /// MIL-HDBK-217F inductive-device model (§11): λ_p = λ_b·π_C·π_Q·π_E
+    /// with λ_b = a·exp(((T_HS+273)/nt)^p) and hot spot
+    /// T_HS = T_A + 1.1·ΔT (§11.3; ΔT from the temp_rise attribute).
+    #[serde(rename = "mil217f_inductive")]
+    Mil217fInductive {
+        a: f64,
+        nt: f64,
+        p: f64,
+        /// Construction factor (coils: 1.0 fixed / 2.0 variable).
+        #[serde(default = "one_f64")]
+        pi_c: f64,
+        pi_q: BTreeMap<String, f64>,
+        default_quality: String,
+        pi_e: BTreeMap<String, f64>,
         source: String,
     },
     /// MIL-HDBK-217F capacitor part-stress model (§10, λ_p in
@@ -107,6 +152,8 @@ impl ClassModel {
             ClassModel::ArrheniusStress { source, .. } => source,
             ClassModel::Mil217fResistor { source, .. } => source,
             ClassModel::Mil217fCapacitor { source, .. } => source,
+            ClassModel::Mil217fSemiconductor { source, .. } => source,
+            ClassModel::Mil217fInductive { source, .. } => source,
         }
     }
 }
@@ -127,8 +174,9 @@ pub struct ReliabilityTable {
 /// from the mission profile (with explicit, printed defaults).
 #[derive(Debug, Clone)]
 pub struct FitInputs {
-    /// S = applied / rated (sim-derived, never estimated).
-    pub stress_ratio: f64,
+    /// S = applied / rated (sim-derived, never estimated). None when no
+    /// sign-off row rated this instance — models that need S error out.
+    pub stress_ratio: Option<f64>,
     /// Mission ambient, °C.
     pub ambient_c: f64,
     /// The part's resistance in ohms (netlist attribute), for π_R.
@@ -143,6 +191,19 @@ pub struct FitInputs {
     /// Circuit resistance in Ω/V between capacitor and supply, for the
     /// tantalum π_SR factor. Not derivable yet ⇒ usually None.
     pub cr_ohms_per_volt: Option<f64>,
+    /// Dissipated power in W (GLACIER DC solve), for T_J / hot-spot.
+    pub power_w: Option<f64>,
+    /// θ_JA in °C/W (netlist attribute), for T_J = T_A + θ·P.
+    pub theta_ja_c_per_w: Option<f64>,
+    /// Rated power in W (power_rating attribute), for the BJT π_R.
+    pub rated_power_w: Option<f64>,
+    /// Average winding temperature rise ΔT in °C (temp_rise attribute),
+    /// for the §11.3 hot spot T_HS = T_A + 1.1·ΔT.
+    pub temp_rise_c: Option<f64>,
+}
+
+fn need_s(inp: &FitInputs) -> Result<f64, String> {
+    inp.stress_ratio.ok_or_else(|| "no sim-derived stress ratio (no sign-off rating for this instance)".to_string())
 }
 
 impl ReliabilityTable {
@@ -165,17 +226,91 @@ impl ReliabilityTable {
                 // Clamp the stress ratio away from zero: an unloaded part
                 // is not more reliable than the standard's floor, and S=0
                 // would zero the whole product for n>0.
-                let s = inp.stress_ratio.max(0.01);
+                let s0 = need_s(inp)?;
+                let s = s0.max(0.01);
                 let pi_s = (s / s_ref).powf(*stress_exp);
                 let fit = lambda_base * pi_t * pi_s;
                 Ok((fit, format!(
                     "λ={:.2} FIT = {:.2}·π_T({:.2})·π_S({:.2}) @ S={:.2}, Ta={:.0}°C per {} [{}]",
-                    fit, lambda_base, pi_t, pi_s, inp.stress_ratio, inp.ambient_c, self.standard, source
+                    fit, lambda_base, pi_t, pi_s, s0, inp.ambient_c, self.standard, source
+                )))
+            }
+            ClassModel::Mil217fSemiconductor { lambda_b, t_const, pi_s_mode, pi_a, pi_c, pi_r_mode, pi_q, default_quality, pi_e, source } => {
+                let Some(power) = inp.power_w else {
+                    return Err("no sim-derived power (DC solve did not cover this instance; T_J needs it)".to_string());
+                };
+                let Some(theta) = inp.theta_ja_c_per_w else {
+                    return Err("no theta_ja attribute on the instance (T_J = T_A + θ_JA·P needs it)".to_string());
+                };
+                let tj = inp.ambient_c + theta * power;
+                let pi_t = (-t_const * (1.0 / (tj + 273.0) - 1.0 / 298.0)).exp();
+                let (ps_txt, ps) = match pi_s_mode.as_str() {
+                    "one" => (String::new(), 1.0),
+                    "diode" => {
+                        let vs = need_s(inp)?.clamp(0.0, 1.0);
+                        let f = if vs <= 0.3 { 0.054 } else { vs.powf(2.43) };
+                        (format!("·π_S({f:.3}@Vs={vs:.2})"), f)
+                    }
+                    "bjt" => {
+                        let vs = need_s(inp)?.clamp(0.0, 1.0);
+                        let f = 0.045 * (3.1 * vs).exp();
+                        (format!("·π_S({f:.3}@Vs={vs:.2})"), f)
+                    }
+                    other => return Err(format!("pi_s_mode '{}' unknown (table bug)", other)),
+                };
+                let (pr_txt, pr) = match pi_r_mode.as_str() {
+                    "one" => (String::new(), 1.0),
+                    "bjt" => {
+                        let Some(rp) = inp.rated_power_w else {
+                            return Err("no power_rating attribute (BJT π_R needs rated power)".to_string());
+                        };
+                        let f = if rp <= 0.1 { 0.43 } else { rp.powf(0.37) };
+                        (format!("·π_R({f:.2}@{rp}W)"), f)
+                    }
+                    other => return Err(format!("pi_r_mode '{}' unknown (table bug)", other)),
+                };
+                let q_key = inp.quality.clone().unwrap_or_else(|| default_quality.clone());
+                let Some(pq) = pi_q.get(&q_key) else {
+                    return Err(format!("quality '{}' not in π_Q ({})", q_key, pi_q.keys().cloned().collect::<Vec<_>>().join(", ")));
+                };
+                let e_key = inp.environment.clone().unwrap_or_else(|| "GB".to_string());
+                let Some(pe) = pi_e.get(&e_key) else {
+                    return Err(format!("environment '{}' not in π_E ({})", e_key, pi_e.keys().cloned().collect::<Vec<_>>().join(", ")));
+                };
+                let fit = 1000.0 * lambda_b * pi_t * pi_a * pr * ps * pi_c * pq * pe;
+                Ok((fit, format!(
+                    "λ={:.1} FIT = 1000·λb({})·π_T({:.2}@Tj={:.0}°C){}{}·π_A({}){}·π_Q({} {})·π_E({} {}) per {} [{}]",
+                    fit, lambda_b, pi_t, tj, ps_txt, pr_txt, pi_a,
+                    if *pi_c != 1.0 { format!("·π_C({pi_c})") } else { String::new() },
+                    pq, q_key, pe, e_key, self.standard, source
+                )))
+            }
+            ClassModel::Mil217fInductive { a, nt, p, pi_c, pi_q, default_quality, pi_e, source } => {
+                let Some(dt) = inp.temp_rise_c else {
+                    return Err("no temp_rise attribute (§11.3 hot spot T_HS = T_A + 1.1·ΔT needs the winding rise)".to_string());
+                };
+                let ths = inp.ambient_c + 1.1 * dt;
+                let lambda_b = a * (((ths + 273.0) / nt).powf(*p)).exp();
+                let q_key = inp.quality.clone().unwrap_or_else(|| default_quality.clone());
+                let Some(pq) = pi_q.get(&q_key) else {
+                    return Err(format!("quality '{}' not in π_Q ({})", q_key, pi_q.keys().cloned().collect::<Vec<_>>().join(", ")));
+                };
+                let e_key = inp.environment.clone().unwrap_or_else(|| "GB".to_string());
+                let Some(pe) = pi_e.get(&e_key) else {
+                    return Err(format!("environment '{}' not in π_E ({})", e_key, pi_e.keys().cloned().collect::<Vec<_>>().join(", ")));
+                };
+                let fit = 1000.0 * lambda_b * pi_c * pq * pe;
+                Ok((fit, format!(
+                    "λ={:.1} FIT = 1000·λb({:.5}@Ths={:.0}°C){}·π_Q({} {})·π_E({} {}) per {} [{}]",
+                    fit, lambda_b, ths,
+                    if *pi_c != 1.0 { format!("·π_C({pi_c})") } else { String::new() },
+                    pq, q_key, pe, e_key, self.standard, source
                 )))
             }
             ClassModel::Mil217fCapacitor { a, g, b, nt, p, cv_a, cv_exp, cv_unit, pi_sr, pi_q, pi_e, source } => {
                 let t = inp.ambient_c;
-                let s = inp.stress_ratio.max(0.01);
+                let s0 = need_s(inp)?;
+                let s = s0.max(0.01);
                 let lambda_b = a * ((s / g).powi(3) + 1.0) * (b * ((t + 273.0) / nt).powf(*p)).exp();
                 let Some(c_f) = inp.capacitance_f else {
                     return Err("no capacitance attribute on the instance (π_CV needs it)".to_string());
@@ -207,12 +342,13 @@ impl ReliabilityTable {
                 let fit = 1000.0 * lambda_b * pi_cv * psr * pq * pe;
                 Ok((fit, format!(
                     "λ={:.1} FIT = 1000·λb({:.5})·π_CV({:.2}@{:.0}{}){}·π_Q({} {})·π_E({} {}) @ S={:.2}, Ta={:.0}°C per {} [{}]",
-                    fit, lambda_b, pi_cv, c_in_unit, cv_unit, sr_txt, pq, q_key, pe, e_key, inp.stress_ratio, inp.ambient_c, self.standard, source
+                    fit, lambda_b, pi_cv, c_in_unit, cv_unit, sr_txt, pq, q_key, pe, e_key, s0, inp.ambient_c, self.standard, source
                 )))
             }
             ClassModel::Mil217fResistor { a, b, nt, p, g, ns, pi_r, pi_q, pi_e, source } => {
                 let t = inp.ambient_c;
-                let s = inp.stress_ratio.max(0.01);
+                let s0 = need_s(inp)?;
+                let s = s0.max(0.01);
                 let lambda_b = a
                     * (b * ((t + 273.0) / nt).powf(*p)).exp()
                     * ((s / g) * ((t + 273.0) / ns)).exp();
@@ -235,7 +371,7 @@ impl ReliabilityTable {
                 let fit = 1000.0 * lambda_b * pr * pq * pe;
                 Ok((fit, format!(
                     "λ={:.1} FIT = 1000·λb({:.5})·π_R({:.1}@{:.0}Ω)·π_Q({} {})·π_E({} {}) @ S={:.2}, Ta={:.0}°C per {} [{}]",
-                    fit, lambda_b, pr, r_ohm, pq, q_key, pe, e_key, inp.stress_ratio, inp.ambient_c, self.standard, source
+                    fit, lambda_b, pr, r_ohm, pq, q_key, pe, e_key, s0, inp.ambient_c, self.standard, source
                 )))
             }
         }
@@ -316,6 +452,14 @@ pub struct InstanceStress {
     pub rated: f64,
     pub resistance_ohm: Option<f64>,
     pub capacitance_f: Option<f64>,
+    /// Dissipated power from the DC solve (all instances).
+    pub power_w: Option<f64>,
+    /// θ_JA °C/W from the theta_ja attribute.
+    pub theta_ja_c_per_w: Option<f64>,
+    /// Rated power in W from the power_rating attribute.
+    pub rated_power_w: Option<f64>,
+    /// Winding temperature rise from the temp_rise attribute.
+    pub temp_rise_c: Option<f64>,
 }
 
 pub type StressMap = HashMap<String, InstanceStress>;
@@ -347,15 +491,19 @@ pub fn apply_reliability(
             missing.push("no sim-derived stress (DC solve did not cover this instance)".to_string());
         }
         if let (Some(table), Some(m), Some(st)) = (table, m, st) {
-            if st.rated > 0.0 {
+            {
                 let mk_inp = |ambient_c: f64| FitInputs {
-                    stress_ratio: st.applied / st.rated,
+                    stress_ratio: (st.rated > 0.0).then(|| st.applied / st.rated),
                     ambient_c,
                     resistance_ohm: st.resistance_ohm,
                     quality: m.quality.clone(),
                     environment: m.environment.clone(),
                     capacitance_f: st.capacitance_f,
                     cr_ohms_per_volt: None,
+                    power_w: st.power_w,
+                    theta_ja_c_per_w: st.theta_ja_c_per_w,
+                    rated_power_w: st.rated_power_w,
+                    temp_rise_c: st.temp_rise_c,
                 };
                 if m.phases.is_empty() && m.ambient_c.is_nan() {
                     missing.push("mission profile named but unresolved (no phases, no ambient)".to_string());
@@ -403,15 +551,13 @@ pub fn apply_reliability(
                         let profile_txt = m.profile.as_deref().map(|p| format!(" profile={p}")).unwrap_or_default();
                         *fit = Some(f);
                         *fit_basis = Some(format!(
-                            "λ={:.1} FIT ({} basis{}) = Σ[{}] / powered {:.0}% @ S={:.2} per {}",
+                            "λ={:.1} FIT ({} basis{}) = Σ[{}] / powered {:.0}%{} per {}",
                             f, basis_kind, profile_txt, parts_txt.join(", "), powered_frac * 100.0,
-                            st.applied / st.rated, table.standard
+                            if st.rated > 0.0 { format!(" @ S={:.2}", st.applied / st.rated) } else { String::new() }, table.standard
                         ));
                         continue;
                     }
                 }
-            } else {
-                missing.push("part has no rating (stress ratio undefined)".to_string());
             }
         }
         gaps.push(Gap {
@@ -489,7 +635,7 @@ source = "MIL-HDBK-217F §9.1 (RC/RCR), p.9-2"
 "#;
 
     fn inp(s: f64, t: f64) -> FitInputs {
-        FitInputs { stress_ratio: s, ambient_c: t, resistance_ohm: Some(1000.0), quality: Some("M".into()), environment: Some("GB".into()), capacitance_f: None, cr_ohms_per_volt: None }
+        FitInputs { stress_ratio: Some(s), ambient_c: t, resistance_ohm: Some(1000.0), quality: Some("M".into()), environment: Some("GB".into()), capacitance_f: None, cr_ohms_per_volt: None, power_w: None, theta_ja_c_per_w: None, rated_power_w: None, temp_rise_c: None }
     }
 
     const M217_CAP_TABLE: &str = r#"
@@ -549,7 +695,7 @@ source = "§10.12 p.10-21"
         // use the handbook's π_CV spot values to pick C, then check the
         // combined number. Simpler: λ_b via fit/(1000·π_CV) with known C.
         let lb = |class: &str, s: f64, temp: f64, c_f: f64, cv: f64| {
-            let inp = FitInputs { stress_ratio: s, ambient_c: temp, resistance_ohm: None, quality: Some("M".into()), environment: Some("GB".into()), capacitance_f: Some(c_f), cr_ohms_per_volt: Some(1.0) };
+            let inp = FitInputs { stress_ratio: Some(s), ambient_c: temp, resistance_ohm: None, quality: Some("M".into()), environment: Some("GB".into()), capacitance_f: Some(c_f), cr_ohms_per_volt: Some(1.0), power_w: None, theta_ja_c_per_w: None, rated_power_w: None, temp_rise_c: None };
             t.fit_for(class, &inp).unwrap().0 / 1000.0 / cv / if class == "cap_tantalum_solid" { 0.066 } else { 1.0 }
         };
         // (class, S, T, C_farads, handbook π_CV at that C, handbook λ_b)
@@ -567,9 +713,9 @@ source = "§10.12 p.10-21"
             assert!(rel < 0.06, "{class} S={s} T={temp}: computed λ_b {got:.5} vs handbook {expect} (rel {rel:.3})");
         }
         // honest errors: no capacitance / tantalum without CR
-        let no_c = FitInputs { stress_ratio: 0.1, ambient_c: 20.0, resistance_ohm: None, quality: None, environment: None, capacitance_f: None, cr_ohms_per_volt: None };
+        let no_c = FitInputs { stress_ratio: Some(0.1), ambient_c: 20.0, resistance_ohm: None, quality: None, environment: None, capacitance_f: None, cr_ohms_per_volt: None, power_w: None, theta_ja_c_per_w: None, rated_power_w: None, temp_rise_c: None };
         assert!(t.fit_for("cap_ceramic_chip", &no_c).unwrap_err().contains("capacitance"));
-        let no_cr = FitInputs { stress_ratio: 0.1, ambient_c: 20.0, resistance_ohm: None, quality: None, environment: None, capacitance_f: Some(1e-6), cr_ohms_per_volt: None };
+        let no_cr = FitInputs { stress_ratio: Some(0.1), ambient_c: 20.0, resistance_ohm: None, quality: None, environment: None, capacitance_f: Some(1e-6), cr_ohms_per_volt: None, power_w: None, theta_ja_c_per_w: None, rated_power_w: None, temp_rise_c: None };
         assert!(t.fit_for("cap_tantalum_solid", &no_cr).unwrap_err().contains("cr_ohms_per_volt"));
     }
 
@@ -644,7 +790,7 @@ source = "§10.12 p.10-21"
                 Part { instance: "r3".into(), type_name: "Res".into(), parent: None, data: hb(None) },             // no standard: untouched
             ],
         };
-        let stress: StressMap = [("r1".to_string(), InstanceStress { applied: 0.25, rated: 0.5, resistance_ohm: Some(1e3), capacitance_f: None })].into();
+        let stress: StressMap = [("r1".to_string(), InstanceStress { applied: 0.25, rated: 0.5, resistance_ohm: Some(1e3), capacitance_f: None, power_w: None, theta_ja_c_per_w: None, rated_power_w: None, temp_rise_c: None })].into();
         apply_reliability(&mut model, &stress, &tables);
         match &model.parts[0].data {
             PartData::Handbook { fit: Some(f), fit_basis: Some(_), .. } => assert!((f - 0.5).abs() < 1e-9, "S=0.5 at Tref → lambda_base, got {f}"),
@@ -673,12 +819,12 @@ source = "§10.12 p.10-21"
             parts: vec![Part { instance: "r1".into(), type_name: "Res".into(), parent: None, data: PartData::Handbook {
                 class: "res_fixed_film".into(), source: "t".into(), per: Some("MILHDBK217F".into()), fit: None, fit_basis: None } }],
         };
-        let stress: StressMap = [("r1".to_string(), InstanceStress { applied: 0.1, rated: 1.0, resistance_ohm: Some(1e3), capacitance_f: None })].into();
+        let stress: StressMap = [("r1".to_string(), InstanceStress { applied: 0.1, rated: 1.0, resistance_ohm: Some(1e3), capacitance_f: None, power_w: None, theta_ja_c_per_w: None, rated_power_w: None, temp_rise_c: None })].into();
         apply_reliability(&mut model, &stress, &tables);
         let PartData::Handbook { fit: Some(f), fit_basis: Some(basis), .. } = &model.parts[0].data else { panic!("no fit") };
         // operating basis: unpowered 90% contributes 0, division by the
         // powered 10% ⇒ λ equals the 60°C point-value exactly.
-        let inp = FitInputs { stress_ratio: 0.1, ambient_c: 60.0, resistance_ohm: Some(1e3), quality: Some("M".into()), environment: Some("GB".into()), capacitance_f: None, cr_ohms_per_volt: None };
+        let inp = FitInputs { stress_ratio: Some(0.1), ambient_c: 60.0, resistance_ohm: Some(1e3), quality: Some("M".into()), environment: Some("GB".into()), capacitance_f: None, cr_ohms_per_volt: None, power_w: None, theta_ja_c_per_w: None, rated_power_w: None, temp_rise_c: None };
         let (point, _) = t.fit_for("res_fixed_film", &inp).unwrap();
         assert!((f - point).abs() < 1e-9, "operating-basis λ {f} must equal the powered phase point value {point}");
         assert!(basis.contains("operating") && basis.contains("profile=p") && basis.contains("off"));
@@ -713,10 +859,84 @@ phases = [ { name = "half", time = 0.5, ambient = 23.0 } ]
         assert!(resolve_mission_profile(&mut unk, &file).unwrap_err().contains("nope"));
     }
 
+    const M217_SEMI_TABLE: &str = r#"
+standard = "MILHDBK217F"
+source = "MIL-HDBK-217F Notice 2, Sections 6 + 11"
+
+[classes.diode_gp]
+model = "mil217f_semiconductor"
+lambda_b = 0.0038
+t_const = 3091.0
+pi_s_mode = "diode"
+pi_a = 1.0
+pi_q = { JANTX = 1.0, plastic = 8.0 }
+default_quality = "plastic"
+pi_e = { GB = 1.0, GM = 9.0 }
+source = "§6.1"
+
+[classes.bjt_npn_pnp]
+model = "mil217f_semiconductor"
+lambda_b = 0.00074
+t_const = 2114.0
+pi_s_mode = "bjt"
+pi_a = 0.70
+pi_r_mode = "bjt"
+pi_q = { JANTX = 1.0, plastic = 8.0 }
+default_quality = "plastic"
+pi_e = { GB = 1.0 }
+source = "§6.3"
+
+[classes.coil_fixed]
+model = "mil217f_inductive"
+a = 0.000319
+nt = 364.0
+p = 8.7
+pi_q = { M = 1.0, lower = 20.0 }
+default_quality = "lower"
+pi_e = { GB = 1.0 }
+source = "§11.2 class B"
+"#;
+
+    /// π_T, π_S, π_R and the inductive λ_b must reproduce the
+    /// handbook's own printed tables (§6.1/§6.3/§11.2).
+    #[test]
+    fn mil217f_semiconductor_and_inductive_match_the_handbook() {
+        let t = ReliabilityTable::from_toml(M217_SEMI_TABLE).unwrap();
+        let semi = |class: &str, s: Option<f64>, tj_via: (f64, f64, f64), q: &str, rp: Option<f64>| {
+            let (amb, theta, pw) = tj_via;
+            let inp = FitInputs { stress_ratio: s, ambient_c: amb, resistance_ohm: None, quality: Some(q.into()), environment: Some("GB".into()), capacitance_f: None, cr_ohms_per_volt: None, power_w: Some(pw), theta_ja_c_per_w: Some(theta), rated_power_w: rp, temp_rise_c: None };
+            t.fit_for(class, &inp).unwrap().0
+        };
+        // diode πT table: Tj=100 → 8.0 (handbook §6.1). Tj = 25 + 75·1.
+        let base = semi("diode_gp", Some(0.9999), (25.0, 0.0, 0.0), "JANTX", None); // Tj=25 → πT=1, πS≈1
+        let hot = semi("diode_gp", Some(0.9999), (25.0, 75.0, 1.0), "JANTX", None);
+        let ratio = hot / base;
+        assert!((ratio - 8.0).abs() / 8.0 < 0.02, "diode πT@Tj=100 should be ~8.0, got {ratio:.2}");
+        // diode πS: Vs=.5 → .19 (handbook §6.1)
+        let s19 = semi("diode_gp", Some(0.5), (25.0, 0.0, 0.0), "JANTX", None) / base;
+        assert!((s19 - 0.19).abs() / 0.19 < 0.05, "πS@.5 ~ .19, got {s19:.3}");
+        // BJT πR: Pr=10W → 2.3 (handbook §6.3)
+        let b1 = semi("bjt_npn_pnp", Some(0.5), (25.0, 0.0, 0.0), "JANTX", Some(1.0));
+        let b10 = semi("bjt_npn_pnp", Some(0.5), (25.0, 0.0, 0.0), "JANTX", Some(10.0));
+        assert!((b10 / b1 - 2.3).abs() / 2.3 < 0.02, "BJT πR@10W ~ 2.3×πR@1W, got {:.2}", b10 / b1);
+        // missing θ_JA = honest gap
+        let no_theta = FitInputs { stress_ratio: Some(0.5), ambient_c: 25.0, resistance_ohm: None, quality: None, environment: None, capacitance_f: None, cr_ohms_per_volt: None, power_w: Some(0.1), theta_ja_c_per_w: None, rated_power_w: None, temp_rise_c: None };
+        assert!(t.fit_for("diode_gp", &no_theta).unwrap_err().contains("theta_ja"));
+        // inductive: λ_b@T_HS=85 = .00076 (§11.2 class-125 column @85).
+        // ambient 60 + 1.1·22.727 = 85.
+        let ind = FitInputs { stress_ratio: None, ambient_c: 60.0, resistance_ohm: None, quality: Some("M".into()), environment: Some("GB".into()), capacitance_f: None, cr_ohms_per_volt: None, power_w: None, theta_ja_c_per_w: None, rated_power_w: None, temp_rise_c: Some(22.727) };
+        let (f, basis) = t.fit_for("coil_fixed", &ind).unwrap();
+        assert!((f / 1000.0 - 0.00076).abs() / 0.00076 < 0.02, "coil λ_b@85 ~ .00076, got {}", f / 1000.0);
+        assert!(basis.contains("Ths=85"));
+        // missing temp_rise = honest gap
+        let no_rise = FitInputs { temp_rise_c: None, ..ind.clone() };
+        assert!(t.fit_for("coil_fixed", &no_rise).unwrap_err().contains("temp_rise"));
+    }
+
     #[test]
     fn fit_scales_with_temperature_and_stress() {
         let t = ReliabilityTable::from_toml(ARR_TABLE).unwrap();
-        let base_inp = |s: f64, temp: f64| FitInputs { stress_ratio: s, ambient_c: temp, resistance_ohm: None, quality: None, environment: None, capacitance_f: None, cr_ohms_per_volt: None };
+        let base_inp = |s: f64, temp: f64| FitInputs { stress_ratio: Some(s), ambient_c: temp, resistance_ohm: None, quality: None, environment: None, capacitance_f: None, cr_ohms_per_volt: None, power_w: None, theta_ja_c_per_w: None, rated_power_w: None, temp_rise_c: None };
         let (base, _) = t.fit_for("res_film_low_dissipation", &base_inp(0.5, 40.0)).unwrap();
         assert!((base - 0.5).abs() < 1e-9, "reference conditions return lambda_base, got {base}");
         let (hot, _) = t.fit_for("res_film_low_dissipation", &base_inp(0.5, 85.0)).unwrap();

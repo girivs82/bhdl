@@ -29,6 +29,13 @@ entity Ind(value: inductance, rated_current: current = 0A) {
     attribute data_source = "class-point: Bourns SRN6045-100M (dcr only)";
     attribute current_rating = rated_current;
     attribute kicad_symbol = "Device:L";
+    // Reliability class (spec §2.8): §11.2 fixed coil, class B model.
+    // Hot spot needs the winding rise — declare `attribute temp_rise =
+    // <°C>;` (from the part's temperature-rise test data), else the
+    // FIT stays uncomputed.
+    safety {
+        handbook class="coil_fixed" per="MILHDBK217F" source="MIL-HDBK-217F §11.2 fixed coil (class B model)";
+    }
 }
 
 alias Inductor = Ind;

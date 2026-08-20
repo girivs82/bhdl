@@ -1717,8 +1717,25 @@ async fn run_safety(
                         };
                         Some(num * mult)
                     };
+                    // Plain number with SI prefix (for °C/W, W, °C attrs).
+                    let parse_si = |v: &str| -> Option<f64> {
+                        let v = v.trim().trim_end_matches(|c: char| c == 'W' || c == 'w' || c == 'C' || c == '°' || c == 'V');
+                        let end = v.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(v.len());
+                        let num: f64 = v[..end].parse().ok()?;
+                        let mult = match v[end..].trim() {
+                            "" => 1.0,
+                            "m" => 1e-3,
+                            "u" | "µ" => 1e-6,
+                            "k" | "K" => 1e3,
+                            _ => return None,
+                        };
+                        Some(num * mult)
+                    };
                     let mut res_of: HashMap<String, f64> = HashMap::new();
                     let mut cap_of: HashMap<String, f64> = HashMap::new();
+                    let mut theta_of: HashMap<String, f64> = HashMap::new();
+                    let mut rise_of: HashMap<String, f64> = HashMap::new();
+                    let mut prated_of: HashMap<String, f64> = HashMap::new();
                     for (_, inst) in netlist.instances.iter() {
                         if let Some(r) = inst.attributes.get("resistance").and_then(|v| parse_ohms(v)) {
                             res_of.insert(inst.name.clone(), r);
@@ -1726,16 +1743,38 @@ async fn run_safety(
                         if let Some(c) = inst.attributes.get("capacitance").and_then(|v| parse_farads(v)) {
                             cap_of.insert(inst.name.clone(), c);
                         }
+                        if let Some(t) = inst.attributes.get("theta_ja").and_then(|v| parse_si(v)) {
+                            theta_of.insert(inst.name.clone(), t);
+                        }
+                        if let Some(t) = inst.attributes.get("temp_rise").and_then(|v| parse_si(v)) {
+                            rise_of.insert(inst.name.clone(), t);
+                        }
+                        if let Some(pw) = inst.attributes.get("power_rating").and_then(|v| parse_si(v)) {
+                            prated_of.insert(inst.name.clone(), pw);
+                        }
+                    }
+                    // Every instance gets an entry (power comes from the
+                    // solve for all of them); the sign-off rows overlay
+                    // applied/rated where a rated axis exists.
+                    let fill = |name: &str| bhdl_synthesizer::reliability::InstanceStress {
+                        applied: 0.0,
+                        rated: 0.0,
+                        resistance_ohm: res_of.get(name).copied(),
+                        capacitance_f: cap_of.get(name).copied(),
+                        power_w: ann.instance_power.get(name).copied(),
+                        theta_ja_c_per_w: theta_of.get(name).copied(),
+                        rated_power_w: prated_of.get(name).copied(),
+                        temp_rise_c: rise_of.get(name).copied(),
+                    };
+                    for (_, inst) in netlist.instances.iter() {
+                        stress.insert(inst.name.clone(), fill(&inst.name));
                     }
                     for r in rows {
                         if dbg { eprintln!("safety debug: signoff row {} axis={} stress={:?} rating={:?}", r.refdes, r.axis, r.stress, r.rating); }
                         if let (Some(st), Some(rt)) = (r.stress, r.rating) {
-                            stress.insert(r.refdes.clone(), bhdl_synthesizer::reliability::InstanceStress {
-                                applied: st,
-                                rated: rt,
-                                resistance_ohm: res_of.get(&r.refdes).copied(),
-                                capacitance_f: cap_of.get(&r.refdes).copied(),
-                            });
+                            let e = stress.entry(r.refdes.clone()).or_insert_with(|| fill(&r.refdes));
+                            e.applied = st;
+                            e.rated = rt;
                         }
                     }
                 }

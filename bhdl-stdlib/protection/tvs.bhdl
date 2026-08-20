@@ -9,6 +9,13 @@ entity TVSDiode(voltage: voltage) {
     attribute forward_voltage = 1.1V;  // forward-conduction drop (unidirectional TVS, datasheet class)
     attribute max_current = 1A;
     attribute kicad_symbol = "Device:D_TVS";
+
+    // Reliability class (spec §2.8): §6.1 transient suppressor, π_S=1.
+    // T_J needs θ_JA — declare `attribute theta_ja = <°C/W>;` on the
+    // concrete part or instance, else the FIT stays uncomputed.
+    safety {
+        handbook class="diode_tvs" per="MILHDBK217F" source="MIL-HDBK-217F §6.1 transient suppressor";
+    }
 }
 
 // Aliases kept for the older generic-style call sites folded in from the
