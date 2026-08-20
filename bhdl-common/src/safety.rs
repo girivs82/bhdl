@@ -316,6 +316,13 @@ pub struct Mission {
     pub on_hours: Option<f64>,
     /// Power on/off cycles per year (thermal-cycling term).
     pub cycles: Option<f64>,
+    /// Environment symbol for π_E lookups (MIL-HDBK-217F Table 3-2
+    /// vocabulary: GB, GF, GM, NS, …). Absent ⇒ engine default "GB",
+    /// printed in the basis.
+    pub environment: Option<String>,
+    /// Quality level for π_Q lookups (S/R/P/M/mil_spec/lower). Absent ⇒
+    /// engine default "lower" (COTS), printed in the basis.
+    pub quality: Option<String>,
 }
 
 /// The whole model for one top-level board.

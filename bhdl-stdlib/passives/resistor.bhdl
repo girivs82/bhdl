@@ -24,11 +24,13 @@ entity Res(value: resistance, tolerance: percentage = 5%, wattage: power = 0.25W
     // Reliability class (docs/spec/Functional_Safety.md §2.8): the FIT
     // is COMPUTED per instance from the named standard's equations, the
     // board's mission profile and the sim-derived power stress ratio.
-    // The coefficient table (bhdl-stdlib/safety/iec62380.toml) is
-    // currently FIXTURE-labelled pending transcription of the real
-    // IEC 62380 constants.
+    // Default standard = MIL-HDBK-217F (public domain — the shipped
+    // bhdl-stdlib/safety/milhdbk217f.toml carries the REAL §9.2
+    // constants, verified against the handbook's printed λ_b tables).
+    // Swap the standard per project by overriding `per=` or by editing
+    // your gitignored <std>.local.toml overlay.
     safety {
-        handbook class="res_film_low_dissipation" per="IEC62380" source="IEC TR 62380:2004 fixed-film model (coefficients: see table file)";
+        handbook class="res_fixed_film" per="MILHDBK217F" source="MIL-HDBK-217F §9.2 fixed film (RL/RLR model)";
     }
 }
 

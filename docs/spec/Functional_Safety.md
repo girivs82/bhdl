@@ -256,10 +256,16 @@ all explicit, none guessed:
 
    ```bhdl
    safety MyBoard as brd {
-       mission { ambient = 55degC; on_hours = 8760; cycles = 4000; }
+       mission { ambient = 55degC; on_hours = 8760; cycles = 4000;
+                 environment = GM; quality = lower; }
        ...
    }
    ```
+
+   `environment` (π_E symbol: GB/GF/GM/NS/NU/…, default GB) and
+   `quality` (π_Q level: S/R/P/M/mil_spec/lower, default lower = COTS)
+   feed standards whose models use them (MIL-HDBK-217F); the applied
+   defaults are printed in every FIT basis.
 
    Board-level only: an entity block is applied per instance, and a
    per-instance environment would be a contradiction (hard error).
@@ -283,7 +289,10 @@ all explicit, none guessed:
    engine implements the shared equation shape
    λ = λ_base · π_T(Ea, T_ref, T_amb) · π_S((S/S_ref)^n); the standard
    is a *data* choice (`per="IEC62380"`), not a code fork — an SN 29500
-   run is a new table file, not a new engine.
+   run is a new table file, not a new engine. Two model forms exist:
+   `model = "arrhenius_stress"` (λ_base·π_T·π_S, the 62380/61709/29500
+   family shape) and `model = "mil217f_resistor"`
+   (λ_p = λ_b·π_R·π_Q·π_E per MIL-HDBK-217F §9; FIT = 1000·λ_p).
 
 The entity declares its class once (`handbook class="res_film_low_dissipation"
 per="IEC62380" source="..."` on the stdlib `Res`), and every instance
@@ -297,7 +306,13 @@ Any missing ingredient (no mission, unconverged solve, no table, class
 not in the table, unrated part) leaves the FIT uncomputed and adds a
 FIT_UNCOMPUTED gap naming exactly what is missing.
 
-**The shipped `iec62380.toml` is FIXTURE-labelled**: the equation shape
+**The shipped default is MIL-HDBK-217F** (`milhdbk217f.toml`): a US
+government work in the public domain, so its real §9.1/§9.2 resistor
+constants ship in-repo — the transcription is unit-tested against the
+handbook's own printed λ_b tables. It is dated (1995) and pessimistic
+for modern parts; treat it as the honest out-of-the-box backend and
+override per project with your licensed standard via the `.local.toml`
+overlay. **The shipped `iec62380.toml` is FIXTURE-labelled**: the equation shape
 is IEC 62380's, the constants are illustrative. Transcribe the real
 constants (or the Isograph RWB configuration's equivalents) into the
 table and update each row's `source` before using a computed FIT in a

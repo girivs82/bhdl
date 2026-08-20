@@ -910,6 +910,8 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
                     let mut ambient: Option<f64> = None;
                     let mut on_hours: Option<f64> = None;
                     let mut cycles: Option<f64> = None;
+                    let mut environment: Option<String> = None;
+                    let mut quality: Option<String> = None;
                     let leading_num = |v: &str| -> Option<f64> {
                         let end = v.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+')).unwrap_or(v.len());
                         v[..end].parse::<f64>().ok()
@@ -925,11 +927,13 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
                             "ambient" => ambient = leading_num(v),
                             "on_hours" => on_hours = leading_num(v),
                             "cycles" => cycles = leading_num(v),
-                            other => model.errors.push(format!("safety {}: unknown mission item '{}' (ambient|on_hours|cycles)", blk.name, other)),
+                            "environment" => environment = Some(v.trim_matches('"').to_string()),
+                            "quality" => quality = Some(v.trim_matches('"').to_string()),
+                            other => model.errors.push(format!("safety {}: unknown mission item '{}' (ambient|on_hours|cycles|environment|quality)", blk.name, other)),
                         }
                     }
                     match ambient {
-                        Some(a) => model.mission = Some(bhdl_common::safety::Mission { ambient_c: a, on_hours, cycles }),
+                        Some(a) => model.mission = Some(bhdl_common::safety::Mission { ambient_c: a, on_hours, cycles, environment, quality }),
                         None => model.errors.push(format!("safety {}: mission {{ }} has no `ambient = <temp>`", blk.name)),
                     }
                 }

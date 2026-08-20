@@ -1651,10 +1651,36 @@ async fn run_safety(
                         &analysis.entity_attribute_index,
                         &analysis.stress_recipes,
                     );
+                    // Resistance per instance (netlist attribute, for π_R):
+                    // parse "10kΩ"/"1M"/"470" style values.
+                    let parse_ohms = |v: &str| -> Option<f64> {
+                        let v = v.trim().trim_end_matches(|c: char| c == 'Ω' || c == 'R' || c == 'r');
+                        let end = v.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(v.len());
+                        let num: f64 = v[..end].parse().ok()?;
+                        let mult = match v[end..].trim() {
+                            "" => 1.0,
+                            "k" | "K" => 1e3,
+                            "M" => 1e6,
+                            "G" => 1e9,
+                            "m" => 1e-3,
+                            _ => return None,
+                        };
+                        Some(num * mult)
+                    };
+                    let mut res_of: HashMap<String, f64> = HashMap::new();
+                    for (_, inst) in netlist.instances.iter() {
+                        if let Some(r) = inst.attributes.get("resistance").and_then(|v| parse_ohms(v)) {
+                            res_of.insert(inst.name.clone(), r);
+                        }
+                    }
                     for r in rows {
                         if dbg { eprintln!("safety debug: signoff row {} axis={} stress={:?} rating={:?}", r.refdes, r.axis, r.stress, r.rating); }
                         if let (Some(st), Some(rt)) = (r.stress, r.rating) {
-                            stress.insert(r.refdes.clone(), (st, rt));
+                            stress.insert(r.refdes.clone(), bhdl_synthesizer::reliability::InstanceStress {
+                                applied: st,
+                                rated: rt,
+                                resistance_ohm: res_of.get(&r.refdes).copied(),
+                            });
                         }
                     }
                 }
