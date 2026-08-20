@@ -173,7 +173,7 @@ regulator entity with its own safety block, a board instantiating it
 twice, the board-level sidecar composing both, and the Phase-1 report
 the CLI prints for it.
 
-### 2.7 Part failure data *(Phase 2)*
+### 2.7 Part failure data *(Phase 2a — implemented)*
 
 On entities (stdlib/vendor models), in the same style as `simulation`:
 
@@ -191,7 +191,24 @@ entity TPS3700 {
 }
 ```
 
-Phase 1 only reports presence/absence of such data per part.
+Semantics (Phase 2a, shipped):
+
+- `failure_state` / `seooc` / `handbook` fill the part's row in the parts
+  table (`behavioral, N failure states` / `seooc λ=..` / `handbook class`),
+  clearing PART_NO_SAFETY_DATA for every instance of the entity. The
+  `source=` string is mandatory in spirit: the report prints it verbatim.
+- `fault state(h, "name")` is validated against the target entity's
+  declared `failure_state`s — naming a state the vendor model does not
+  declare is a hard error (no invented failure modes).
+- each `assumption ID "text"` is surfaced as an OPEN assumption
+  `<owner>.<local>.<ID>` in the scope that owns the instance (its safety
+  part, else the board); a parent block discharges it like any other:
+  `brd.rail_a.mon.ASM_SUP_VDD satisfied_by brd.x;` / `waived "..."`.
+- `terminal` contracts are recorded; they become fault-campaign checks in
+  Phase 3.
+
+Safety data is read from the entity's own source file, so the CLI parses
+imports transitively (relative to the board file, `BHDL_LIB_PATH`, cwd).
 
 ## 3. Semantic model
 

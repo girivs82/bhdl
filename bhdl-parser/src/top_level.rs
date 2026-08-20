@@ -225,6 +225,11 @@ impl<'t> Parser<'t> {
                 Some(SyntaxKind::GENERATE_KW) => self.parse_generate_block(),
                 Some(SyntaxKind::WITH_KW) => self.parse_with_block(),
                 Some(SyntaxKind::SATISFIES_KW) => self.parse_satisfies_block(),
+                // Entity-scope `safety { ... }` = the part's safety DATA
+                // (docs/spec/Functional_Safety.md §2.7): failure states,
+                // SEooC figures, terminal contract, assumptions, handbook
+                // class. Distinct from the top-level `safety X as ns { }`.
+                Some(SyntaxKind::SAFETY_KW) => self.parse_safety_data_block(),
                 Some(SyntaxKind::EXPANSION_KW) => self.parse_expansion_block(),
                 Some(SyntaxKind::DESIGN_KW) => self.parse_design_block(),
                 Some(SyntaxKind::PLACEMENT_KW) => self.parse_placement_block(),
@@ -3249,6 +3254,45 @@ impl<'t> Parser<'t> {
         }
         self.skip_trivia();
         self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+
+    /// Entity-scope `safety { item; item; ... }` — each item is a head
+    /// word (`failure_state`, `seooc`, `terminal`, `assumption`,
+    /// `handbook`) followed by free tokens up to `;`. Kept as flat token
+    /// runs; the semantic pass interprets them (unknown heads are hard
+    /// errors there, so the CST stays total).
+    fn parse_safety_data_block(&mut self) {
+        self.builder.start_node(SyntaxKind::SAFETY_DATA_BLOCK.into());
+        self.expect(SyntaxKind::SAFETY_KW);
+        self.skip_trivia();
+        self.expect(SyntaxKind::L_BRACE);
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) | None => break,
+                Some(SyntaxKind::IDENT) => {
+                    self.builder.start_node(SyntaxKind::SAFETY_DATA_ITEM.into());
+                    while self.peek() != Some(SyntaxKind::SEMI)
+                        && self.peek() != Some(SyntaxKind::R_BRACE)
+                        && self.peek().is_some()
+                    {
+                        self.bump_any();
+                    }
+                    if self.peek() == Some(SyntaxKind::SEMI) {
+                        self.bump();
+                    } else {
+                        self.error("Expected ';' after safety data item".to_string());
+                    }
+                    self.builder.finish_node();
+                }
+                _ => {
+                    self.error("Expected `failure_state|seooc|terminal|assumption|handbook ...;` in entity safety block".to_string());
+                    self.bump_any();
+                }
+            }
+        }
+        self.expect(SyntaxKind::R_BRACE);
         self.builder.finish_node();
     }
 

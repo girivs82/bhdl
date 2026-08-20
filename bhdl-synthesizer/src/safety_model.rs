@@ -245,6 +245,112 @@ fn collect_blocks(root: &SyntaxNode) -> Vec<SafetyBlock> {
     out
 }
 
+/// Entity-level safety data (spec §2.7), keyed by entity name.
+#[derive(Debug, Clone, Default)]
+struct EntityData {
+    failure_states: Vec<(String, Option<f64>, Option<f64>, String)>, // (name, fit, of, source)
+    seooc: Option<(Option<f64>, Option<f64>, Option<f64>, String)>,  // (lambda, spfm, lfm, source)
+    handbook: Option<(String, String)>,                              // (class, source)
+    terminals: Vec<(String, String)>,                                 // (pin, raw text)
+    assumptions: Vec<(String, String)>,                               // (id, text)
+    errors: Vec<String>,
+}
+
+impl EntityData {
+    fn merge(&mut self, o: EntityData) {
+        self.failure_states.extend(o.failure_states);
+        if o.seooc.is_some() { self.seooc = o.seooc; }
+        if o.handbook.is_some() { self.handbook = o.handbook; }
+        self.terminals.extend(o.terminals);
+        self.assumptions.extend(o.assumptions);
+        self.errors.extend(o.errors);
+    }
+}
+
+fn tokens_of(node: &SyntaxNode) -> Vec<String> {
+    node.descendants_with_tokens()
+        .filter_map(|e| e.into_token())
+        .filter(|t| !matches!(t.kind(), SyntaxKind::WHITESPACE | SyntaxKind::COMMENT | SyntaxKind::SEMI))
+        .map(|t| t.text().to_string())
+        .collect()
+}
+
+/// `k=v` pairs from a token run, where `=` may be its own token.
+fn kv_from_tokens(toks: &[String]) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    let mut i = 0;
+    while i < toks.len() {
+        if i + 2 < toks.len() && toks[i + 1] == "=" {
+            out.insert(toks[i].clone(), toks[i + 2].trim_matches('"').to_string());
+            i += 3;
+        } else if let Some((k, v)) = toks[i].split_once('=') {
+            out.insert(k.to_string(), v.trim_matches('"').to_string());
+            i += 1;
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+fn num(s: Option<&String>) -> Option<f64> {
+    s.and_then(|v| v.trim_end_matches(|c: char| c.is_alphabetic()).parse::<f64>().ok())
+}
+
+fn collect_entity_data(root: &SyntaxNode) -> HashMap<String, EntityData> {
+    let mut out: HashMap<String, EntityData> = HashMap::new();
+    for ent in root.descendants().filter(|n| n.kind() == SyntaxKind::ENTITY_DEF) {
+        let Some(ename) = ent
+            .children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .find(|t| t.kind() == SyntaxKind::IDENT)
+            .map(|t| t.text().to_string())
+        else { continue };
+        for blk in ent.children().filter(|c| c.kind() == SyntaxKind::SAFETY_DATA_BLOCK) {
+            let d = out.entry(ename.clone()).or_default();
+            for item in blk.children().filter(|c| c.kind() == SyntaxKind::SAFETY_DATA_ITEM) {
+                let toks = tokens_of(&item);
+                let Some(head) = toks.first() else { continue };
+                match head.as_str() {
+                    "failure_state" => {
+                        let name = toks.get(1).cloned().unwrap_or_default();
+                        let kv = kv_from_tokens(&toks[2..]);
+                        // `fit=12 of 60` → fit=12, and the token after `of`
+                        let of = toks.iter().position(|t| t == "of").and_then(|i| toks.get(i + 1)).and_then(|v| v.parse::<f64>().ok());
+                        let src = kv.get("source").cloned().unwrap_or_default();
+                        if src.is_empty() { d.errors.push(format!("{ename}: failure_state {name} has no source")); }
+                        d.failure_states.push((name, num(kv.get("fit")), of, src));
+                    }
+                    "seooc" => {
+                        let kv = kv_from_tokens(&toks[1..]);
+                        let src = kv.get("source").cloned().unwrap_or_default();
+                        if src.is_empty() { d.errors.push(format!("{ename}: seooc has no source")); }
+                        d.seooc = Some((num(kv.get("lambda")), num(kv.get("spfm")), num(kv.get("lfm")), src));
+                    }
+                    "handbook" => {
+                        let kv = kv_from_tokens(&toks[1..]);
+                        let class = kv.get("class").cloned().or_else(|| toks.get(1).filter(|t| !t.contains('=')).cloned()).unwrap_or_default();
+                        let src = kv.get("source").cloned().unwrap_or_default();
+                        if src.is_empty() { d.errors.push(format!("{ename}: handbook has no source")); }
+                        d.handbook = Some((class, src));
+                    }
+                    "terminal" => {
+                        let pin = toks.get(1).cloned().unwrap_or_default();
+                        d.terminals.push((pin, toks[2..].join(" ")));
+                    }
+                    "assumption" => {
+                        let id = toks.get(1).cloned().unwrap_or_default();
+                        let text = toks.iter().skip(2).find(|t| t.starts_with('"')).map(|t| t.trim_matches('"').to_string()).unwrap_or_default();
+                        d.assumptions.push((id, text));
+                    }
+                    other => d.errors.push(format!("{ename}: unknown safety data item '{other}' (failure_state|seooc|handbook|terminal|assumption)")),
+                }
+            }
+        }
+    }
+    out
+}
+
 // ─────────────────────────── netlist view ───────────────────────────
 
 struct NetView {
@@ -364,10 +470,14 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
     let view = NetView::build(netlist);
     let mut goal_defs: HashMap<String, GoalDef> = HashMap::new();
     let mut blocks: Vec<SafetyBlock> = Vec::new();
+    let mut entity_data: HashMap<String, EntityData> = HashMap::new();
     for sf in sources {
         let root = sf.syntax();
         goal_defs.extend(collect_goal_defs(&root));
         blocks.extend(collect_blocks(&root));
+        for (k, v) in collect_entity_data(&root) {
+            entity_data.entry(k).or_default().merge(v);
+        }
     }
 
     let mut model = SafetyModel {
@@ -412,21 +522,48 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
         _ => a.1.cmp(&b.1).then(a.0.name.cmp(&b.0.name)),
     });
 
+    // A part's declared assumptions of use (spec §2b/§2.7) are
+    // requirements on its integrator: surface each as an OPEN assumption
+    // in the scope that owns the part (its safety part, else the board),
+    // under the path `<owner>.<local>.<id>`, so a parent block can
+    // discharge it (`brd.rail_a.mon.ASM_X satisfied_by ..`). Seeded when
+    // the scope is created so later-applied blocks see them.
+    let seed_part_assumptions = |sc: &mut Scope| {
+        for inst in &view.physical {
+            let tname = view.inst_type.get(inst).cloned().unwrap_or_default();
+            let Some(ed) = entity_data.get(&tname) else { continue };
+            if ed.assumptions.is_empty() { continue; }
+            let owner = view.parent_of.get(inst).cloned().unwrap_or_default();
+            if owner != sc.path { continue; }
+            let local = if owner.is_empty() { inst.clone() } else { inst.strip_prefix(&format!("{owner}_")).unwrap_or(inst).to_string() };
+            for (id, text) in &ed.assumptions {
+                let path = if owner.is_empty() { format!("{local}.{id}") } else { format!("{owner}.{local}.{id}") };
+                if !sc.assumptions.iter().any(|a| a.path == path) {
+                    sc.assumptions.push(Assumption { id: format!("{local}.{id}"), path, text: text.clone(), status: AssumptionStatus::Open });
+                }
+            }
+        }
+    };
+
     let mut scopes: Vec<Scope> = Vec::new();
     for (blk, prefix) in &applications {
         let mut scope = scopes
             .iter()
             .position(|s| s.path == *prefix)
             .map(|i| scopes.remove(i))
-            .unwrap_or_else(|| Scope {
-                path: prefix.clone(),
-                entity: blk.entity.clone(),
-                ns: blk.ns.clone(),
-                goals: Vec::new(),
-                mechanisms: Vec::new(),
-                faults: Vec::new(),
-                waivers: Vec::new(),
-                assumptions: Vec::new(),
+            .unwrap_or_else(|| {
+                let mut sc = Scope {
+                    path: prefix.clone(),
+                    entity: blk.entity.clone(),
+                    ns: blk.ns.clone(),
+                    goals: Vec::new(),
+                    mechanisms: Vec::new(),
+                    faults: Vec::new(),
+                    waivers: Vec::new(),
+                    assumptions: Vec::new(),
+                };
+                seed_part_assumptions(&mut sc);
+                sc
             });
         let qual = |local: &str| if prefix.is_empty() { local.to_string() } else { format!("{prefix}.{local}") };
         // strip leading `ns.` and split
@@ -653,6 +790,22 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
                             if !wt.contains('(') { within = Some(wt); }
                         }
                     }
+                    if kind == "state" {
+                        // IC-internal faults are vendor-declared model states
+                        // (spec §2a): the state must exist on the part's entity.
+                        if let (Some(inst), Some(st)) = (targets.first(), targets.get(1)) {
+                            let st = st.trim_matches('"');
+                            let tname = view.inst_type.get(inst).cloned().unwrap_or_default();
+                            let known = entity_data.get(&tname).map(|d| d.failure_states.iter().any(|f| f.0 == st)).unwrap_or(false);
+                            if !known {
+                                model.errors.push(format!(
+                                    "safety {}: fault state({}, \"{}\"): entity {} declares no such failure state{}",
+                                    blk.name, inst, st, tname,
+                                    if entity_data.get(&tname).map(|d| d.failure_states.is_empty()).unwrap_or(true) { " (no `safety { failure_state .. }` data at all)" } else { "" }
+                                ));
+                            }
+                        }
+                    }
                     scope.faults.push(Fault { kind, targets, expect, detected_by, within, run: false });
                 }
                 SyntaxKind::SAFETY_WAIVE => {
@@ -697,8 +850,22 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
                     let refs: Vec<SyntaxNode> = child_nodes(st, SyntaxKind::NET_REF);
                     let subj = refs.first().map(|n| text_of(&n)).unwrap_or_default();
                     let segs = strip_ns(&subj);
-                    let (aid, spath) = match segs.split_last() { Some((a, s)) => (a.clone(), s.join("_")), None => (String::new(), String::new()) };
-                    let target_scope_path = if prefix.is_empty() { spath } else { format!("{prefix}_{spath}") };
+                    // The subject is `<scope path>.<assumption id>`; the id may
+                    // itself be dotted (part assumptions surface as
+                    // `<local>.<ID>`), so try every split: the LONGEST scope
+                    // path that exists wins, the rest is the id.
+                    let mut split: Option<(String, String)> = None;
+                    for cut in (1..segs.len()).rev() {
+                        let spath = segs[..cut].join("_");
+                        let spath = if prefix.is_empty() { spath } else { format!("{prefix}_{spath}") };
+                        if scopes.iter().any(|s| s.path == spath) || scope.path == spath {
+                            split = Some((segs[cut..].join("."), spath));
+                            break;
+                        }
+                    }
+                    let (aid, target_scope_path) = split.unwrap_or_else(|| {
+                        match segs.split_last() { Some((a, s)) => (a.clone(), s.join("_")), None => (String::new(), String::new()) }
+                    });
                     let status = if let Some(by) = refs.get(1) {
                         match resolve_handle(&text_of(by), &mut model.errors) {
                             Some(h) => AssumptionStatus::SatisfiedBy(h),
@@ -727,16 +894,34 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
     }
     scopes.sort_by(|a, b| a.path.cmp(&b.path));
 
+    for sc in scopes.iter_mut() { seed_part_assumptions(sc); }
+
     // Parts table: every physical instance, grouped by expansion parent.
     let waived: HashMap<String, String> = scopes
         .iter()
         .flat_map(|s| s.waivers.iter().map(|w| (w.instance.clone(), w.reason.clone())))
         .collect();
+    for (_, ed) in entity_data.iter() {
+        model.errors.extend(ed.errors.iter().cloned());
+    }
     for inst in &view.physical {
+        let tname = view.inst_type.get(inst).cloned().unwrap_or_default();
+        let ed = entity_data.get(&tname);
         let data = if let Some(r) = waived.get(inst) {
             PartData::Waived { reason: r.clone() }
+        } else if let Some(ed) = ed {
+            if !ed.failure_states.is_empty() {
+                let src = ed.failure_states.iter().map(|f| f.3.clone()).find(|s| !s.is_empty()).unwrap_or_default();
+                PartData::Behavioral { failure_states: ed.failure_states.len(), source: src }
+            } else if let Some((lambda, _, _, src)) = &ed.seooc {
+                PartData::Seooc { lambda_fit: *lambda, source: src.clone() }
+            } else if let Some((class, src)) = &ed.handbook {
+                PartData::Handbook { class: class.clone(), source: src.clone() }
+            } else {
+                PartData::None
+            }
         } else {
-            PartData::None // Phase 2 reads entity `safety { }` data here
+            PartData::None
         };
         model.parts.push(Part {
             instance: inst.clone(),

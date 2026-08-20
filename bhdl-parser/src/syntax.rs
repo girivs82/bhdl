@@ -452,6 +452,8 @@ pub enum SyntaxKind {
     SAFETY_ASSUME,      // assume Id(args) | Id "text";
     SAFETY_REFINES,     // ns.inst.Goal refines Goal;
     SAFETY_SATISFIED,   // ns.inst.Id satisfied_by ns.h;  |  ... waived "reason";
+    SAFETY_DATA_BLOCK,  // entity-scope: safety { failure_state ..; seooc ..; terminal ..; handbook ..; assumption ..; }
+    SAFETY_DATA_ITEM,   // one statement inside SAFETY_DATA_BLOCK (head ident + tokens up to ';')
     FAULT_INJECT_DEF,   // fault_inject short(a, b) -> verify { ... }
     SAFETY_ATTR,        // #[safety(...)] or #[safety_mechanism(...)]
     FUNCTIONAL_REQ_DEF, // functional_requirement FSR_001 { ... }

@@ -18,6 +18,17 @@ entity VoltageSupervisor(vlo: voltage = 4.5V, vhi: voltage = 5.5V) {
     pin GND:   ground;
     attribute component_class = "supervisor";
     attribute data_source = "class-point: TI TPS3700 (window thresholds)";
+
+    // Entity safety DATA (spec §2.7). The numbers below are FIXTURE
+    // VALUES for the plumbing test and say so in their source; a real
+    // part carries the vendor's FIT report and failure-mode split.
+    safety {
+        failure_state output_stuck_high fit=8  of 40 source="FIXTURE — illustrative split, not vendor data";
+        failure_state output_stuck_low  fit=8  of 40 source="FIXTURE — illustrative split, not vendor data";
+        failure_state threshold_drift   fit=24 of 40 source="FIXTURE — illustrative split, not vendor data";
+        terminal VDD range 1.8V..6.5V below_min="nOUT undefined";
+        assumption ASM_SUP_VDD "VDD stays within 1.8..6.5V";
+    }
 }
 
 // ───────────────────────── the design ────────────────────────────────
@@ -71,7 +82,8 @@ safety SupervisedReg5V as dut {
     fault short(dut.r_fb_bot.1, dut.r_fb_bot.2) expect SG_OV.overvoltage detected_by dut.mon within 10ms;
     fault open(dut.r_fb_top)                    expect SG_OV.overvoltage detected_by dut.mon within 10ms;
     fault open(dut.r_pu)                        expect SG_UV.silent_uv;
-    fault state(dut.reg, "ref_drift_high")      expect SG_OV.overvoltage detected_by dut.mon;
+    // (no `fault state(dut.reg, ...)`: the stdlib LM317 declares no vendor
+    //  failure states yet — naming one would be a hard error, by design)
     fault state(dut.mon, "output_stuck_high")   expect SG_OV.silent_ov;
 
     waive dut.c_out qm "output cap: open -> ripple, short -> UV which SG_UV covers";
@@ -106,4 +118,8 @@ safety DualRail as brd {
     brd.rail_b.ASM_SUPPLY_WITHIN_ABSMAX satisfied_by brd.tvs;
     brd.rail_a.ASM_LOAD_REACTS_TO_FLAG  waived "bench fixture: flags drive resistive loads, no consumer to disable";
     brd.rail_b.ASM_LOAD_REACTS_TO_FLAG  waived "bench fixture: flags drive resistive loads, no consumer to disable";
+    // The supervisor's own assumption of use (from its entity safety data):
+    // its VDD is the supervised rail itself, bounded by SG_OV/SG_UV.
+    brd.rail_a.mon.ASM_SUP_VDD waived "VDD = VOUT, bounded by the rail's own goals";
+    brd.rail_b.mon.ASM_SUP_VDD waived "VDD = VOUT, bounded by the rail's own goals";
 }

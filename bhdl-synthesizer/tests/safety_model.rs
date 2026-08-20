@@ -71,10 +71,10 @@ async fn supervised_reg_model_resolves_and_gaps_are_honest() {
     assert!(psm.iter().all(|m| m.claimed_dc == Some(0.90) && m.dc_source.is_some()));
 
     // Faults resolved; none run.
-    assert_eq!(ra.faults.len(), 5);
+    assert_eq!(ra.faults.len(), 4);
     assert!(ra.faults.iter().all(|f| !f.run));
     assert!(ra.faults.iter().any(|f| f.kind == "short" && f.targets == vec!["rail_a_r_fb_bot.1", "rail_a_r_fb_bot.2"] && f.detected_by.as_deref() == Some("rail_a_mon") && f.within.as_deref() == Some("10ms")));
-    assert!(ra.faults.iter().any(|f| f.kind == "state" && f.targets[0] == "rail_a_reg"));
+    assert!(ra.faults.iter().any(|f| f.kind == "state" && f.targets[0] == "rail_a_mon"));
 
     // Waiver + assumptions discharged from the board block.
     assert_eq!(ra.waivers.len(), 1);
@@ -83,6 +83,13 @@ async fn supervised_reg_model_resolves_and_gaps_are_honest() {
     assert_eq!(a1.status, AssumptionStatus::SatisfiedBy("tvs".into()));
     let a2 = ra.assumptions.iter().find(|a| a.id == "ASM_LOAD_REACTS_TO_FLAG").unwrap();
     assert!(matches!(a2.status, AssumptionStatus::Waived(_)));
+    // The supervisor entity's own assumption of use surfaced in the rail
+    // scope and was discharged by the board block.
+    let a3 = ra.assumptions.iter().find(|a| a.id == "mon.ASM_SUP_VDD").expect("part assumption surfaced");
+    assert_eq!(a3.path, "rail_a.mon.ASM_SUP_VDD");
+    assert!(matches!(a3.status, AssumptionStatus::Waived(_)));
+    // Entity safety data reached the part table.
+    assert!(matches!(m.parts.iter().find(|p| p.instance == "rail_a_mon").unwrap().data, PartData::Behavioral { failure_states: 3, .. }));
 
     // Parts grouped by safety part; waived part carries its reason.
     let rail_a_parts: Vec<&str> = m.parts.iter().filter(|p| p.parent.as_deref() == Some("rail_a")).map(|p| p.instance.as_str()).collect();
@@ -94,8 +101,8 @@ async fn supervised_reg_model_resolves_and_gaps_are_honest() {
     // unwaived part lacks data; no open assumptions; no unsourced dc.
     let count = |c: GapClass| m.gaps.iter().filter(|g| g.class == c).count();
     assert_eq!(count(GapClass::EffectUndetected), 0, "{:#?}", m.gaps);
-    assert_eq!(count(GapClass::FaultUnrun), 10);
-    assert_eq!(count(GapClass::PartNoSafetyData), 13); // 15 parts - 2 waived caps
+    assert_eq!(count(GapClass::FaultUnrun), 8);
+    assert_eq!(count(GapClass::PartNoSafetyData), 11); // 15 parts - 2 waived caps - 2 supervisors with data
     assert_eq!(count(GapClass::AssumptionOpen), 0);
     assert_eq!(count(GapClass::DcUnsourced), 0);
     assert_eq!(count(GapClass::PsmWithoutLsm), 0); // ASIL B needs none
