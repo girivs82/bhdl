@@ -90,7 +90,7 @@ async fn declared_faults_run_classify_and_regenerate_gaps() {
     // (+0 states). Under the all-12V mock with alias-following, the
     // classification is deterministic; measured DC exists for the
     // mechanism because the fixture declares detected_when.
-    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve);
+    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve, &HashMap::new());
     // 3 generic 2-pin parts × 2 modes + DemoSense's 2 VENDOR states
     assert_eq!(model.universe.len(), 8, "{:#?}", model.universe);
     let states: Vec<_> = model.universe.iter().filter(|u| u.mode == "state").collect();
@@ -128,4 +128,82 @@ async fn declared_faults_run_classify_and_regenerate_gaps() {
     let unrun2: Vec<_> = model2.gaps.iter().filter(|g| g.class == GapClass::FaultUnrun).collect();
     assert_eq!(unrun2.len(), 6);
     assert!(unrun2.iter().all(|g| g.fix.contains("without verdict")));
+}
+
+/// Multi-pin universe: adjacent-pin bridge faults. With no geometry the
+/// bridges are the ORDERING approximation (consecutive definition-order
+/// pins, labelled); with a caller-supplied geometric adjacency map the
+/// bridges are exactly the geometric pairs, labelled as such. Weight is
+/// None (no safety data on the part) — the bridge rows still run.
+#[tokio::test]
+async fn universe_adjacent_pin_bridges_geometry_vs_ordering() {
+    let src = r#"
+entity Quad() {
+    pin 1: signal inout;
+    pin 2: signal inout;
+    pin 3: signal inout;
+    pin 4: signal inout;
+    attribute component_class = "ic";
+}
+
+board GeoDemo {
+    power V5 = 5V @ 1A;
+    ground GND;
+    @V5 -> u1: Quad().1;
+    u1.2 -> @GND;
+    u1.3 -> @GND;
+    u1.4 -> @GND;
+}
+
+safety GeoDemo as g {
+    goal SG: ASIL_B "rail" (id="SG-GEO-1") {
+        effect ov = g.u1.1 > 8V severity S2;
+    }
+}
+"#;
+    let pr = parse(src);
+    assert!(pr.errors().is_empty(), "parse: {:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let netlist = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+    let solve = |faulted: &bhdl_netlist::Netlist| -> Result<HashMap<String, f64>, String> {
+        Ok(faulted
+            .nets
+            .iter()
+            .filter_map(|(_, n)| n.name.clone())
+            .map(|name| (name.clone(), if name == "GND" { 0.0 } else { 5.0 }))
+            .collect())
+    };
+
+    // No geometry → ordering fallback: 4 opens + 3 consecutive bridges.
+    let mut model = build_safety_model(&netlist, &[&sf]);
+    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve, &HashMap::new());
+    let bridges: Vec<_> = model.universe.iter().filter(|u| u.mode == "short_adjacent").collect();
+    assert_eq!(bridges.len(), 3, "{:#?}", model.universe);
+    assert!(
+        bridges.iter().all(|u| u.note.as_deref().map(|n| n.contains("ordering-adjacency")).unwrap_or(false)),
+        "fallback must be labelled: {bridges:#?}"
+    );
+    assert_eq!(model.universe.iter().filter(|u| u.mode == "open_pin").count(), 4);
+    assert!(bridges.iter().all(|u| u.ran), "{bridges:#?}");
+
+    // Geometric map → exactly those pairs, labelled geometric. The map
+    // deliberately DROPS the 2-3 consecutive pair (opposite sides on
+    // the package) — the ordering bug this feature kills.
+    let mut geo: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    geo.insert("u1".into(), vec![("1".into(), "2".into()), ("3".into(), "4".into())]);
+    let mut model2 = build_safety_model(&netlist, &[&sf]);
+    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model2, &solve, &geo);
+    let bridges2: Vec<_> = model2.universe.iter().filter(|u| u.mode == "short_adjacent").collect();
+    assert_eq!(bridges2.len(), 2, "{:#?}", model2.universe);
+    assert!(
+        bridges2.iter().all(|u| u.note.as_deref().map(|n| n.contains("geometric adjacency")).unwrap_or(false)),
+        "{bridges2:#?}"
+    );
+    let has_pair = |a: &str, b: &str| {
+        bridges2.iter().any(|u| u.targets == vec![format!("u1.{a}"), format!("u1.{b}")])
+    };
+    assert!(has_pair("1", "2") && has_pair("3", "4"), "{bridges2:#?}");
+    assert!(!has_pair("2", "3"), "2-3 must be dropped by geometry: {bridges2:#?}");
 }

@@ -41,6 +41,12 @@ struct View {
     nets: std::collections::HashSet<String>,
     /// instance name → connected pin names (sorted)
     pins_of: HashMap<String, Vec<String>>,
+    /// instance name → pin names in DEFINITION order (the entity
+    /// author's ordering — the package pin numbering for real parts).
+    /// Adjacency for pin-bridge faults is consecutive pins in this
+    /// order: an ORDERING approximation of package adjacency
+    /// (geometric adjacency needs footprint pad coordinates).
+    pins_ordered: HashMap<String, Vec<String>>,
 }
 
 impl View {
@@ -70,7 +76,20 @@ impl View {
         for v in pins_of.values_mut() {
             v.sort();
         }
-        View { inst, pin_net, nets, pins_of }
+        let mut pins_ordered: HashMap<String, Vec<String>> = HashMap::new();
+        for (_, i) in n.instances.iter() {
+            let Some(def) = n.modules.get(i.definition) else { continue };
+            let ordered: Vec<String> = def
+                .pins
+                .iter()
+                .filter_map(|pid| n.pins.get(*pid))
+                .filter(|p| !p.is_virtual)
+                .map(|p| p.name.clone())
+                .filter(|pn| pin_net.contains_key(&(i.name.clone(), pn.clone())))
+                .collect();
+            pins_ordered.insert(i.name.clone(), ordered);
+        }
+        View { inst, pin_net, nets, pins_of, pins_ordered }
     }
 
     /// Resolve an ns-stripped, scope-prefixed identifier to a NET name.
@@ -690,11 +709,16 @@ pub fn run_declared_faults(netlist: &Netlist, model: &mut SafetyModel, solve: &S
 
 /// Run the AUTOMATIC fault universe: every unwaived physical part ×
 /// its standard failure modes — 2-pin parts get `short` + `open`,
-/// multi-pin parts get a per-pin `open` (pin-to-pin shorts beyond the
-/// declared faults need adjacency knowledge the netlist does not
-/// carry — stated, not silently skipped), and parts with declared
-/// behavioral failure states are LISTED as needing the vendor-model
-/// hook. Each fault is classified on the faulted operating point:
+/// multi-pin parts get a per-pin `open` plus ADJACENT-pin shorts
+/// (solder bridges). Adjacency comes from `geo_adjacency` when the
+/// caller resolved the part's footprint pad geometry (pads within
+/// 1.5× the package's minimum pad spacing — real neighbours, so a
+/// SOIC's 4↔5 "consecutive" pair is correctly ABSENT); parts without
+/// resolvable geometry fall back to consecutive-pins-in-definition-
+/// order, labelled as the approximation it is. Parts with declared
+/// behavioral failure states run the VENDOR's states instead of the
+/// generic guesses (bridges still apply — they are board-side).
+/// Each fault is classified on the faulted operating point:
 ///
 ///   dangerous     — any effect predicate in the owning scope fired
 ///   detected      — a mechanism's `detected_when` predicate was TRUE
@@ -707,7 +731,12 @@ pub fn run_declared_faults(netlist: &Netlist, model: &mut SafetyModel, solve: &S
 /// equally over its modes when the reliability engine produced one
 /// (the equal split is labelled — mode fractions are data we do not
 /// have); count-basis otherwise, also labelled.
-pub fn run_universe(netlist: &Netlist, model: &mut SafetyModel, solve: &Solver) {
+pub fn run_universe(
+    netlist: &Netlist,
+    model: &mut SafetyModel,
+    solve: &Solver,
+    geo_adjacency: &HashMap<String, Vec<(String, String)>>,
+) {
     use bhdl_common::safety::{PartData, UniverseFault};
     let view = View::build(netlist);
     // (instance, state name) → behavior, for state-mode (re-)application
@@ -765,28 +794,77 @@ pub fn run_universe(netlist: &Netlist, model: &mut SafetyModel, solve: &Solver) 
             _ => None,
         };
         let pins = view.pins_of.get(&part.instance).cloned().unwrap_or_default();
+        let ordered = view.pins_ordered.get(&part.instance).cloned().unwrap_or_else(|| pins.clone());
         // modes. A BEHAVIORAL part's failure modes are the VENDOR'S
         // declared states — never the generic 2-pin guesses — and each
         // state carries its REAL FIT share as the λ weight. A state
         // without a behavior stays unrun with that said.
-        let mut modes: Vec<(String, Vec<String>, Option<f64>, Option<String>)> = Vec::new();
+        //
+        // Multi-pin parts additionally get ADJACENT-PIN SHORTS (solder
+        // bridges are board-side faults, so they apply to behavioral
+        // parts too): consecutive pins in definition order — an
+        // ORDERING approximation of package adjacency, stated; the
+        // geometric version needs footprint pad coordinates. For
+        // behavioral parts the bridge λ is NOT covered by the die's
+        // failure-state FITs — weight None, said in the note.
+        let mut modes: Vec<(String, Vec<String>, Option<f64>, Option<String>, Option<String>)> = Vec::new();
+        let is_behavioral = matches!(part.data, PartData::Behavioral { .. });
         if let PartData::Behavioral { states, .. } = &part.data {
             for st in states {
-                modes.push(("state".into(), vec![part.instance.clone(), st.name.clone()], st.fit, st.behavior.clone()));
+                modes.push(("state".into(), vec![part.instance.clone(), st.name.clone()], st.fit, st.behavior.clone(), None));
             }
         } else if pins.len() == 2 {
             let n = 2.0;
             let w = fit.map(|f| f / n);
-            modes.push(("short".into(), vec![format!("{}.{}", part.instance, pins[0]), format!("{}.{}", part.instance, pins[1])], w, None));
-            modes.push(("open".into(), vec![part.instance.clone()], w, None));
-        } else if pins.len() > 2 {
-            let n = pins.len() as f64;
-            let w = fit.map(|f| f / n);
-            for p in &pins {
-                modes.push(("open_pin".into(), vec![format!("{}.{}", part.instance, p)], w, None));
+            modes.push(("short".into(), vec![format!("{}.{}", part.instance, pins[0]), format!("{}.{}", part.instance, pins[1])], w, None, None));
+            modes.push(("open".into(), vec![part.instance.clone()], w, None, None));
+        }
+        if pins.len() > 2 {
+            // Adjacency basis: footprint pad GEOMETRY when the caller
+            // resolved it (only pairs whose pads physically neighbour —
+            // a bridge spans one gap, not the package body), else the
+            // ordering approximation, labelled.
+            let geo = geo_adjacency.get(&part.instance);
+            let pairs: Vec<(String, String)> = match geo {
+                Some(g) => g
+                    .iter()
+                    .filter(|(a, b)| pins.contains(a) && pins.contains(b))
+                    .cloned()
+                    .collect(),
+                None => ordered.windows(2).map(|w| (w[0].clone(), w[1].clone())).collect(),
+            };
+            let basis = if geo.is_some() {
+                "geometric adjacency (footprint pads)"
+            } else {
+                "ordering-adjacency approximation — no footprint geometry"
+            };
+            let n_adj = pairs.len();
+            let n_modes = if is_behavioral { n_adj } else { pins.len() + n_adj };
+            let w = if is_behavioral { None } else { fit.map(|f| f / n_modes.max(1) as f64) };
+            if !is_behavioral {
+                for p in &pins {
+                    modes.push(("open_pin".into(), vec![format!("{}.{}", part.instance, p)], w, None, None));
+                }
+            }
+            for (pa, pb) in &pairs {
+                let note = if is_behavioral {
+                    Some(format!(
+                        "pin bridge ({}): λ not covered by the die failure states — unweighted",
+                        basis
+                    ))
+                } else {
+                    Some(basis.to_string())
+                };
+                modes.push((
+                    "short_adjacent".into(),
+                    vec![format!("{}.{}", part.instance, pa), format!("{}.{}", part.instance, pb)],
+                    w,
+                    None,
+                    note,
+                ));
             }
         }
-        for (mode, targets, weight, behavior) in modes {
+        for (mode, targets, weight, behavior, mode_note) in modes {
             let mut uf = UniverseFault {
                 scope: scopes[si].prefix.clone(),
                 part: part.instance.clone(),
@@ -799,13 +877,13 @@ pub fn run_universe(netlist: &Netlist, model: &mut SafetyModel, solve: &Solver) 
                 latent: false,
                 latent_exposed_fit: 0.0,
                 weight_fit: weight,
-                note: None,
+                note: mode_note,
             };
             // mutate + solve
             let mut faulted = netlist.clone();
             let mut alias: HashMap<String, String> = HashMap::new();
             let res = match mode.as_str() {
-                "short" => apply_short(&mut faulted, &view, &targets[0], &targets[1]).map(|a| {
+                "short" | "short_adjacent" => apply_short(&mut faulted, &view, &targets[0], &targets[1]).map(|a| {
                     if let Some((from, to)) = a {
                         alias.insert(from, to);
                     }
@@ -818,7 +896,7 @@ pub fn run_universe(netlist: &Netlist, model: &mut SafetyModel, solve: &Solver) 
                 _ => unreachable!(),
             };
             if let Err(e) = res {
-                uf.note = Some(e);
+                uf.note = Some(match uf.note.take() { Some(n) => format!("{n}; {e}"), None => e });
                 universe.push(uf);
                 continue;
             }
@@ -852,7 +930,8 @@ pub fn run_universe(netlist: &Netlist, model: &mut SafetyModel, solve: &Solver) 
             uf.ran = true;
             uf.false_alarm = uf.fired.is_empty() && !uf.detected.is_empty();
             if !errs.is_empty() {
-                uf.note = Some(errs.join("; "));
+                let e = errs.join("; ");
+                uf.note = Some(match uf.note.take() { Some(n) => format!("{n}; {e}"), None => e });
             }
             universe.push(uf);
         }
@@ -882,7 +961,7 @@ pub fn run_universe(netlist: &Netlist, model: &mut SafetyModel, solve: &Solver) 
                     && u.fired.is_empty()
                     && u.detected.is_empty()
                     && mech_parts.contains(&(u.scope.clone(), u.part.clone()))
-                    && (matches!(u.mode.as_str(), "short" | "open" | "open_pin")
+                    && (matches!(u.mode.as_str(), "short" | "short_adjacent" | "open" | "open_pin")
                         || (u.mode == "state"
                             && state_behaviors.get(&(u.part.clone(), u.targets.get(1).cloned().unwrap_or_default())).map(|b| b.is_some()).unwrap_or(false)))
             })
@@ -900,7 +979,7 @@ pub fn run_universe(netlist: &Netlist, model: &mut SafetyModel, solve: &Solver) 
                 let mut alias: HashMap<String, String> = HashMap::new();
                 let apply = |n: &mut Netlist, mode: &str, targets: &[String], alias: &mut HashMap<String, String>| -> Result<(), String> {
                     match mode {
-                        "short" => apply_short(n, &view, &targets[0], &targets[1]).map(|a| {
+                        "short" | "short_adjacent" => apply_short(n, &view, &targets[0], &targets[1]).map(|a| {
                             if let Some((from, to)) = a {
                                 alias.insert(from, to);
                             }

@@ -2048,3 +2048,198 @@ fn has_high_speed_nets(netlist: &Netlist) -> bool {
         )
     })
 }
+
+// ── Safety-engine geometry export ────────────────────────────────────
+// The fault campaign's adjacent-pin-short universe needs REAL package
+// adjacency: consecutive PIN NUMBERS are not neighbours on a package —
+// on a SOIC, pin 4→5 sit on OPPOSITE corners (body width apart) while
+// pin 1↔8 face each other across the same gap. Both helpers reuse the
+// exact machinery build_board uses — the same package-resolution
+// ladder and the same pin↔pad pairing contract — so the safety
+// engine's notion of "where pin X is" can never diverge from PnR's.
+// No layout run is involved: footprint generation is a pure function.
+
+/// Resolve the package name for an instance, mirroring `build_board`'s
+/// ladder (minus per-run config overrides, which don't exist outside a
+/// layout run): instance `package` → instance `physical_package` →
+/// module `physical_package` → category default sized to the pin count.
+pub fn resolve_package_name(
+    entity_type: &str,
+    instance_attrs: &std::collections::HashMap<String, String>,
+    module_attrs: &std::collections::HashMap<String, String>,
+    pin_count: usize,
+) -> String {
+    instance_attrs
+        .get("package")
+        .cloned()
+        .or_else(|| instance_attrs.get("physical_package").cloned())
+        .or_else(|| module_attrs.get("physical_package").cloned())
+        .map(|p| p.trim_matches('"').to_string())
+        .unwrap_or_else(|| {
+            let cat = categorize_component(entity_type, instance_attrs);
+            default_package_for_category(&cat, pin_count)
+        })
+}
+
+/// Geometrically adjacent pin pairs for a package: pairs whose pad
+/// centers sit within 1.5× the package's minimum pad spacing — the
+/// solder-bridge criterion (a bridge spans one gap, not the body).
+/// `pin_names` is the entity's non-virtual pins in DEFINITION order;
+/// pads pair to pins by the same contract as `build_board`: exact
+/// name match, then numeric pad order (def i ↔ pad numbered i+1),
+/// then emission order. Returns None when the package doesn't resolve
+/// or has fewer than 3 placed pins — the caller falls back to the
+/// (labelled) ordering approximation.
+pub fn geometric_pin_adjacency(
+    package: &str,
+    pin_names: &[String],
+) -> Option<Vec<(String, String)>> {
+    let fp = ipc7351::standard_package(package)
+        .map(|family| ipc7351::generate_footprint(&family, ipc7351::DensityLevel::Nominal))?;
+    if pin_names.len() < 3 || fp.pads.len() < 3 {
+        return None;
+    }
+    // Same pairing ladder as build_board (name → numeric → emission).
+    let mut used = vec![false; fp.pads.len()];
+    let numeric: Option<Vec<usize>> = {
+        let mut idx: Vec<(usize, usize)> = Vec::new();
+        let mut ok = true;
+        for (i, pad) in fp.pads.iter().enumerate() {
+            match pad.pad_number.parse::<usize>() {
+                Ok(n) => idx.push((n, i)),
+                Err(_) => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if ok {
+            idx.sort();
+            Some(idx.into_iter().map(|(_, i)| i).collect())
+        } else {
+            None
+        }
+    };
+    let mut pos: Vec<(String, f64, f64)> = Vec::new();
+    for (di, pname) in pin_names.iter().enumerate() {
+        let by_name = fp
+            .pads
+            .iter()
+            .position(|p| p.pad_number.eq_ignore_ascii_case(pname));
+        let chosen = by_name
+            .filter(|&i| !used[i])
+            .or_else(|| {
+                numeric
+                    .as_ref()
+                    .and_then(|ord| ord.get(di).copied())
+                    .filter(|&i| !used[i])
+            })
+            .or_else(|| Some(di).filter(|&i| i < used.len() && !used[i]))
+            .or_else(|| used.iter().position(|u| !u));
+        // A pin with no pad slot has no geometry — skip it here (the
+        // build_board path reports it loudly as unplaced).
+        let Some(i) = chosen else { continue };
+        used[i] = true;
+        pos.push((pname.clone(), fp.pads[i].x_position, fp.pads[i].y_position));
+    }
+    if pos.len() < 3 {
+        return None;
+    }
+    let dist = |a: &(String, f64, f64), b: &(String, f64, f64)| -> f64 {
+        (a.1 - b.1).hypot(a.2 - b.2)
+    };
+    let mut min_d = f64::INFINITY;
+    for i in 0..pos.len() {
+        for j in (i + 1)..pos.len() {
+            let d = dist(&pos[i], &pos[j]);
+            if d > 1e-9 && d < min_d {
+                min_d = d;
+            }
+        }
+    }
+    if !min_d.is_finite() {
+        return None;
+    }
+    let threshold = 1.5 * min_d;
+    let mut out: Vec<(String, String)> = Vec::new();
+    for i in 0..pos.len() {
+        for j in (i + 1)..pos.len() {
+            let d = dist(&pos[i], &pos[j]);
+            if d > 1e-9 && d <= threshold {
+                out.push((pos[i].0.clone(), pos[j].0.clone()));
+            }
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+#[cfg(test)]
+mod geometric_adjacency_tests {
+    use super::*;
+
+    fn names(n: usize) -> Vec<String> {
+        (1..=n).map(|i| i.to_string()).collect()
+    }
+
+    #[test]
+    fn soic8_adjacency_is_geometric_not_numeric() {
+        // SOIC-8: pins 1-4 down one column, 5-8 up the other. The
+        // ordering approximation fabricates a 4↔5 bridge (opposite
+        // corners, body width apart) and misses nothing else; geometry
+        // must keep the six within-column gaps and DROP 4↔5.
+        let pairs = geometric_pin_adjacency("SOIC-8", &names(8)).expect("SOIC-8 resolves");
+        let has = |a: &str, b: &str| {
+            pairs
+                .iter()
+                .any(|(x, y)| (x == a && y == b) || (x == b && y == a))
+        };
+        for (a, b) in [("1", "2"), ("2", "3"), ("3", "4"), ("5", "6"), ("6", "7"), ("7", "8")] {
+            assert!(has(a, b), "within-column neighbours {}-{} missing: {:?}", a, b, pairs);
+        }
+        assert!(
+            !has("4", "5"),
+            "4-5 are opposite corners — the ordering-adjacency bug: {:?}",
+            pairs
+        );
+        assert!(!has("1", "8"), "1-8 span the body: {:?}", pairs);
+    }
+
+    #[test]
+    fn sot23_all_three_pins_mutually_reachable_or_not_is_measured() {
+        // SOT-23: pins 1,2 on one side, 3 centered opposite. Whatever
+        // the generator's geometry says, the 1-2 gap (one pitch) must
+        // be adjacent; the result must be a real subset of the 3 pairs.
+        let pairs = geometric_pin_adjacency("SOT-23", &names(3)).expect("SOT-23 resolves");
+        assert!(
+            pairs
+                .iter()
+                .any(|(x, y)| (x == "1" && y == "2") || (x == "2" && y == "1")),
+            "1-2 same-side neighbours missing: {:?}",
+            pairs
+        );
+        assert!(pairs.len() <= 3);
+    }
+
+    #[test]
+    fn two_pin_and_unknown_packages_yield_none() {
+        assert!(geometric_pin_adjacency("0603", &names(2)).is_none());
+        assert!(geometric_pin_adjacency("NOT-A-PACKAGE", &names(4)).is_none());
+    }
+
+    #[test]
+    fn resolve_package_ladder_orders_instance_over_module_over_default() {
+        use std::collections::HashMap;
+        let mut ia: HashMap<String, String> = HashMap::new();
+        let mut ma: HashMap<String, String> = HashMap::new();
+        ma.insert("physical_package".into(), "\"SOIC-14\"".into());
+        assert_eq!(resolve_package_name("Thing", &ia, &ma, 8), "SOIC-14");
+        ia.insert("package".into(), "TQFP-32".into());
+        assert_eq!(resolve_package_name("Thing", &ia, &ma, 8), "TQFP-32");
+        let empty: HashMap<String, String> = HashMap::new();
+        assert_eq!(resolve_package_name("Res", &empty, &empty, 2), "0603");
+    }
+}

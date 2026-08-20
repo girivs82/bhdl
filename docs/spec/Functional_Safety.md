@@ -143,9 +143,20 @@ fields/goals/effects/handles: hard errors.
 **Measured DC** *(Phase 3, implemented)*: the whole-universe campaign
 generates the automatic fault set — every unwaived physical part × its
 standard modes (2-pin parts: `short` + `open`; multi-pin parts: per-pin
-`open`; pin-to-pin shorts beyond the declared faults need adjacency
-knowledge the netlist does not carry — stated; declared behavioral
-failure states are listed as needing the vendor-model hook) — solves
+`open` plus `short_adjacent` solder-bridge faults between ADJACENT
+pins. Adjacency is **geometric**: the part's package resolves through
+the same ladder PnR uses (`package` attribute → `physical_package` →
+class default) and the bridge pairs are the pads within 1.5× the
+package's minimum pad spacing — so a SOIC's pin 4↔5, consecutive in
+number but on opposite corners, is correctly absent. No layout run is
+involved; footprint generation is a pure function. Parts whose package
+does not resolve fall back to consecutive-pins-in-definition-order,
+and every bridge row's note names which basis produced it. Declared
+behavioral failure states run the vendor's states instead of the
+generic modes; bridges still apply to behavioral parts — they are
+board-side faults — but carry no λ weight, since the die's
+failure-state FITs do not cover a solder bridge, and the note says
+so) — solves
 each faulted board, and classifies it on the faulted operating point:
 **dangerous** (an effect fired), **detected** (a mechanism's
 `detected_when` was TRUE), **residual** (dangerous, undetected),

@@ -1820,7 +1820,43 @@ async fn run_safety(
             println!("  fault campaign: {ran} declared fault(s) run, {mismatched} expectation(s) NOT met");
         }
         // Whole-universe campaign: every unwaived part × standard modes.
-        bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solver);
+        // Adjacent-pin bridge faults use REAL footprint pad geometry:
+        // resolve each multi-pin part's package through the SAME ladder
+        // PnR uses (package attr → physical_package → class default)
+        // and take pairs whose pads physically neighbour. No layout run
+        // — footprint generation is a pure function. Parts whose
+        // package doesn't resolve fall back to ordering-adjacency,
+        // labelled in the universe rows.
+        let mut geo_adjacency: HashMap<String, Vec<(String, String)>> = HashMap::new();
+        for (_, inst) in netlist.instances.iter() {
+            let Some(mdef) = netlist.modules.get(inst.definition) else { continue };
+            let pin_names: Vec<String> = mdef
+                .pins
+                .iter()
+                .filter_map(|&pid| {
+                    netlist
+                        .pins
+                        .get(pid)
+                        .filter(|p| !p.is_virtual)
+                        .map(|p| p.name.clone())
+                })
+                .collect();
+            if pin_names.len() <= 2 {
+                continue;
+            }
+            let package = bhdl_pnr::semantic::resolve_package_name(
+                &mdef.name,
+                &inst.attributes,
+                &mdef.attributes,
+                pin_names.len(),
+            );
+            if let Some(pairs) =
+                bhdl_pnr::semantic::geometric_pin_adjacency(&package, &pin_names)
+            {
+                geo_adjacency.insert(inst.name.clone(), pairs);
+            }
+        }
+        bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solver, &geo_adjacency);
         // FMEDA metrics from the measured universe.
         bhdl_synthesizer::fault_campaign::compute_metrics(&mut model);
     }
