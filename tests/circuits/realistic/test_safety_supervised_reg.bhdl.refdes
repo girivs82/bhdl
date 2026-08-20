@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "mappings": {
+    "C": {
+      "c_out": "C1",
+      "rail_a_c_out": "C4",
+      "rail_b_c_out": "C5",
+      "reg_C_in": "C2",
+      "reg_C_out": "C3"
+    },
+    "D": {
+      "tvs": "D1"
+    },
+    "R": {
+      "r_fb_bot": "R1",
+      "r_fb_top": "R2",
+      "r_flag_a": "R3",
+      "r_flag_b": "R4",
+      "r_pu": "R5",
+      "rail_a_r_fb_bot": "R8",
+      "rail_a_r_fb_top": "R9",
+      "rail_a_r_pu": "R10",
+      "rail_b_r_fb_bot": "R11",
+      "rail_b_r_fb_top": "R12",
+      "rail_b_r_pu": "R13",
+      "reg_R1": "R6",
+      "reg_R2": "R7"
+    },
+    "U": {
+      "mon": "U1",
+      "rail_a": "U2",
+      "rail_a_mon": "U5",
+      "rail_a_reg": "U6",
+      "rail_b": "U3",
+      "rail_b_mon": "U7",
+      "rail_b_reg": "U8",
+      "reg": "U4"
+    }
+  }
+}

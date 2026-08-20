@@ -237,6 +237,7 @@ fn collect_blocks(root: &SyntaxNode) -> Vec<SafetyBlock> {
                         | SyntaxKind::SAFETY_ASSUME
                         | SyntaxKind::SAFETY_REFINES
                         | SyntaxKind::SAFETY_SATISFIED
+                        | SyntaxKind::SAFETY_MISSION
                 )
             })
             .collect();
@@ -312,7 +313,7 @@ fn split_call_args(txt: &str) -> (Vec<String>, BTreeMap<String, String>) {
 struct EntityData {
     failure_states: Vec<(String, Option<f64>, Option<f64>, String)>, // (name, fit, of, source)
     seooc: Option<(Option<f64>, Option<f64>, Option<f64>, String)>,  // (lambda, spfm, lfm, source)
-    handbook: Option<(String, String)>,                              // (class, source)
+    handbook: Option<(String, String, Option<String>)>,              // (class, source, per-standard)
     terminals: Vec<(String, String)>,                                 // (pin, raw text)
     assumptions: Vec<(String, String)>,                               // (id, text)
     errors: Vec<String>,
@@ -394,7 +395,7 @@ fn collect_entity_data(root: &SyntaxNode) -> HashMap<String, EntityData> {
                         let class = kv.get("class").cloned().or_else(|| toks.get(1).filter(|t| !t.contains('=')).cloned()).unwrap_or_default();
                         let src = kv.get("source").cloned().unwrap_or_default();
                         if src.is_empty() { d.errors.push(format!("{ename}: handbook has no source")); }
-                        d.handbook = Some((class, src));
+                        d.handbook = Some((class, src, kv.get("per").cloned()));
                     }
                     "terminal" => {
                         let pin = toks.get(1).cloned().unwrap_or_default();
@@ -546,6 +547,7 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
 
     let mut model = SafetyModel {
         board: view.board_name.clone(),
+        mission: None,
         scopes: Vec::new(),
         parts: Vec::new(),
         gaps: Vec::new(),
@@ -879,6 +881,41 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
                         scope.waivers.push(Waiver { instance: inst, handle, reason });
                     }
                 }
+                SyntaxKind::SAFETY_MISSION => {
+                    // Board-level mission profile (spec §2.8). Belongs to
+                    // the board block: an entity block is applied per
+                    // instance and a per-instance environment would be a
+                    // contradiction.
+                    if !prefix.is_empty() {
+                        model.errors.push(format!("safety {}: mission {{ }} belongs to the board block, not an entity block", blk.name));
+                        continue;
+                    }
+                    let mut ambient: Option<f64> = None;
+                    let mut on_hours: Option<f64> = None;
+                    let mut cycles: Option<f64> = None;
+                    let leading_num = |v: &str| -> Option<f64> {
+                        let end = v.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+')).unwrap_or(v.len());
+                        v[..end].parse::<f64>().ok()
+                    };
+                    for item in child_nodes(st, SyntaxKind::SAFETY_DATA_ITEM) {
+                        let t = text_of(&item);
+                        let Some((k, v)) = t.split_once('=') else {
+                            model.errors.push(format!("safety {}: mission item '{}' is not `key = value`", blk.name, t));
+                            continue;
+                        };
+                        let (k, v) = (k.trim(), v.trim());
+                        match k {
+                            "ambient" => ambient = leading_num(v),
+                            "on_hours" => on_hours = leading_num(v),
+                            "cycles" => cycles = leading_num(v),
+                            other => model.errors.push(format!("safety {}: unknown mission item '{}' (ambient|on_hours|cycles)", blk.name, other)),
+                        }
+                    }
+                    match ambient {
+                        Some(a) => model.mission = Some(bhdl_common::safety::Mission { ambient_c: a, on_hours, cycles }),
+                        None => model.errors.push(format!("safety {}: mission {{ }} has no `ambient = <temp>`", blk.name)),
+                    }
+                }
                 SyntaxKind::SAFETY_ASSUME => {
                     let t = st.children().map(|c| text_of(&c)).find(|t| !t.is_empty()).unwrap_or_default();
                     let id = t.split('(').next().unwrap_or("").trim().to_string();
@@ -1018,8 +1055,8 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
                 PartData::Behavioral { failure_states: ed.failure_states.len(), source: src }
             } else if let Some((lambda, _, _, src)) = &ed.seooc {
                 PartData::Seooc { lambda_fit: *lambda, source: src.clone() }
-            } else if let Some((class, src)) = &ed.handbook {
-                PartData::Handbook { class: class.clone(), source: src.clone() }
+            } else if let Some((class, src, per)) = &ed.handbook {
+                PartData::Handbook { class: class.clone(), source: src.clone(), per: per.clone(), fit: None, fit_basis: None }
             } else {
                 PartData::None
             }

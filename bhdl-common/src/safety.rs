@@ -213,8 +213,18 @@ pub enum PartData {
     Behavioral { failure_states: usize, source: String },
     /// Black box with SEooC data.
     Seooc { lambda_fit: Option<f64>, source: String },
-    /// Handbook class data (passives).
-    Handbook { class: String, source: String },
+    /// Handbook class data (passives). `per` names the prediction
+    /// standard whose equations compute the FIT (e.g. "IEC62380");
+    /// `fit`/`fit_basis` are filled by the reliability engine when the
+    /// mission profile, the sim-derived stress and the coefficient
+    /// table are all present — never guessed.
+    Handbook {
+        class: String,
+        source: String,
+        per: Option<String>,
+        fit: Option<f64>,
+        fit_basis: Option<String>,
+    },
     /// Waived out of the argument with a reason.
     Waived { reason: String },
     /// Nothing — gap `PART_NO_SAFETY_DATA`.
@@ -242,6 +252,10 @@ pub enum GapClass {
     AssumptionOpen,
     PartNoSafetyData,
     FaultUnrun,
+    /// A handbook part names a prediction standard but its FIT could not
+    /// be computed (missing mission profile, unsolved stress, or no
+    /// coefficient table).
+    FitUncomputed,
 }
 
 impl GapClass {
@@ -253,6 +267,7 @@ impl GapClass {
             GapClass::AssumptionOpen => "ASSUMPTION_OPEN",
             GapClass::PartNoSafetyData => "PART_NO_SAFETY_DATA",
             GapClass::FaultUnrun => "FAULT_UNRUN",
+            GapClass::FitUncomputed => "FIT_UNCOMPUTED",
         }
     }
 }
@@ -285,10 +300,25 @@ pub struct Scope {
     pub assumptions: Vec<Assumption>,
 }
 
+/// Board-level mission profile (spec §2.8): the environment every
+/// per-standard FIT equation evaluates against. Declared once in the
+/// board's safety block; absent ⇒ handbook FITs are not computed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Mission {
+    /// Ambient temperature in °C.
+    pub ambient_c: f64,
+    /// Powered hours per year (8760 = always on).
+    pub on_hours: Option<f64>,
+    /// Power on/off cycles per year (thermal-cycling term).
+    pub cycles: Option<f64>,
+}
+
 /// The whole model for one top-level board.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SafetyModel {
     pub board: String,
+    /// Board-level mission profile, if declared.
+    pub mission: Option<Mission>,
     pub scopes: Vec<Scope>,
     pub parts: Vec<Part>,
     pub gaps: Vec<Gap>,

@@ -3214,6 +3214,39 @@ impl<'t> Parser<'t> {
         self.builder.finish_node();
     }
 
+    /// `mission { ambient = 55degC; on_hours = 8760; cycles = 4000; }` —
+    /// board-level mission profile (spec §2.8). Items are token runs to
+    /// `;`, same shape as entity safety data items.
+    fn parse_safety_mission(&mut self) {
+        self.builder.start_node(SyntaxKind::SAFETY_MISSION.into());
+        self.bump(); // `mission`
+        self.skip_trivia();
+        self.expect(SyntaxKind::L_BRACE);
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) | None => break,
+                Some(_) => {
+                    self.builder.start_node(SyntaxKind::SAFETY_DATA_ITEM.into());
+                    while self.peek() != Some(SyntaxKind::SEMI)
+                        && self.peek() != Some(SyntaxKind::R_BRACE)
+                        && self.peek().is_some()
+                    {
+                        self.bump_any();
+                    }
+                    if self.peek() == Some(SyntaxKind::SEMI) {
+                        self.bump();
+                    } else {
+                        self.error("Expected ';' after mission item".to_string());
+                    }
+                    self.builder.finish_node();
+                }
+            }
+        }
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
     /// Body shared by library goals and inline goals:
     /// `signal NAME: kind;` | `effect NAME = expr severity Sx;` | legacy `key: value;`
     fn parse_safety_goal_body(&mut self) {
@@ -3368,6 +3401,7 @@ impl<'t> Parser<'t> {
                     let head = self.peek_text().unwrap_or_default();
                     match head.as_str() {
                         "goal" => self.parse_safety_goal_inline(),
+                        "mission" => self.parse_safety_mission(),
                         "mechanism" => self.parse_safety_mechanism(),
                         "fault" => self.parse_safety_fault(),
                         "waive" => self.parse_safety_waive(),

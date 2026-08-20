@@ -145,6 +145,7 @@ pub mod manufacturing_optimization;
 // Intent hint processor - applies synthesis hints to guide component selection
 pub mod intent_hint_processor;
 pub mod safety_model;
+pub mod reliability;
 
 // Analysis-runner methods (`run_compatibility_analysis`,
 // `run_emi_emc_analysis`, `run_reliability_analysis`, …) split

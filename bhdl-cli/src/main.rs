@@ -1579,7 +1579,72 @@ async fn run_safety(
     for sf in &owned {
         sources.push(sf);
     }
-    let model = build_safety_model(&netlist, &sources);
+    let mut model = build_safety_model(&netlist, &sources);
+
+    // ── Reliability (spec §2.8): handbook FITs from the named standard's
+    // equations, the mission profile and SIM-DERIVED stress. The stress
+    // ratio comes from the same GLACIER DC solve + sign-off rows the
+    // margin table uses — never estimated here. Any missing ingredient
+    // leaves the FIT uncomputed and adds a FIT_UNCOMPUTED gap.
+    {
+        // Coefficient tables: bhdl-stdlib/safety/<standard>.toml, resolved
+        // like imports (BHDL_LIB_PATH, then relative to the board file, cwd).
+        let mut tables: HashMap<String, bhdl_synthesizer::reliability::ReliabilityTable> = HashMap::new();
+        let stds: std::collections::HashSet<String> = model.parts.iter().filter_map(|p| match &p.data {
+            bhdl_common::safety::PartData::Handbook { per: Some(std), .. } => Some(std.clone()),
+            _ => None,
+        }).collect();
+        for std_name in stds {
+            let rel = format!("bhdl-stdlib/safety/{}.toml", std_name.to_lowercase());
+            let mut cands: Vec<PathBuf> = Vec::new();
+            if let Ok(lr) = std::env::var("BHDL_LIB_PATH") { cands.push(PathBuf::from(lr).join(&rel)); }
+            if let Some(base) = board_path.parent() { cands.push(base.join(&rel)); }
+            cands.push(PathBuf::from(&rel));
+            for c in cands {
+                if let Ok(text) = fs::read_to_string(&c) {
+                    match bhdl_synthesizer::reliability::ReliabilityTable::from_toml(&text) {
+                        Ok(t) => { tables.insert(t.standard.clone(), t); }
+                        Err(e) => eprintln!("  ! bad reliability table {}: {}", c.display(), e),
+                    }
+                    break;
+                }
+            }
+        }
+        // Sim-derived stress: DC solve + sign-off rows (applied, rated).
+        let mut stress: bhdl_synthesizer::reliability::StressMap = HashMap::new();
+        {
+            let mut converter = NetlistToSpiceConverter::new();
+            converter.set_model_overrides(bhdl_synthesizer::model_evaluator::evaluate_model_overrides(
+                &netlist,
+                &analysis.model_recipes,
+                &analysis.entity_attribute_index,
+            ));
+            let dbg = std::env::var("BHDL_SAFETY_DEBUG").map(|v| v == "1").unwrap_or(false);
+            match converter.convert(&netlist) {
+                Err(e) => { if dbg { eprintln!("safety debug: spice convert failed: {e}"); } }
+                Ok(circuit) => match bhdl_spice::input_draw::solve_dc_with_input_draws(circuit, &regulator_hints(&netlist)) {
+                Err(e) => { if dbg { eprintln!("safety debug: DC solve failed: {e}"); } }
+                Ok((result, circuit_ref)) => {
+                    let ann = build_simulation_annotations(&result, &circuit_ref);
+                    let rows = bhdl_synthesizer::signoff::compute_signoff(
+                        &netlist,
+                        &ann.net_voltages,
+                        &ann.instance_power,
+                        &ann.instance_currents,
+                        &analysis.entity_attribute_index,
+                        &analysis.stress_recipes,
+                    );
+                    for r in rows {
+                        if dbg { eprintln!("safety debug: signoff row {} axis={} stress={:?} rating={:?}", r.refdes, r.axis, r.stress, r.rating); }
+                        if let (Some(st), Some(rt)) = (r.stress, r.rating) {
+                            stress.insert(r.refdes.clone(), (st, rt));
+                        }
+                    }
+                }
+            } }
+        }
+        bhdl_synthesizer::reliability::apply_reliability(&mut model, &stress, &tables);
+    }
 
     // ── Report ───────────────────────────────────────────────────────
     println!("{}", format!("Functional safety — {}", model.board).bold().cyan());
@@ -1638,13 +1703,24 @@ async fn run_safety(
         }
     }
 
+    if let Some(m) = &model.mission {
+        let extras = [m.on_hours.map(|h| format!("on_hours={h}")), m.cycles.map(|c| format!("cycles={c}"))]
+            .into_iter().flatten().collect::<Vec<_>>().join(", ");
+        println!("\n  mission: ambient={}°C{}", m.ambient_c, if extras.is_empty() { String::new() } else { format!(", {extras}") });
+    }
     println!("\n  {} ({})", "parts".bold(), model.parts.len());
     println!("    {:<26} {:<22} {:<12} {}", "instance", "type", "safety part", "safety data");
     for p in &model.parts {
         let data = match &p.data {
             PartData::Behavioral { failure_states, source } => format!("behavioral, {failure_states} failure states  {source}"),
             PartData::Seooc { lambda_fit, source } => format!("seooc{}  {source}", lambda_fit.map(|l| format!(" λ={l} FIT")).unwrap_or_default()),
-            PartData::Handbook { class, source } => format!("handbook {class}  {source}"),
+            PartData::Handbook { class, source, per, fit, fit_basis } => {
+                let engine = per.as_deref().map(|p| format!(" per {p}")).unwrap_or_default();
+                match (fit, fit_basis) {
+                    (Some(_), Some(basis)) => format!("handbook {class}{engine}: {basis}"),
+                    _ => format!("handbook {class}{engine} (FIT not computed)  {source}"),
+                }
+            }
             PartData::Waived { reason } => format!("waived qm \"{reason}\""),
             PartData::None => "NONE".red().to_string(),
         };

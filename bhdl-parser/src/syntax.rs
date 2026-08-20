@@ -439,6 +439,7 @@ pub enum SyntaxKind {
     // Hierarchical requirement nodes
     SAFETY_GOAL_DEF,    // safety_goal Name(params) "title" { signal ..; effect ..; }  (library goal definition)
     SAFETY_ASSUMPTION_DEF, // safety_assumption Name(params) "text";  (library assumption-of-use definition)
+    SAFETY_MISSION,     // mission { ambient = 55degC; on_hours = 8760; }  (board mission profile)
     SAFETY_GOAL_PARAMS, // (vmax: voltage, level: asil = ASIL_B)
     SAFETY_SIGNAL_DECL, // signal RAIL: power;      (goal formal)
     SAFETY_EFFECT,      // effect name = expr severity S3;

@@ -20,6 +20,16 @@ entity Res(value: resistance, tolerance: percentage = 5%, wattage: power = 0.25W
     attribute tolerance = tolerance;
     attribute power_rating = wattage;
     attribute kicad_symbol = "Device:R";
+
+    // Reliability class (docs/spec/Functional_Safety.md §2.8): the FIT
+    // is COMPUTED per instance from the named standard's equations, the
+    // board's mission profile and the sim-derived power stress ratio.
+    // The coefficient table (bhdl-stdlib/safety/iec62380.toml) is
+    // currently FIXTURE-labelled pending transcription of the real
+    // IEC 62380 constants.
+    safety {
+        handbook class="res_film" per="IEC62380" source="IEC TR 62380:2004 fixed-film model (coefficients: see table file)";
+    }
 }
 
 alias Resistor = Res;

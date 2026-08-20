@@ -232,6 +232,56 @@ Semantics (Phase 2a, shipped):
 Safety data is read from the entity's own source file, so the CLI parses
 imports transitively (relative to the board file, `BHDL_LIB_PATH`, cwd).
 
+### 2.8 Mission profile and computed handbook FITs *(Phase 2c — implemented)*
+
+Passives don't get vendor FMEDAs; their FIT comes from a prediction
+standard's *equations* (IEC 62380 historically; IEC 61709 absorbed its
+models; SN 29500 is the automotive table equivalent). Three ingredients,
+all explicit, none guessed:
+
+1. **Mission profile** — declared once, in the board's safety block:
+
+   ```bhdl
+   safety MyBoard as brd {
+       mission { ambient = 55degC; on_hours = 8760; cycles = 4000; }
+       ...
+   }
+   ```
+
+   Board-level only: an entity block is applied per instance, and a
+   per-instance environment would be a contradiction (hard error).
+
+2. **Stress ratio — sim-derived, never estimated.** S = applied/rated
+   from the same GLACIER DC solve and sign-off rows the margin table
+   uses (a resistor's applied power over its `power_rating`). A board
+   whose DC solve does not converge gets no stress and therefore no FIT.
+
+3. **Coefficient table** — `bhdl-stdlib/safety/<standard>.toml`, one
+   class row per component class, each row individually sourced. The
+   engine implements the shared equation shape
+   λ = λ_base · π_T(Ea, T_ref, T_amb) · π_S((S/S_ref)^n); the standard
+   is a *data* choice (`per="IEC62380"`), not a code fork — an SN 29500
+   run is a new table file, not a new engine.
+
+The entity declares its class once (`handbook class="res_film"
+per="IEC62380" source="..."` on the stdlib `Res`), and every instance
+gets its own computed FIT with the full basis printed:
+
+```
+r_hot  Res  handbook res_film per IEC62380: λ=0.32 FIT = 0.10·π_T(1.29)·π_S(2.45) @ S=1.23, Ta=55°C ...
+```
+
+Any missing ingredient (no mission, unconverged solve, no table, class
+not in the table, unrated part) leaves the FIT uncomputed and adds a
+FIT_UNCOMPUTED gap naming exactly what is missing.
+
+**The shipped `iec62380.toml` is FIXTURE-labelled**: the equation shape
+is IEC 62380's, the constants are illustrative. Transcribe the real
+constants (or the Isograph RWB configuration's equivalents) into the
+table and update each row's `source` before using a computed FIT in a
+real FMEDA. See `tests/circuits/realistic/test_safety_fit_divider.bhdl`
+for the end-to-end demonstration.
+
 ## 3. Semantic model
 
 `bhdl_common::safety::SafetyModel`, built by the synthesizer after the

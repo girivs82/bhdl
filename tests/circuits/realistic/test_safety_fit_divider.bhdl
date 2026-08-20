@@ -1,0 +1,23 @@
+// Reliability-engine fixture (docs/spec/Functional_Safety.md §2.8):
+// a purely resistive board whose GLACIER DC solve converges, so every
+// handbook FIT is COMPUTED — λ from the IEC62380-shaped table
+// (bhdl-stdlib/safety/iec62380.toml, FIXTURE coefficients), the
+// mission profile below, and the SIM-DERIVED power stress ratio.
+//
+//   r_easy: 12V across 1kΩ rated 1W    → 144 mW, S = 0.14 (cool)
+//   r_hot:  12V across 470Ω rated 0.25W → 306 mW, S = 1.23 (over-stressed:
+//           the sign-off table flags it AND its computed FIT is higher)
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+board FitDemo {
+    power V12 = 12V @ 1A;
+    ground GND;
+
+    @V12 -> r_easy: Res(1kΩ, wattage=1W).1;    r_easy.2 -> @GND;
+    @V12 -> r_hot:  Res(470Ω, wattage=0.25W).1; r_hot.2 -> @GND;
+}
+
+safety FitDemo as brd {
+    mission { ambient = 55degC; on_hours = 8760; }
+}

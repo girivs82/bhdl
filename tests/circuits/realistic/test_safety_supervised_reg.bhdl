@@ -115,6 +115,10 @@ board DualRail {
 }
 
 safety DualRail as brd {
+    // Mission profile (spec §2.8): the environment every handbook FIT
+    // equation evaluates against. Board-level, declared once.
+    mission { ambient = 55degC; on_hours = 8760; }
+
     goal SG_SUPPLY: ASIL_B "Neither 5V rail overvolts undetected" (id="SG-SYS-010", ftti=10ms) {
         effect any_ov = brd.V5_A > 5.5V || brd.V5_B > 5.5V   severity S3;
     }

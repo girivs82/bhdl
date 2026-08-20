@@ -36,7 +36,7 @@ async fn model_for(src: &str) -> SafetyModel {
         .expect("synthesize");
     // The fixture imports the stdlib safety catalogue; parse those
     // sources too (the CLI does this transitively).
-    let lib: Vec<SourceFile> = ["bhdl-stdlib/safety/power_rails.bhdl", "bhdl-stdlib/safety/assumptions.bhdl"]
+    let lib: Vec<SourceFile> = ["bhdl-stdlib/safety/power_rails.bhdl", "bhdl-stdlib/safety/assumptions.bhdl", "bhdl-stdlib/passives/resistor.bhdl"]
         .iter()
         .map(|p| {
             let src = std::fs::read_to_string(p).expect(p);
@@ -108,6 +108,21 @@ async fn supervised_reg_model_resolves_and_gaps_are_honest() {
     assert!(matches!(a3.status, AssumptionStatus::Waived(_)));
     // Entity safety data reached the part table.
     assert!(matches!(m.parts.iter().find(|p| p.instance == "rail_a_mon").unwrap().data, PartData::Behavioral { failure_states: 3, .. }));
+    // The stdlib Res entity's handbook class + prediction standard reached
+    // every resistor instance; the FIT itself is only computed by the
+    // reliability engine (CLI), so it is None here.
+    match &m.parts.iter().find(|p| p.instance == "rail_a_r_fb_top").unwrap().data {
+        PartData::Handbook { class, per, fit, .. } => {
+            assert_eq!(class, "res_film");
+            assert_eq!(per.as_deref(), Some("IEC62380"));
+            assert!(fit.is_none());
+        }
+        other => panic!("expected handbook data, got {other:?}"),
+    }
+    // Board-level mission profile parsed.
+    let mission = m.mission.as_ref().expect("mission profile");
+    assert_eq!(mission.ambient_c, 55.0);
+    assert_eq!(mission.on_hours, Some(8760.0));
 
     // Parts grouped by safety part; waived part carries its reason.
     let rail_a_parts: Vec<&str> = m.parts.iter().filter(|p| p.parent.as_deref() == Some("rail_a")).map(|p| p.instance.as_str()).collect();
@@ -120,7 +135,7 @@ async fn supervised_reg_model_resolves_and_gaps_are_honest() {
     let count = |c: GapClass| m.gaps.iter().filter(|g| g.class == c).count();
     assert_eq!(count(GapClass::EffectUndetected), 0, "{:#?}", m.gaps);
     assert_eq!(count(GapClass::FaultUnrun), 8);
-    assert_eq!(count(GapClass::PartNoSafetyData), 11); // 15 parts - 2 waived caps - 2 supervisors with data
+    assert_eq!(count(GapClass::PartNoSafetyData), 3); // regs ×2 + tvs (8 resistors carry handbook data, 2 caps waived, 2 supervisors behavioral)
     assert_eq!(count(GapClass::AssumptionOpen), 0);
     assert_eq!(count(GapClass::DcUnsourced), 0);
     assert_eq!(count(GapClass::PsmWithoutLsm), 0); // ASIL B needs none
@@ -140,7 +155,7 @@ async fn supervised_reg_model_resolves_and_gaps_are_honest() {
     let added: Vec<&str> = d.parts.added.iter().map(|(k, _)| k.as_str()).collect();
     assert_eq!(added, vec!["rail_a_r_snub", "rail_b_r_snub"]);
     assert!(d.parts.removed.is_empty() && d.parts.changed.is_empty());
-    assert_eq!(d.gaps.added.len(), 2);
+    assert_eq!(d.gaps.added.len(), 0); // r_snub carries handbook data from its entity — no new gap
     assert!(d.goals.is_empty() && d.effects.is_empty() && d.mechanisms.is_empty() && d.assumptions.is_empty() && d.faults.is_empty());
     // Determinism: same source → identical baseline.
     let m3 = model_for(&src).await;
