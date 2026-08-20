@@ -146,6 +146,7 @@ pub mod manufacturing_optimization;
 pub mod intent_hint_processor;
 pub mod safety_model;
 pub mod reliability;
+pub mod fault_campaign;
 
 // Analysis-runner methods (`run_compatibility_analysis`,
 // `run_emi_emc_analysis`, `run_reliability_analysis`, …) split

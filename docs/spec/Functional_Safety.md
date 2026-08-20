@@ -152,10 +152,38 @@ DC *(Phase 3)* always overrides the claim; both are reported.
 ```
 
 `fault <kind>(<targets>) expect <Goal>.<effect> [detected_by <ns>.<h>] [within <duration>];`
-— explicit injections on top of the automatic campaign *(Phase 3)*;
-kinds `short(a, b)`, `open(pin|part)`, `drift(part, ±pct)`,
-`state(part, "<model failure state>")`. Listed as `FAULT_UNRUN` until
-the campaign exists.
+— explicit injections on top of the automatic campaign; kinds
+`short(a, b)`, `open(pin|part)`, `drift(part, ±pct)`,
+`state(part, "<model failure state>")`.
+
+**The declared-fault campaign runs** *(Phase 3, first increment)*: when
+the board's healthy GLACIER DC solve converges, each `short`/`open`
+fault mutates a clone of the netlist (short = the two nets become one —
+the surviving node is always the rail, so a short to GND never destroys
+the solver's ground reference; open = the pin(s) detach / the part is
+removed), the faulted board is re-solved with the same DC path, and
+every effect predicate in the fault's scope is evaluated on the FAULTED
+operating point. Predicates resolve against the HEALTHY connectivity
+(an opened part's pin still names the net it sat on) with a net-alias
+map following merges. The report shows, per fault, what fired and
+whether the expected effect did:
+
+```
+short(r_top.1, r_top.2) expect SG_MID.overvoltage  → ran: fired [SG_MID.overvoltage] ✓
+open(r_top) expect SG_MID.overvoltage  → ran: fired [SG_MID.undervoltage] — EXPECTED … DID NOT FIRE
+```
+
+A fault clears its FAULT_UNRUN gap only when it ran AND the expectation
+held. An expectation the physics did not produce is a first-class gap
+(the safety argument claimed a wrong effect); a faulted board that does
+not converge is reported as ran-without-verdict (non-convergence is
+information — usually a catastrophic short), and stays a gap. Honestly
+out of scope in this increment, stated per fault: `state` needs the
+vendor-model failure-state hook, `drift` needs magnitude mutation, and
+`within <FTTI>` needs transient simulation — the static campaign
+classifies the settled operating point only. Effect predicates are
+VOLTAGE predicates (`brd.r_bot.1 > 8V`); an identifier that does not
+resolve is a per-fault error, never a silently-false predicate.
 
 `waive <ns>.<handle> qm "<reason>";` takes a part out of the argument
 with the reason on record (ERC-waiver idiom). Every other physical

@@ -1,0 +1,38 @@
+// Phase-3 fault-campaign fixture (docs/spec/Functional_Safety.md §2.5):
+// a resistive divider whose GLACIER DC solve converges, with declared
+// faults the campaign RUNS — each fault mutates a clone of the netlist
+// (short = merge nets, open = detach), re-solves, and evaluates every
+// effect predicate on the FAULTED operating point.
+//
+// Healthy: V12=12V, mid node = 6V (1k/1k).
+//   short(r_top)  → mid = 12V → overvoltage fires   (expectation MET)
+//   short(r_bot)  → mid = 0V  → undervoltage fires  (expectation MET)
+//   open(r_bot)   → mid pulled to 12V through r_top → overvoltage (MET)
+//   open(r_top)   → declared expecting OVERvoltage, but physics gives
+//                   0V through r_bot → UNDERvoltage fires instead —
+//                   the campaign flags the EXPECTATION NOT MET: the
+//                   safety argument claimed an effect the board does
+//                   not produce. That finding is the demonstration.
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+board FaultDemo {
+    power V12 = 12V @ 1A;
+    ground GND;
+
+    @V12 -> r_top: Res(1kΩ).1; r_top.2 -> r_bot: Res(1kΩ).1; r_bot.2 -> @GND;
+}
+
+safety FaultDemo as brd {
+    mission { ambient = 40degC; }
+
+    goal SG_MID: QM "mid node stays in its window" (id="SG-FC-1") {
+        effect overvoltage  = brd.r_bot.1 > 8V severity S2;
+        effect undervoltage = brd.r_bot.1 < 4V severity S2;
+    }
+
+    fault short(brd.r_top.1, brd.r_top.2) expect SG_MID.overvoltage;
+    fault short(brd.r_bot.1, brd.r_bot.2) expect SG_MID.undervoltage;
+    fault open(brd.r_bot)                 expect SG_MID.overvoltage;
+    fault open(brd.r_top)                 expect SG_MID.overvoltage;   // deliberately wrong — see header
+}

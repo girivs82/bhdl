@@ -889,7 +889,7 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
                             }
                         }
                     }
-                    scope.faults.push(Fault { kind, targets, expect, detected_by, within, run: false });
+                    scope.faults.push(Fault { kind, targets, expect, detected_by, within, run: false, fired: Vec::new(), expectation_met: None, note: None });
                 }
                 SyntaxKind::SAFETY_WAIVE => {
                     let handle = first_child(st, SyntaxKind::NET_REF).map(|n| text_of(&n)).unwrap_or_default();
@@ -1215,7 +1215,7 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
         }
         for f in &s.faults {
             if !f.run {
-                gaps.push(Gap { class: GapClass::FaultUnrun, goal: f.expect.clone(), subject: format!("{}({})", f.kind, f.targets.join(",")), fix: "fault campaign not implemented (Phase 3)".into() });
+                gaps.push(Gap { class: GapClass::FaultUnrun, goal: f.expect.clone(), subject: format!("{}({})", f.kind, f.targets.join(",")), fix: "fault not yet run (the campaign runs when the board's DC solve converges)".into() });
             }
         }
     }

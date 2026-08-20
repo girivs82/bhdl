@@ -178,6 +178,16 @@ pub struct Fault {
     pub within: Option<String>,
     /// Phase 3 fills this in; Phase 1 = false (`FAULT_UNRUN`).
     pub run: bool,
+    /// Effect paths whose predicate evaluated TRUE on the faulted
+    /// operating point (campaign result).
+    #[serde(default)]
+    pub fired: Vec<String>,
+    /// Did the expected effect fire? None until run.
+    #[serde(default)]
+    pub expectation_met: Option<bool>,
+    /// Campaign note (solve diverged, kind unsupported, …).
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

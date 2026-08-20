@@ -1581,6 +1581,7 @@ async fn run_safety(
     }
     let mut model = build_safety_model(&netlist, &sources);
 
+    let mut healthy_solved = false;
     // ── Reliability (spec §2.8): handbook FITs from the named standard's
     // equations, the mission profile and SIM-DERIVED stress. The stress
     // ratio comes from the same GLACIER DC solve + sign-off rows the
@@ -1678,6 +1679,7 @@ async fn run_safety(
                 Ok(circuit) => match bhdl_spice::input_draw::solve_dc_with_input_draws(circuit, &regulator_hints(&netlist)) {
                 Err(e) => { if dbg { eprintln!("safety debug: DC solve failed: {e}"); } }
                 Ok((result, circuit_ref)) => {
+                    healthy_solved = true;
                     let ann = build_simulation_annotations(&result, &circuit_ref);
                     let rows = bhdl_synthesizer::signoff::compute_signoff(
                         &netlist,
@@ -1783,6 +1785,33 @@ async fn run_safety(
         bhdl_synthesizer::reliability::apply_reliability(&mut model, &stress, &tables);
     }
 
+    // ── Phase 3: run the declared faults (spec §2.5). Board-side
+    // short/open faults mutate a clone of the netlist and re-solve with
+    // the same GLACIER DC path; every effect in the fault's scope is
+    // evaluated on the FAULTED operating point. Gated on the HEALTHY
+    // solve converging: a board the solver cannot model gives the
+    // campaign nothing honest to compare against.
+    if healthy_solved {
+        let overrides = bhdl_synthesizer::model_evaluator::evaluate_model_overrides(
+            &netlist,
+            &analysis.model_recipes,
+            &analysis.entity_attribute_index,
+        );
+        let solver = |faulted: &bhdl_netlist::Netlist| -> Result<HashMap<String, f64>, String> {
+            let mut converter = NetlistToSpiceConverter::new();
+            converter.set_model_overrides(overrides.clone());
+            let circuit = converter.convert(faulted).map_err(|e| format!("spice convert: {e}"))?;
+            let (result, circuit_ref) = bhdl_spice::input_draw::solve_dc_with_input_draws(circuit, &regulator_hints(faulted))
+                .map_err(|e| format!("{e}"))?;
+            let ann = build_simulation_annotations(&result, &circuit_ref);
+            Ok(ann.net_voltages)
+        };
+        let (ran, mismatched) = bhdl_synthesizer::fault_campaign::run_declared_faults(&netlist, &mut model, &solver);
+        if ran > 0 {
+            println!("  fault campaign: {ran} fault(s) run, {mismatched} expectation(s) NOT met");
+        }
+    }
+
     // ── Report ───────────────────────────────────────────────────────
     println!("{}", format!("Functional safety — {}", model.board).bold().cyan());
     if !model.errors.is_empty() {
@@ -1822,9 +1851,21 @@ async fn run_safety(
             let run = s.faults.iter().filter(|f| f.run).count();
             println!("    faults    {} declared, {} run", s.faults.len(), run);
             for f in &s.faults {
-                println!("      {}({}) expect {}{}{}", f.kind, f.targets.join(", "), f.expect,
+                let outcome = if f.run {
+                    match f.expectation_met {
+                        Some(true) => format!("  → ran: fired [{}] ✓", f.fired.join(", ")).green().to_string(),
+                        Some(false) => format!("  → ran: fired [{}] — EXPECTED {} DID NOT FIRE", f.fired.join(", "), f.expect).red().to_string(),
+                        None => format!("  → ran: {}", f.note.as_deref().unwrap_or("no verdict")).yellow().to_string(),
+                    }
+                } else if let Some(n) = &f.note {
+                    format!("  → not run: {n}").yellow().to_string()
+                } else {
+                    String::new()
+                };
+                println!("      {}({}) expect {}{}{}{}", f.kind, f.targets.join(", "), f.expect,
                     f.detected_by.as_deref().map(|d| format!(" detected_by {d}")).unwrap_or_default(),
-                    f.within.as_deref().map(|w| format!(" within {w}")).unwrap_or_default());
+                    f.within.as_deref().map(|w| format!(" within {w}")).unwrap_or_default(),
+                    outcome);
             }
         }
         for w in &s.waivers {
