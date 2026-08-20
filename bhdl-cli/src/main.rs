@@ -1703,10 +1703,28 @@ async fn run_safety(
                         };
                         Some(num * mult)
                     };
+                    let parse_farads = |v: &str| -> Option<f64> {
+                        let v = v.trim().trim_end_matches('F').trim_end_matches('f');
+                        let end = v.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(v.len());
+                        let num: f64 = v[..end].parse().ok()?;
+                        let mult = match v[end..].trim() {
+                            "" => 1.0,
+                            "m" => 1e-3,
+                            "u" | "µ" => 1e-6,
+                            "n" => 1e-9,
+                            "p" => 1e-12,
+                            _ => return None,
+                        };
+                        Some(num * mult)
+                    };
                     let mut res_of: HashMap<String, f64> = HashMap::new();
+                    let mut cap_of: HashMap<String, f64> = HashMap::new();
                     for (_, inst) in netlist.instances.iter() {
                         if let Some(r) = inst.attributes.get("resistance").and_then(|v| parse_ohms(v)) {
                             res_of.insert(inst.name.clone(), r);
+                        }
+                        if let Some(c) = inst.attributes.get("capacitance").and_then(|v| parse_farads(v)) {
+                            cap_of.insert(inst.name.clone(), c);
                         }
                     }
                     for r in rows {
@@ -1716,6 +1734,7 @@ async fn run_safety(
                                 applied: st,
                                 rated: rt,
                                 resistance_ohm: res_of.get(&r.refdes).copied(),
+                                capacitance_f: cap_of.get(&r.refdes).copied(),
                             });
                         }
                     }

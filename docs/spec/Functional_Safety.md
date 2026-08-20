@@ -314,10 +314,14 @@ all explicit, none guessed:
    engine implements the shared equation shape
    λ = λ_base · π_T(Ea, T_ref, T_amb) · π_S((S/S_ref)^n); the standard
    is a *data* choice (`per="IEC62380"`), not a code fork — an SN 29500
-   run is a new table file, not a new engine. Two model forms exist:
+   run is a new table file, not a new engine. Three model forms exist:
    `model = "arrhenius_stress"` (λ_base·π_T·π_S, the 62380/61709/29500
-   family shape) and `model = "mil217f_resistor"`
-   (λ_p = λ_b·π_R·π_Q·π_E per MIL-HDBK-217F §9; FIT = 1000·λ_p).
+   family shape), `model = "mil217f_resistor"`
+   (λ_p = λ_b·π_R·π_Q·π_E per MIL-HDBK-217F §9) and
+   `model = "mil217f_capacitor"` (λ_p = λ_b·π_CV·[π_SR]·π_Q·π_E per
+   §10; S = V_applied/V_rated, π_CV from the capacitance attribute,
+   π_SR — tantalum — requires a circuit-resistance input or the FIT
+   stays uncomputed). FIT = 1000·λ_p for both 217F forms.
 
 The entity declares its class once (`handbook class="res_film_low_dissipation"
 per="IEC62380" source="..."` on the stdlib `Res`), and every instance

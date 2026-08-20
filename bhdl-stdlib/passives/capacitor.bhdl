@@ -20,6 +20,15 @@ entity Cap(value: capacitance, voltage: voltage = 50V) {
     attribute esr = 0.01Ω;
     attribute data_source = "class-point: Murata GRM18 X7R (esr)";
     attribute voltage_rating = voltage;
+
+    // Reliability class (docs/spec/Functional_Safety.md §2.8): generic
+    // Cap is an MLCC chip — MIL-HDBK-217F §10.11 CDR model (real
+    // constants in bhdl-stdlib/safety/milhdbk217f.toml, verified
+    // against the handbook's printed λ_b tables). S = V_applied/V_rated
+    // (sim-derived); π_CV from the capacitance attribute.
+    safety {
+        handbook class="cap_ceramic_chip" per="MILHDBK217F" source="MIL-HDBK-217F §10.11 ceramic chip (CDR model)";
+    }
     attribute tolerance = 0.10;
     // Dielectric class carried explicitly (matches the GRM18 X7R ESR
     // class point above). DELIBERATE ABSENCE: no DC-bias capacitance

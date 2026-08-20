@@ -9,6 +9,7 @@
 //           the sign-off table flags it AND its computed FIT is higher)
 
 import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
 
 board FitDemo {
     power V12 = 12V @ 1A;
@@ -16,6 +17,9 @@ board FitDemo {
 
     @V12 -> r_easy: Res(1kΩ, wattage=1W).1;    r_easy.2 -> @GND;
     @V12 -> r_hot:  Res(470Ω, wattage=0.25W).1; r_hot.2 -> @GND;
+
+    // Ceramic across the rail: S = 12V/50V = 0.24, π_CV from 100 nF.
+    @V12 -> c_filt: Cap(100nF).1; c_filt.2 -> @GND;
 }
 
 safety FitDemo as brd {

@@ -71,3 +71,61 @@ pi_r = [[1e5, 1.0], [1e6, 1.1], [1e7, 1.6], [1e30, 2.5]]   # §9.1 p.9-2
 pi_q = { S = 0.03, R = 0.1, P = 0.3, M = 1.0, mil_spec = 5.0, lower = 15.0 }   # §9.1 p.9-2 (mil_spec = MIL-R-11)
 pi_e = { GB = 1.0, GF = 3.0, GM = 8.0, NS = 5.0, NU = 13.0, AIC = 4.0, AIF = 5.0, AUC = 7.0, AUF = 11.0, ARW = 19.0, SF = 0.5, MF = 11.0, ML = 27.0, CL = 490.0 }   # §9.1 p.9-2
 source = "MIL-HDBK-217F N2 §9.1 (RC MIL-R-11 / RCR MIL-R-39008), p.9-2"
+
+# ── Capacitors (§10) ──────────────────────────────────────────────────
+# Model: λ_p = λ_b·π_CV·[π_SR]·π_Q·π_E failures/10⁶h, FIT = 1000·λ_p,
+#   λ_b = a·[(S/g)³+1]·exp(b·((T+273)/nt)^p),  S = applied/rated VOLTAGE
+#   (sum of DC + peak AC per the handbook), π_CV = cv_a·C^cv_exp.
+
+# §10.11 Ceramic, temperature compensating and CHIP (MLCC) — CDR
+# (MIL-C-55681, all styles; the 125°C-max-rated model). The default
+# class for generic ceramic capacitors.
+[classes.cap_ceramic_chip]
+model = "mil217f_capacitor"
+a = 2.6e-9      # λ_b = 2.6e-9·[(S/.3)³+1]·exp(14.3·(T+273)/398)   §10.11 p.10-20
+g = 0.3
+b = 14.3
+nt = 398.0
+p = 1.0
+cv_a = 0.59     # π_CV = 0.59·C^0.12, C in pF                       §10.11 p.10-20
+cv_exp = 0.12
+cv_unit = "pF"
+pi_q = { S = 0.03, R = 0.1, P = 0.3, M = 1.0, mil_spec = 3.0, lower = 10.0 }   # §10.11 p.10-20 (mil_spec = non-ER)
+pi_e = { GB = 1.0, GF = 2.0, GM = 10.0, NS = 5.0, NU = 17.0, AIC = 4.0, AIF = 8.0, AUC = 16.0, AUF = 35.0, ARW = 24.0, SF = 0.5, MF = 13.0, ML = 34.0, CL = 610.0 }   # §10.11 p.10-20
+source = "MIL-HDBK-217F N2 §10.11 (CDR MIL-C-55681, 125°C-rated model), p.10-20"
+
+# §10.10 Ceramic, general purpose — CK (MIL-C-11015) / CKR
+# (MIL-C-39014); the 125°C-max-rated (type B) model.
+[classes.cap_ceramic_gp]
+model = "mil217f_capacitor"
+a = 3.0e-4      # λ_b = 0.0003·[(S/.3)³+1]·exp((T+273)/398)         §10.10 p.10-18
+g = 0.3
+b = 1.0
+nt = 398.0
+p = 1.0
+cv_a = 0.41     # π_CV = 0.41·C^0.11, C in pF                       §10.10 p.10-19
+cv_exp = 0.11
+cv_unit = "pF"
+pi_q = { S = 0.03, R = 0.1, P = 0.3, M = 1.0, L = 3.0, mil_spec = 3.0, lower = 10.0 }   # §10.10 p.10-19 (mil_spec = MIL-C-11015 non-ER)
+pi_e = { GB = 1.0, GF = 2.0, GM = 9.0, NS = 5.0, NU = 15.0, AIC = 4.0, AIF = 4.0, AUC = 8.0, AUF = 12.0, ARW = 20.0, SF = 0.4, MF = 13.0, ML = 34.0, CL = 610.0 }   # §10.10 p.10-19
+source = "MIL-HDBK-217F N2 §10.10 (CK MIL-C-11015 / CKR MIL-C-39014, 125°C type B model), p.10-18/10-19"
+
+# §10.12 Tantalum, solid electrolyte — CSR (MIL-C-39003). Uses the
+# series-resistance factor π_SR (circuit Ω per applied volt): rows are
+# [min_CR, π_SR], first row whose min is below the circuit CR applies.
+# The circuit CR is not yet sim-derived — an instance without
+# cr_ohms_per_volt gets FIT_UNCOMPUTED, never a guessed π_SR.
+[classes.cap_tantalum_solid]
+model = "mil217f_capacitor"
+a = 3.75e-3     # λ_b = .00375·[(S/.4)³+1]·exp(2.6·((T+273)/398)^9)   §10.12 p.10-21
+g = 0.4
+b = 2.6
+nt = 398.0
+p = 9.0
+cv_a = 1.0      # π_CV = 1.0·C^0.12, C in µF                          §10.12 p.10-21
+cv_exp = 0.12
+cv_unit = "uF"
+pi_sr = [[0.8, 0.066], [0.6, 0.10], [0.4, 0.13], [0.2, 0.20], [0.1, 0.27], [0.0, 0.33]]   # §10.12 p.10-21
+pi_q = { D = 0.001, C = 0.01, S = 0.03, B = 0.03, R = 0.1, P = 0.3, M = 1.0, L = 1.5, lower = 10.0 }   # §10.12 p.10-21
+pi_e = { GB = 1.0, GF = 2.0, GM = 8.0, NS = 5.0, NU = 14.0, AIC = 4.0, AIF = 5.0, AUC = 12.0, AUF = 20.0, ARW = 24.0, SF = 0.4, MF = 11.0, ML = 29.0, CL = 530.0 }   # §10.12 p.10-21
+source = "MIL-HDBK-217F N2 §10.12 (CSR MIL-C-39003), p.10-21"
