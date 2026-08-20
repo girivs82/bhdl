@@ -314,6 +314,10 @@ struct EntityData {
     failure_states: Vec<(String, Option<f64>, Option<f64>, String)>, // (name, fit, of, source)
     seooc: Option<(Option<f64>, Option<f64>, Option<f64>, String)>,  // (lambda, spfm, lfm, source)
     handbook: Option<(String, String, Option<String>)>,              // (class, source, per-standard)
+    /// Vendor-data validity configuration: the FMEDA/safety-manual FIT
+    /// was computed for THIS configuration (param=value…) — checked
+    /// against each instance's attributes. (params, source)
+    config: Option<(BTreeMap<String, String>, String)>,
     terminals: Vec<(String, String)>,                                 // (pin, raw text)
     assumptions: Vec<(String, String)>,                               // (id, text)
     errors: Vec<String>,
@@ -324,6 +328,7 @@ impl EntityData {
         self.failure_states.extend(o.failure_states);
         if o.seooc.is_some() { self.seooc = o.seooc; }
         if o.handbook.is_some() { self.handbook = o.handbook; }
+        if o.config.is_some() { self.config = o.config; }
         self.terminals.extend(o.terminals);
         self.assumptions.extend(o.assumptions);
         self.errors.extend(o.errors);
@@ -401,12 +406,20 @@ fn collect_entity_data(root: &SyntaxNode) -> HashMap<String, EntityData> {
                         let pin = toks.get(1).cloned().unwrap_or_default();
                         d.terminals.push((pin, toks[2..].join(" ")));
                     }
+                    "config" => {
+                        let kv = kv_from_tokens(&toks[1..]);
+                        let src = kv.get("source").cloned().unwrap_or_default();
+                        if src.is_empty() { d.errors.push(format!("{ename}: config has no source (name the FMEDA tool + configuration)")); }
+                        let params: BTreeMap<String, String> = kv.into_iter().filter(|(k, _)| k != "source").collect();
+                        if params.is_empty() { d.errors.push(format!("{ename}: config declares no parameters")); }
+                        d.config = Some((params, src));
+                    }
                     "assumption" => {
                         let id = toks.get(1).cloned().unwrap_or_default();
                         let text = toks.iter().skip(2).find(|t| t.starts_with('"')).map(|t| t.trim_matches('"').to_string()).unwrap_or_default();
                         d.assumptions.push((id, text));
                     }
-                    other => d.errors.push(format!("{ename}: unknown safety data item '{other}' (failure_state|seooc|handbook|terminal|assumption)")),
+                    other => d.errors.push(format!("{ename}: unknown safety data item '{other}' (failure_state|seooc|handbook|terminal|assumption|config)")),
                 }
             }
         }
@@ -428,6 +441,8 @@ struct NetView {
     net_names: HashSet<String>,
     /// set of instance names that are physical parts (not composites, not definition shadows)
     physical: Vec<String>,
+    /// instance name → attributes (for the vendor-config validity check)
+    attrs_of: HashMap<String, HashMap<String, String>>,
     board_name: String,
 }
 
@@ -437,6 +452,7 @@ impl NetView {
         let mut parent_of = HashMap::new();
         let mut children_of: HashMap<String, Vec<String>> = HashMap::new();
         let mut pins_of = HashMap::new();
+        let mut attrs_of = HashMap::new();
         let mut physical = Vec::new();
         let board_name = netlist
             .top_level_module
@@ -446,6 +462,7 @@ impl NetView {
         for (_, inst) in netlist.instances.iter() {
             let Some(def) = netlist.modules.get(inst.definition) else { continue };
             inst_type.insert(inst.name.clone(), def.name.clone());
+            attrs_of.insert(inst.name.clone(), inst.attributes.clone());
             let pins: Vec<String> = def
                 .pins
                 .iter()
@@ -475,7 +492,7 @@ impl NetView {
         for v in children_of.values_mut() {
             v.sort();
         }
-        NetView { inst_type, parent_of, children_of, pins_of, net_names, physical, board_name }
+        NetView { inst_type, parent_of, children_of, pins_of, net_names, physical, attrs_of, board_name }
     }
 
     /// Resolve `ns.a.b.c` within a scope (instance path prefix, or "" for the board).
@@ -1063,6 +1080,44 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
         } else {
             PartData::None
         };
+        // Vendor-data validity check (spec §2.7): the FMEDA/safety-manual
+        // FIT was computed for a declared configuration; compare each
+        // declared param against this instance's actual attribute (entity
+        // params reach instances through the attribute flow). A param the
+        // instance does not expose, or exposes with a different value,
+        // means the vendor data does not apply to this instance.
+        if let Some(ed) = ed {
+            if let Some((params, src)) = &ed.config {
+                let attrs = view.attrs_of.get(inst);
+                let same = |a: &str, b: &str| -> bool {
+                    let numeric = |v: &str| -> Option<f64> {
+                        let end = v.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+')).unwrap_or(v.len());
+                        v[..end].parse::<f64>().ok()
+                    };
+                    match (numeric(a), numeric(b)) {
+                        (Some(x), Some(y)) => (x - y).abs() <= 1e-9 * x.abs().max(y.abs()).max(1e-30),
+                        _ => a.trim() == b.trim(),
+                    }
+                };
+                for (k, want) in params {
+                    match attrs.and_then(|a| a.get(k)) {
+                        None => model.gaps.push(Gap {
+                            class: GapClass::ConfigMismatch,
+                            goal: String::new(),
+                            subject: inst.clone(),
+                            fix: format!("vendor data ({src}) is valid for {k}={want}, but the instance does not expose '{k}' — export it (`attribute {k} = {k};`) so the configuration is checkable"),
+                        }),
+                        Some(have) if !same(have, want) => model.gaps.push(Gap {
+                            class: GapClass::ConfigMismatch,
+                            goal: String::new(),
+                            subject: inst.clone(),
+                            fix: format!("vendor data ({src}) is valid for {k}={want}, this instance has {k}={have} — the FIT/failure split does not apply; regenerate the vendor FMEDA for this configuration"),
+                        }),
+                        Some(_) => {}
+                    }
+                }
+            }
+        }
         model.parts.push(Part {
             instance: inst.clone(),
             type_name: view.inst_type.get(inst).cloned().unwrap_or_default(),
@@ -1127,7 +1182,8 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
         }
     }
     model.scopes = scopes;
-    model.gaps = gaps;
+    // Append: the parts loop may already have pushed CONFIG_MISMATCH gaps.
+    model.gaps.extend(gaps);
     model
 }
 

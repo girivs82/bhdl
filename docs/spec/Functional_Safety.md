@@ -209,6 +209,7 @@ entity TPS3700 {
         seooc lambda=240 spfm=0.97 lfm=0.80 source="Vendor Safety Manual rev C";
         assumption ASM_PWR_001 "VIN within 9..16V";
         terminal VIN range 2.7V..30V below_min="reset asserted";
+        config vlo=4.5V vhi=5.5V source="TI FMEDA tool v2.1, cfg=window/OD";
     }
 }
 ```
@@ -228,6 +229,18 @@ Semantics (Phase 2a, shipped):
   `brd.rail_a.mon.ASM_SUP_VDD satisfied_by brd.x;` / `waived "..."`.
 - `terminal` contracts are recorded; they become fault-campaign checks in
   Phase 3.
+
+- `config k=v … source="<FMEDA tool + configuration>";` records the
+  configuration the vendor data was computed for — an FMEDA Excel or
+  safety manual gives a FIT **per configuration**, not per part. Each
+  declared parameter is checked against every instance's attribute of
+  the same name (entity parameters reach instances through the
+  attribute flow — export them: `attribute vlo = vlo;`). An instance
+  whose actual configuration differs, or which does not expose the
+  parameter, gets a CONFIG_MISMATCH gap: the FIT/failure split does not
+  apply to it, and the fix is to regenerate the vendor FMEDA for the
+  real configuration (values compare numerically when both sides parse
+  as numbers, else as trimmed strings).
 
 Safety data is read from the entity's own source file, so the CLI parses
 imports transitively (relative to the board file, `BHDL_LIB_PATH`, cwd).

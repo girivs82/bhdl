@@ -23,6 +23,10 @@ entity VoltageSupervisor(vlo: voltage = 4.5V, vhi: voltage = 5.5V) {
     pin GND:   ground;
     attribute component_class = "supervisor";
     attribute data_source = "class-point: TI TPS3700 (window thresholds)";
+    // Exported so the vendor-config validity check (spec §2.7 `config`)
+    // can compare the declared configuration against each instance.
+    attribute vlo = vlo;
+    attribute vhi = vhi;
 
     // Entity safety DATA (spec §2.7). The numbers below are FIXTURE
     // VALUES for the plumbing test and say so in their source; a real
@@ -32,6 +36,10 @@ entity VoltageSupervisor(vlo: voltage = 4.5V, vhi: voltage = 5.5V) {
         failure_state output_stuck_low  fit=8  of 40 source="FIXTURE — illustrative split, not vendor data";
         failure_state threshold_drift   fit=24 of 40 source="FIXTURE — illustrative split, not vendor data";
         terminal VDD range 1.8V..6.5V below_min="nOUT undefined";
+        // The failure split above is valid for THIS configuration only —
+        // a vendor FMEDA tool computes FIT per configuration. Checked
+        // against every instance's vlo/vhi attributes.
+        config vlo=4.5V vhi=5.5V source="FIXTURE — split valid for the default window config";
         assumption ASM_SUP_VDD "VDD stays within 1.8..6.5V";
     }
 }

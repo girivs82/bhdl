@@ -256,6 +256,10 @@ pub enum GapClass {
     /// be computed (missing mission profile, unsolved stress, or no
     /// coefficient table).
     FitUncomputed,
+    /// The entity's vendor safety data declares the configuration it was
+    /// computed for (`config k=v … source=…`) and this instance's actual
+    /// configuration differs — the FIT/failure split does not apply here.
+    ConfigMismatch,
 }
 
 impl GapClass {
@@ -268,6 +272,7 @@ impl GapClass {
             GapClass::PartNoSafetyData => "PART_NO_SAFETY_DATA",
             GapClass::FaultUnrun => "FAULT_UNRUN",
             GapClass::FitUncomputed => "FIT_UNCOMPUTED",
+            GapClass::ConfigMismatch => "CONFIG_MISMATCH",
         }
     }
 }

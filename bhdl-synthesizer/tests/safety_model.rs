@@ -160,4 +160,17 @@ async fn supervised_reg_model_resolves_and_gaps_are_honest() {
     // Determinism: same source → identical baseline.
     let m3 = model_for(&src).await;
     assert_eq!(m3.baseline(), before);
+
+    // Vendor config gap-check (spec §2.7 `config`): the entity declares
+    // the configuration its failure split is valid for (vlo/vhi); an
+    // instance built with a DIFFERENT window gets a CONFIG_MISMATCH gap
+    // per instance, and the matching baseline has none.
+    assert_eq!(m.gaps.iter().filter(|g| g.class == GapClass::ConfigMismatch).count(), 0);
+    let src3 = src.replace("VoltageSupervisor(4.5V, 5.5V)", "VoltageSupervisor(3.0V, 5.5V)");
+    assert_ne!(src, src3);
+    let m4 = model_for(&src3).await;
+    let cfg: Vec<_> = m4.gaps.iter().filter(|g| g.class == GapClass::ConfigMismatch).collect();
+    assert_eq!(cfg.len(), 2, "one per instance: {cfg:#?}");
+    assert!(cfg.iter().any(|g| g.subject == "rail_a_mon"));
+    assert!(cfg.iter().all(|g| g.fix.contains("vlo") && g.fix.contains("3.0V")));
 }
