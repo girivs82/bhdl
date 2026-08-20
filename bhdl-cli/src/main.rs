@@ -151,6 +151,11 @@ enum Commands {
         /// Also dump the full model as JSON to this path.
         #[arg(long)]
         json: Option<PathBuf>,
+        /// Write the FMEDA package (assessor worksheet) to this CSV
+        /// path; the mechanism table and metrics summary land next to
+        /// it as <stem>_mechanisms.csv and <stem>_metrics.csv.
+        #[arg(long)]
+        fmeda: Option<PathBuf>,
     },
 
     /// Generate interactive schematic visualization (HTML)
@@ -556,8 +561,8 @@ async fn main() -> Result<()> {
             run_freeze(&source_file, &cli.input, output, frozen_libraries).await?;
         }
 
-        Some(Commands::Safety { baseline, update_baseline, json }) => {
-            run_safety(&source_file, &cli.input, baseline, update_baseline, json).await?;
+        Some(Commands::Safety { baseline, update_baseline, json, fmeda }) => {
+            run_safety(&source_file, &cli.input, baseline, update_baseline, json, fmeda).await?;
         }
         
         Some(Commands::Visualize { output, json, svg_v4, binder }) => {
@@ -1433,6 +1438,7 @@ async fn run_safety(
     baseline: Option<PathBuf>,
     update_baseline: bool,
     json_out: Option<PathBuf>,
+    fmeda_out: Option<PathBuf>,
 ) -> Result<()> {
     use bhdl_common::safety::{AssumptionStatus, Baseline, Delta, MechanismKind, PartData};
     use bhdl_synthesizer::safety_model::build_safety_model;
@@ -2088,6 +2094,20 @@ async fn run_safety(
     if let Some(jp) = json_out {
         fs::write(&jp, serde_json::to_string_pretty(&model)?)?;
         println!("  model json: {}", jp.display());
+    }
+
+    // ── FMEDA package (assessor worksheet) ───────────────────────────
+    if let Some(fp) = fmeda_out {
+        let csvs = bhdl_synthesizer::fault_campaign::export_fmeda(&model);
+        let stem = fp.with_extension("");
+        let mech_path = PathBuf::from(format!("{}_mechanisms.csv", stem.display()));
+        let met_path = PathBuf::from(format!("{}_metrics.csv", stem.display()));
+        fs::write(&fp, &csvs.worksheet)?;
+        fs::write(&mech_path, &csvs.mechanisms)?;
+        fs::write(&met_path, &csvs.metrics)?;
+        println!("  fmeda worksheet: {}", fp.display());
+        println!("  fmeda mechanisms: {}", mech_path.display());
+        println!("  fmeda metrics: {}", met_path.display());
     }
 
     // ── Baseline / delta ─────────────────────────────────────────────

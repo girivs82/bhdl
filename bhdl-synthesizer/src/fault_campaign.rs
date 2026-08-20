@@ -1457,3 +1457,187 @@ mod tests {
         assert_eq!(m.pass, Some(true), "{m:?}");
     }
 }
+
+// ── FMEDA export (assessor worksheet) ───────────────────────────────
+
+/// The three CSV bodies of the FMEDA package: the per-fault worksheet,
+/// the mechanism table (claimed vs MEASURED DC), and the metrics
+/// summary. Everything comes from the measured model — no field is
+/// computed here, only serialized; empty cells mean the datum does not
+/// exist (never zero-filled).
+pub struct FmedaCsvs {
+    pub worksheet: String,
+    pub mechanisms: String,
+    pub metrics: String,
+}
+
+fn csv_cell(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+fn csv_row(cells: &[String]) -> String {
+    cells.iter().map(|c| csv_cell(c)).collect::<Vec<_>>().join(",")
+}
+
+fn fmt_f(v: f64) -> String {
+    format!("{v:.4}")
+}
+
+/// Serialize the measured safety model as the FMEDA package.
+pub fn export_fmeda(model: &bhdl_common::safety::SafetyModel) -> FmedaCsvs {
+    use bhdl_common::safety::PartData;
+    let s = |x: &str| x.to_string();
+    // part → (type, λ_total, basis/source line) for the denormalized
+    // worksheet columns
+    let part_info: HashMap<&str, (String, Option<f64>, String)> = model
+        .parts
+        .iter()
+        .map(|p| {
+            let (fit, basis) = match &p.data {
+                PartData::Handbook { class, source, per, fit, fit_basis } => (
+                    *fit,
+                    fit_basis.clone().unwrap_or_else(|| {
+                        format!("handbook {class}{} — FIT not computed; {source}",
+                            per.as_deref().map(|x| format!(" per {x}")).unwrap_or_default())
+                    }),
+                ),
+                PartData::Behavioral { states, source, .. } => {
+                    let total: f64 = states.iter().filter_map(|st| st.fit).sum();
+                    (
+                        (total > 0.0).then_some(total),
+                        format!("vendor failure states ({}) — {source}", states.len()),
+                    )
+                }
+                PartData::Seooc { lambda_fit, source } => (*lambda_fit, format!("SEooC — {source}")),
+                PartData::Waived { reason } => (None, format!("WAIVED: {reason}")),
+                PartData::None => (None, "no safety data (PART_NO_SAFETY_DATA gap)".to_string()),
+            };
+            (p.instance.as_str(), (p.type_name.clone(), fit, basis))
+        })
+        .collect();
+    let mut w: Vec<String> = Vec::new();
+    w.push(csv_row(&[
+        s("scope"), s("part"), s("entity"), s("part_lambda_fit"), s("part_fit_basis"),
+        s("failure_mode"), s("targets"), s("mode_lambda_share_fit"), s("ran"),
+        s("classification"), s("effects_fired"), s("detected_by"),
+        s("latent_exposed_fit"), s("note"),
+    ]));
+    let mut covered: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for u in &model.universe {
+        covered.insert(u.part.as_str());
+        let (ty, pfit, pbasis) = part_info
+            .get(u.part.as_str())
+            .cloned()
+            .unwrap_or((String::new(), None, String::new()));
+        let class = if !u.ran {
+            "NOT_RUN"
+        } else if u.latent {
+            "LATENT"
+        } else if !u.fired.is_empty() && u.detected.is_empty() {
+            "RESIDUAL"
+        } else if !u.fired.is_empty() {
+            "DETECTED_DANGEROUS"
+        } else if u.false_alarm {
+            "FALSE_ALARM"
+        } else {
+            "SAFE"
+        };
+        w.push(csv_row(&[
+            u.scope.clone(),
+            u.part.clone(),
+            ty,
+            pfit.map(fmt_f).unwrap_or_default(),
+            pbasis,
+            u.mode.clone(),
+            u.targets.join(" "),
+            u.weight_fit.map(fmt_f).unwrap_or_default(),
+            u.ran.to_string(),
+            class.to_string(),
+            u.fired.join(" "),
+            u.detected.join(" "),
+            if u.latent { fmt_f(u.latent_exposed_fit) } else { String::new() },
+            u.note.clone().unwrap_or_default(),
+        ]));
+    }
+    // parts the universe generated NO modes for still belong on the
+    // worksheet — an assessor must see them, not infer them from gaps
+    for p in &model.parts {
+        if covered.contains(p.instance.as_str()) {
+            continue;
+        }
+        let (ty, pfit, pbasis) = part_info.get(p.instance.as_str()).cloned().unwrap_or_default();
+        w.push(csv_row(&[
+            p.parent.clone().unwrap_or_default(),
+            p.instance.clone(),
+            ty,
+            pfit.map(fmt_f).unwrap_or_default(),
+            pbasis,
+            s("(no universe modes)"),
+            String::new(), String::new(), s("false"), s("NOT_RUN"),
+            String::new(), String::new(), String::new(),
+            s("part not represented in the fault universe — see gaps"),
+        ]));
+    }
+    // mechanisms: claimed vs measured
+    let mut m: Vec<String> = Vec::new();
+    m.push(csv_row(&[
+        s("scope"), s("mechanism"), s("instance"), s("goal"), s("detects"),
+        s("claimed_dc"), s("dc_source"), s("measured_dc"), s("measurement_basis"),
+        s("interval"), s("latency"), s("detected_when"),
+    ]));
+    for sc in &model.scopes {
+        for mech in &sc.mechanisms {
+            m.push(csv_row(&[
+                sc.path.clone(),
+                mech.handle.clone(),
+                mech.instance.clone(),
+                mech.goal.clone(),
+                mech.detects.join(" "),
+                mech.claimed_dc.map(fmt_f).unwrap_or_default(),
+                mech.dc_source.clone().unwrap_or_default(),
+                mech.measured_dc.map(fmt_f).unwrap_or_default(),
+                mech.measured_note.clone().unwrap_or_default(),
+                mech.interval.clone().unwrap_or_default(),
+                mech.latency.clone().unwrap_or_default(),
+                mech.detected_when.clone().unwrap_or_default(),
+            ]));
+        }
+    }
+    // metrics summary, one row per scope that computed metrics
+    let mut t: Vec<String> = Vec::new();
+    t.push(csv_row(&[
+        s("scope"), s("lambda_total_fit"), s("lambda_residual_fit"), s("lambda_latent_fit"),
+        s("unmeasured_faults"), s("spfm"), s("lfm"), s("pmhf_fit"), s("pmhf_dual_point_fit"),
+        s("target_level"), s("spfm_min"), s("lfm_min"), s("pmhf_max_fit"), s("pass"),
+    ]));
+    for sc in &model.scopes {
+        let Some(mx) = &sc.metrics else { continue };
+        let (smin, lmin, pmax) = match mx.targets {
+            Some((a, b, c)) => (fmt_f(a), fmt_f(b), fmt_f(c)),
+            None => (String::new(), String::new(), String::new()),
+        };
+        t.push(csv_row(&[
+            sc.path.clone(),
+            fmt_f(mx.lambda_total_fit),
+            fmt_f(mx.lambda_residual_fit),
+            fmt_f(mx.lambda_latent_fit),
+            mx.unmeasured_faults.to_string(),
+            fmt_f(mx.spfm),
+            fmt_f(mx.lfm),
+            fmt_f(mx.pmhf_fit),
+            mx.pmhf_dual_fit.map(|v| format!("{v:.3e}")).unwrap_or_default(),
+            mx.target_level.map(|l| format!("{l:?}")).unwrap_or_default(),
+            smin, lmin, pmax,
+            mx.pass.map(|p| p.to_string()).unwrap_or_default(),
+        ]));
+    }
+    FmedaCsvs {
+        worksheet: w.join("\n") + "\n",
+        mechanisms: m.join("\n") + "\n",
+        metrics: t.join("\n") + "\n",
+    }
+}

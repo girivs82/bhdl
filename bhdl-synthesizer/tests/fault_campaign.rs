@@ -230,3 +230,65 @@ safety GeoDemo as g {
     assert!(has_pair("1", "2") && has_pair("3", "4"), "{bridges2:#?}");
     assert!(!has_pair("2", "3"), "2-3 must be dropped by geometry: {bridges2:#?}");
 }
+
+/// FMEDA export: the worksheet serializes what the campaign MEASURED —
+/// no field computed at export time, empty cells where data does not
+/// exist. Runs on the FaultDemo fixture after a full mock campaign.
+#[tokio::test]
+async fn fmeda_export_serializes_the_measured_model() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let src = std::fs::read_to_string(ws.join("tests/circuits/realistic/test_safety_fault_campaign.bhdl")).unwrap();
+    let pr = parse(&src);
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let netlist = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+    let mut model = build_safety_model(&netlist, &[&sf]);
+    let solve = |faulted: &bhdl_netlist::Netlist| -> Result<HashMap<String, f64>, String> {
+        Ok(faulted
+            .nets
+            .iter()
+            .filter_map(|(_, n)| n.name.clone())
+            .map(|name| (name.clone(), if name == "GND" { 0.0 } else { 12.0 }))
+            .collect())
+    };
+    run_declared_faults(&netlist, &mut model, &solve);
+    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve, &HashMap::new());
+    bhdl_synthesizer::fault_campaign::compute_metrics(&mut model);
+    let csvs = bhdl_synthesizer::fault_campaign::export_fmeda(&model);
+
+    // worksheet: header + one row per universe fault (14 in the mock)
+    let wlines: Vec<&str> = csvs.worksheet.trim_end().lines().collect();
+    assert_eq!(wlines.len(), 1 + model.universe.len(), "{}", csvs.worksheet);
+    assert!(wlines[0].starts_with("scope,part,entity,part_lambda_fit"));
+    // vendor states carry their real λ shares; classification column present
+    assert!(csvs.worksheet.contains("state") && csvs.worksheet.contains("6.0000"), "{}", csvs.worksheet);
+    // under the flat mock sense_stuck is RESIDUAL (ov fires everywhere,
+    // its own short kills the detection read) — LATENT rows appear only
+    // under a real solve; both classifications serialize
+    assert!(csvs.worksheet.contains("RESIDUAL"), "{}", csvs.worksheet);
+    assert!(csvs.worksheet.contains("DETECTED_DANGEROUS"), "{}", csvs.worksheet);
+    // CSV escaping: notes contain commas → quoted cells, and every data
+    // row parses back to the header's column count
+    let ncols = wlines[0].split(',').count();
+    for line in &wlines[1..] {
+        let mut cols = 0usize;
+        let mut in_q = false;
+        for c in line.chars() {
+            match c {
+                '"' => in_q = !in_q,
+                ',' if !in_q => cols += 1,
+                _ => {}
+            }
+        }
+        assert_eq!(cols + 1, ncols, "row column count: {line}");
+    }
+    // mechanisms: claimed vs measured side by side
+    assert!(csvs.mechanisms.lines().next().unwrap().contains("claimed_dc,dc_source,measured_dc"));
+    assert!(csvs.mechanisms.contains("brd.sense"), "{}", csvs.mechanisms);
+    // metrics: one row for the board scope, incomplete ⇒ pass=false
+    let mlines: Vec<&str> = csvs.metrics.trim_end().lines().collect();
+    assert_eq!(mlines.len(), 2, "{}", csvs.metrics);
+    assert!(mlines[1].ends_with("false"), "{}", csvs.metrics);
+}

@@ -193,6 +193,18 @@ count-basis otherwise, also labelled. A measured DC below the claim is
 flagged; both are always reported. A mechanism without `detected_when`
 cannot have a measured DC, and the report says so.
 
+**FMEDA export**: `bhdl-cli <file> safety --fmeda <path.csv>` writes
+the assessor package — the per-fault worksheet (one row per universe
+fault: scope, part, entity, part λ + its full FIT basis citation,
+mode, targets, λ share, classification SAFE / DETECTED_DANGEROUS /
+RESIDUAL / FALSE_ALARM / LATENT / NOT_RUN, effects, detection, latent
+exposure, note incl. sweep windows; parts the universe generated no
+modes for still get a row), plus `<stem>_mechanisms.csv` (claimed vs
+MEASURED DC side by side with sources) and `<stem>_metrics.csv`
+(λ totals, SPFM/LFM/PMHF with dual-point term, targets, pass). Export
+serializes the measured model — nothing is computed at export time,
+and empty cells mean the datum does not exist, never zero.
+
 ### 2.5 Faults, waivers, assumptions
 
 ```bhdl
