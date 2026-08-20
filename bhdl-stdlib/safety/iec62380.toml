@@ -1,25 +1,118 @@
-# IEC 62380 coefficient table for the bhdl reliability engine
+# IEC TR 62380:2004 coefficient table for the bhdl reliability engine
 # (docs/spec/Functional_Safety.md §2.8).
 #
+# Class keys follow the standard's own taxonomy (section numbers from
+# the IEC TR 62380:2004 table of contents; the constants live on the
+# cited pages of the licensed document):
+#
+#   Resistors and potentiometers (§11, IEC 60115)
+#     res_film_low_dissipation   §11.1  fixed, low dissipation film — high
+#                                       stability (rs), general purpose (rc),
+#                                       "minimelf"                       p.65
+#     res_carbon_comp            §11.2  hot molded carbon composition    p.66
+#     res_film_high_dissipation  §11.3  fixed, high dissipation film     p.67
+#     res_wirewound_low          §11.4  low dissipation wirewound        p.68
+#     res_wirewound_high         §11.5  high dissipation wirewound       p.69
+#     res_smd_array              §11.6  fixed, low dissipation surface
+#                                       mounting resistors + arrays      p.70
+#     pot_cermet                 §11.7  non-wirewound cermet pot         p.71
+#
+#   Capacitors and thermistors (§10)
+#     cap_plastic_paper          §10.1  fixed plastic/paper dielectric   p.55
+#     cap_ceramic_class1         §10.2  ceramic, defined tempco, Class I p.56
+#     cap_ceramic_class2         §10.3  ceramic, non-defined tempco,
+#                                       Class II                         p.57
+#     cap_tantalum_solid         §10.4  tantalum, solid electrolyte      p.58
+#     cap_alu_nonsolid           §10.5  aluminum, non-solid electrolyte  p.59
+#     cap_alu_solid              §10.6  aluminum, solid electrolyte      p.61
+#     cap_alu_polymer            §10.7  aluminum, polymer electrolyte    p.62
+#     ntc_thermistor             §10.9  NTC thermistor                   p.64
+#
+#   Inductive components (§12, IEC 61248)
+#     inductor_transformer       §12    inductors and transformers       p.73
+#
 # ┌─────────────────────────────────────────────────────────────────┐
-# │ FIXTURE — every number below is ILLUSTRATIVE, chosen only to    │
-# │ exercise the pipeline. NOT transcribed from IEC TR 62380:2004.  │
-# │ Replace each row with the standard's real constants (or your    │
-# │ Isograph RWB configuration's equivalents) and update the row    │
-# │ source before using any computed FIT in a real FMEDA.           │
+# │ FIXTURE — the one live row below carries ILLUSTRATIVE numbers   │
+# │ that only exercise the pipeline; they are NOT transcribed from  │
+# │ the standard. To activate a class: copy its commented stub,     │
+# │ fill the constants from the licensed IEC TR 62380:2004 (or from │
+# │ your Isograph RWB configuration), and set `source` to the       │
+# │ section you took them from. A commented class simply does not   │
+# │ exist to the engine — the part gets a FIT_UNCOMPUTED gap, never │
+# │ a guessed number.                                               │
 # └─────────────────────────────────────────────────────────────────┘
 #
-# Model shape per class:  λ = λ_base · π_T · π_S
+# Engine model shape (see bhdl-synthesizer/src/reliability.rs):
+#   λ = λ_base · π_T · π_S
 #   π_T = exp(Ea/k · (1/T_ref − 1/T_amb))       (temperatures in K)
 #   π_S = (S / S_ref)^n,  S = applied/rated (sim-derived, never guessed)
+# If the transcribed §11/§10 formulas differ from this shape (62380
+# resistor models add an internal-temperature step from dissipated power
+# and a thermal-cycling term), extend the engine to the exact form when
+# the constants land — the mission profile already carries `cycles`.
 
 standard = "IEC62380"
-source = "FIXTURE — illustrative coefficients, IEC TR 62380:2004 constants NOT yet transcribed"
+source = "IEC TR 62380:2004 taxonomy; constants FIXTURE — real values NOT yet transcribed"
 
-[classes.res_film]
+# §11.1 — fixed, low dissipation film (rs/rc/minimelf).  FIXTURE ROW:
+# every number is illustrative, present only so the pipeline runs
+# end-to-end (tests/circuits/realistic/test_safety_fit_divider.bhdl).
+[classes.res_film_low_dissipation]
 lambda_base = 0.1   # FIT at reference conditions — FIXTURE
 ea_ev = 0.15        # activation energy, eV — FIXTURE
 t_ref_c = 40.0      # reference ambient, °C — FIXTURE
 s_ref = 0.5         # reference stress ratio — FIXTURE
 stress_exp = 1.0    # stress exponent — FIXTURE
-source = "FIXTURE (shape: IEC 62380 fixed-film resistor model)"
+source = "FIXTURE (shape only) — replace with IEC TR 62380:2004 §11.1, p.65"
+
+# ── stubs awaiting transcription (uncomment + fill from the standard) ──
+#
+# [classes.res_carbon_comp]              # §11.2, p.66
+# lambda_base =
+# ea_ev =
+# t_ref_c =
+# s_ref =
+# stress_exp =
+# source = "IEC TR 62380:2004 §11.2, p.66"
+#
+# [classes.res_film_high_dissipation]    # §11.3, p.67
+# source = "IEC TR 62380:2004 §11.3, p.67"
+#
+# [classes.res_wirewound_low]            # §11.4, p.68
+# source = "IEC TR 62380:2004 §11.4, p.68"
+#
+# [classes.res_wirewound_high]           # §11.5, p.69
+# source = "IEC TR 62380:2004 §11.5, p.69"
+#
+# [classes.res_smd_array]                # §11.6, p.70
+# source = "IEC TR 62380:2004 §11.6, p.70"
+#
+# [classes.pot_cermet]                   # §11.7, p.71
+# source = "IEC TR 62380:2004 §11.7, p.71"
+#
+# [classes.cap_plastic_paper]            # §10.1, p.55
+# source = "IEC TR 62380:2004 §10.1, p.55"
+#
+# [classes.cap_ceramic_class1]           # §10.2, p.56
+# source = "IEC TR 62380:2004 §10.2, p.56"
+#
+# [classes.cap_ceramic_class2]           # §10.3, p.57
+# source = "IEC TR 62380:2004 §10.3, p.57"
+#
+# [classes.cap_tantalum_solid]           # §10.4, p.58
+# source = "IEC TR 62380:2004 §10.4, p.58"
+#
+# [classes.cap_alu_nonsolid]             # §10.5, p.59
+# source = "IEC TR 62380:2004 §10.5, p.59"
+#
+# [classes.cap_alu_solid]                # §10.6, p.61
+# source = "IEC TR 62380:2004 §10.6, p.61"
+#
+# [classes.cap_alu_polymer]              # §10.7, p.62
+# source = "IEC TR 62380:2004 §10.7, p.62"
+#
+# [classes.ntc_thermistor]               # §10.9, p.64
+# source = "IEC TR 62380:2004 §10.9, p.64"
+#
+# [classes.inductor_transformer]         # §12, p.73
+# source = "IEC TR 62380:2004 §12, p.73"

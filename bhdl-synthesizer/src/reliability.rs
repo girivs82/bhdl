@@ -50,7 +50,7 @@ pub struct ReliabilityTable {
     pub standard: String,
     /// Table-wide provenance note (e.g. edition, or FIXTURE marker).
     pub source: String,
-    /// Class name (e.g. "res_film") → coefficients.
+    /// Class name (e.g. "res_film_low_dissipation", IEC TR 62380 §11.1) → coefficients.
     pub classes: BTreeMap<String, ClassCoeffs>,
 }
 

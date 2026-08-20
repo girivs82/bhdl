@@ -113,7 +113,7 @@ async fn supervised_reg_model_resolves_and_gaps_are_honest() {
     // reliability engine (CLI), so it is None here.
     match &m.parts.iter().find(|p| p.instance == "rail_a_r_fb_top").unwrap().data {
         PartData::Handbook { class, per, fit, .. } => {
-            assert_eq!(class, "res_film");
+            assert_eq!(class, "res_film_low_dissipation");
             assert_eq!(per.as_deref(), Some("IEC62380"));
             assert!(fit.is_none());
         }

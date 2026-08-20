@@ -276,12 +276,12 @@ all explicit, none guessed:
    is a *data* choice (`per="IEC62380"`), not a code fork — an SN 29500
    run is a new table file, not a new engine.
 
-The entity declares its class once (`handbook class="res_film"
+The entity declares its class once (`handbook class="res_film_low_dissipation"
 per="IEC62380" source="..."` on the stdlib `Res`), and every instance
 gets its own computed FIT with the full basis printed:
 
 ```
-r_hot  Res  handbook res_film per IEC62380: λ=0.32 FIT = 0.10·π_T(1.29)·π_S(2.45) @ S=1.23, Ta=55°C ...
+r_hot  Res  handbook res_film_low_dissipation per IEC62380: λ=0.32 FIT = 0.10·π_T(1.29)·π_S(2.45) @ S=1.23, Ta=55°C ...
 ```
 
 Any missing ingredient (no mission, unconverged solve, no table, class
