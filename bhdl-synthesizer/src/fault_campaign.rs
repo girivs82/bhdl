@@ -581,6 +581,7 @@ pub fn run_universe(netlist: &Netlist, model: &mut SafetyModel, solve: &Solver) 
                     fired: vec![],
                     detected: vec![],
                     false_alarm: false,
+                    latent: false,
                     weight_fit: None,
                     note: Some("needs the vendor-model failure-state hook".into()),
                 });
@@ -598,6 +599,7 @@ pub fn run_universe(netlist: &Netlist, model: &mut SafetyModel, solve: &Solver) 
                 fired: vec![],
                 detected: vec![],
                 false_alarm: false,
+                latent: false,
                 weight_fit: weight,
                 note: None,
             };
@@ -653,6 +655,96 @@ pub fn run_universe(netlist: &Netlist, model: &mut SafetyModel, solve: &Solver) 
             universe.push(uf);
         }
     }
+    // ── LATENT probe (ISO multi-point): a fault on a MECHANISM part
+    // that alone is neither dangerous nor annunciated may still defeat
+    // detection. Double-inject it with each otherwise-DETECTED dangerous
+    // fault; if any detection is lost, the mechanism-part mode is
+    // latent. Cost: |candidate mech faults| × |detected dangerous|.
+    {
+        let mech_parts: std::collections::HashSet<(String, String)> = model
+            .scopes
+            .iter()
+            .flat_map(|s| s.mechanisms.iter().map(move |m| (s.path.clone(), m.instance.clone())))
+            .collect();
+        let detected_dangerous: Vec<(usize, String, Vec<String>)> = universe
+            .iter()
+            .enumerate()
+            .filter(|(_, u)| u.ran && !u.fired.is_empty() && !u.detected.is_empty())
+            .map(|(i, u)| (i, u.mode.clone(), u.targets.clone()))
+            .collect();
+        let candidates: Vec<usize> = universe
+            .iter()
+            .enumerate()
+            .filter(|(_, u)| {
+                u.ran
+                    && u.fired.is_empty()
+                    && u.detected.is_empty()
+                    && mech_parts.contains(&(u.scope.clone(), u.part.clone()))
+                    && matches!(u.mode.as_str(), "short" | "open" | "open_pin")
+            })
+            .map(|(i, _)| i)
+            .collect();
+        for ci in candidates {
+            let (c_scope, c_mode, c_targets) = (universe[ci].scope.clone(), universe[ci].mode.clone(), universe[ci].targets.clone());
+            let Some(si) = scopes.iter().position(|s| s.prefix == c_scope) else { continue };
+            let sc = &scopes[si];
+            'probe: for (di, d_mode, d_targets) in &detected_dangerous {
+                if universe[*di].scope != c_scope {
+                    continue;
+                }
+                let mut faulted = netlist.clone();
+                let mut alias: HashMap<String, String> = HashMap::new();
+                let mut apply = |n: &mut Netlist, mode: &str, targets: &[String], alias: &mut HashMap<String, String>| -> Result<(), String> {
+                    match mode {
+                        "short" => apply_short(n, &view, &targets[0], &targets[1]).map(|a| {
+                            if let Some((from, to)) = a {
+                                alias.insert(from, to);
+                            }
+                        }),
+                        "open" | "open_pin" => apply_open(n, &view, &targets[0]),
+                        _ => Err("unsupported".into()),
+                    }
+                };
+                if apply(&mut faulted, &c_mode, &c_targets, &mut alias).is_err() {
+                    continue;
+                }
+                if apply(&mut faulted, d_mode, d_targets, &mut alias).is_err() {
+                    continue;
+                }
+                let Ok(volts) = solve(&faulted) else { continue };
+                // dangerous effect still present under the pair?
+                let mut still_dangerous = false;
+                for (path, expr) in &sc.effects {
+                    if universe[*di].fired.contains(path) {
+                        if let Ok(true) = eval_effect(expr, &sc.prefix, &sc.ns, &view, &alias, &volts) {
+                            still_dangerous = true;
+                        }
+                    }
+                }
+                if !still_dangerous {
+                    continue;
+                }
+                // detection lost?
+                let mut any_detect = false;
+                for (_h, _d, dw) in &sc.mechs {
+                    if let Some(pred) = dw {
+                        if let Ok(true) = eval_effect(pred, &sc.prefix, &sc.ns, &view, &alias, &volts) {
+                            any_detect = true;
+                        }
+                    }
+                }
+                if !any_detect {
+                    universe[ci].latent = true;
+                    universe[ci].note = Some(format!(
+                        "LATENT: with {}({}) also injected, the dangerous effect persists UNDETECTED",
+                        d_mode,
+                        d_targets.join(",")
+                    ));
+                    break 'probe;
+                }
+            }
+        }
+    }
     // measured DC per mechanism: over dangerous faults whose fired
     // effects intersect the mechanism's detects list.
     for (si, s) in model.scopes.iter_mut().enumerate() {
@@ -686,4 +778,148 @@ pub fn run_universe(netlist: &Netlist, model: &mut SafetyModel, solve: &Solver) 
         }
     }
     model.universe = universe;
+}
+
+
+/// Compute the FMEDA metrics per scope from the measured universe
+/// (Phase 3 increment 3). Purely arithmetic over what the campaign
+/// measured; incomplete measurement is stated, never normalized away.
+pub fn compute_metrics(model: &mut SafetyModel) {
+    use bhdl_common::safety::{metric_targets, Gap, Metrics};
+    if model.universe.is_empty() {
+        return;
+    }
+    let mut gaps: Vec<Gap> = Vec::new();
+    for scope in model.scopes.iter_mut() {
+        let faults: Vec<&bhdl_common::safety::UniverseFault> =
+            model.universe.iter().filter(|u| u.scope == scope.path).collect();
+        if faults.is_empty() {
+            continue;
+        }
+        let measured: Vec<_> = faults.iter().filter(|u| u.ran && u.weight_fit.is_some()).collect();
+        let unmeasured = faults.len() - measured.len();
+        let lambda_total: f64 = measured.iter().map(|u| u.weight_fit.unwrap()).sum();
+        let lambda_residual: f64 = measured
+            .iter()
+            .filter(|u| !u.fired.is_empty() && u.detected.is_empty())
+            .map(|u| u.weight_fit.unwrap())
+            .sum();
+        let lambda_latent: f64 = measured.iter().filter(|u| u.latent).map(|u| u.weight_fit.unwrap()).sum();
+        let spfm = if lambda_total > 0.0 { 1.0 - lambda_residual / lambda_total } else { 1.0 };
+        let non_spf = lambda_total - lambda_residual;
+        let lfm = if non_spf > 0.0 { 1.0 - lambda_latent / non_spf } else { 1.0 };
+        let pmhf = lambda_residual;
+        // strictest goal level with targets
+        let target_level = scope
+            .goals
+            .iter()
+            .map(|g| g.level)
+            .filter(|l| metric_targets(*l).is_some())
+            .max();
+        let targets = target_level.and_then(metric_targets);
+        let complete = unmeasured == 0 && lambda_total > 0.0;
+        let pass = match (targets, complete) {
+            (Some((smin, lmin, pmax)), true) => Some(spfm >= smin && lfm >= lmin && pmhf <= pmax),
+            (Some(_), false) => Some(false),
+            (None, _) => None,
+        };
+        if let (Some((smin, lmin, pmax)), Some(false)) = (targets, pass) {
+            let lvl = target_level.unwrap().as_str();
+            if !complete {
+                gaps.push(Gap {
+                    class: bhdl_common::safety::GapClass::MetricMissed,
+                    goal: scope.path.clone(),
+                    subject: format!("{lvl} metrics"),
+                    fix: format!("{unmeasured} universe fault(s) unmeasured (no λ share or not run) — metrics cannot pass at {lvl} until the whole universe is measured"),
+                });
+            } else {
+                let mut misses = Vec::new();
+                if spfm < smin { misses.push(format!("SPFM {:.1}% < {:.0}%", spfm * 100.0, smin * 100.0)); }
+                if lfm < lmin { misses.push(format!("LFM {:.1}% < {:.0}%", lfm * 100.0, lmin * 100.0)); }
+                if pmhf > pmax { misses.push(format!("PMHF {:.1} FIT > {:.0} FIT", pmhf, pmax)); }
+                gaps.push(Gap {
+                    class: bhdl_common::safety::GapClass::MetricMissed,
+                    goal: scope.path.clone(),
+                    subject: format!("{lvl} metrics"),
+                    fix: format!("{} (ISO 26262-5:2018 T4/T5/T6) — raise coverage or reduce residual λ", misses.join("; ")),
+                });
+            }
+        }
+        scope.metrics = Some(Metrics {
+            lambda_total_fit: lambda_total,
+            lambda_residual_fit: lambda_residual,
+            lambda_latent_fit: lambda_latent,
+            unmeasured_faults: unmeasured,
+            spfm,
+            lfm,
+            pmhf_fit: pmhf,
+            target_level,
+            targets,
+            pass,
+        });
+    }
+    model.gaps.extend(gaps);
+    model.gaps.sort_by(|a, b| (a.class as u8, &a.subject).cmp(&(b.class as u8, &b.subject)));
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bhdl_common::safety::{Goal, Level, Metrics, Scope, UniverseFault};
+
+    fn uf(scope: &str, part: &str, w: f64, fired: bool, detected: bool, latent: bool) -> UniverseFault {
+        UniverseFault {
+            scope: scope.into(),
+            part: part.into(),
+            mode: "short".into(),
+            targets: vec![],
+            ran: true,
+            fired: if fired { vec!["G.e".into()] } else { vec![] },
+            detected: if detected { vec!["m".into()] } else { vec![] },
+            false_alarm: false,
+            latent,
+            weight_fit: Some(w),
+            note: None,
+        }
+    }
+
+    /// SPFM/LFM/PMHF arithmetic against hand-computed values, and the
+    /// ASIL_B gate on a miss.
+    #[test]
+    fn metrics_arithmetic_and_targets() {
+        let goal = Goal {
+            name: "G".into(), path: "G".into(), library_type: None, level: Level::AsilB,
+            title: String::new(), id: None, ftti: None, safe_state: None, effects: vec![], refines: None,
+        };
+        let mut model = SafetyModel {
+            board: "B".into(), mission: None,
+            scopes: vec![Scope { path: String::new(), entity: "B".into(), ns: "brd".into(),
+                goals: vec![goal], mechanisms: vec![], faults: vec![], waivers: vec![], assumptions: vec![], metrics: None }],
+            parts: vec![], universe: vec![
+                uf("", "a", 10.0, true, true, false),   // dangerous detected
+                uf("", "b", 5.0, true, false, false),   // RESIDUAL
+                uf("", "c", 20.0, false, false, false), // safe
+                uf("", "d", 5.0, false, false, true),   // LATENT
+            ],
+            gaps: vec![], errors: vec![],
+        };
+        compute_metrics(&mut model);
+        let m: &Metrics = model.scopes[0].metrics.as_ref().unwrap();
+        // λ_total=40, λ_res=5 → SPFM = 1 − 5/40 = 87.5%
+        assert!((m.spfm - 0.875).abs() < 1e-9);
+        // LFM = 1 − 5/(40−5) = 85.71%
+        assert!((m.lfm - (1.0 - 5.0 / 35.0)).abs() < 1e-9);
+        assert!((m.pmhf_fit - 5.0).abs() < 1e-9);
+        // ASIL_B: SPFM 87.5% < 90% ⇒ MISS + gap naming SPFM
+        assert_eq!(m.pass, Some(false));
+        assert!(model.gaps.iter().any(|g| g.class == bhdl_common::safety::GapClass::MetricMissed && g.fix.contains("SPFM")));
+        // raise coverage: make b detected too → SPFM 100%, PASS
+        model.universe[1].detected = vec!["m".into()];
+        model.gaps.clear();
+        compute_metrics(&mut model);
+        let m = model.scopes[0].metrics.as_ref().unwrap();
+        assert_eq!(m.pass, Some(true), "{m:?}");
+        assert!(model.gaps.is_empty());
+    }
 }

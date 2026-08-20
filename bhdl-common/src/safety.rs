@@ -282,6 +282,9 @@ pub enum GapClass {
     /// computed for (`config k=v … source=…`) and this instance's actual
     /// configuration differs — the FIT/failure split does not apply here.
     ConfigMismatch,
+    /// A measured architectural metric (SPFM/LFM/PMHF) misses its ISO
+    /// target, or the measurement is incomplete at a level that has one.
+    MetricMissed,
 }
 
 impl GapClass {
@@ -295,6 +298,7 @@ impl GapClass {
             GapClass::FaultUnrun => "FAULT_UNRUN",
             GapClass::FitUncomputed => "FIT_UNCOMPUTED",
             GapClass::ConfigMismatch => "CONFIG_MISMATCH",
+            GapClass::MetricMissed => "METRIC_MISSED",
         }
     }
 }
@@ -325,6 +329,9 @@ pub struct Scope {
     pub faults: Vec<Fault>,
     pub waivers: Vec<Waiver>,
     pub assumptions: Vec<Assumption>,
+    /// Measured FMEDA metrics (Phase 3), filled after the universe runs.
+    #[serde(default)]
+    pub metrics: Option<Metrics>,
 }
 
 /// One phase of a mission profile: a fraction of life at one ambient.
@@ -393,10 +400,60 @@ pub struct UniverseFault {
     /// Detection asserted with NO dangerous effect (mechanism self-fault
     /// or spurious trip).
     pub false_alarm: bool,
+    /// LATENT: this fault alone is neither dangerous nor annunciated,
+    /// but the double-fault probe showed it defeats the detection of an
+    /// otherwise-detected dangerous fault (ISO 26262 multi-point latent).
+    #[serde(default)]
+    pub latent: bool,
     /// λ share of this mode in FIT (part FIT split over its modes), when
     /// the part's FIT was computed.
     pub weight_fit: Option<f64>,
     pub note: Option<String>,
+}
+
+/// FMEDA metrics for one scope (ISO 26262-5; the identical residual
+/// arithmetic yields IEC 61508's SFF for SIL-level goals). All λ in
+/// FIT, all from the MEASURED fault universe — nothing assumed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Metrics {
+    /// Σ weight of universe faults that ran with a computed λ share.
+    pub lambda_total_fit: f64,
+    /// Dangerous and undetected (single-point/residual — the measured
+    /// campaign cannot distinguish ISO's SPF from RF; both are counted).
+    pub lambda_residual_fit: f64,
+    /// Latent multi-point λ (double-fault probe).
+    pub lambda_latent_fit: f64,
+    /// Universe faults that could NOT enter the measurement (no λ share
+    /// or not run) — metrics are incomplete unless this is 0.
+    pub unmeasured_faults: usize,
+    /// SPFM = 1 − λ_residual/λ_total (ISO 26262-5 §8.4.5).
+    pub spfm: f64,
+    /// LFM = 1 − λ_latent/(λ_total − λ_residual) (ISO 26262-5 §8.4.6).
+    pub lfm: f64,
+    /// PMHF single-point approximation = λ_residual, in FIT (the full
+    /// PMHF adds dual-point residual terms — stated, not hidden).
+    pub pmhf_fit: f64,
+    /// The strictest goal level in the scope that carries targets.
+    pub target_level: Option<Level>,
+    /// (spfm_min, lfm_min, pmhf_max_fit) for that level, if any.
+    pub targets: Option<(f64, f64, f64)>,
+    /// Pass verdict against the targets; None when no targets apply or
+    /// the measurement is incomplete.
+    pub pass: Option<bool>,
+}
+
+/// ISO 26262-5:2018 hardware architectural metric targets and random-
+/// hardware-failure targets (Tables 4, 5 and 6): (SPFM min, LFM min,
+/// PMHF max in FIT). ASIL A and QM carry no normative targets; SIL
+/// levels are evaluated with the same residual arithmetic against IEC
+/// 61508 SFF thresholds in a later increment (reported unmapped here).
+pub fn metric_targets(level: Level) -> Option<(f64, f64, f64)> {
+    match level {
+        Level::AsilB => Some((0.90, 0.60, 100.0)), // ISO 26262-5:2018 T4/T5/T6
+        Level::AsilC => Some((0.97, 0.80, 100.0)),
+        Level::AsilD => Some((0.99, 0.90, 10.0)),
+        _ => None,
+    }
 }
 
 /// The whole model for one top-level board.

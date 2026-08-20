@@ -405,6 +405,41 @@ table and update each row's `source` before using a computed FIT in a
 real FMEDA. See `tests/circuits/realistic/test_safety_fit_divider.bhdl`
 for the end-to-end demonstration.
 
+### 2.9 Measured FMEDA metrics *(Phase 3 — implemented)*
+
+After the universe runs, each scope gets its architectural metrics —
+computed from MEASURED λ, never from claims:
+
+- **λ_total** — Σ λ shares of universe faults that ran with a computed
+  FIT (a fault with no λ share or that did not run is counted as
+  UNMEASURED; metrics with unmeasured faults cannot pass a target).
+- **λ_residual** — dangerous and undetected (the measured campaign does
+  not distinguish ISO's single-point from residual faults; both count).
+- **λ_latent** — from the DOUBLE-FAULT probe: a fault on a mechanism
+  part that alone is neither dangerous nor annunciated, co-injected
+  with each otherwise-detected dangerous fault; if the dangerous effect
+  persists undetected, the mechanism-part mode is latent.
+- **SPFM** = 1 − λ_residual/λ_total (ISO 26262-5 §8.4.5),
+  **LFM** = 1 − λ_latent/(λ_total − λ_residual) (§8.4.6),
+  **PMHF** = λ_residual in FIT — the single-point approximation; the
+  full PMHF adds dual-point residual terms (stated in the report).
+
+Targets per ISO 26262-5:2018 Tables 4/5/6: ASIL B (SPFM≥90%, LFM≥60%,
+PMHF≤100 FIT), C (97%, 80%, 100), D (99%, 90%, 10). QM and ASIL A carry
+no normative targets — metrics are reported without a gate. The
+strictest goal level in the scope selects the targets; a miss (or an
+incomplete measurement at a targeted level) is a METRIC_MISSED gap and
+fails the verdict:
+
+```
+metrics [board]: λ_total=45.7 FIT, λ_residual=12.3, λ_latent=5.3
+  → SPFM=73.1%  LFM=84.2%  PMHF=12.3 FIT (targets ASIL_B: …)  MISS
+METRIC_MISSED  ASIL_B metrics  SPFM 73.1% < 90% — raise coverage or reduce residual λ
+```
+
+SIL-level goals use the same residual arithmetic; mapping to IEC 61508
+SFF/PFH thresholds is a later increment (reported unmapped until then).
+
 ## 3. Semantic model
 
 `bhdl_common::safety::SafetyModel`, built by the synthesizer after the

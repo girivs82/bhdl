@@ -31,7 +31,7 @@ board FaultDemo {
 safety FaultDemo as brd {
     mission { ambient = 40degC; }
 
-    goal SG_MID: QM "mid node stays in its window" (id="SG-FC-1") {
+    goal SG_MID: ASIL_B "mid node stays in its window" (id="SG-FC-1") {
         effect overvoltage  = brd.r_bot.1 > 8V severity S2;
         effect undervoltage = brd.r_bot.1 < 4V severity S2;
     }

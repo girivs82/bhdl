@@ -1821,6 +1821,8 @@ async fn run_safety(
         }
         // Whole-universe campaign: every unwaived part × standard modes.
         bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solver);
+        // FMEDA metrics from the measured universe.
+        bhdl_synthesizer::fault_campaign::compute_metrics(&mut model);
     }
 
     // ── Report ───────────────────────────────────────────────────────
@@ -1950,6 +1952,8 @@ async fn run_safety(
                 println!("    {} {}({})  fired [{}]  {}{}", u.part, u.mode, u.targets.join(", "), u.fired.join(", "), det, note);
             } else if u.false_alarm {
                 println!("    {} {}({})  {}", u.part, u.mode, u.targets.join(", "), "FALSE ALARM (detection with no effect)".yellow());
+            } else if u.latent {
+                println!("    {} {}({})  {}  [{}]", u.part, u.mode, u.targets.join(", "), "LATENT (defeats detection)".red(), u.note.as_deref().unwrap_or(""));
             } else if !u.ran {
                 println!("    {} {}({})  not run: {}", u.part, u.mode, u.targets.join(", "), u.note.as_deref().unwrap_or("?"));
             }
@@ -1959,7 +1963,28 @@ async fn run_safety(
     for g in &model.gaps {
         println!("    {:<22} {:<28} {:<28} {}", g.class.as_str(), g.goal, g.subject, g.fix);
     }
-    println!("  metrics: not computed (Phase 1 — SPFM/LFM/PMHF and SFF/PFH need the fault campaign)");
+    let mut any_metrics = false;
+    for s in &model.scopes {
+        let Some(m) = &s.metrics else { continue };
+        any_metrics = true;
+        let label = if s.path.is_empty() { "board".to_string() } else { s.path.clone() };
+        let verdict = match m.pass {
+            Some(true) => "PASS".green().bold().to_string(),
+            Some(false) => "MISS".red().bold().to_string(),
+            None => "no targets (QM/ASIL_A)".to_string(),
+        };
+        let tgt = m.targets.map(|(sp, lf, pm)| format!(" (targets {}: SPFM≥{:.0}% LFM≥{:.0}% PMHF≤{:.0} FIT)", m.target_level.unwrap().as_str(), sp * 100.0, lf * 100.0, pm)).unwrap_or_default();
+        println!("\n  metrics [{}]: λ_total={:.1} FIT, λ_residual={:.1}, λ_latent={:.1} → SPFM={:.1}%  LFM={:.1}%  PMHF={:.1} FIT{}  {}",
+            label, m.lambda_total_fit, m.lambda_residual_fit, m.lambda_latent_fit,
+            m.spfm * 100.0, m.lfm * 100.0, m.pmhf_fit, tgt, verdict);
+        if m.unmeasured_faults > 0 {
+            println!("    ⚠ {} universe fault(s) NOT in the measurement (no λ share or not run) — metrics incomplete", m.unmeasured_faults);
+        }
+        println!("    PMHF is the single-point approximation (λ_residual); dual-point residual terms need the multi-fault campaign");
+    }
+    if !any_metrics {
+        println!("  metrics: not computed (the fault universe has not run — needs a converging DC solve)");
+    }
     let pass = model.verdict_pass();
     println!("  verdict: {}", if pass { "PASS".green().bold().to_string() } else { "FAIL".red().bold().to_string() });
 

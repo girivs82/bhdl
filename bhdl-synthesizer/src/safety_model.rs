@@ -645,6 +645,7 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
                     faults: Vec::new(),
                     waivers: Vec::new(),
                     assumptions: Vec::new(),
+                    metrics: None,
                 };
                 seed_part_assumptions(&mut sc);
                 sc

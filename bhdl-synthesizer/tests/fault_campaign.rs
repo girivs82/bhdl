@@ -84,6 +84,15 @@ async fn declared_faults_run_classify_and_regenerate_gaps() {
     assert!(model.universe.iter().all(|u| u.weight_fit.is_none()));
     assert!(mech.measured_note.as_deref().unwrap_or("").contains("count"));
 
+    // ── Metrics on the mock universe: weights are None (reliability did
+    // not run here) ⇒ measurement INCOMPLETE ⇒ ASIL_B targets cannot
+    // pass and a METRIC_MISSED gap says why. No silent normalization.
+    bhdl_synthesizer::fault_campaign::compute_metrics(&mut model);
+    let m = model.scopes[0].metrics.as_ref().expect("metrics computed");
+    assert_eq!(m.unmeasured_faults, 8, "no λ shares in the mock run");
+    assert_eq!(m.pass, Some(false));
+    assert!(model.gaps.iter().any(|g| g.class == GapClass::MetricMissed && g.fix.contains("unmeasured")));
+
     // Negative control: a solver that refuses leaves ran-without-verdict
     // gaps that say so (the fault is NOT silently classified).
     let mut model2 = build_safety_model(&netlist, &[&sf]);
