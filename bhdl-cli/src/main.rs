@@ -1875,9 +1875,15 @@ async fn run_safety(
             let run = s.faults.iter().filter(|f| f.run).count();
             println!("    faults    {} declared, {} run", s.faults.len(), run);
             for f in &s.faults {
+                let timing = match (f.within.as_deref(), f.timing_met) {
+                    (Some(w), Some(true)) => format!("  ⏱ within {w} OK").green().to_string(),
+                    (Some(w), Some(false)) => format!("  ⏱ within {w} FAILED").red().to_string(),
+                    (Some(w), None) if f.run => format!("  ⏱ within {w} UNVERIFIABLE").yellow().to_string(),
+                    _ => String::new(),
+                };
                 let outcome = if f.run {
                     match f.expectation_met {
-                        Some(true) => format!("  → ran: fired [{}] ✓", f.fired.join(", ")).green().to_string(),
+                        Some(true) => format!("  → ran: fired [{}] ✓{timing}", f.fired.join(", ")).green().to_string(),
                         Some(false) => format!("  → ran: fired [{}] — EXPECTED {} DID NOT FIRE", f.fired.join(", "), f.expect).red().to_string(),
                         None => format!("  → ran: {}", f.note.as_deref().unwrap_or("no verdict")).yellow().to_string(),
                     }

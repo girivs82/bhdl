@@ -59,14 +59,21 @@ safety FaultDemo as brd {
     // predicate the campaign evaluates on every FAULTED operating point
     // to MEASURE the diagnostic coverage (claimed 0.90 is a FIXTURE
     // number — the measurement is the point).
+    // latency = the comparator path's declared reaction time — the FTTI
+    // check compares interval+latency against each fault's `within`.
     mechanism brd.sense: psm(SG_MID, detects=[overvoltage],
                              detected_when = brd.sense.1 > 4V,
+                             latency=1ms,
                              dc=0.90, source="FIXTURE claim — measured DC supersedes");
 
-    fault short(brd.r_top.1, brd.r_top.2) expect SG_MID.overvoltage;
+    fault short(brd.r_top.1, brd.r_top.2) expect SG_MID.overvoltage detected_by brd.sense within 10ms;   // 1ms ≤ 10ms → ⏱ OK
     fault short(brd.r_bot.1, brd.r_bot.2) expect SG_MID.undervoltage;
-    fault open(brd.r_bot)                 expect SG_MID.overvoltage;
+    fault open(brd.r_bot)                 expect SG_MID.overvoltage detected_by brd.sense within 500us;  // 1ms > 500µs → ⏱ FAILED
     fault open(brd.r_top)                 expect SG_MID.overvoltage;   // deliberately wrong — see header
+    // Parametric fault: +200% drift on the top leg → 3kΩ/1kΩ divider,
+    // mid = 3V < 4V → undervoltage. Declared-only (a universe drift
+    // magnitude would be invented data).
+    fault drift(brd.r_top, +200%)          expect SG_MID.undervoltage;
 
     // Vendor failure state, run through its declared behavior:
     // sense_stuck = short(1,2) collapses the flag node to GND — the

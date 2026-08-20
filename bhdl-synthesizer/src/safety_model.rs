@@ -894,7 +894,7 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
                             }
                         }
                     }
-                    scope.faults.push(Fault { kind, targets, expect, detected_by, within, run: false, fired: Vec::new(), expectation_met: None, note: None });
+                    scope.faults.push(Fault { kind, targets, expect, detected_by, within, run: false, fired: Vec::new(), expectation_met: None, note: None, timing_met: None });
                 }
                 SyntaxKind::SAFETY_WAIVE => {
                     let handle = first_child(st, SyntaxKind::NET_REF).map(|n| text_of(&n)).unwrap_or_default();

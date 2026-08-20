@@ -194,17 +194,29 @@ short(r_top.1, r_top.2) expect SG_MID.overvoltage  → ran: fired [SG_MID.overvo
 open(r_top) expect SG_MID.overvoltage  → ran: fired [SG_MID.undervoltage] — EXPECTED … DID NOT FIRE
 ```
 
+`drift(part, ±pct)` scales the part's value attributes (every
+value-carrying key — different consumers read different ones) by
+1 + pct/100 and runs like any other fault. Drift is DECLARED-only: a
+universe drift magnitude would be invented data.
+
+`within <FTTI>` is checked at steady state: the fault must be DETECTED
+(a mechanism's `detected_when` TRUE on the faulted point), and the
+detecting mechanism's declared `interval` + `latency` budget must fit
+inside the FTTI — the standard timing argument for periodic and
+continuous mechanisms. Never detected, or budget exceeds FTTI ⇒ the
+FTTI check fails and the fault keeps a gap even when its effect
+expectation held; a detecting mechanism with no declared budget ⇒
+UNVERIFIABLE, stated (true transient simulation of the detection path
+is future work — an undeclared budget is never assumed).
+
 A fault clears its FAULT_UNRUN gap only when it ran AND the expectation
-held. An expectation the physics did not produce is a first-class gap
-(the safety argument claimed a wrong effect); a faulted board that does
-not converge is reported as ran-without-verdict (non-convergence is
-information — usually a catastrophic short), and stays a gap. Honestly
-out of scope in this increment, stated per fault: `state` needs the
-vendor-model failure-state hook, `drift` needs magnitude mutation, and
-`within <FTTI>` needs transient simulation — the static campaign
-classifies the settled operating point only. Effect predicates are
-VOLTAGE predicates (`brd.r_bot.1 > 8V`); an identifier that does not
-resolve is a per-fault error, never a silently-false predicate.
+held AND any `within` check passed. An expectation the physics did not
+produce is a first-class gap (the safety argument claimed a wrong
+effect); a faulted board that does not converge is reported as
+ran-without-verdict (non-convergence is information — usually a
+catastrophic short), and stays a gap. Effect predicates are VOLTAGE
+predicates (`brd.r_bot.1 > 8V`); an identifier that does not resolve is
+a per-fault error, never a silently-false predicate.
 
 `waive <ns>.<handle> qm "<reason>";` takes a part out of the argument
 with the reason on record (ERC-waiver idiom). Every other physical

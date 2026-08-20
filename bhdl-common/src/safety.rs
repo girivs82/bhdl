@@ -200,6 +200,13 @@ pub struct Fault {
     /// Campaign note (solve diverged, kind unsupported, …).
     #[serde(default)]
     pub note: Option<String>,
+    /// `within <FTTI>` verdict: Some(true) = the detecting mechanism's
+    /// declared interval+latency budget fits inside the FTTI and the
+    /// fault IS detected at steady state; Some(false) = never detected
+    /// or budget exceeds FTTI; None = no `within`, or unverifiable
+    /// (mechanism declares no timing and there is no transient sim).
+    #[serde(default)]
+    pub timing_met: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

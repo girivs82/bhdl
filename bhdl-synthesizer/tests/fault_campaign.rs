@@ -29,7 +29,7 @@ async fn declared_faults_run_classify_and_regenerate_gaps() {
     let mut model = build_safety_model(&netlist, &[&sf]);
     assert!(model.errors.is_empty(), "errors: {:#?}", model.errors);
     let unrun_before = model.gaps.iter().filter(|g| g.class == GapClass::FaultUnrun).count();
-    assert_eq!(unrun_before, 5); // 4 board faults + 1 vendor state fault
+    assert_eq!(unrun_before, 6); // 4 board faults + 1 vendor state + 1 drift
 
     // Mock solver: every net at 12 V except GND. The short faults are
     // still classified PHYSICALLY under this mock, because the net-alias
@@ -49,28 +49,42 @@ async fn declared_faults_run_classify_and_regenerate_gaps() {
             .collect())
     };
     let (ran, mismatched) = run_declared_faults(&netlist, &mut model, &solve);
-    assert_eq!(ran, 5); // the state fault runs through its declared behavior
-    // Under the mock, board-fault expectations all hold (aliasing makes
-    // the shorts physical); the state fault's ov expectation ALSO holds
-    // here because every non-GND net mocks at 12V.
-    assert_eq!(mismatched, 0, "{:#?}", model.scopes[0].faults);
+    assert_eq!(ran, 6); // state runs via its behavior, drift via value scaling
+    // Under the mock, aliasing makes the short/open expectations hold
+    // and the state's ov fires (12V everywhere) — but the DRIFT fault
+    // expects UNDERVOLTAGE, which an all-12V mock can never produce:
+    // exactly one honest mismatch.
+    assert_eq!(mismatched, 1, "{:#?}", model.scopes[0].faults);
 
     let scope = &model.scopes[0];
     for f in &scope.faults {
         assert!(f.run, "{}({:?}) must have run", f.kind, f.targets);
-        assert_eq!(f.expectation_met, Some(true), "{}({:?})", f.kind, f.targets);
+        let expect_met = f.kind != "drift"; // see mock note above
+        assert_eq!(f.expectation_met, Some(expect_met), "{}({:?})", f.kind, f.targets);
     }
     // the vendor state ran via its behavior (no 'needs the hook' note)
     let st = scope.faults.iter().find(|f| f.kind == "state").unwrap();
     assert!(st.run && st.note.is_none(), "{st:?}");
+    // drift ran via value scaling
+    let dr = scope.faults.iter().find(|f| f.kind == "drift").unwrap();
+    assert!(dr.run && dr.note.is_none(), "{dr:?}");
+    // FTTI: 1ms latency vs within 10ms = OK; vs within 500us = FAILED
+    let t_ok = scope.faults.iter().find(|f| f.within.as_deref() == Some("10ms")).unwrap();
+    assert_eq!(t_ok.timing_met, Some(true), "{t_ok:?}");
+    let t_bad = scope.faults.iter().find(|f| f.within.as_deref() == Some("500us")).unwrap();
+    assert_eq!(t_bad.timing_met, Some(false), "{t_bad:?}");
     // The alias proof: short(r_bot) merged the mid node into GND, so the
     // undervoltage effect fired from the SURVIVING net's 0 V.
     let uv = scope.faults.iter().find(|f| f.expect.contains("undervoltage")).unwrap();
     assert_eq!(uv.fired, vec!["SG_MID.undervoltage".to_string()]);
 
-    // Gap regeneration: all 4 placeholders cleared.
+    // Gap regeneration: two gaps survive the mock — the 500µs FTTI
+    // (mechanism budget 1ms regardless of mock voltages) and the drift
+    // mismatch above.
     let unrun_after: Vec<_> = model.gaps.iter().filter(|g| g.class == GapClass::FaultUnrun).collect();
-    assert!(unrun_after.is_empty(), "{unrun_after:#?}");
+    assert_eq!(unrun_after.len(), 2, "{unrun_after:#?}");
+    assert!(unrun_after.iter().any(|g| g.fix.contains("FTTI")));
+    assert!(unrun_after.iter().any(|g| g.subject.contains("drift")));
 
     // ── Whole-universe campaign on the same mock: 4 parts × 2 modes
     // (+0 states). Under the all-12V mock with alias-following, the
@@ -110,8 +124,8 @@ async fn declared_faults_run_classify_and_regenerate_gaps() {
     let mut model2 = build_safety_model(&netlist, &[&sf]);
     let refuse = |_: &bhdl_netlist::Netlist| -> Result<HashMap<String, f64>, String> { Err("no convergence".into()) };
     let (ran2, _) = run_declared_faults(&netlist, &mut model2, &refuse);
-    assert_eq!(ran2, 5);
+    assert_eq!(ran2, 6);
     let unrun2: Vec<_> = model2.gaps.iter().filter(|g| g.class == GapClass::FaultUnrun).collect();
-    assert_eq!(unrun2.len(), 5);
+    assert_eq!(unrun2.len(), 6);
     assert!(unrun2.iter().all(|g| g.fix.contains("without verdict")));
 }

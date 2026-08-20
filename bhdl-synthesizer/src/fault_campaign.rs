@@ -224,6 +224,56 @@ fn apply_force(n: &mut Netlist, view: &View, inst: &str, pin: &str, volts: f64) 
     if hit { Ok(()) } else { Err(format!("force: net '{net_name}' not found")) }
 }
 
+/// `drift(part, ±pct)`: scale the part's value attribute (resistance /
+/// capacitance / inductance) by 1 + pct/100 — the classic
+/// beyond-tolerance parametric fault. The numeric prefix of the
+/// attribute is scaled in place; the unit suffix is preserved.
+fn apply_drift(n: &mut Netlist, view: &View, inst: &str, pct_str: &str) -> Result<(), String> {
+    let pct: f64 = pct_str
+        .trim()
+        .trim_end_matches('%')
+        .parse()
+        .map_err(|_| format!("drift magnitude '{pct_str}' is not ±<number>%"))?;
+    let factor = 1.0 + pct / 100.0;
+    let iid = *view.inst.get(inst).ok_or_else(|| format!("drift: instance '{inst}' not found"))?;
+    let Some(instance) = n.instances.get_mut(iid) else { return Err("instance vanished".into()) };
+    // Scale EVERY value-carrying attribute: different consumers read
+    // different keys (the converter may use `value` while sign-off reads
+    // `resistance`) — scaling only one leaves the solve on the healthy
+    // number.
+    let mut scaled_any = false;
+    for key in ["resistance", "capacitance", "inductance", "value"] {
+        if let Some(v) = instance.attributes.get(key).cloned() {
+            let end = v.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(v.len());
+            if let Ok(num) = v[..end].parse::<f64>() {
+                let scaled = format!("{}{}", num * factor, &v[end..]);
+                instance.attributes.insert(key.to_string(), scaled);
+                scaled_any = true;
+            }
+        }
+    }
+    if scaled_any {
+        Ok(())
+    } else {
+        Err(format!("drift: '{inst}' has no numeric resistance/capacitance/inductance/value attribute"))
+    }
+}
+
+/// Parse a duration string ("10ms", "500us", "1s") to seconds.
+fn parse_duration_s(v: &str) -> Option<f64> {
+    let v = v.trim();
+    let end = v.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(v.len());
+    let num: f64 = v[..end].parse().ok()?;
+    match v[end..].trim() {
+        "s" | "" => Some(num),
+        "ms" => Some(num * 1e-3),
+        "us" | "µs" => Some(num * 1e-6),
+        "ns" => Some(num * 1e-9),
+        "m" | "min" => Some(num * 60.0),
+        _ => None,
+    }
+}
+
 /// Execute a vendor failure-state behavior on the faulted netlist:
 /// `open(PIN)` | `short(PIN_A,PIN_B)` | `force(PIN, <voltage>)`, pins
 /// relative to `inst`. Returns the net-alias map contribution.
@@ -453,6 +503,16 @@ pub fn run_declared_faults(netlist: &Netlist, model: &mut SafetyModel, solve: &S
             )
         })
         .collect();
+    let scopes_mechs: Vec<Vec<(String, Vec<String>, Option<String>, Option<String>, Option<String>)>> = model
+        .scopes
+        .iter()
+        .map(|s| {
+            s.mechanisms
+                .iter()
+                .map(|m| (m.handle.clone(), m.detects.clone(), m.detected_when.clone(), m.interval.clone(), m.latency.clone()))
+                .collect()
+        })
+        .collect();
     for (si, scope) in model.scopes.iter_mut().enumerate() {
         let (prefix, ns, effects) = &scopes_goals[si];
         for f in scope.faults.iter_mut() {
@@ -461,11 +521,7 @@ pub fn run_declared_faults(netlist: &Netlist, model: &mut SafetyModel, solve: &S
             }
             // unsupported kinds: say why, precisely
             match f.kind.as_str() {
-                "short" | "open" | "state" => {}
-                "drift" => {
-                    f.note = Some("drift magnitude mutation not implemented in the static campaign yet".into());
-                    continue;
-                }
+                "short" | "open" | "state" | "drift" => {}
                 other => {
                     f.note = Some(format!("fault kind '{other}' not supported by the campaign"));
                     continue;
@@ -503,6 +559,13 @@ pub fn run_declared_faults(netlist: &Netlist, model: &mut SafetyModel, solve: &S
                         None => Err(format!("no failure_state '{sname}' on {inst}")),
                     }
                 }
+                "drift" => {
+                    if f.targets.len() != 2 {
+                        Err(format!("drift needs (part, ±pct), got {} args", f.targets.len()))
+                    } else {
+                        apply_drift(&mut faulted, &view, &f.targets[0], &f.targets[1])
+                    }
+                }
                 _ => unreachable!(),
             };
             if let Err(e) = res {
@@ -532,6 +595,47 @@ pub fn run_declared_faults(netlist: &Netlist, model: &mut SafetyModel, solve: &S
             }
             let expect_full = &f.expect; // e.g. "SG_MID.overvoltage" or "rail_a.SG_OV.overvoltage"
             let met = fired.iter().any(|p| p == expect_full || p.ends_with(&format!(".{expect_full}")) || expect_full.ends_with(p.as_str()));
+            // FTTI: `within T` claims DETECTION inside T. Steady-state
+            // detection comes from the mechanisms' detected_when on the
+            // faulted point; the time argument is the mechanism's
+            // DECLARED interval+latency budget (the standard argument
+            // for periodic/continuous mechanisms). True transient
+            // simulation of the detection path is future work — an
+            // undeclared budget is UNVERIFIABLE, stated, never assumed.
+            if let Some(w) = &f.within {
+                let ftti = parse_duration_s(w);
+                let mut detecting: Vec<(f64, bool)> = Vec::new(); // (budget_s, budget_known)
+                for (handle, _d, dw, interval, latency) in &scopes_mechs[si] {
+                    let _ = handle;
+                    if let Some(pred) = dw {
+                        if let Ok(true) = eval_effect(pred, prefix, ns, &view, &alias, &volts) {
+                            let b_int = interval.as_deref().and_then(parse_duration_s).unwrap_or(0.0);
+                            let b_lat = latency.as_deref().and_then(parse_duration_s);
+                            match b_lat {
+                                Some(l) => detecting.push((b_int + l, true)),
+                                None if interval.is_some() => detecting.push((b_int, true)),
+                                None => detecting.push((0.0, false)),
+                            }
+                        }
+                    }
+                }
+                f.timing_met = match (ftti, detecting.is_empty()) {
+                    (None, _) => {
+                        f.note = Some(format!("within '{w}' is not a parsable duration"));
+                        None
+                    }
+                    (Some(_), true) => Some(false), // never detected ⇒ FTTI missed
+                    (Some(t), false) => {
+                        if detecting.iter().any(|(_, known)| *known) {
+                            let best = detecting.iter().filter(|(_, k)| *k).map(|(b, _)| *b).fold(f64::INFINITY, f64::min);
+                            Some(best <= t)
+                        } else {
+                            f.note = Some("FTTI unverifiable: detecting mechanism declares no interval/latency budget (and there is no transient sim)".into());
+                            None
+                        }
+                    }
+                };
+            }
             f.run = true;
             f.fired = fired;
             f.expectation_met = Some(met);
@@ -555,6 +659,15 @@ pub fn run_declared_faults(netlist: &Netlist, model: &mut SafetyModel, solve: &S
         for f in &s.faults {
             let subject = format!("{}({})", f.kind, f.targets.join(","));
             let fix = match (f.run, f.expectation_met) {
+                (true, Some(true)) if f.timing_met == Some(false) => format!(
+                    "campaign ran: {} fired and is detected, but the FTTI check FAILED — never detected or the mechanism's declared interval+latency exceeds within {}",
+                    f.expect,
+                    f.within.as_deref().unwrap_or("?")
+                ),
+                (true, Some(true)) if f.within.is_some() && f.timing_met.is_none() => format!(
+                    "campaign ran: expectation met, FTTI UNVERIFIABLE — {}",
+                    f.note.as_deref().unwrap_or("no timing data")
+                ),
                 (true, Some(true)) => continue,
                 (true, Some(false)) => format!(
                     "campaign ran: expected {} did NOT fire (fired: [{}]) — fix the fault declaration or the design",
