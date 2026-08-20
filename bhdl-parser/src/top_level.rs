@@ -25,6 +25,7 @@ impl<'t> Parser<'t> {
                 SyntaxKind::TRAIT_KW => self.parse_trait_def(),
                 SyntaxKind::IMPL_KW => self.parse_trait_impl(),
                 SyntaxKind::SAFETY_GOAL_KW => self.parse_safety_goal_def(),
+                SyntaxKind::SAFETY_ASSUMPTION_KW => self.parse_safety_assumption_def(),
                 SyntaxKind::SAFETY_KW => self.parse_safety_def(),
                 SyntaxKind::FAULT_INJECT_KW => self.parse_fault_inject_def(),
                 SyntaxKind::SYMBOL_KW => self.parse_symbol_def(),
@@ -3180,6 +3181,39 @@ impl<'t> Parser<'t> {
         self.builder.finish_node();
     }
 
+    /// Library assumption-of-use definition (docs/spec/Functional_Safety.md §2.5):
+    /// ```bhdl
+    /// safety_assumption ASM_SUPPLY_WITHIN_ABSMAX(pin: net, vmax: voltage)
+    ///     "Supply into {pin} stays below {vmax}";
+    /// ```
+    /// A `safety` block instantiates it as `assume ASM_SUPPLY_WITHIN_ABSMAX(dut.VIN, 36V);`
+    /// and the semantic pass substitutes the arguments into the text.
+    pub(crate) fn parse_safety_assumption_def(&mut self) {
+        self.builder.start_node(SyntaxKind::SAFETY_ASSUMPTION_DEF.into());
+        self.expect(SyntaxKind::SAFETY_ASSUMPTION_KW);
+        self.skip_trivia();
+        if self.peek() == Some(SyntaxKind::IDENT) {
+            self.bump();
+        } else {
+            self.error("Expected safety assumption name".to_string());
+        }
+        self.skip_trivia();
+        if self.peek() == Some(SyntaxKind::L_PAREN) {
+            self.builder.start_node(SyntaxKind::SAFETY_GOAL_PARAMS.into());
+            self.parse_entity_parameters();
+            self.builder.finish_node();
+            self.skip_trivia();
+        }
+        if self.peek() == Some(SyntaxKind::STRING) {
+            self.bump();
+            self.skip_trivia();
+        } else {
+            self.error("Expected assumption text string".to_string());
+        }
+        self.expect(SyntaxKind::SEMI);
+        self.builder.finish_node();
+    }
+
     /// Body shared by library goals and inline goals:
     /// `signal NAME: kind;` | `effect NAME = expr severity Sx;` | legacy `key: value;`
     fn parse_safety_goal_body(&mut self) {
@@ -3540,7 +3574,24 @@ impl<'t> Parser<'t> {
         self.builder.start_node(SyntaxKind::SAFETY_ASSUME.into());
         self.bump(); // `assume`
         self.skip_trivia();
-        self.parse_expression(); // Id(args) or Id
+        // `Id` or `Id(args…)` where args may be design paths (dut.VIN) or
+        // values (40V, within=10ms). Wrapped in one NET_REF node; the
+        // semantic pass re-parses the text against the library definition.
+        self.builder.start_node(SyntaxKind::NET_REF.into());
+        self.expect(SyntaxKind::IDENT);
+        self.skip_trivia();
+        if self.peek() == Some(SyntaxKind::L_PAREN) {
+            let mut depth = 0i32;
+            loop {
+                match self.peek() {
+                    Some(SyntaxKind::L_PAREN) => { depth += 1; self.bump(); }
+                    Some(SyntaxKind::R_PAREN) => { depth -= 1; self.bump(); if depth == 0 { break; } }
+                    Some(_) => self.bump_any(),
+                    None => { self.error("Unclosed assumption argument list".to_string()); break; }
+                }
+            }
+        }
+        self.builder.finish_node();
         self.skip_trivia();
         if self.peek() == Some(SyntaxKind::STRING) {
             self.bump();

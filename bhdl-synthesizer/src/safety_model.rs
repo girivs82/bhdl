@@ -245,6 +245,68 @@ fn collect_blocks(root: &SyntaxNode) -> Vec<SafetyBlock> {
     out
 }
 
+/// A library `safety_assumption` definition (spec §2.5):
+/// `safety_assumption ASM_X(pin: net, vmax: voltage) "text with {pin} and {vmax}";`
+#[derive(Debug, Clone)]
+struct AssumptionDef {
+    params: Vec<(String, Option<String>)>, // (name, default)
+    text: String,
+}
+
+fn collect_assumption_defs(root: &SyntaxNode) -> HashMap<String, AssumptionDef> {
+    let mut out = HashMap::new();
+    for n in root.descendants().filter(|n| n.kind() == SyntaxKind::SAFETY_ASSUMPTION_DEF) {
+        let Some(name) = idents(&n).first().cloned() else { continue };
+        let text = first_string(&n).unwrap_or_default();
+        let mut params = Vec::new();
+        if let Some(p) = first_child(&n, SyntaxKind::SAFETY_GOAL_PARAMS) {
+            let txt = text_of(&p);
+            let inner = txt.trim_start_matches('(').trim_end_matches(')');
+            for item in inner.split(',') {
+                let item = item.trim();
+                if item.is_empty() { continue; }
+                let (lhs, default) = match item.split_once('=') {
+                    Some((l, d)) => (l, Some(d.trim().to_string())),
+                    None => (item, None),
+                };
+                let pname = lhs.split(':').next().unwrap_or("").trim().to_string();
+                if !pname.is_empty() { params.push((pname, default)); }
+            }
+        }
+        out.insert(name, AssumptionDef { params, text });
+    }
+    out
+}
+
+/// Split `Id(a, b, kw=v)` into all positionals + kwargs (top-level commas).
+fn split_call_args(txt: &str) -> (Vec<String>, BTreeMap<String, String>) {
+    let Some(open) = txt.find('(') else { return (Vec::new(), BTreeMap::new()) };
+    let inner = txt[open + 1..].trim_end_matches(')');
+    let mut parts = Vec::new();
+    let (mut depth, mut cur, mut in_str) = (0i32, String::new(), false);
+    for ch in inner.chars() {
+        match ch {
+            '"' => { in_str = !in_str; cur.push(ch); }
+            '[' | '(' if !in_str => { depth += 1; cur.push(ch); }
+            ']' | ')' if !in_str => { depth -= 1; cur.push(ch); }
+            ',' if depth == 0 && !in_str => { parts.push(cur.trim().to_string()); cur.clear(); }
+            _ => cur.push(ch),
+        }
+    }
+    if !cur.trim().is_empty() { parts.push(cur.trim().to_string()); }
+    let mut pos = Vec::new();
+    let mut kw = BTreeMap::new();
+    for p in parts {
+        match p.split_once('=') {
+            Some((k, v)) if k.trim().chars().all(|c| c.is_alphanumeric() || c == '_') => {
+                kw.insert(k.trim().to_string(), v.trim().trim_matches('"').to_string());
+            }
+            _ => pos.push(p),
+        }
+    }
+    (pos, kw)
+}
+
 /// Entity-level safety data (spec §2.7), keyed by entity name.
 #[derive(Debug, Clone, Default)]
 struct EntityData {
@@ -469,11 +531,13 @@ impl NetView {
 pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyModel {
     let view = NetView::build(netlist);
     let mut goal_defs: HashMap<String, GoalDef> = HashMap::new();
+    let mut asm_defs: HashMap<String, AssumptionDef> = HashMap::new();
     let mut blocks: Vec<SafetyBlock> = Vec::new();
     let mut entity_data: HashMap<String, EntityData> = HashMap::new();
     for sf in sources {
         let root = sf.syntax();
         goal_defs.extend(collect_goal_defs(&root));
+        asm_defs.extend(collect_assumption_defs(&root));
         blocks.extend(collect_blocks(&root));
         for (k, v) in collect_entity_data(&root) {
             entity_data.entry(k).or_default().merge(v);
@@ -818,7 +882,46 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
                 SyntaxKind::SAFETY_ASSUME => {
                     let t = st.children().map(|c| text_of(&c)).find(|t| !t.is_empty()).unwrap_or_default();
                     let id = t.split('(').next().unwrap_or("").trim().to_string();
-                    let text = first_string(st).unwrap_or_else(|| t.clone());
+                    let inline = first_string(st);
+                    let text = if let Some(def) = asm_defs.get(&id) {
+                        // library assumption: substitute call args into the
+                        // `{param}` placeholders; design handles are shown
+                        // qualified by the instance path (dut.VIN → rail_a.VIN).
+                        let (pos, kw) = split_call_args(&t);
+                        let show = |v: &str| -> String {
+                            let v = v.trim_start_matches('@');
+                            if v.starts_with(&format!("{}.", blk.ns)) {
+                                let rest = v.splitn(2, '.').nth(1).unwrap_or(v);
+                                if prefix.is_empty() { rest.to_string() } else { format!("{prefix}.{rest}") }
+                            } else {
+                                v.to_string()
+                            }
+                        };
+                        if pos.len() > def.params.len() {
+                            model.errors.push(format!("safety {}: assume {}: {} arguments, {} parameters", blk.name, id, pos.len(), def.params.len()));
+                        }
+                        for k in kw.keys() {
+                            if !def.params.iter().any(|(n, _)| n == k) {
+                                model.errors.push(format!("safety {}: assume {}: unknown parameter '{}'", blk.name, id, k));
+                            }
+                        }
+                        let mut text = def.text.clone();
+                        for (i, (pname, default)) in def.params.iter().enumerate() {
+                            let val = pos.get(i).cloned()
+                                .or_else(|| kw.get(pname).cloned())
+                                .or_else(|| default.clone());
+                            match val {
+                                Some(v) => text = text.replace(&format!("{{{pname}}}"), &show(&v)),
+                                None => model.errors.push(format!("safety {}: assume {}: parameter '{}' has no argument and no default", blk.name, id, pname)),
+                            }
+                        }
+                        text
+                    } else if inline.is_none() && t.contains('(') {
+                        model.errors.push(format!("safety {}: assume {}: unknown library assumption (no `safety_assumption {}` in scope and no inline text)", blk.name, id, id));
+                        continue;
+                    } else {
+                        inline.unwrap_or_else(|| t.clone())
+                    };
                     scope.assumptions.push(Assumption { path: qual(&id), id, text, status: AssumptionStatus::Open });
                 }
                 SyntaxKind::SAFETY_REFINES => {

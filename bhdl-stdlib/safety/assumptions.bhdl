@@ -1,0 +1,29 @@
+// bhdl-stdlib/safety — common assumptions of use
+// (docs/spec/Functional_Safety.md §2.5)
+//
+// Reusable assumption-of-use definitions. A safety block instantiates
+// one with arguments:
+//
+//     import { ASM_SUPPLY_WITHIN_ABSMAX } from "bhdl-stdlib/safety/assumptions.bhdl";
+//     ...
+//     assume ASM_SUPPLY_WITHIN_ABSMAX(dut.VIN, 36V);
+//
+// and the integrator (parent block) must discharge each one:
+//
+//     brd.rail_a.ASM_SUPPLY_WITHIN_ABSMAX satisfied_by brd.tvs;
+//
+// The `{name}` placeholders in the text are filled from the arguments,
+// so the report reads concretely ("Supply into rail_a.VIN stays below
+// 36V"), not abstractly.
+
+safety_assumption ASM_SUPPLY_WITHIN_ABSMAX(supply: handle, vmax: voltage)
+    "Supply into {supply} stays below {vmax} (absolute maximum) under all transients";
+
+safety_assumption ASM_LOAD_REACTS_TO_FLAG(flag: handle, within: time = 10ms)
+    "The consumer of {flag} reaches its safe state within {within} of the flag asserting";
+
+safety_assumption ASM_AMBIENT_WITHIN_RATING(tmax: temperature = 85degC)
+    "Ambient temperature stays below {tmax}; derating beyond it is the integrator's problem";
+
+safety_assumption ASM_EXTERNAL_WDG(within: time)
+    "An external supervisor power-cycles or resets this part within {within} of it going silent";

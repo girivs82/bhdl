@@ -34,7 +34,20 @@ async fn model_for(src: &str) -> SafetyModel {
         .generate_from_ast_and_analysis(&sf, &analysis)
         .await
         .expect("synthesize");
-    build_safety_model(&netlist, &[&sf])
+    // The fixture imports the stdlib safety catalogue; parse those
+    // sources too (the CLI does this transitively).
+    let lib: Vec<SourceFile> = ["bhdl-stdlib/safety/power_rails.bhdl", "bhdl-stdlib/safety/assumptions.bhdl"]
+        .iter()
+        .map(|p| {
+            let src = std::fs::read_to_string(p).expect(p);
+            let pr = parse(&src);
+            assert!(pr.errors().is_empty(), "parse {}: {:?}", p, pr.errors());
+            SourceFile::cast(pr.syntax()).unwrap()
+        })
+        .collect();
+    let mut sources: Vec<&SourceFile> = vec![&sf];
+    sources.extend(lib.iter());
+    build_safety_model(&netlist, &sources)
 }
 
 #[tokio::test]
@@ -81,6 +94,11 @@ async fn supervised_reg_model_resolves_and_gaps_are_honest() {
     assert_eq!(ra.waivers[0].instance, "rail_a_c_out");
     let a1 = ra.assumptions.iter().find(|a| a.id == "ASM_SUPPLY_WITHIN_ABSMAX").unwrap();
     assert_eq!(a1.status, AssumptionStatus::SatisfiedBy("tvs".into()));
+    // Library assumption text: {placeholders} filled from the call args,
+    // design handles qualified by the instance path.
+    assert_eq!(a1.text, "Supply into rail_a.VIN stays below 40V (absolute maximum) under all transients");
+    let af = ra.assumptions.iter().find(|a| a.id == "ASM_LOAD_REACTS_TO_FLAG").unwrap();
+    assert_eq!(af.text, "The consumer of rail_a.nFAULT reaches its safe state within 10ms of the flag asserting");
     let a2 = ra.assumptions.iter().find(|a| a.id == "ASM_LOAD_REACTS_TO_FLAG").unwrap();
     assert!(matches!(a2.status, AssumptionStatus::Waived(_)));
     // The supervisor entity's own assumption of use surfaced in the rail

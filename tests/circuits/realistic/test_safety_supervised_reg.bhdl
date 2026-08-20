@@ -10,6 +10,11 @@ import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
 import { LM317 } from "bhdl-stdlib/power/lm317.bhdl";
 import { TVSDiode } from "bhdl-stdlib/protection/tvs.bhdl";
 
+// Library safety catalogue (Phase 2b): parameterised goals and
+// assumptions of use, imported like entities.
+import { RailOvervoltage } from "bhdl-stdlib/safety/power_rails.bhdl";
+import { ASM_SUPPLY_WITHIN_ABSMAX, ASM_LOAD_REACTS_TO_FLAG } from "bhdl-stdlib/safety/assumptions.bhdl";
+
 // Minimal window supervisor stand-in (the stdlib part lands in Phase 2).
 entity VoltageSupervisor(vlo: voltage = 4.5V, vhi: voltage = 5.5V) {
     pin VDD:   power in;
@@ -66,11 +71,11 @@ entity SupervisedReg5V(vout: voltage = 5V) {
 // ───────────────────────── the safety part ───────────────────────────
 
 safety SupervisedReg5V as dut {
-    goal SG_OV: ASIL_B "No undetected overvoltage on VOUT"
-                (id="SG-REG-001", ftti=10ms, safe_state="nFAULT low; load shall disable") {
-        effect overvoltage = dut.VOUT > 5.5V                    severity S3;
-        effect silent_ov   = dut.VOUT > 5.5V && dut.nFAULT == 1 severity S3;
-    }
+    // Library goal (catalogue form): formals bound to design handles,
+    // parameters substituted into the effects.
+    SG_OV: RailOvervoltage(vmax=5.5V, level=ASIL_B)
+               { RAIL: dut.VOUT; FLAG: dut.nFAULT; }
+               (id="SG-REG-001", ftti=10ms, safe_state="nFAULT low; load shall disable");
     goal SG_UV: ASIL_A "Loss of VOUT is signalled" (id="SG-REG-002", ftti=50ms) {
         effect silent_uv = dut.VOUT < 4.5V && dut.nFAULT == 1   severity S2;
     }
@@ -88,8 +93,10 @@ safety SupervisedReg5V as dut {
 
     waive dut.c_out qm "output cap: open -> ripple, short -> UV which SG_UV covers";
 
-    assume ASM_SUPPLY_WITHIN_ABSMAX "VIN stays below the LM317 abs-max (40V in-out)";
-    assume ASM_LOAD_REACTS_TO_FLAG  "the load disables itself while nFAULT is low within FTTI";
+    // Library assumptions (catalogue form): arguments fill the
+    // {placeholders} in the catalogue text.
+    assume ASM_SUPPLY_WITHIN_ABSMAX(dut.VIN, 40V);
+    assume ASM_LOAD_REACTS_TO_FLAG(dut.nFAULT, within=10ms);
 }
 
 // ───────────────────────── a board using it twice ────────────────────

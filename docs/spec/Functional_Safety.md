@@ -166,6 +166,28 @@ part is in the fault universe whether mentioned or not.
 block discharges it: `<ns>.<inst>.<Id> satisfied_by <ns>.<h>;` or
 `... waived "<reason>";`. Open assumptions are gaps.
 
+Library assumptions *(Phase 2b — implemented)* are defined once in a
+catalogue file and imported like entities:
+
+```bhdl
+// bhdl-stdlib/safety/assumptions.bhdl
+safety_assumption ASM_SUPPLY_WITHIN_ABSMAX(supply: handle, vmax: voltage)
+    "Supply into {supply} stays below {vmax} (absolute maximum) under all transients";
+```
+
+`assume ASM_SUPPLY_WITHIN_ABSMAX(dut.VIN, 40V);` instantiates it: the
+arguments fill the `{param}` placeholders (positional or `name=value`;
+missing arguments fall back to the parameter default, or are a hard
+error), and design handles print qualified by the instance path
+(`dut.VIN` → `rail_a.VIN`), so the report reads concretely. A
+parenthesised `assume` whose `Id` matches no imported
+`safety_assumption` is a hard error. Note `pin`/`net` are reserved
+words — catalogue parameters use `handle` for design-path parameters.
+
+The catalogue lives in `bhdl-stdlib/safety/` (`power_rails.bhdl` for
+goals, `assumptions.bhdl` for assumptions of use). Goals are LOGIC,
+not data: nothing in the catalogue claims a failure rate or a DC.
+
 ### 2.6 Complete example
 
 See `docs/examples/safety_mockup/supervised_reg.bhdl`: a supervised

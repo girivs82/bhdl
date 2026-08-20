@@ -1,0 +1,43 @@
+// bhdl-stdlib/safety — power-rail safety goals
+// (docs/spec/Functional_Safety.md §2.2)
+//
+// Parameterised library goals, imported and instantiated like entities:
+//
+//     import { RailOvervoltage } from "bhdl-stdlib/safety/power_rails.bhdl";
+//     ...
+//     SG_OV: RailOvervoltage(vmax=5.5V, level=ASIL_B)
+//                { RAIL: dut.VOUT; FLAG: dut.nFAULT; }
+//                (id="SG-REG-001", ftti=10ms);
+//
+// Formals (`signal NAME: kind;`) are the only abstraction: the instance
+// binds each one to a real design handle and the effects become
+// predicates over real nets. Goals are LOGIC, not data — nothing in
+// this file claims a failure rate or a diagnostic coverage.
+
+safety_goal RailOvervoltage(vmax: voltage, level: asil = ASIL_B)
+    "No undetected overvoltage on the rail"
+{
+    signal RAIL: power;      // the supervised rail
+    signal FLAG: signal;     // fault indication seen by the consumer (active-low)
+    effect overvoltage = RAIL > vmax               severity S3;
+    effect silent_ov   = RAIL > vmax && FLAG == 1  severity S3;
+}
+
+safety_goal RailBrownout(vmin: voltage, level: asil = ASIL_A)
+    "Loss or sag of the rail is signalled while enabled"
+{
+    signal RAIL: power;
+    signal EN:   signal;     // rail enable — sag with EN low is not a violation
+    signal FLAG: signal;
+    effect undervoltage = RAIL < vmin && EN == 1               severity S2;
+    effect silent_uv    = RAIL < vmin && EN == 1 && FLAG == 1  severity S2;
+}
+
+safety_goal RailShortToAdjacent(vmax: voltage, level: asil = ASIL_B)
+    "A short from an adjacent higher rail is detected before FTTI"
+{
+    signal RAIL:     power;  // the protected (lower) rail
+    signal ADJACENT: power;  // the aggressor rail
+    signal FLAG:     signal;
+    effect adjacent_short = RAIL > vmax && ADJACENT > vmax  severity S3;
+}

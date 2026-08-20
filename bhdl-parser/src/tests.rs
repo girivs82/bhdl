@@ -566,6 +566,26 @@ safety Sys of Board as brd {
         assert_eq!(find_all_nodes(&root, SAFETY_SATISFIED).len(), 2);
     }
 
+    /// Phase 2b catalogue: `safety_assumption Name(params) "text";`
+    /// definition plus its instantiation with design-path arguments.
+    #[test]
+    fn parse_safety_assumption_def_and_library_assume_call() {
+        let input = r#"
+safety_assumption ASM_SUPPLY_WITHIN_ABSMAX(supply: handle, vmax: voltage)
+    "Supply into {supply} stays below {vmax}";
+
+safety X as dut {
+    assume ASM_SUPPLY_WITHIN_ABSMAX(dut.VIN, 40V);
+    assume ASM_LOAD_REACTS_TO_FLAG(dut.nFAULT, within=10ms);
+}
+"#;
+        let result = parse(input);
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        let root = result.syntax();
+        assert_eq!(find_all_nodes(&root, SAFETY_ASSUMPTION_DEF).len(), 1);
+        assert_eq!(find_all_nodes(&root, SAFETY_ASSUME).len(), 2);
+    }
+
     /// `safety` as a bare word elsewhere must not break anything: the
     /// header without `as` is an error, not a hang.
     #[test]

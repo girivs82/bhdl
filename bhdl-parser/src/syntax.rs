@@ -124,6 +124,7 @@ pub enum SyntaxKind {
     TRAIT_KW,     // trait (for interface traits)
     IMPL_KW,      // impl (for trait implementations on components)
     SAFETY_GOAL_KW,   // safety_goal
+    SAFETY_ASSUMPTION_KW, // safety_assumption
     SAFETY_KW,        // safety (top-level `safety X as ns { }` block; entity-level `safety { }` data block)
     FAULT_INJECT_KW,  // fault_inject
     SATISFIES_KW, // satisfies (for safety requirement compliance)
@@ -437,6 +438,7 @@ pub enum SyntaxKind {
     
     // Hierarchical requirement nodes
     SAFETY_GOAL_DEF,    // safety_goal Name(params) "title" { signal ..; effect ..; }  (library goal definition)
+    SAFETY_ASSUMPTION_DEF, // safety_assumption Name(params) "text";  (library assumption-of-use definition)
     SAFETY_GOAL_PARAMS, // (vmax: voltage, level: asil = ASIL_B)
     SAFETY_SIGNAL_DECL, // signal RAIL: power;      (goal formal)
     SAFETY_EFFECT,      // effect name = expr severity S3;

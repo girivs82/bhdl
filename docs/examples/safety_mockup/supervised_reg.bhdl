@@ -1,9 +1,10 @@
 // ─────────────────────────────────────────────────────────────────────
 // MOCKUP — the holistic read of the Functional_Safety.md surface on a
 // small, real block. The SYNTAX here is implemented (parser 345d4e6);
-// what is not yet real: the stdlib parts (TPS7A4701, TPS3700, SomeMcu),
-// the library goals/assumptions catalogue (Phase 2), and the fault
-// campaign (Phase 3). For a version that parses, synthesizes and
+// what is not yet real: the stdlib parts (TPS7A4701, TPS3700, SomeMcu)
+// and the fault campaign (Phase 3). The library goals/assumptions
+// catalogue EXISTS (bhdl-stdlib/safety/, Phase 2b) — the imports below
+// are live. For a version that parses, synthesizes and
 // reports today see tests/circuits/realistic/test_safety_supervised_reg.bhdl.
 //
 // The design entity IS the safety part. `safety X of X as dut` links a
@@ -83,7 +84,7 @@ safety SupervisedReg5V of SupervisedReg5V as dut {
 
     // Assumptions of use this block makes of its environment, from the
     // library catalogue; the integrator must satisfy or waive each.
-    assume ASM_SUPPLY_WITHIN_ABSMAX(dut.VIN, 36V);
+    assume ASM_SUPPLY_WITHIN_ABSMAX(dut.VIN, 36V);            // args fill the {placeholders}
     assume ASM_LOAD_REACTS_TO_FLAG(dut.nFAULT, within=10ms);
 }
 
