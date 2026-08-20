@@ -269,8 +269,17 @@ all explicit, none guessed:
    uses (a resistor's applied power over its `power_rating`). A board
    whose DC solve does not converge gets no stress and therefore no FIT.
 
-3. **Coefficient table** — `bhdl-stdlib/safety/<standard>.toml`, one
-   class row per component class, each row individually sourced. The
+3. **Coefficient table** — one class row per component class, each row
+   individually sourced. Resolution order (first hit wins):
+   `$BHDL_SAFETY_TABLES/<std>.toml` (external dir, e.g. a company
+   share), then `bhdl-stdlib/safety/<std>.local.toml` (per-checkout
+   overlay, **gitignored**), then the in-repo
+   `bhdl-stdlib/safety/<std>.toml`. Standards data transcribed from
+   licensed or registration-walled documents (IEC 62380, FIDES,
+   SN 29500) is not redistributable and must NEVER be committed — it
+   lives in the `.local.toml` overlay or the external dir; the repo
+   carries only FIXTURE demo tables. The report prints which file each
+   table was loaded from. The
    engine implements the shared equation shape
    λ = λ_base · π_T(Ea, T_ref, T_amb) · π_S((S/S_ref)^n); the standard
    is a *data* choice (`per="IEC62380"`), not a code fork — an SN 29500

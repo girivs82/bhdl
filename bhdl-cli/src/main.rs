@@ -1595,15 +1595,32 @@ async fn run_safety(
             _ => None,
         }).collect();
         for std_name in stds {
-            let rel = format!("bhdl-stdlib/safety/{}.toml", std_name.to_lowercase());
+            let lower = std_name.to_lowercase();
+            // Resolution order (first hit wins), so the repo never has to
+            // carry redistributable standard data:
+            //   1. $BHDL_SAFETY_TABLES/<std>.toml            (external dir,
+            //      e.g. a company share with licensed constants)
+            //   2. bhdl-stdlib/safety/<std>.local.toml       (per-checkout
+            //      overlay, GITIGNORED — the user's own transcription)
+            //   3. bhdl-stdlib/safety/<std>.toml             (in-repo, only
+            //      FIXTURE demo tables live here)
+            // each of 2/3 tried under BHDL_LIB_PATH, the board dir, cwd.
             let mut cands: Vec<PathBuf> = Vec::new();
-            if let Ok(lr) = std::env::var("BHDL_LIB_PATH") { cands.push(PathBuf::from(lr).join(&rel)); }
-            if let Some(base) = board_path.parent() { cands.push(base.join(&rel)); }
-            cands.push(PathBuf::from(&rel));
+            if let Ok(dir) = std::env::var("BHDL_SAFETY_TABLES") {
+                cands.push(PathBuf::from(dir).join(format!("{lower}.toml")));
+            }
+            for rel in [format!("bhdl-stdlib/safety/{lower}.local.toml"), format!("bhdl-stdlib/safety/{lower}.toml")] {
+                if let Ok(lr) = std::env::var("BHDL_LIB_PATH") { cands.push(PathBuf::from(lr).join(&rel)); }
+                if let Some(base) = board_path.parent() { cands.push(base.join(&rel)); }
+                cands.push(PathBuf::from(&rel));
+            }
             for c in cands {
                 if let Ok(text) = fs::read_to_string(&c) {
                     match bhdl_synthesizer::reliability::ReliabilityTable::from_toml(&text) {
-                        Ok(t) => { tables.insert(t.standard.clone(), t); }
+                        Ok(t) => {
+                            println!("  reliability table {}: {}", t.standard, c.display());
+                            tables.insert(t.standard.clone(), t);
+                        }
                         Err(e) => eprintln!("  ! bad reliability table {}: {}", c.display(), e),
                     }
                     break;

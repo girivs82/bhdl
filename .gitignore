@@ -89,3 +89,8 @@ tests/scratch/
 
 # Vendor IBIS models — Atmel license permits use, not redistribution.
 vendor/ibis/
+
+# Reliability coefficient tables transcribed from licensed/registered
+# standards (IEC 62380, FIDES, SN 29500, ...) are NOT redistributable —
+# users supply their own. Only FIXTURE demo tables are committed.
+bhdl-stdlib/safety/*.local.toml

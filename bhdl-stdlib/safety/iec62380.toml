@@ -34,12 +34,14 @@
 # ┌─────────────────────────────────────────────────────────────────┐
 # │ FIXTURE — the one live row below carries ILLUSTRATIVE numbers   │
 # │ that only exercise the pipeline; they are NOT transcribed from  │
-# │ the standard. To activate a class: copy its commented stub,     │
-# │ fill the constants from the licensed IEC TR 62380:2004 (or from │
-# │ your Isograph RWB configuration), and set `source` to the       │
-# │ section you took them from. A commented class simply does not   │
-# │ exist to the engine — the part gets a FIT_UNCOMPUTED gap, never │
-# │ a guessed number.                                               │
+# │ the standard. Standards data is NOT redistributable: put your   │
+# │ real transcription in `iec62380.local.toml` next to this file   │
+# │ (gitignored, takes precedence) or in `$BHDL_SAFETY_TABLES/` —   │
+# │ never in this committed file. To activate a class there: copy   │
+# │ its commented stub, fill the constants from the licensed        │
+# │ IEC TR 62380:2004 (or your Isograph RWB configuration), set     │
+# │ `source` to the section. A class absent from the loaded table   │
+# │ does not exist to the engine — FIT_UNCOMPUTED, never a guess.   │
 # └─────────────────────────────────────────────────────────────────┘
 #
 # Engine model shape (see bhdl-synthesizer/src/reliability.rs):
