@@ -91,8 +91,31 @@ async fn declared_faults_run_classify_and_regenerate_gaps() {
     // classification is deterministic; measured DC exists for the
     // mechanism because the fixture declares detected_when.
     bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve, &HashMap::new());
-    // 3 generic 2-pin parts × 2 modes + DemoSense's 2 VENDOR states
-    assert_eq!(model.universe.len(), 8, "{:#?}", model.universe);
+    // 3 generic 2-pin parts × 4 modes (short/open + drift_high/drift_low
+    // — value-carrying parts get parametric drift probed at the declared
+    // tolerance edge and the labelled 0.5×/2× convention point) +
+    // DemoSense's 2 VENDOR states (behavioral parts run the vendor's
+    // states, never generic drift)
+    assert_eq!(model.universe.len(), 14, "{:#?}", model.universe);
+    let drifts: Vec<_> = model.universe.iter().filter(|u| u.mode.starts_with("drift_")).collect();
+    assert_eq!(drifts.len(), 6);
+    // every drift row's note labels the convention probe as convention
+    assert!(
+        drifts.iter().all(|u| u.note.as_deref().map(|n| n.contains("convention")).unwrap_or(false)),
+        "{drifts:#?}"
+    );
+    // stdlib Res declares tolerance=5% — the real-data probe is named
+    assert!(drifts.iter().all(|u| u.note.as_deref().unwrap_or("").contains("declared tolerance")), "{drifts:#?}");
+    // under the flat 12V mock every drift is dangerous (ov fires) and
+    // detected (sense reads 12V) — the sweep reports full coverage
+    assert!(
+        drifts.iter().all(|u| u.ran && !u.fired.is_empty() && !u.detected.is_empty()),
+        "{drifts:#?}"
+    );
+    assert!(
+        drifts.iter().all(|u| u.note.as_deref().unwrap_or("").contains("detected throughout")),
+        "{drifts:#?}"
+    );
     let states: Vec<_> = model.universe.iter().filter(|u| u.mode == "state").collect();
     assert_eq!(states.len(), 2);
     // vendor states carry their REAL fit shares as λ weights
@@ -115,7 +138,7 @@ async fn declared_faults_run_classify_and_regenerate_gaps() {
     // pass and a METRIC_MISSED gap says why. No silent normalization.
     bhdl_synthesizer::fault_campaign::compute_metrics(&mut model);
     let m = model.scopes[0].metrics.as_ref().expect("metrics computed");
-    assert_eq!(m.unmeasured_faults, 6, "generic modes lack λ shares in the mock run; the 2 vendor states carry theirs");
+    assert_eq!(m.unmeasured_faults, 12, "generic modes (incl. drift) lack λ shares in the mock run; the 2 vendor states carry theirs");
     assert_eq!(m.pass, Some(false));
     assert!(model.gaps.iter().any(|g| g.class == GapClass::MetricMissed && g.fix.contains("unmeasured")));
 

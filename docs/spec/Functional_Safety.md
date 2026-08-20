@@ -142,7 +142,24 @@ fields/goals/effects/handles: hard errors.
 
 **Measured DC** *(Phase 3, implemented)*: the whole-universe campaign
 generates the automatic fault set — every unwaived physical part × its
-standard modes (2-pin parts: `short` + `open`; multi-pin parts: per-pin
+standard modes (2-pin parts: `short` + `open`, and value-carrying
+parts additionally `drift_high`/`drift_low` — parametric drift beyond
+tolerance is its own failure mode in the FMD-91-family mode splits.
+The endpoints are NOT drift: R→∞ *is* the open mode and R→0 *is* the
+short mode, already carried with their own λ, so a "drift to worst
+case" row would re-solve identical netlists and double-count λ. Each
+drift direction is one λ mode (equal 4-way split, labelled) probed at
+two magnitudes: the part's declared `tolerance` edge (real data when
+the attribute exists) and the 0.5×/2× de-facto FMEDA convention point
+(labelled as convention, not vendor data); the row keeps the
+worst-classified probe. When a probe is dangerous and the scope has a
+`detected_when` mechanism, a **detectability sweep** bisects the
+boundaries of "dangerous && undetected" across the probed range plus
+coarse extensions toward (never onto) the endpoints, and the row's
+note reports the undetected window — e.g.
+`sweep: UNDETECTED dangerous window +90%..+900% (to probe limit)` —
+the region drift analysis exists to find: drifted enough to violate
+the goal, not enough to trip the detector; multi-pin parts: per-pin
 `open` plus `short_adjacent` solder-bridge faults between ADJACENT
 pins. Adjacency is **geometric**: the part's package resolves through
 the same ladder PnR uses (`package` attribute → `physical_package` →

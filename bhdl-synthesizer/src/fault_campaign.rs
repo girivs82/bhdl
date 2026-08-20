@@ -814,10 +814,52 @@ pub fn run_universe(
                 modes.push(("state".into(), vec![part.instance.clone(), st.name.clone()], st.fit, st.behavior.clone(), None));
             }
         } else if pins.len() == 2 {
-            let n = 2.0;
+            // Value-carrying parts additionally get parametric DRIFT
+            // modes (FMD-91-family mode splits list drift-beyond-
+            // tolerance as its own mode next to open/short). The
+            // ENDPOINTS are NOT drift — R→∞ IS the open mode and R→0
+            // IS the short mode, already carried with their own λ; a
+            // "drift to worst case" row would re-solve those identical
+            // netlists and double-count λ. Each direction is ONE mode
+            // λ-wise, probed at two magnitudes: the part's declared
+            // `tolerance` edge (real data when the attribute exists)
+            // and the 0.5×/2× convention point (the de-facto FMEDA
+            // convention — labelled as convention, not vendor data);
+            // the row keeps the WORST-classified probe.
+            let attrs = view
+                .inst
+                .get(&part.instance)
+                .and_then(|id| netlist.instances.get(*id))
+                .map(|i| &i.attributes);
+            let has_value = attrs
+                .map(|a| ["resistance", "capacitance", "inductance", "value"].iter().any(|k| a.contains_key(*k)))
+                .unwrap_or(false);
+            let tol_pct: Option<f64> = attrs
+                .and_then(|a| a.get("tolerance"))
+                .and_then(|t| t.trim().trim_start_matches('±').trim_end_matches('%').trim().parse::<f64>().ok())
+                .filter(|p| *p > 0.0);
+            let n = if has_value { 4.0 } else { 2.0 };
             let w = fit.map(|f| f / n);
             modes.push(("short".into(), vec![format!("{}.{}", part.instance, pins[0]), format!("{}.{}", part.instance, pins[1])], w, None, None));
             modes.push(("open".into(), vec![part.instance.clone()], w, None, None));
+            if has_value {
+                let basis = match tol_pct {
+                    Some(t) => format!(
+                        "probes: ±{t}% (declared tolerance) and 0.5×/2× (FMEDA convention, not vendor data); λ = equal 4-way mode split"
+                    ),
+                    None => "probes: 0.5×/2× (FMEDA convention, not vendor data; no tolerance attribute); λ = equal 4-way mode split".to_string(),
+                };
+                let mut high = vec![part.instance.clone()];
+                let mut low = vec![part.instance.clone()];
+                if let Some(t) = tol_pct {
+                    high.push(format!("+{t}%"));
+                    low.push(format!("-{t}%"));
+                }
+                high.push("+100%".to_string());
+                low.push("-50%".to_string());
+                modes.push(("drift_high".into(), high, w, None, Some(basis.clone())));
+                modes.push(("drift_low".into(), low, w, None, Some(basis)));
+            }
         }
         if pins.len() > 2 {
             // Adjacency basis: footprint pad GEOMETRY when the caller
@@ -879,6 +921,150 @@ pub fn run_universe(
                 weight_fit: weight,
                 note: mode_note,
             };
+            // DRIFT rows: one λ mode probed at several magnitudes —
+            // classify each probe, keep the WORST (residual > detected-
+            // dangerous > false alarm > benign), then bisect for the
+            // undetected-dangerous window (the region drift analysis
+            // exists to find: drifted enough to violate the goal, not
+            // enough to trip the detector — endpoints are usually the
+            // EASY cases). Sweep runs only when a probe is dangerous
+            // and the scope has a detected_when mechanism; boundaries
+            // are bisected to ~1% between grid points.
+            if mode == "drift_high" || mode == "drift_low" {
+                let sc = &scopes[si];
+                let inst = targets[0].clone();
+                // classify one magnitude: None = did not converge
+                let classify = |pct: f64| -> Option<(Vec<String>, Vec<String>)> {
+                    let mut faulted = netlist.clone();
+                    let pct_str = format!("{pct:+}%");
+                    apply_drift(&mut faulted, &view, &inst, &pct_str).ok()?;
+                    let volts = solve(&faulted).ok()?;
+                    let alias: HashMap<String, String> = HashMap::new();
+                    let mut fired = Vec::new();
+                    let mut det = Vec::new();
+                    for (path, expr) in &sc.effects {
+                        if let Ok(true) = eval_effect(expr, &sc.prefix, &sc.ns, &view, &alias, &volts) {
+                            fired.push(path.clone());
+                        }
+                    }
+                    for (handle, _d, dw) in &sc.mechs {
+                        if let Some(pred) = dw {
+                            if let Ok(true) = eval_effect(pred, &sc.prefix, &sc.ns, &view, &alias, &volts) {
+                                det.push(handle.clone());
+                            }
+                        }
+                    }
+                    Some((fired, det))
+                };
+                let severity = |r: &Option<(Vec<String>, Vec<String>)>| -> u8 {
+                    match r {
+                        Some((f, d)) if !f.is_empty() && d.is_empty() => 3, // residual
+                        Some((f, _)) if !f.is_empty() => 2,                // dangerous, detected
+                        Some((f, d)) if f.is_empty() && !d.is_empty() => 1, // false alarm
+                        Some(_) => 0,
+                        None => 0,
+                    }
+                };
+                let probes: Vec<f64> = targets[1..]
+                    .iter()
+                    .filter_map(|s| s.trim().trim_end_matches('%').parse::<f64>().ok())
+                    .collect();
+                let mut worst: Option<(u8, f64, Vec<String>, Vec<String>)> = None;
+                let mut unconverged = 0usize;
+                for &p in &probes {
+                    let r = classify(p);
+                    if r.is_none() {
+                        unconverged += 1;
+                    }
+                    let sev = severity(&r);
+                    let better = worst.as_ref().map(|(ws, ..)| sev > *ws).unwrap_or(true);
+                    if better {
+                        let (f, d) = r.unwrap_or_default();
+                        worst = Some((sev, p, f, d));
+                    }
+                }
+                let (wsev, wpct, wf, wd) = worst.unwrap_or((0, probes.first().copied().unwrap_or(0.0), vec![], vec![]));
+                uf.ran = unconverged < probes.len();
+                uf.fired = wf;
+                uf.detected = wd;
+                uf.false_alarm = wsev == 1;
+                uf.targets = vec![inst.clone(), format!("{wpct:+}%")];
+                let mut notes: Vec<String> = uf.note.take().into_iter().collect();
+                if unconverged > 0 {
+                    notes.push(format!("{unconverged}/{} probe(s) did not converge", probes.len()));
+                }
+                if wsev >= 2 {
+                    notes.push(format!("worst probe {wpct:+}%"));
+                }
+                // ── detectability sweep: bisect the boundaries of
+                // "dangerous && undetected" over the probed range plus
+                // coarse extensions toward (never onto) the endpoint.
+                let has_mech = sc.mechs.iter().any(|(_, _, dw)| dw.is_some());
+                if wsev >= 2 && has_mech {
+                    let mut grid: Vec<f64> = probes.clone();
+                    if mode == "drift_high" {
+                        grid.extend([300.0, 900.0]);
+                    } else {
+                        grid.extend([-75.0, -95.0]);
+                    }
+                    grid.sort_by(|a, b| a.abs().partial_cmp(&b.abs()).unwrap());
+                    grid.dedup();
+                    let undet = |pct: f64| -> Option<bool> {
+                        classify(pct).map(|(f, d)| !f.is_empty() && d.is_empty())
+                    };
+                    let status: Vec<(f64, Option<bool>)> = grid.iter().map(|&p| (p, undet(p))).collect();
+                    // bisect each grid-adjacent transition to ~1/64 of the span
+                    let bisect = |mut a: f64, mut b: f64| -> f64 {
+                        // invariant: undet(a) != undet(b), both converge
+                        for _ in 0..6 {
+                            let m = (a + b) / 2.0;
+                            match undet(m) {
+                                Some(u) if Some(u) == undet(a) => a = m,
+                                Some(_) => b = m,
+                                None => break,
+                            }
+                        }
+                        (a + b) / 2.0
+                    };
+                    let mut edges: Vec<(f64, bool)> = Vec::new(); // (boundary pct, entering-undetected?)
+                    for w in status.windows(2) {
+                        if let ((a, Some(ua)), (b, Some(ub))) = (&w[0], &w[1]) {
+                            if ua != ub {
+                                edges.push((bisect(*a, *b), *ub));
+                            }
+                        }
+                    }
+                    let end = *grid.last().unwrap_or(&wpct);
+                    let any_undet = status.iter().any(|(_, u)| *u == Some(true));
+                    if any_undet {
+                        // report the window(s): entering edges open, leaving edges close
+                        let mut windows: Vec<String> = Vec::new();
+                        let mut open: Option<f64> = if status.first().and_then(|(_, u)| *u) == Some(true) {
+                            Some(status[0].0)
+                        } else {
+                            None
+                        };
+                        for (b, entering) in &edges {
+                            if *entering {
+                                open = Some(*b);
+                            } else if let Some(o) = open.take() {
+                                windows.push(format!("{o:+.0}%..{b:+.0}%"));
+                            }
+                        }
+                        if let Some(o) = open {
+                            windows.push(format!("{o:+.0}%..{end:+.0}% (to probe limit)"));
+                        }
+                        notes.push(format!("sweep: UNDETECTED dangerous window {}", windows.join(", ")));
+                    } else if status.iter().all(|(_, u)| u.is_some()) {
+                        notes.push(format!("sweep: dangerous drift detected throughout probed range (to {end:+.0}%)"));
+                    }
+                }
+                if !notes.is_empty() {
+                    uf.note = Some(notes.join("; "));
+                }
+                universe.push(uf);
+                continue;
+            }
             // mutate + solve
             let mut faulted = netlist.clone();
             let mut alias: HashMap<String, String> = HashMap::new();
@@ -961,7 +1147,7 @@ pub fn run_universe(
                     && u.fired.is_empty()
                     && u.detected.is_empty()
                     && mech_parts.contains(&(u.scope.clone(), u.part.clone()))
-                    && (matches!(u.mode.as_str(), "short" | "short_adjacent" | "open" | "open_pin")
+                    && (matches!(u.mode.as_str(), "short" | "short_adjacent" | "open" | "open_pin" | "drift_high" | "drift_low")
                         || (u.mode == "state"
                             && state_behaviors.get(&(u.part.clone(), u.targets.get(1).cloned().unwrap_or_default())).map(|b| b.is_some()).unwrap_or(false)))
             })
@@ -985,6 +1171,11 @@ pub fn run_universe(
                             }
                         }),
                         "open" | "open_pin" => apply_open(n, &view, &targets[0]),
+                        // drift rows carry their WORST probe magnitude
+                        // as targets[1] after classification
+                        "drift_high" | "drift_low" => {
+                            apply_drift(n, &view, &targets[0], targets.get(1).map(|s| s.as_str()).unwrap_or("+0%"))
+                        }
                         "state" => match state_behaviors.get(&(targets[0].clone(), targets.get(1).cloned().unwrap_or_default())) {
                             Some(Some(beh)) => apply_state_behavior(n, &view, &targets[0], beh, alias),
                             _ => Err("state without behavior".into()),
