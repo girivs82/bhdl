@@ -21,6 +21,10 @@ board FaultDemo {
     ground GND;
 
     @V12 -> r_top: Res(1kΩ).1; r_top.2 -> r_bot: Res(1kΩ).1; r_bot.2 -> @GND;
+
+    // Detection divider — the stand-in PSM: flag node = mid/2, so
+    // flag > 4V ⇔ mid > 8V (the overvoltage threshold).
+    r_top.2 -> r_m1: Res(10kΩ).1; r_m1.2 -> r_m2: Res(10kΩ).1; r_m2.2 -> @GND;
 }
 
 safety FaultDemo as brd {
@@ -30,6 +34,14 @@ safety FaultDemo as brd {
         effect overvoltage  = brd.r_bot.1 > 8V severity S2;
         effect undervoltage = brd.r_bot.1 < 4V severity S2;
     }
+
+    // The detection divider IS the mechanism: detected_when is the
+    // predicate the campaign evaluates on every FAULTED operating point
+    // to MEASURE the diagnostic coverage (claimed 0.90 is a FIXTURE
+    // number — the measurement is the point).
+    mechanism brd.r_m2: psm(SG_MID, detects=[overvoltage],
+                            detected_when = brd.r_m2.1 > 4V,
+                            dc=0.90, source="FIXTURE claim — measured DC supersedes");
 
     fault short(brd.r_top.1, brd.r_top.2) expect SG_MID.overvoltage;
     fault short(brd.r_bot.1, brd.r_bot.2) expect SG_MID.undervoltage;

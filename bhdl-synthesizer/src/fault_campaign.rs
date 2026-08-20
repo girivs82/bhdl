@@ -39,6 +39,8 @@ struct View {
     pin_net: HashMap<(String, String), String>,
     /// net names
     nets: std::collections::HashSet<String>,
+    /// instance name → connected pin names (sorted)
+    pins_of: HashMap<String, Vec<String>>,
 }
 
 impl View {
@@ -61,7 +63,14 @@ impl View {
             .iter()
             .filter_map(|(_, net)| net.name.clone())
             .collect();
-        View { inst, pin_net, nets }
+        let mut pins_of: HashMap<String, Vec<String>> = HashMap::new();
+        for (inst_name, pin_name) in pin_net.keys() {
+            pins_of.entry(inst_name.clone()).or_default().push(pin_name.clone());
+        }
+        for v in pins_of.values_mut() {
+            v.sort();
+        }
+        View { inst, pin_net, nets, pins_of }
     }
 
     /// Resolve an ns-stripped, scope-prefixed identifier to a NET name.
@@ -118,27 +127,31 @@ fn apply_short(n: &mut Netlist, view: &View, a: &str, b: &str) -> Result<Option<
     if is_rail(&nb) && !is_rail(&na) {
         std::mem::swap(&mut na, &mut nb);
     }
-    let id_a = n.nets.iter().find(|(_, net)| net.name.as_deref() == Some(na.as_str())).map(|(id, _)| id).ok_or("net A missing")?;
-    let id_b = n.nets.iter().find(|(_, net)| net.name.as_deref() == Some(nb.as_str())).map(|(id, _)| id).ok_or("net B missing")?;
-    // re-point pin instances
-    let moved: Vec<_> = n
-        .pin_instances
-        .iter_mut()
-        .filter(|(_, pi)| pi.net == Some(id_b))
-        .map(|(_, pi)| {
+    // The synthesizer can leave DUPLICATE nets carrying the same name
+    // (different NetIds, one shared node in the solver) — merge by NAME,
+    // catching every id, or the mutation silently misses the copy the
+    // pin instances actually point at.
+    let ids_a: Vec<_> = n.nets.iter().filter(|(_, net)| net.name.as_deref() == Some(na.as_str())).map(|(id, _)| id).collect();
+    let ids_b: Vec<_> = n.nets.iter().filter(|(_, net)| net.name.as_deref() == Some(nb.as_str())).map(|(id, _)| id).collect();
+    let id_a = *ids_a.first().ok_or("net A missing")?;
+    if ids_b.is_empty() {
+        return Err("net B missing".into());
+    }
+    // re-point pin instances on ANY id of net B (and any duplicate of A)
+    let move_from: Vec<_> = ids_b.iter().chain(ids_a.iter().skip(1)).copied().collect();
+    for (_, pi) in n.pin_instances.iter_mut() {
+        if pi.net.map(|nid| move_from.contains(&nid)).unwrap_or(false) {
             pi.net = Some(id_a);
-        })
-        .collect();
-    let _ = moved;
-    // move connection points
-    let conns_b: Vec<ConnectionPoint> = n.nets.get(id_b).map(|net| net.connections.clone()).unwrap_or_default();
-    if let Some(net_a) = n.nets.get_mut(id_a) {
-        net_a.connections.extend(conns_b);
+        }
     }
-    if let Some(net_b) = n.nets.get_mut(id_b) {
-        net_b.connections.clear();
+    // move connection points, then remove the emptied nets
+    for from in move_from {
+        let conns: Vec<ConnectionPoint> = n.nets.get(from).map(|net| net.connections.clone()).unwrap_or_default();
+        if let Some(net_a) = n.nets.get_mut(id_a) {
+            net_a.connections.extend(conns);
+        }
+        n.nets.remove(from);
     }
-    n.nets.remove(id_b);
     Ok(Some((nb, na)))
 }
 
@@ -479,4 +492,198 @@ pub fn run_declared_faults(netlist: &Netlist, model: &mut SafetyModel, solve: &S
     model.gaps.extend(new_gaps);
     model.gaps.sort_by(|a, b| (a.class as u8, &a.subject).cmp(&(b.class as u8, &b.subject)));
     (ran, mismatched)
+}
+
+
+// ── whole-universe campaign + measured DC (Phase 3 increment 2) ─────
+
+/// Run the AUTOMATIC fault universe: every unwaived physical part ×
+/// its standard failure modes — 2-pin parts get `short` + `open`,
+/// multi-pin parts get a per-pin `open` (pin-to-pin shorts beyond the
+/// declared faults need adjacency knowledge the netlist does not
+/// carry — stated, not silently skipped), and parts with declared
+/// behavioral failure states are LISTED as needing the vendor-model
+/// hook. Each fault is classified on the faulted operating point:
+///
+///   dangerous     — any effect predicate in the owning scope fired
+///   detected      — a mechanism's `detected_when` predicate was TRUE
+///   residual      — dangerous and NOT detected
+///   false alarm   — detected with NO dangerous effect
+///
+/// Measured DC per mechanism = detected dangerous weight / dangerous
+/// weight, over the faults whose fired effects intersect the
+/// mechanism's `detects` list. Weight = the part's COMPUTED FIT split
+/// equally over its modes when the reliability engine produced one
+/// (the equal split is labelled — mode fractions are data we do not
+/// have); count-basis otherwise, also labelled.
+pub fn run_universe(netlist: &Netlist, model: &mut SafetyModel, solve: &Solver) {
+    use bhdl_common::safety::{PartData, UniverseFault};
+    let view = View::build(netlist);
+    // scope effect + mechanism tables
+    struct ScopeInfo {
+        prefix: String,
+        ns: String,
+        effects: Vec<(String, String)>,           // (path, expr)
+        mechs: Vec<(String, Vec<String>, Option<String>)>, // (handle, detects, detected_when)
+    }
+    let scopes: Vec<ScopeInfo> = model
+        .scopes
+        .iter()
+        .map(|s| ScopeInfo {
+            prefix: s.path.clone(),
+            ns: s.ns.clone(),
+            effects: s
+                .goals
+                .iter()
+                .flat_map(|g| g.effects.iter().map(move |e| (format!("{}.{}", g.path, e.name), e.expr.clone())))
+                .collect(),
+            mechs: s
+                .mechanisms
+                .iter()
+                .map(|m| (m.handle.clone(), m.detects.clone(), m.detected_when.clone()))
+                .collect(),
+        })
+        .collect();
+    let scope_idx_of = |owner: &Option<String>| -> Option<usize> {
+        let key = owner.clone().unwrap_or_default();
+        scopes.iter().position(|s| s.prefix == key).or_else(|| scopes.iter().position(|s| s.prefix.is_empty()))
+    };
+    let mut universe: Vec<UniverseFault> = Vec::new();
+    for part in &model.parts {
+        if matches!(part.data, PartData::Waived { .. }) {
+            continue;
+        }
+        let Some(si) = scope_idx_of(&part.parent) else { continue };
+        let fit = match &part.data {
+            PartData::Handbook { fit, .. } => *fit,
+            _ => None,
+        };
+        let pins = view.pins_of.get(&part.instance).cloned().unwrap_or_default();
+        // modes
+        let mut modes: Vec<(String, Vec<String>)> = Vec::new();
+        if pins.len() == 2 {
+            modes.push(("short".into(), vec![format!("{}.{}", part.instance, pins[0]), format!("{}.{}", part.instance, pins[1])]));
+            modes.push(("open".into(), vec![part.instance.clone()]));
+        } else if pins.len() > 2 {
+            for p in &pins {
+                modes.push(("open_pin".into(), vec![format!("{}.{}", part.instance, p)]));
+            }
+        }
+        // declared behavioral failure states: listed, need the hook
+        if let PartData::Behavioral { failure_states, .. } = &part.data {
+            for i in 0..*failure_states {
+                universe.push(UniverseFault {
+                    scope: scopes[si].prefix.clone(),
+                    part: part.instance.clone(),
+                    mode: "state".into(),
+                    targets: vec![format!("failure_state[{i}]")],
+                    ran: false,
+                    fired: vec![],
+                    detected: vec![],
+                    false_alarm: false,
+                    weight_fit: None,
+                    note: Some("needs the vendor-model failure-state hook".into()),
+                });
+            }
+        }
+        let n_modes = modes.len().max(1);
+        for (mode, targets) in modes {
+            let weight = fit.map(|f| f / n_modes as f64);
+            let mut uf = UniverseFault {
+                scope: scopes[si].prefix.clone(),
+                part: part.instance.clone(),
+                mode: mode.clone(),
+                targets: targets.clone(),
+                ran: false,
+                fired: vec![],
+                detected: vec![],
+                false_alarm: false,
+                weight_fit: weight,
+                note: None,
+            };
+            // mutate + solve
+            let mut faulted = netlist.clone();
+            let mut alias: HashMap<String, String> = HashMap::new();
+            let res = match mode.as_str() {
+                "short" => apply_short(&mut faulted, &view, &targets[0], &targets[1]).map(|a| {
+                    if let Some((from, to)) = a {
+                        alias.insert(from, to);
+                    }
+                }),
+                "open" | "open_pin" => apply_open(&mut faulted, &view, &targets[0]),
+                _ => unreachable!(),
+            };
+            if let Err(e) = res {
+                uf.note = Some(format!("mutation failed: {e}"));
+                universe.push(uf);
+                continue;
+            }
+            let volts = match solve(&faulted) {
+                Ok(v) => v,
+                Err(e) => {
+                    uf.ran = true;
+                    uf.note = Some(format!("did not converge ({e})"));
+                    universe.push(uf);
+                    continue;
+                }
+            };
+            let sc = &scopes[si];
+            let mut errs = Vec::new();
+            for (path, expr) in &sc.effects {
+                match eval_effect(expr, &sc.prefix, &sc.ns, &view, &alias, &volts) {
+                    Ok(true) => uf.fired.push(path.clone()),
+                    Ok(false) => {}
+                    Err(e) => errs.push(format!("{path}: {e}")),
+                }
+            }
+            for (handle, _detects, dw) in &sc.mechs {
+                if let Some(pred) = dw {
+                    match eval_effect(pred, &sc.prefix, &sc.ns, &view, &alias, &volts) {
+                        Ok(true) => uf.detected.push(handle.clone()),
+                        Ok(false) => {}
+                        Err(e) => errs.push(format!("detected_when {handle}: {e}")),
+                    }
+                }
+            }
+            uf.ran = true;
+            uf.false_alarm = uf.fired.is_empty() && !uf.detected.is_empty();
+            if !errs.is_empty() {
+                uf.note = Some(errs.join("; "));
+            }
+            universe.push(uf);
+        }
+    }
+    // measured DC per mechanism: over dangerous faults whose fired
+    // effects intersect the mechanism's detects list.
+    for (si, s) in model.scopes.iter_mut().enumerate() {
+        let sc = &scopes[si];
+        let _ = sc;
+        for m in s.mechanisms.iter_mut() {
+            if m.detected_when.is_none() {
+                m.measured_note = Some("no detected_when predicate — measured DC impossible".into());
+                continue;
+            }
+            let short_effect = |full: &str| full.rsplit('.').next().unwrap_or(full).to_string();
+            let relevant: Vec<&UniverseFault> = universe
+                .iter()
+                .filter(|u| u.scope == s.path && u.ran && u.fired.iter().any(|f| m.detects.contains(&short_effect(f))))
+                .collect();
+            if relevant.is_empty() {
+                m.measured_note = Some("no universe fault produced a detected effect class — nothing to measure".into());
+                continue;
+            }
+            let all_weighted = relevant.iter().all(|u| u.weight_fit.is_some());
+            let w = |u: &UniverseFault| if all_weighted { u.weight_fit.unwrap() } else { 1.0 };
+            let total: f64 = relevant.iter().map(|u| w(u)).sum();
+            let det: f64 = relevant.iter().filter(|u| u.detected.contains(&m.handle)).map(|u| w(u)).sum();
+            m.measured_dc = Some(det / total);
+            m.measured_note = Some(format!(
+                "{} dangerous fault(s), {} basis (equal mode split{})",
+                relevant.len(),
+                if all_weighted { "λ-weighted" } else { "count" },
+                if all_weighted { " — mode fractions are unmeasured data" } else { "" },
+            ));
+        }
+    }
+    model.universe = universe;
 }

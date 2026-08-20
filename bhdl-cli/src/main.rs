@@ -1804,12 +1804,23 @@ async fn run_safety(
             let (result, circuit_ref) = bhdl_spice::input_draw::solve_dc_with_input_draws(circuit, &regulator_hints(faulted))
                 .map_err(|e| format!("{e}"))?;
             let ann = build_simulation_annotations(&result, &circuit_ref);
+            if std::env::var("BHDL_SAFETY_DEBUG").map(|v| v == "1").unwrap_or(false) {
+                let mut vs: Vec<_> = ann.net_voltages.iter().collect();
+                vs.sort_by(|a, b| a.0.cmp(b.0));
+                eprintln!("safety debug: faulted solve ({} nets in netlist): {:?}", faulted.nets.len(), vs);
+                for (_, b) in circuit_ref.branches() {
+                    let names: Vec<String> = b.nodes.iter().map(|nid| circuit_ref.get_node_name(*nid).unwrap_or("?").to_string()).collect();
+                    eprintln!("  branch {} {} nodes={:?} val={}", b.component_type, b.name, names, b.value);
+                }
+            }
             Ok(ann.net_voltages)
         };
         let (ran, mismatched) = bhdl_synthesizer::fault_campaign::run_declared_faults(&netlist, &mut model, &solver);
         if ran > 0 {
-            println!("  fault campaign: {ran} fault(s) run, {mismatched} expectation(s) NOT met");
+            println!("  fault campaign: {ran} declared fault(s) run, {mismatched} expectation(s) NOT met");
         }
+        // Whole-universe campaign: every unwaived part × standard modes.
+        bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solver);
     }
 
     // ── Report ───────────────────────────────────────────────────────
@@ -1843,6 +1854,17 @@ async fn run_safety(
                 (Some(d), Some(src)) => format!("claimed dc {:.2} ({})", d, src),
                 (Some(d), None) => format!("claimed dc {:.2} (UNSOURCED)", d),
                 _ => "no dc claimed".to_string(),
+            };
+            let dc = match (m.measured_dc, &m.measured_note) {
+                (Some(md), Some(note)) => {
+                    let cmp = match m.claimed_dc {
+                        Some(cd) if md + 1e-9 < cd => format!("  ⚠ MEASURED {:.2} < claimed", md).red().to_string(),
+                        _ => format!("  measured dc {:.2}", md).green().to_string(),
+                    };
+                    format!("{dc}{cmp} [{note}]")
+                }
+                (None, Some(note)) => format!("{dc}  (unmeasured: {note})"),
+                _ => dc,
             };
             let kind = match m.kind { MechanismKind::Psm => "psm", MechanismKind::Lsm => "lsm" };
             println!("    mechanism {} [{}]: {} {} detects={:?}  {}", m.handle, m.instance, kind, m.goal, m.detects, dc);
@@ -1913,6 +1935,26 @@ async fn run_safety(
         println!("    {:<26} {:<22} {:<12} {}", p.instance, p.type_name, p.parent.as_deref().unwrap_or("-"), data);
     }
 
+    if !model.universe.is_empty() {
+        let ran = model.universe.iter().filter(|u| u.ran).count();
+        let dangerous: Vec<_> = model.universe.iter().filter(|u| u.ran && !u.fired.is_empty()).collect();
+        let residual: Vec<_> = dangerous.iter().filter(|u| u.detected.is_empty()).collect();
+        let false_alarms: Vec<_> = model.universe.iter().filter(|u| u.false_alarm).collect();
+        let unrun: Vec<_> = model.universe.iter().filter(|u| !u.ran).collect();
+        println!("\n  {} ({} faults: {} ran, {} dangerous, {} residual, {} false alarm, {} not run)",
+            "fault universe".bold(), model.universe.len(), ran, dangerous.len(), residual.len(), false_alarms.len(), unrun.len());
+        for u in &model.universe {
+            if u.ran && !u.fired.is_empty() {
+                let det = if u.detected.is_empty() { "RESIDUAL (undetected)".red().to_string() } else { format!("detected by {}", u.detected.join(", ")).green().to_string() };
+                let note = u.note.as_deref().map(|n| format!("  [{n}]")).unwrap_or_default();
+                println!("    {} {}({})  fired [{}]  {}{}", u.part, u.mode, u.targets.join(", "), u.fired.join(", "), det, note);
+            } else if u.false_alarm {
+                println!("    {} {}({})  {}", u.part, u.mode, u.targets.join(", "), "FALSE ALARM (detection with no effect)".yellow());
+            } else if !u.ran {
+                println!("    {} {}({})  not run: {}", u.part, u.mode, u.targets.join(", "), u.note.as_deref().unwrap_or("?"));
+            }
+        }
+    }
     println!("\n  {} ({})", "gaps".bold(), model.gaps.len());
     for g in &model.gaps {
         println!("    {:<22} {:<28} {:<28} {}", g.class.as_str(), g.goal, g.subject, g.fix);

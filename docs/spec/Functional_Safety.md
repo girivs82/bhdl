@@ -135,8 +135,29 @@ names within a goal are errors.
 (effect names, required for `psm`), `protects` (mechanism handle,
 required for `lsm`), `dc` (claimed 0..1), `source` (required with `dc`;
 claimed DC without source = gap `DC_UNSOURCED`), `interval`/`latency`
-(`lsm`). Unknown fields/goals/effects/handles: hard errors. A measured
-DC *(Phase 3)* always overrides the claim; both are reported.
+(`lsm`), and `detected_when` — a voltage predicate over design handles
+that is TRUE on a faulted operating point exactly when this mechanism
+has detected the fault (`detected_when = dut.nFAULT < 1V`). Unknown
+fields/goals/effects/handles: hard errors.
+
+**Measured DC** *(Phase 3, implemented)*: the whole-universe campaign
+generates the automatic fault set — every unwaived physical part × its
+standard modes (2-pin parts: `short` + `open`; multi-pin parts: per-pin
+`open`; pin-to-pin shorts beyond the declared faults need adjacency
+knowledge the netlist does not carry — stated; declared behavioral
+failure states are listed as needing the vendor-model hook) — solves
+each faulted board, and classifies it on the faulted operating point:
+**dangerous** (an effect fired), **detected** (a mechanism's
+`detected_when` was TRUE), **residual** (dangerous, undetected),
+**false alarm** (detection with no effect — a mechanism self-fault or
+spurious trip). Measured DC per mechanism = detected dangerous weight /
+dangerous weight over the faults whose fired effects intersect the
+mechanism's `detects` list; weight = the part's computed FIT split
+equally over its modes when the reliability engine produced one (the
+equal split is labelled — mode fractions are data we do not have),
+count-basis otherwise, also labelled. A measured DC below the claim is
+flagged; both are always reported. A mechanism without `detected_when`
+cannot have a measured DC, and the report says so.
 
 ### 2.5 Faults, waivers, assumptions
 

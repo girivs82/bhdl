@@ -567,6 +567,7 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
         mission: None,
         scopes: Vec::new(),
         parts: Vec::new(),
+        universe: Vec::new(),
         gaps: Vec::new(),
         errors: Vec::new(),
     };
@@ -808,7 +809,7 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
                     let claimed_dc = kw.get("dc").and_then(|d| d.parse::<f64>().ok());
                     let dc_source = kw.get("source").map(|s| s.trim_matches('"').to_string());
                     for k in kw.keys() {
-                        if !matches!(k.as_str(), "detects" | "protects" | "dc" | "source" | "interval" | "latency") {
+                        if !matches!(k.as_str(), "detects" | "protects" | "dc" | "source" | "interval" | "latency" | "detected_when") {
                             model.errors.push(format!("safety {}: mechanism {} has unknown field '{}'", blk.name, handle, k));
                         }
                     }
@@ -823,6 +824,9 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
                         dc_source,
                         interval: kw.get("interval").cloned(),
                         latency: kw.get("latency").cloned(),
+                        detected_when: kw.get("detected_when").cloned(),
+                        measured_dc: None,
+                        measured_note: None,
                     });
                 }
                 SyntaxKind::SAFETY_FAULT => {

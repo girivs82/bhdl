@@ -783,7 +783,7 @@ source = "§10.12 p.10-21"
         let mut model = SafetyModel {
             board: "B".into(),
             mission: Some(Mission { ambient_c: 40.0, on_hours: None, cycles: None, environment: None, quality: None, profile: None, phases: vec![], time_basis: None }),
-            scopes: vec![], gaps: vec![], errors: vec![],
+            scopes: vec![], universe: vec![], gaps: vec![], errors: vec![],
             parts: vec![
                 Part { instance: "r1".into(), type_name: "Res".into(), parent: None, data: hb(Some("IEC62380")) },
                 Part { instance: "r2".into(), type_name: "Res".into(), parent: None, data: hb(Some("IEC62380")) }, // no stress
@@ -815,7 +815,7 @@ source = "§10.12 p.10-21"
         let mut model = SafetyModel {
             board: "B".into(),
             mission: Some(Mission { ambient_c: 26.7, on_hours: None, cycles: None, environment: Some("GB".into()), quality: Some("M".into()), profile: Some("p".into()), phases: phases.clone(), time_basis: None }),
-            scopes: vec![], gaps: vec![], errors: vec![],
+            scopes: vec![], universe: vec![], gaps: vec![], errors: vec![],
             parts: vec![Part { instance: "r1".into(), type_name: "Res".into(), parent: None, data: PartData::Handbook {
                 class: "res_fixed_film".into(), source: "t".into(), per: Some("MILHDBK217F".into()), fit: None, fit_basis: None } }],
         };

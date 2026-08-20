@@ -66,6 +66,24 @@ async fn declared_faults_run_classify_and_regenerate_gaps() {
     let unrun_after: Vec<_> = model.gaps.iter().filter(|g| g.class == GapClass::FaultUnrun).collect();
     assert!(unrun_after.is_empty(), "{unrun_after:#?}");
 
+    // ── Whole-universe campaign on the same mock: 4 parts × 2 modes
+    // (+0 states). Under the all-12V mock with alias-following, the
+    // classification is deterministic; measured DC exists for the
+    // mechanism because the fixture declares detected_when.
+    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve);
+    assert_eq!(model.universe.len(), 8, "{:#?}", model.universe);
+    assert!(model.universe.iter().all(|u| u.ran));
+    let dangerous = model.universe.iter().filter(|u| !u.fired.is_empty()).count();
+    assert!(dangerous >= 2, "at least the r_bot short (aliased to GND) and more fire: {dangerous}");
+    let mech = &model.scopes[0].mechanisms[0];
+    assert!(mech.measured_dc.is_some(), "detected_when declared ⇒ measured DC exists: {:?}", mech.measured_note);
+    assert!(mech.measured_note.as_deref().unwrap_or("").contains("basis"));
+    // every universe fault carries its λ share (all parts have FIT... in
+    // this test reliability did NOT run, so weights are None and the
+    // basis is count — both stated)
+    assert!(model.universe.iter().all(|u| u.weight_fit.is_none()));
+    assert!(mech.measured_note.as_deref().unwrap_or("").contains("count"));
+
     // Negative control: a solver that refuses leaves ran-without-verdict
     // gaps that say so (the fault is NOT silently classified).
     let mut model2 = build_safety_model(&netlist, &[&sf]);

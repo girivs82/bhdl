@@ -164,6 +164,18 @@ pub struct Mechanism {
     pub dc_source: Option<String>,
     pub interval: Option<String>,
     pub latency: Option<String>,
+    /// Detection predicate (voltage expr over design handles): TRUE on a
+    /// faulted operating point ⇔ this mechanism has detected the fault.
+    /// Without it a measured DC cannot exist.
+    #[serde(default)]
+    pub detected_when: Option<String>,
+    /// MEASURED diagnostic coverage from the fault-universe campaign
+    /// (Phase 3): detected dangerous weight / total dangerous weight.
+    #[serde(default)]
+    pub measured_dc: Option<f64>,
+    /// Basis of the measurement (weighting, counts) — printed verbatim.
+    #[serde(default)]
+    pub measured_note: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -362,6 +374,31 @@ pub struct Mission {
     pub time_basis: Option<String>,
 }
 
+/// One automatically-generated fault in the whole-universe campaign
+/// (Phase 3): a part × standard failure mode, classified on the faulted
+/// operating point.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UniverseFault {
+    /// Owning scope path ("" = board).
+    pub scope: String,
+    pub part: String,
+    /// "short" | "open" | "open_pin" | "state".
+    pub mode: String,
+    pub targets: Vec<String>,
+    pub ran: bool,
+    /// Effect paths that fired on the faulted point.
+    pub fired: Vec<String>,
+    /// Mechanism handles whose detected_when was TRUE.
+    pub detected: Vec<String>,
+    /// Detection asserted with NO dangerous effect (mechanism self-fault
+    /// or spurious trip).
+    pub false_alarm: bool,
+    /// λ share of this mode in FIT (part FIT split over its modes), when
+    /// the part's FIT was computed.
+    pub weight_fit: Option<f64>,
+    pub note: Option<String>,
+}
+
 /// The whole model for one top-level board.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SafetyModel {
@@ -370,6 +407,9 @@ pub struct SafetyModel {
     pub mission: Option<Mission>,
     pub scopes: Vec<Scope>,
     pub parts: Vec<Part>,
+    /// Whole-universe campaign results (Phase 3), empty until it runs.
+    #[serde(default)]
+    pub universe: Vec<UniverseFault>,
     pub gaps: Vec<Gap>,
     /// Hard errors found while resolving (unknown handle, unbound formal…).
     pub errors: Vec<String>,
