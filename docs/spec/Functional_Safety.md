@@ -149,7 +149,13 @@ the same ladder PnR uses (`package` attribute → `physical_package` →
 class default) and the bridge pairs are the pads within 1.5× the
 package's minimum pad spacing — so a SOIC's pin 4↔5, consecutive in
 number but on opposite corners, is correctly absent. No layout run is
-involved; footprint generation is a pure function. Parts whose package
+involved; footprint generation is a pure function. A vendor
+`.kicad_mod` takes precedence over the parametric registry — the
+`footprint` attribute (or the package name) is tried as a path ending
+in `.kicad_mod` relative to the board source, else as
+`<name>.kicad_mod` under `$BHDL_FOOTPRINT_DIR` and
+`<board dir>/footprints/`; a loaded file's real pad coordinates feed
+the same criterion and the loaded path is printed. Parts whose package
 does not resolve fall back to consecutive-pins-in-definition-order,
 and every bridge row's note names which basis produced it. Declared
 behavioral failure states run the vendor's states instead of the

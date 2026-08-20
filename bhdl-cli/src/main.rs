@@ -1828,7 +1828,15 @@ async fn run_safety(
         // package doesn't resolve fall back to ordering-adjacency,
         // labelled in the universe rows.
         let mut geo_adjacency: HashMap<String, Vec<(String, String)>> = HashMap::new();
+        // Only real safety parts — the netlist also holds phantom
+        // entity-definition stubs (instance named exactly like its
+        // module) that the campaign never faults.
+        let part_names: std::collections::HashSet<&str> =
+            model.parts.iter().map(|p| p.instance.as_str()).collect();
         for (_, inst) in netlist.instances.iter() {
+            if !part_names.contains(inst.name.as_str()) {
+                continue;
+            }
             let Some(mdef) = netlist.modules.get(inst.definition) else { continue };
             let pin_names: Vec<String> = mdef
                 .pins
@@ -1850,9 +1858,41 @@ async fn run_safety(
                 &mdef.attributes,
                 pin_names.len(),
             );
-            if let Some(pairs) =
+            // Vendor .kicad_mod geometry takes precedence over the
+            // parametric registry — the vendor's own footprint file IS
+            // the pad geometry. A `footprint` attribute (freeze.rs's
+            // BOM convention) or the package name is tried as
+            //   <name-or-path ending .kicad_mod>  (relative to the
+            //   board source's directory), else <name>.kicad_mod under
+            //   $BHDL_FOOTPRINT_DIR and <board dir>/footprints/.
+            // Loaded paths are printed; no file ⇒ parametric ladder.
+            let fp_name = inst
+                .attributes
+                .get("footprint")
+                .map(|s| s.trim_matches('"').to_string())
+                .unwrap_or_else(|| package.clone());
+            let board_dir = source_path.parent().unwrap_or(Path::new("."));
+            let mut candidates: Vec<PathBuf> = Vec::new();
+            if fp_name.ends_with(".kicad_mod") {
+                let p = Path::new(&fp_name);
+                candidates.push(if p.is_absolute() { p.to_path_buf() } else { board_dir.join(p) });
+            } else {
+                if let Ok(dir) = std::env::var("BHDL_FOOTPRINT_DIR") {
+                    candidates.push(Path::new(&dir).join(format!("{fp_name}.kicad_mod")));
+                }
+                candidates.push(board_dir.join("footprints").join(format!("{fp_name}.kicad_mod")));
+            }
+            let from_file = candidates.iter().find_map(|p| {
+                let content = std::fs::read_to_string(p).ok()?;
+                let pairs = bhdl_pnr::semantic::geometric_pin_adjacency_from_kicad_mod(
+                    &content, &pin_names,
+                )?;
+                println!("  footprint geometry: {} ← {}", inst.name, p.display());
+                Some(pairs)
+            });
+            if let Some(pairs) = from_file.or_else(|| {
                 bhdl_pnr::semantic::geometric_pin_adjacency(&package, &pin_names)
-            {
+            }) {
                 geo_adjacency.insert(inst.name.clone(), pairs);
             }
         }

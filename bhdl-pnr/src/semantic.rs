@@ -2096,6 +2096,30 @@ pub fn geometric_pin_adjacency(
 ) -> Option<Vec<(String, String)>> {
     let fp = ipc7351::standard_package(package)
         .map(|family| ipc7351::generate_footprint(&family, ipc7351::DensityLevel::Nominal))?;
+    geometric_pin_adjacency_from_footprint(&fp, pin_names)
+}
+
+/// Same adjacency criterion applied to an IMPORTED footprint — a
+/// `.kicad_mod` body (translated via `footprint::import_kicad_mod`,
+/// which preserves the real KiCad pad designators and coordinates).
+/// This is the path for parts whose package is not in the parametric
+/// IPC-7351 registry: the vendor's own footprint file is the geometry.
+pub fn geometric_pin_adjacency_from_kicad_mod(
+    content: &str,
+    pin_names: &[String],
+) -> Option<Vec<(String, String)>> {
+    let imported = crate::footprint::import_kicad_mod(content).ok()?;
+    geometric_pin_adjacency_from_footprint(&imported.footprint, pin_names)
+}
+
+/// Core of the criterion, over any `ComponentFootprint` (generated or
+/// imported): pin↔pad pairing by build_board's contract, then pairs
+/// whose pad centers sit within 1.5× the package's minimum pad
+/// spacing.
+pub fn geometric_pin_adjacency_from_footprint(
+    fp: &bhdl_components::ComponentFootprint,
+    pin_names: &[String],
+) -> Option<Vec<(String, String)>> {
     if pin_names.len() < 3 || fp.pads.len() < 3 {
         return None;
     }
@@ -2222,6 +2246,35 @@ mod geometric_adjacency_tests {
             pairs
         );
         assert!(pairs.len() <= 3);
+    }
+
+    #[test]
+    fn kicad_mod_import_feeds_the_same_criterion() {
+        // A vendor-authored 4-pad footprint, SOIC-style: pads 1,2 down
+        // the left column (pitch 1.27), pads 3,4 up the right — so 2↔3
+        // are CONSECUTIVE NUMBERS across the 5.4mm body. Geometry from
+        // the real .kicad_mod must keep 1-2 and 3-4 and drop 2-3/1-4.
+        let body = r#"
+(footprint "VENDOR-SOIC-4" (layer "F.Cu")
+  (attr smd)
+  (pad "1" smd roundrect (at -2.7 0)    (size 1.5 0.6) (layers "F.Cu"))
+  (pad "2" smd roundrect (at -2.7 1.27) (size 1.5 0.6) (layers "F.Cu"))
+  (pad "3" smd roundrect (at 2.7 1.27)  (size 1.5 0.6) (layers "F.Cu"))
+  (pad "4" smd roundrect (at 2.7 0)     (size 1.5 0.6) (layers "F.Cu"))
+)
+"#;
+        let pairs = geometric_pin_adjacency_from_kicad_mod(body, &names(4))
+            .expect("kicad_mod resolves");
+        let has = |a: &str, b: &str| {
+            pairs
+                .iter()
+                .any(|(x, y)| (x == a && y == b) || (x == b && y == a))
+        };
+        assert!(has("1", "2") && has("3", "4"), "{pairs:?}");
+        assert!(!has("2", "3"), "2-3 span the body: {pairs:?}");
+        assert!(!has("1", "4"), "1-4 span the body: {pairs:?}");
+        // Garbage content is a clean None, not a panic.
+        assert!(geometric_pin_adjacency_from_kicad_mod("(not a footprint", &names(4)).is_none());
     }
 
     #[test]
