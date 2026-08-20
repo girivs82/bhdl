@@ -797,6 +797,7 @@ pub fn run_universe(netlist: &Netlist, model: &mut SafetyModel, solve: &Solver) 
                 detected: vec![],
                 false_alarm: false,
                 latent: false,
+                latent_exposed_fit: 0.0,
                 weight_fit: weight,
                 note: None,
             };
@@ -891,7 +892,7 @@ pub fn run_universe(netlist: &Netlist, model: &mut SafetyModel, solve: &Solver) 
             let (c_scope, c_mode, c_targets) = (universe[ci].scope.clone(), universe[ci].mode.clone(), universe[ci].targets.clone());
             let Some(si) = scopes.iter().position(|s| s.prefix == c_scope) else { continue };
             let sc = &scopes[si];
-            'probe: for (di, d_mode, d_targets) in &detected_dangerous {
+            for (di, d_mode, d_targets) in &detected_dangerous {
                 if universe[*di].scope != c_scope {
                     continue;
                 }
@@ -942,12 +943,19 @@ pub fn run_universe(netlist: &Netlist, model: &mut SafetyModel, solve: &Solver) 
                 }
                 if !any_detect {
                     universe[ci].latent = true;
-                    universe[ci].note = Some(format!(
-                        "LATENT: with {}({}) also injected, the dangerous effect persists UNDETECTED",
-                        d_mode,
-                        d_targets.join(",")
-                    ));
-                    break 'probe;
+                    if universe[ci].note.is_none() {
+                        universe[ci].note = Some(format!(
+                            "LATENT: with {}({}) also injected, the dangerous effect persists UNDETECTED",
+                            d_mode,
+                            d_targets.join(",")
+                        ));
+                    }
+                    // exposure for the dual-point PMHF term: Σ λ of the
+                    // dangerous faults this latent mode blinds — so the
+                    // probe runs EVERY pair, no early break.
+                    if let Some(wd) = universe[*di].weight_fit {
+                        universe[ci].latent_exposed_fit += wd;
+                    }
                 }
             }
         }
@@ -1015,7 +1023,22 @@ pub fn compute_metrics(model: &mut SafetyModel) {
         let spfm = if lambda_total > 0.0 { 1.0 - lambda_residual / lambda_total } else { 1.0 };
         let non_spf = lambda_total - lambda_residual;
         let lfm = if non_spf > 0.0 { 1.0 - lambda_latent / non_spf } else { 1.0 };
-        let pmhf = lambda_residual;
+        // Dual-point term (second-order, ISO 26262-10 §8.3.3 shape):
+        // for each latent fault L, both L and one of the dangerous
+        // faults it blinds must occur within the service lifetime —
+        // rate ≈ λ_L·λ_exposed·T/2. λ in FIT (1e-9/h), T in hours ⇒
+        // contribution in FIT = w_L·w_exposed·T/2·1e-9. Needs the
+        // mission to DECLARE the lifetime; otherwise PMHF stays the
+        // single-point approximation, stated.
+        let lifetime_h = model.mission.as_ref().and_then(|m| m.lifetime_h);
+        let pmhf_dual = lifetime_h.map(|t| {
+            measured
+                .iter()
+                .filter(|u| u.latent)
+                .map(|u| u.weight_fit.unwrap() * u.latent_exposed_fit * t / 2.0 * 1e-9)
+                .sum::<f64>()
+        });
+        let pmhf = lambda_residual + pmhf_dual.unwrap_or(0.0);
         // strictest goal level with targets
         let target_level = scope
             .goals
@@ -1060,6 +1083,7 @@ pub fn compute_metrics(model: &mut SafetyModel) {
             spfm,
             lfm,
             pmhf_fit: pmhf,
+            pmhf_dual_fit: pmhf_dual,
             target_level,
             targets,
             pass,
@@ -1086,6 +1110,7 @@ mod tests {
             detected: if detected { vec!["m".into()] } else { vec![] },
             false_alarm: false,
             latent,
+            latent_exposed_fit: if latent { 10.0 } else { 0.0 },
             weight_fit: Some(w),
             note: None,
         }
@@ -1128,5 +1153,37 @@ mod tests {
         let m = model.scopes[0].metrics.as_ref().unwrap();
         assert_eq!(m.pass, Some(true), "{m:?}");
         assert!(model.gaps.is_empty());
+
+        // dual-point PMHF: declare a lifetime → the latent fault (w=5,
+        // exposure=10 FIT) contributes 5·10·10000/2·1e-9 = 2.5e-4 FIT.
+        model.mission = Some(bhdl_common::safety::Mission {
+            ambient_c: 40.0, on_hours: None, cycles: None, environment: None,
+            quality: None, profile: None, phases: vec![], time_basis: None,
+            lifetime_h: Some(10_000.0),
+        });
+        model.gaps.clear();
+        compute_metrics(&mut model);
+        let m = model.scopes[0].metrics.as_ref().unwrap();
+        let d = m.pmhf_dual_fit.expect("dual term with lifetime");
+        assert!((d - 2.5e-4).abs() < 1e-9, "dual = 2.5e-4 FIT, got {d}");
+        assert!((m.pmhf_fit - (0.0 + d)).abs() < 1e-9, "PMHF = residual(0 after coverage fix) + dual");
+
+        // SIL mapping: same residual arithmetic gated as SFF/PFH.
+        // Restore the residual (b undetected) and set the goal to SIL3:
+        // SFF 87.5% < 90% (IEC 61508-2 T3, Type A HFT=0) ⇒ MISS.
+        model.universe[1].detected = vec![];
+        model.scopes[0].goals[0].level = Level::Sil3;
+        model.gaps.clear();
+        compute_metrics(&mut model);
+        let m = model.scopes[0].metrics.as_ref().unwrap();
+        assert_eq!(m.target_level, Some(Level::Sil3));
+        assert_eq!(m.targets, Some((0.90, 0.0, 100.0)));
+        assert_eq!(m.pass, Some(false));
+        // SIL1: no SFF floor at HFT=0, PFH 10000 FIT — passes here
+        model.scopes[0].goals[0].level = Level::Sil1;
+        model.gaps.clear();
+        compute_metrics(&mut model);
+        let m = model.scopes[0].metrics.as_ref().unwrap();
+        assert_eq!(m.pass, Some(true), "{m:?}");
     }
 }

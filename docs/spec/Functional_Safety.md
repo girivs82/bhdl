@@ -338,7 +338,9 @@ all explicit, none guessed:
    `environment` (π_E symbol: GB/GF/GM/NS/NU/…, default GB) and
    `quality` (π_Q level: S/R/P/M/mil_spec/lower, default lower = COTS)
    feed standards whose models use them (MIL-HDBK-217F); the applied
-   defaults are printed in every FIT basis.
+   defaults are printed in every FIT basis. `lifetime = <hours>` is the
+   service life — the exposure window of the dual-point PMHF term
+   (§2.9); without it PMHF stays the single-point approximation.
 
    A real mission is not one ambient — it is a temperature/time
    histogram. Two ways to declare it:
@@ -445,8 +447,13 @@ computed from MEASURED λ, never from claims:
   persists undetected, the mechanism-part mode is latent.
 - **SPFM** = 1 − λ_residual/λ_total (ISO 26262-5 §8.4.5),
   **LFM** = 1 − λ_latent/(λ_total − λ_residual) (§8.4.6),
-  **PMHF** = λ_residual in FIT — the single-point approximation; the
-  full PMHF adds dual-point residual terms (stated in the report).
+  **PMHF** = λ_residual plus, when the mission declares
+  `lifetime = <hours>`, the **dual-point term**
+  Σ_L λ_L·λ_exposed·T_life/2 over the latent faults (second-order,
+  ISO 26262-10 §8.3.3 shape) — λ_exposed is the measured Σ λ of the
+  detected-dangerous faults each latent fault blinds, from the
+  all-pairs double-fault probe. Without a lifetime, PMHF is the
+  single-point approximation and the report says how to fix that.
 
 Targets per ISO 26262-5:2018 Tables 4/5/6: ASIL B (SPFM≥90%, LFM≥60%,
 PMHF≤100 FIT), C (97%, 80%, 100), D (99%, 90%, 10). QM and ASIL A carry
@@ -461,8 +468,15 @@ metrics [board]: λ_total=45.7 FIT, λ_residual=12.3, λ_latent=5.3
 METRIC_MISSED  ASIL_B metrics  SPFM 73.1% < 90% — raise coverage or reduce residual λ
 ```
 
-SIL-level goals use the same residual arithmetic; mapping to IEC 61508
-SFF/PFH thresholds is a later increment (reported unmapped until then).
+SIL-level goals use the same residual arithmetic under IEC 61508's
+names: **SFF** = 1 − λ_DU/λ_total (identical to SPFM; λ_DU = the
+measured residual) gated per IEC 61508-2:2010 Table 3 assuming a
+**Type A subsystem with HFT = 0** — the assumption is printed in every
+SIL metrics line; a Type B or redundant architecture needs its own
+targets — and **PFH** = the PMHF value gated per IEC 61508-1:2010
+Table 3 (high demand / continuous mode): SIL1 ≤10⁴ FIT, SIL2 ≤10³,
+SIL3 ≤10², SIL4 ≤10. IEC has no LFM equivalent (still reported,
+ungated for SIL goals).
 
 ## 3. Semantic model
 

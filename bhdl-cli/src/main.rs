@@ -1918,6 +1918,7 @@ async fn run_safety(
             m.environment.as_ref().map(|e| format!("environment={e}")),
             m.quality.as_ref().map(|q| format!("quality={q}")),
             m.profile.as_ref().map(|p| format!("profile={p}")),
+            m.lifetime_h.map(|l| format!("lifetime={l}h")),
         ].into_iter().flatten().collect::<Vec<_>>().join(", ");
         println!("\n  mission: ambient={:.1}°C{}", m.ambient_c, if extras.is_empty() { String::new() } else { format!(", {extras}") });
         for ph in &m.phases {
@@ -1982,14 +1983,25 @@ async fn run_safety(
             Some(false) => "MISS".red().bold().to_string(),
             None => "no targets (QM/ASIL_A)".to_string(),
         };
-        let tgt = m.targets.map(|(sp, lf, pm)| format!(" (targets {}: SPFM≥{:.0}% LFM≥{:.0}% PMHF≤{:.0} FIT)", m.target_level.unwrap().as_str(), sp * 100.0, lf * 100.0, pm)).unwrap_or_default();
-        println!("\n  metrics [{}]: λ_total={:.1} FIT, λ_residual={:.1}, λ_latent={:.1} → SPFM={:.1}%  LFM={:.1}%  PMHF={:.1} FIT{}  {}",
+        // IEC 61508 goals use the same arithmetic under different names.
+        let is_sil = m.target_level.map(|l| matches!(l.standard(), bhdl_common::safety::Standard::Iec61508)).unwrap_or(false);
+        let (n_spfm, n_pmhf) = if is_sil { ("SFF", "PFH") } else { ("SPFM", "PMHF") };
+        let tgt = m.targets.map(|(sp, lf, pm)| {
+            let lfm_part = if is_sil { String::new() } else { format!(" LFM≥{:.0}%", lf * 100.0) };
+            format!(" (targets {}: {}≥{:.0}%{} {}≤{:.0} FIT{})",
+                m.target_level.unwrap().as_str(), n_spfm, sp * 100.0, lfm_part, n_pmhf, pm,
+                if is_sil { "; IEC 61508-2 T3 Type A HFT=0 ASSUMED" } else { "" })
+        }).unwrap_or_default();
+        println!("\n  metrics [{}]: λ_total={:.1} FIT, λ_residual={:.1}, λ_latent={:.1} → {}={:.1}%  LFM={:.1}%  {}={:.3} FIT{}  {}",
             label, m.lambda_total_fit, m.lambda_residual_fit, m.lambda_latent_fit,
-            m.spfm * 100.0, m.lfm * 100.0, m.pmhf_fit, tgt, verdict);
+            n_spfm, m.spfm * 100.0, m.lfm * 100.0, n_pmhf, m.pmhf_fit, tgt, verdict);
         if m.unmeasured_faults > 0 {
             println!("    ⚠ {} universe fault(s) NOT in the measurement (no λ share or not run) — metrics incomplete", m.unmeasured_faults);
         }
-        println!("    PMHF is the single-point approximation (λ_residual); dual-point residual terms need the multi-fault campaign");
+        match m.pmhf_dual_fit {
+            Some(d) => println!("    {} includes the dual-point term {:.2e} FIT (Σ λ_L·λ_exposed·T_life/2, second-order)", n_pmhf, d),
+            None => println!("    {} is the single-point approximation — declare `lifetime = <hours>` in the mission for the dual-point term", n_pmhf),
+        }
     }
     if !any_metrics {
         println!("  metrics: not computed (the fault universe has not run — needs a converging DC solve)");

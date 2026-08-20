@@ -782,7 +782,7 @@ source = "§10.12 p.10-21"
         };
         let mut model = SafetyModel {
             board: "B".into(),
-            mission: Some(Mission { ambient_c: 40.0, on_hours: None, cycles: None, environment: None, quality: None, profile: None, phases: vec![], time_basis: None }),
+            mission: Some(Mission { ambient_c: 40.0, on_hours: None, cycles: None, environment: None, quality: None, profile: None, phases: vec![], time_basis: None, lifetime_h: None }),
             scopes: vec![], universe: vec![], gaps: vec![], errors: vec![],
             parts: vec![
                 Part { instance: "r1".into(), type_name: "Res".into(), parent: None, data: hb(Some("IEC62380")) },
@@ -814,7 +814,7 @@ source = "§10.12 p.10-21"
         ];
         let mut model = SafetyModel {
             board: "B".into(),
-            mission: Some(Mission { ambient_c: 26.7, on_hours: None, cycles: None, environment: Some("GB".into()), quality: Some("M".into()), profile: Some("p".into()), phases: phases.clone(), time_basis: None }),
+            mission: Some(Mission { ambient_c: 26.7, on_hours: None, cycles: None, environment: Some("GB".into()), quality: Some("M".into()), profile: Some("p".into()), phases: phases.clone(), time_basis: None, lifetime_h: None }),
             scopes: vec![], universe: vec![], gaps: vec![], errors: vec![],
             parts: vec![Part { instance: "r1".into(), type_name: "Res".into(), parent: None, data: PartData::Handbook {
                 class: "res_fixed_film".into(), source: "t".into(), per: Some("MILHDBK217F".into()), fit: None, fit_basis: None } }],
@@ -848,14 +848,14 @@ phases = [ { name = "parked", time = 0.9, ambient = 23.0, powered = false },
 source = "broken"
 phases = [ { name = "half", time = 0.5, ambient = 23.0 } ]
 "#).unwrap();
-        let mut m = Mission { ambient_c: f64::NAN, on_hours: None, cycles: None, environment: Some("GB".into()), quality: None, profile: Some("cabin".into()), phases: vec![], time_basis: None };
+        let mut m = Mission { ambient_c: f64::NAN, on_hours: None, cycles: None, environment: Some("GB".into()), quality: None, profile: Some("cabin".into()), phases: vec![], time_basis: None, lifetime_h: None };
         resolve_mission_profile(&mut m, &file).unwrap();
         assert_eq!(m.phases.len(), 2);
         assert_eq!(m.environment.as_deref(), Some("GB"), "explicit board environment beats the profile's");
         assert!(!m.ambient_c.is_nan());
-        let mut bad = Mission { ambient_c: f64::NAN, on_hours: None, cycles: None, environment: None, quality: None, profile: Some("broken".into()), phases: vec![], time_basis: None };
+        let mut bad = Mission { ambient_c: f64::NAN, on_hours: None, cycles: None, environment: None, quality: None, profile: Some("broken".into()), phases: vec![], time_basis: None, lifetime_h: None };
         assert!(resolve_mission_profile(&mut bad, &file).unwrap_err().contains("sum"));
-        let mut unk = Mission { ambient_c: f64::NAN, on_hours: None, cycles: None, environment: None, quality: None, profile: Some("nope".into()), phases: vec![], time_basis: None };
+        let mut unk = Mission { ambient_c: f64::NAN, on_hours: None, cycles: None, environment: None, quality: None, profile: Some("nope".into()), phases: vec![], time_basis: None, lifetime_h: None };
         assert!(resolve_mission_profile(&mut unk, &file).unwrap_err().contains("nope"));
     }
 

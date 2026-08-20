@@ -48,7 +48,7 @@ board FaultDemo {
 }
 
 safety FaultDemo as brd {
-    mission { ambient = 40degC; }
+    mission { ambient = 40degC; lifetime = 15000h; }
 
     goal SG_MID: ASIL_B "mid node stays in its window" (id="SG-FC-1") {
         effect overvoltage  = brd.r_bot.1 > 8V severity S2;

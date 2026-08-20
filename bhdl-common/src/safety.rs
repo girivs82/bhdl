@@ -399,6 +399,11 @@ pub struct Mission {
     /// the FMEDA/PMHF convention) or "calendar" (unpowered time counts
     /// as zero-rate time).
     pub time_basis: Option<String>,
+    /// Service lifetime in operating hours (`lifetime = 15000h`) — the
+    /// exposure window of the dual-point PMHF term. Absent ⇒ PMHF stays
+    /// the single-point approximation, stated.
+    #[serde(default)]
+    pub lifetime_h: Option<f64>,
 }
 
 /// One automatically-generated fault in the whole-universe campaign
@@ -425,6 +430,10 @@ pub struct UniverseFault {
     /// otherwise-detected dangerous fault (ISO 26262 multi-point latent).
     #[serde(default)]
     pub latent: bool,
+    /// Σ λ (FIT) of the detected-dangerous faults whose detection this
+    /// latent fault defeats — the exposure of the dual-point PMHF term.
+    #[serde(default)]
+    pub latent_exposed_fit: f64,
     /// λ share of this mode in FIT (part FIT split over its modes), when
     /// the part's FIT was computed.
     pub weight_fit: Option<f64>,
@@ -450,9 +459,16 @@ pub struct Metrics {
     pub spfm: f64,
     /// LFM = 1 − λ_latent/(λ_total − λ_residual) (ISO 26262-5 §8.4.6).
     pub lfm: f64,
-    /// PMHF single-point approximation = λ_residual, in FIT (the full
-    /// PMHF adds dual-point residual terms — stated, not hidden).
+    /// PMHF in FIT: λ_residual plus, when the mission declares a
+    /// service lifetime, the dual-point term
+    /// Σ_L λ_L·λ_exposed·T_life/2 over the latent faults (second-order
+    /// approximation, ISO 26262-10 §8.3.3 shape). Without a lifetime it
+    /// is the single-point approximation — stated, not hidden.
     pub pmhf_fit: f64,
+    /// The dual-point contribution inside pmhf_fit; None ⇒ no mission
+    /// lifetime declared (single-point approximation).
+    #[serde(default)]
+    pub pmhf_dual_fit: Option<f64>,
     /// The strictest goal level in the scope that carries targets.
     pub target_level: Option<Level>,
     /// (spfm_min, lfm_min, pmhf_max_fit) for that level, if any.
@@ -462,17 +478,31 @@ pub struct Metrics {
     pub pass: Option<bool>,
 }
 
-/// ISO 26262-5:2018 hardware architectural metric targets and random-
-/// hardware-failure targets (Tables 4, 5 and 6): (SPFM min, LFM min,
-/// PMHF max in FIT). ASIL A and QM carry no normative targets; SIL
-/// levels are evaluated with the same residual arithmetic against IEC
-/// 61508 SFF thresholds in a later increment (reported unmapped here).
+/// Architectural-metric targets: (SPFM/SFF min, LFM min, PMHF/PFH max
+/// in FIT).
+///
+/// ASIL levels: ISO 26262-5:2018 Tables 4, 5 and 6. ASIL A and QM
+/// carry no normative targets.
+///
+/// SIL levels: SFF = 1 − λ_DU/λ_total is the SAME residual arithmetic
+/// as SPFM; thresholds per IEC 61508-2:2010 Table 3 assuming a
+/// **Type A subsystem with HFT = 0** (single-channel, simple
+/// components — the assumption is printed in the report; a Type B or
+/// redundant architecture needs its own row). PFH limits per IEC
+/// 61508-1:2010 Table 3 (high demand / continuous mode), expressed in
+/// FIT (1 FIT = 1e-9/h). IEC has no LFM equivalent — the LFM floor is
+/// 0 for SIL rows.
 pub fn metric_targets(level: Level) -> Option<(f64, f64, f64)> {
     match level {
         Level::AsilB => Some((0.90, 0.60, 100.0)), // ISO 26262-5:2018 T4/T5/T6
         Level::AsilC => Some((0.97, 0.80, 100.0)),
         Level::AsilD => Some((0.99, 0.90, 10.0)),
-        _ => None,
+        // IEC 61508: SFF (61508-2 T3, Type A HFT=0) + PFH (61508-1 T3)
+        Level::Sil1 => Some((0.0, 0.0, 10_000.0)), // <1e-5/h; no SFF floor at HFT=0
+        Level::Sil2 => Some((0.60, 0.0, 1_000.0)), // <1e-6/h
+        Level::Sil3 => Some((0.90, 0.0, 100.0)),   // <1e-7/h
+        Level::Sil4 => Some((0.99, 0.0, 10.0)),    // <1e-8/h
+        Level::QM | Level::AsilA => None,
     }
 }
 

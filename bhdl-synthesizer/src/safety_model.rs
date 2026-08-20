@@ -919,6 +919,7 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
                     let mut quality: Option<String> = None;
                     let mut profile: Option<String> = None;
                     let mut time_basis: Option<String> = None;
+                    let mut lifetime_h: Option<f64> = None;
                     let mut phases: Vec<bhdl_common::safety::MissionPhase> = Vec::new();
                     let leading_num = |v: &str| -> Option<f64> {
                         let end = v.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+')).unwrap_or(v.len());
@@ -939,7 +940,8 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
                             "quality" => quality = Some(v.trim_matches('"').to_string()),
                             "profile" => profile = Some(v.trim_matches('"').to_string()),
                             "time_basis" => time_basis = Some(v.trim_matches('"').to_string()),
-                            other => model.errors.push(format!("safety {}: unknown mission item '{}' (ambient|on_hours|cycles|environment|quality|profile|time_basis)", blk.name, other)),
+                            "lifetime" => lifetime_h = leading_num(v),
+                            other => model.errors.push(format!("safety {}: unknown mission item '{}' (ambient|on_hours|cycles|environment|quality|profile|time_basis|lifetime)", blk.name, other)),
                         }
                     }
                     // Inline phases: `phase NAME { time = 8%; ambient = 60degC; powered = false; }`
@@ -979,8 +981,8 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
                         ambient = Some(phases.iter().map(|p| p.frac * p.ambient_c).sum::<f64>() / sum);
                     }
                     match (ambient, &profile) {
-                        (Some(a), _) => model.mission = Some(bhdl_common::safety::Mission { ambient_c: a, on_hours, cycles, environment, quality, profile, time_basis, phases }),
-                        (None, Some(_)) => model.mission = Some(bhdl_common::safety::Mission { ambient_c: f64::NAN, on_hours, cycles, environment, quality, profile, time_basis, phases }),
+                        (Some(a), _) => model.mission = Some(bhdl_common::safety::Mission { ambient_c: a, on_hours, cycles, environment, quality, profile, time_basis, phases, lifetime_h }),
+                        (None, Some(_)) => model.mission = Some(bhdl_common::safety::Mission { ambient_c: f64::NAN, on_hours, cycles, environment, quality, profile, time_basis, phases, lifetime_h }),
                         (None, None) => model.errors.push(format!("safety {}: mission {{ }} has no `ambient = <temp>`, no phases and no profile", blk.name)),
                     }
                 }
