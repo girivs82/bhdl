@@ -227,12 +227,25 @@ pub struct Assumption {
     pub status: AssumptionStatus,
 }
 
+/// One vendor-declared failure state of a behavioral part.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FailureState {
+    pub name: String,
+    /// Vendor FIT share of this state (`fit=8 of 40`) — the REAL mode
+    /// fraction, used as the λ weight in the fault universe.
+    pub fit: Option<f64>,
+    /// What the state DOES, as a board-observable mutation:
+    /// `open(PIN)` | `short(PIN_A,PIN_B)` | `force(PIN, <voltage>)`.
+    /// Absent ⇒ the state cannot be simulated (honest gap, never a guess).
+    pub behavior: Option<String>,
+}
+
 /// What kind of safety data a physical part carries (Phase 2 fills the
 /// variants; Phase 1 can only see `None` and waivers).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum PartData {
     /// Behavioral model with declared failure states.
-    Behavioral { failure_states: usize, source: String },
+    Behavioral { failure_states: usize, source: String, states: Vec<FailureState> },
     /// Black box with SEooC data.
     Seooc { lambda_fit: Option<f64>, source: String },
     /// Handbook class data (passives). `per` names the prediction

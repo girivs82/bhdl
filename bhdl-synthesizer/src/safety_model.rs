@@ -311,7 +311,7 @@ fn split_call_args(txt: &str) -> (Vec<String>, BTreeMap<String, String>) {
 /// Entity-level safety data (spec §2.7), keyed by entity name.
 #[derive(Debug, Clone, Default)]
 struct EntityData {
-    failure_states: Vec<(String, Option<f64>, Option<f64>, String)>, // (name, fit, of, source)
+    failure_states: Vec<(String, Option<f64>, Option<f64>, String, Option<String>)>, // (name, fit, of, source, behavior)
     seooc: Option<(Option<f64>, Option<f64>, Option<f64>, String)>,  // (lambda, spfm, lfm, source)
     handbook: Option<(String, String, Option<String>)>,              // (class, source, per-standard)
     /// Vendor-data validity configuration: the FMEDA/safety-manual FIT
@@ -387,7 +387,7 @@ fn collect_entity_data(root: &SyntaxNode) -> HashMap<String, EntityData> {
                         let of = toks.iter().position(|t| t == "of").and_then(|i| toks.get(i + 1)).and_then(|v| v.parse::<f64>().ok());
                         let src = kv.get("source").cloned().unwrap_or_default();
                         if src.is_empty() { d.errors.push(format!("{ename}: failure_state {name} has no source")); }
-                        d.failure_states.push((name, num(kv.get("fit")), of, src));
+                        d.failure_states.push((name, num(kv.get("fit")), of, src, kv.get("behavior").cloned()));
                     }
                     "seooc" => {
                         let kv = kv_from_tokens(&toks[1..]);
@@ -1120,7 +1120,13 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
         } else if let Some(ed) = ed {
             if !ed.failure_states.is_empty() {
                 let src = ed.failure_states.iter().map(|f| f.3.clone()).find(|s| !s.is_empty()).unwrap_or_default();
-                PartData::Behavioral { failure_states: ed.failure_states.len(), source: src }
+                PartData::Behavioral {
+                    failure_states: ed.failure_states.len(),
+                    source: src,
+                    states: ed.failure_states.iter().map(|f| bhdl_common::safety::FailureState {
+                        name: f.0.clone(), fit: f.1, behavior: f.4.clone(),
+                    }).collect(),
+                }
             } else if let Some((lambda, _, _, src)) = &ed.seooc {
                 PartData::Seooc { lambda_fit: *lambda, source: src.clone() }
             } else if let Some((class, src, per)) = &ed.handbook {

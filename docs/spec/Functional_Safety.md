@@ -272,6 +272,18 @@ Semantics (Phase 2a, shipped):
 - `fault state(h, "name")` is validated against the target entity's
   declared `failure_state`s — naming a state the vendor model does not
   declare is a hard error (no invented failure modes).
+- `failure_state … behavior="open(PIN)|short(PIN_A,PIN_B)|force(PIN, <V>)"`
+  says what the state DOES, as a board-observable mutation relative to
+  the part's pins (open-drain output stuck high = `open(nOUT)`; output
+  shorted to ground = `short(nOUT,GND)`; push-pull stuck driving =
+  `force(nOUT, 5V)` — an ideal source on the pin's net, the same
+  mechanism that energises a declared rail). The fault campaign RUNS a
+  state through its behavior: declared `state()` faults and the
+  automatic universe both execute it; a behavioral part's universe
+  modes are the VENDOR'S states — never the generic 2-pin guesses —
+  each weighted by its REAL `fit=X of Y` share (actual mode fractions,
+  not an equal split). A state without a behavior stays unrun with
+  exactly that said. The latent double-fault probe covers states too.
 - each `assumption ID "text"` is surfaced as an OPEN assumption
   `<owner>.<local>.<ID>` in the scope that owns the instance (its safety
   part, else the board); a parent block discharges it like any other:

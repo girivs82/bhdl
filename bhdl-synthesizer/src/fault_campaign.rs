@@ -204,6 +204,63 @@ fn apply_open(n: &mut Netlist, view: &View, target: &str) -> Result<(), String> 
     Ok(())
 }
 
+/// `force(PIN, <volts>)` — the failed pin actively drives a voltage:
+/// the pin's net becomes a Power-classed net, which the spice converter
+/// energises with an ideal source (the same mechanism as a declared
+/// board rail).
+fn apply_force(n: &mut Netlist, view: &View, inst: &str, pin: &str, volts: f64) -> Result<(), String> {
+    let net_name = view
+        .pin_net
+        .get(&(inst.to_string(), pin.to_string()))
+        .ok_or_else(|| format!("force: {inst}.{pin} has no net"))?
+        .clone();
+    let mut hit = false;
+    for (_, net) in n.nets.iter_mut() {
+        if net.name.as_deref() == Some(net_name.as_str()) {
+            net.net_class = bhdl_netlist::NetClass::Power { voltage: volts, current: None };
+            hit = true;
+        }
+    }
+    if hit { Ok(()) } else { Err(format!("force: net '{net_name}' not found")) }
+}
+
+/// Execute a vendor failure-state behavior on the faulted netlist:
+/// `open(PIN)` | `short(PIN_A,PIN_B)` | `force(PIN, <voltage>)`, pins
+/// relative to `inst`. Returns the net-alias map contribution.
+fn apply_state_behavior(
+    n: &mut Netlist,
+    view: &View,
+    inst: &str,
+    behavior: &str,
+    alias: &mut HashMap<String, String>,
+) -> Result<(), String> {
+    let b = behavior.trim();
+    let open_paren = b.find('(').ok_or_else(|| format!("behavior '{b}' is not fn(args)"))?;
+    let kind = b[..open_paren].trim();
+    let args: Vec<String> = b[open_paren + 1..]
+        .trim_end_matches(')')
+        .split(',')
+        .map(|a| a.trim().to_string())
+        .filter(|a| !a.is_empty())
+        .collect();
+    match (kind, args.len()) {
+        ("open", 1) => apply_open(n, view, &format!("{inst}.{}", args[0])),
+        ("short", 2) => apply_short(n, view, &format!("{inst}.{}", args[0]), &format!("{inst}.{}", args[1])).map(|a| {
+            if let Some((from, to)) = a {
+                alias.insert(from, to);
+            }
+        }),
+        ("force", 2) => {
+            let v = args[1]
+                .trim_end_matches('V')
+                .parse::<f64>()
+                .map_err(|_| format!("force voltage '{}' is not a number", args[1]))?;
+            apply_force(n, view, inst, &args[0], v)
+        }
+        _ => Err(format!("behavior '{b}' not one of open(P)|short(A,B)|force(P,V)")),
+    }
+}
+
 // ── effect predicate evaluation ─────────────────────────────────────
 
 struct Pred<'a> {
@@ -364,6 +421,21 @@ fn eval_effect(
 /// was met, and clears the corresponding FAULT_UNRUN gaps.
 pub fn run_declared_faults(netlist: &Netlist, model: &mut SafetyModel, solve: &Solver) -> (usize, usize) {
     let view = View::build(netlist);
+    // (instance, state name) → behavior (None = declared without one)
+    let state_behaviors: HashMap<(String, String), Option<String>> = model
+        .parts
+        .iter()
+        .filter_map(|p| match &p.data {
+            bhdl_common::safety::PartData::Behavioral { states, .. } => Some(
+                states
+                    .iter()
+                    .map(|st| ((p.instance.clone(), st.name.clone()), st.behavior.clone()))
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        })
+        .flatten()
+        .collect();
     let mut ran = 0usize;
     let mut mismatched = 0usize;
     // (scope idx, fault idx) → work on a snapshot of goals for evaluation
@@ -389,11 +461,7 @@ pub fn run_declared_faults(netlist: &Netlist, model: &mut SafetyModel, solve: &S
             }
             // unsupported kinds: say why, precisely
             match f.kind.as_str() {
-                "short" | "open" => {}
-                "state" => {
-                    f.note = Some("needs the vendor-model failure-state hook (behavioral model campaign)".into());
-                    continue;
-                }
+                "short" | "open" | "state" => {}
                 "drift" => {
                     f.note = Some("drift magnitude mutation not implemented in the static campaign yet".into());
                     continue;
@@ -425,10 +493,20 @@ pub fn run_declared_faults(netlist: &Netlist, model: &mut SafetyModel, solve: &S
                         apply_open(&mut faulted, &view, &f.targets[0])
                     }
                 }
+                "state" => {
+                    // vendor failure state: execute its declared behavior
+                    let inst = f.targets.first().cloned().unwrap_or_default();
+                    let sname = f.targets.get(1).map(|s| s.trim_matches('"').to_string()).unwrap_or_default();
+                    match state_behaviors.get(&(inst.clone(), sname.clone())) {
+                        Some(Some(beh)) => apply_state_behavior(&mut faulted, &view, &inst, beh, &mut alias),
+                        Some(None) => Err(format!("failure_state '{sname}' declares no behavior=\"open(P)|short(A,B)|force(P,V)\" — the vendor model must say what the state DOES")),
+                        None => Err(format!("no failure_state '{sname}' on {inst}")),
+                    }
+                }
                 _ => unreachable!(),
             };
             if let Err(e) = res {
-                f.note = Some(format!("mutation failed: {e}"));
+                f.note = Some(format!("not run: {e}"));
                 continue;
             }
             // solve the faulted board
@@ -519,6 +597,21 @@ pub fn run_declared_faults(netlist: &Netlist, model: &mut SafetyModel, solve: &S
 pub fn run_universe(netlist: &Netlist, model: &mut SafetyModel, solve: &Solver) {
     use bhdl_common::safety::{PartData, UniverseFault};
     let view = View::build(netlist);
+    // (instance, state name) → behavior, for state-mode (re-)application
+    let state_behaviors: HashMap<(String, String), Option<String>> = model
+        .parts
+        .iter()
+        .filter_map(|p| match &p.data {
+            PartData::Behavioral { states, .. } => Some(
+                states
+                    .iter()
+                    .map(|st| ((p.instance.clone(), st.name.clone()), st.behavior.clone()))
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        })
+        .flatten()
+        .collect();
     // scope effect + mechanism tables
     struct ScopeInfo {
         prefix: String,
@@ -559,37 +652,28 @@ pub fn run_universe(netlist: &Netlist, model: &mut SafetyModel, solve: &Solver) 
             _ => None,
         };
         let pins = view.pins_of.get(&part.instance).cloned().unwrap_or_default();
-        // modes
-        let mut modes: Vec<(String, Vec<String>)> = Vec::new();
-        if pins.len() == 2 {
-            modes.push(("short".into(), vec![format!("{}.{}", part.instance, pins[0]), format!("{}.{}", part.instance, pins[1])]));
-            modes.push(("open".into(), vec![part.instance.clone()]));
+        // modes. A BEHAVIORAL part's failure modes are the VENDOR'S
+        // declared states — never the generic 2-pin guesses — and each
+        // state carries its REAL FIT share as the λ weight. A state
+        // without a behavior stays unrun with that said.
+        let mut modes: Vec<(String, Vec<String>, Option<f64>, Option<String>)> = Vec::new();
+        if let PartData::Behavioral { states, .. } = &part.data {
+            for st in states {
+                modes.push(("state".into(), vec![part.instance.clone(), st.name.clone()], st.fit, st.behavior.clone()));
+            }
+        } else if pins.len() == 2 {
+            let n = 2.0;
+            let w = fit.map(|f| f / n);
+            modes.push(("short".into(), vec![format!("{}.{}", part.instance, pins[0]), format!("{}.{}", part.instance, pins[1])], w, None));
+            modes.push(("open".into(), vec![part.instance.clone()], w, None));
         } else if pins.len() > 2 {
+            let n = pins.len() as f64;
+            let w = fit.map(|f| f / n);
             for p in &pins {
-                modes.push(("open_pin".into(), vec![format!("{}.{}", part.instance, p)]));
+                modes.push(("open_pin".into(), vec![format!("{}.{}", part.instance, p)], w, None));
             }
         }
-        // declared behavioral failure states: listed, need the hook
-        if let PartData::Behavioral { failure_states, .. } = &part.data {
-            for i in 0..*failure_states {
-                universe.push(UniverseFault {
-                    scope: scopes[si].prefix.clone(),
-                    part: part.instance.clone(),
-                    mode: "state".into(),
-                    targets: vec![format!("failure_state[{i}]")],
-                    ran: false,
-                    fired: vec![],
-                    detected: vec![],
-                    false_alarm: false,
-                    latent: false,
-                    weight_fit: None,
-                    note: Some("needs the vendor-model failure-state hook".into()),
-                });
-            }
-        }
-        let n_modes = modes.len().max(1);
-        for (mode, targets) in modes {
-            let weight = fit.map(|f| f / n_modes as f64);
+        for (mode, targets, weight, behavior) in modes {
             let mut uf = UniverseFault {
                 scope: scopes[si].prefix.clone(),
                 part: part.instance.clone(),
@@ -613,10 +697,14 @@ pub fn run_universe(netlist: &Netlist, model: &mut SafetyModel, solve: &Solver) 
                     }
                 }),
                 "open" | "open_pin" => apply_open(&mut faulted, &view, &targets[0]),
+                "state" => match &behavior {
+                    Some(beh) => apply_state_behavior(&mut faulted, &view, &targets[0], beh, &mut alias),
+                    None => Err("failure_state declares no behavior= — the vendor model must say what the state DOES".into()),
+                },
                 _ => unreachable!(),
             };
             if let Err(e) = res {
-                uf.note = Some(format!("mutation failed: {e}"));
+                uf.note = Some(e);
                 universe.push(uf);
                 continue;
             }
@@ -680,7 +768,9 @@ pub fn run_universe(netlist: &Netlist, model: &mut SafetyModel, solve: &Solver) 
                     && u.fired.is_empty()
                     && u.detected.is_empty()
                     && mech_parts.contains(&(u.scope.clone(), u.part.clone()))
-                    && matches!(u.mode.as_str(), "short" | "open" | "open_pin")
+                    && (matches!(u.mode.as_str(), "short" | "open" | "open_pin")
+                        || (u.mode == "state"
+                            && state_behaviors.get(&(u.part.clone(), u.targets.get(1).cloned().unwrap_or_default())).map(|b| b.is_some()).unwrap_or(false)))
             })
             .map(|(i, _)| i)
             .collect();
@@ -694,7 +784,7 @@ pub fn run_universe(netlist: &Netlist, model: &mut SafetyModel, solve: &Solver) 
                 }
                 let mut faulted = netlist.clone();
                 let mut alias: HashMap<String, String> = HashMap::new();
-                let mut apply = |n: &mut Netlist, mode: &str, targets: &[String], alias: &mut HashMap<String, String>| -> Result<(), String> {
+                let apply = |n: &mut Netlist, mode: &str, targets: &[String], alias: &mut HashMap<String, String>| -> Result<(), String> {
                     match mode {
                         "short" => apply_short(n, &view, &targets[0], &targets[1]).map(|a| {
                             if let Some((from, to)) = a {
@@ -702,6 +792,10 @@ pub fn run_universe(netlist: &Netlist, model: &mut SafetyModel, solve: &Solver) 
                             }
                         }),
                         "open" | "open_pin" => apply_open(n, &view, &targets[0]),
+                        "state" => match state_behaviors.get(&(targets[0].clone(), targets.get(1).cloned().unwrap_or_default())) {
+                            Some(Some(beh)) => apply_state_behavior(n, &view, &targets[0], beh, alias),
+                            _ => Err("state without behavior".into()),
+                        },
                         _ => Err("unsupported".into()),
                     }
                 };

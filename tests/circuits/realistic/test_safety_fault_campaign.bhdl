@@ -17,6 +17,25 @@
 
 import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 
+// A BEHAVIORAL part: electrically the lower leg of the detection
+// divider (10k to GND), but carrying VENDOR-DECLARED failure states
+// with behaviors — what each state DOES, as a board-observable
+// mutation. The campaign runs these states with their REAL FIT shares
+// as λ weights (fit=X of Y is the vendor's mode split, not a guess).
+// FIT numbers are FIXTURE values for the pipeline demo.
+entity DemoSense(value: resistance = 10kΩ) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+    attribute component_class = "resistor";
+    attribute resistance = value;
+    attribute power_rating = 0.1W;
+    attribute kicad_symbol = "Device:R";
+    safety {
+        failure_state sense_open  fit=6 of 10 source="FIXTURE — illustrative split" behavior="open(2)";
+        failure_state sense_stuck fit=4 of 10 source="FIXTURE — illustrative split" behavior="short(1,2)";
+    }
+}
+
 board FaultDemo {
     power V12 = 12V @ 1A;
     ground GND;
@@ -25,7 +44,7 @@ board FaultDemo {
 
     // Detection divider — the stand-in PSM: flag node = mid/2, so
     // flag > 4V ⇔ mid > 8V (the overvoltage threshold).
-    r_top.2 -> r_m1: Res(10kΩ).1; r_m1.2 -> r_m2: Res(10kΩ).1; r_m2.2 -> @GND;
+    r_top.2 -> r_m1: Res(10kΩ).1; r_m1.2 -> sense: DemoSense().1; sense.2 -> @GND;
 }
 
 safety FaultDemo as brd {
@@ -40,12 +59,19 @@ safety FaultDemo as brd {
     // predicate the campaign evaluates on every FAULTED operating point
     // to MEASURE the diagnostic coverage (claimed 0.90 is a FIXTURE
     // number — the measurement is the point).
-    mechanism brd.r_m2: psm(SG_MID, detects=[overvoltage],
-                            detected_when = brd.r_m2.1 > 4V,
-                            dc=0.90, source="FIXTURE claim — measured DC supersedes");
+    mechanism brd.sense: psm(SG_MID, detects=[overvoltage],
+                             detected_when = brd.sense.1 > 4V,
+                             dc=0.90, source="FIXTURE claim — measured DC supersedes");
 
     fault short(brd.r_top.1, brd.r_top.2) expect SG_MID.overvoltage;
     fault short(brd.r_bot.1, brd.r_bot.2) expect SG_MID.undervoltage;
     fault open(brd.r_bot)                 expect SG_MID.overvoltage;
     fault open(brd.r_top)                 expect SG_MID.overvoltage;   // deliberately wrong — see header
+
+    // Vendor failure state, run through its declared behavior:
+    // sense_stuck = short(1,2) collapses the flag node to GND — the
+    // detector reads permanently low. No goal effect fires (the mid
+    // node is untouched), no alarm: the campaign's latent probe is what
+    // exposes it.
+    fault state(brd.sense, "sense_stuck") expect SG_MID.overvoltage;   // deliberately wrong: the state is SILENT
 }

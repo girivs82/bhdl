@@ -1922,7 +1922,10 @@ async fn run_safety(
     println!("    {:<26} {:<22} {:<12} {}", "instance", "type", "safety part", "safety data");
     for p in &model.parts {
         let data = match &p.data {
-            PartData::Behavioral { failure_states, source } => format!("behavioral, {failure_states} failure states  {source}"),
+            PartData::Behavioral { failure_states, source, states } => {
+                let with_beh = states.iter().filter(|st| st.behavior.is_some()).count();
+                format!("behavioral, {failure_states} failure states ({with_beh} with behavior)  {source}")
+            }
             PartData::Seooc { lambda_fit, source } => format!("seooc{}  {source}", lambda_fit.map(|l| format!(" λ={l} FIT")).unwrap_or_default()),
             PartData::Handbook { class, source, per, fit, fit_basis } => {
                 let engine = per.as_deref().map(|p| format!(" per {p}")).unwrap_or_default();
