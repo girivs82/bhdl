@@ -138,11 +138,15 @@ Accordingly, designer-owned composition is NOT a new construct:
    physical. `as design` plus declared package identity is a hard
    error ("a design block has no body to solder"). Undeclared
    entities keep derived behavior — no migration cliff.
-   NB a related but DISTINCT implicit bit remains on the ledger: the
-   `name == module && no connected pins` phantom-stub heuristic
-   (four sites) detects definition-TEMPLATE instances, which occur
-   for part entities too — it wants an explicit template marker at
-   the stub creation paths, not the partness tag.
+   The related-but-distinct implicit bit — definition-TEMPLATE
+   instances (`Res: Res`, minted once per definition by the symbol
+   walk) — is ALSO explicit now (ee4b1f3): the creation site stamps
+   `template = "true"` and the single judgment `is_template_stub()`
+   replaced the name-shape heuristic at all five consumer sites (a
+   fifth, the safety model's shadow check, surfaced while landing
+   it). The name-shape fallback survives inside the one helper and
+   logs when it fires, so any unmarked creation path announces
+   itself.
 4. **The one idiomatic divergence that stays is `expansion {}`
    itself**, inside entity — because it marks a real semantic
    difference the reader must see. Plain body instantiation is
