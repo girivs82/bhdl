@@ -542,11 +542,18 @@ computed from MEASURED λ, never from claims:
   **LFM** = 1 − λ_latent/(λ_total − λ_residual) (§8.4.6),
   **PMHF** = λ_residual plus, when the mission declares
   `lifetime = <hours>`, the **dual-point term**
-  Σ_L λ_L·λ_exposed·T_life/2 over the latent faults (second-order,
+  Σ_L λ_L·λ_exposed·T_window over the latent faults (second-order,
   ISO 26262-10 §8.3.3 shape) — λ_exposed is the measured Σ λ of the
   detected-dangerous faults each latent fault blinds, from the
-  all-pairs double-fault probe. Without a lifetime, PMHF is the
-  single-point approximation and the report says how to fix that.
+  all-pairs double-fault probe. T_window is the latent fault's
+  EXPOSURE, strongest bound first: the defeated mechanism's declared
+  proof-test `interval` (a periodic self-test reveals the dormant
+  fault at the next test — ISO's multiple-point fault detection
+  interval; the interval IS the worst-case window, no /2), else
+  T_life/2 (never tested — average dormancy of a uniformly-arriving
+  fault). Durations parse with s/ms/µs/ns/min/h/d suffixes. Without a
+  lifetime, PMHF is the single-point approximation and the report says
+  how to fix that.
 
 Targets per ISO 26262-5:2018 Tables 4/5/6: ASIL B (SPFM≥90%, LFM≥60%,
 PMHF≤100 FIT), C (97%, 80%, 100), D (99%, 90%, 10). QM and ASIL A carry

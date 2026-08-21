@@ -2183,7 +2183,7 @@ async fn run_safety(
             println!("    ⚠ {} universe fault(s) NOT in the measurement (no λ share or not run) — metrics incomplete", m.unmeasured_faults);
         }
         match m.pmhf_dual_fit {
-            Some(d) => println!("    {} includes the dual-point term {:.2e} FIT (Σ λ_L·λ_exposed·T_life/2, second-order)", n_pmhf, d),
+            Some(d) => println!("    {} includes the dual-point term {:.2e} FIT (Σ λ_L·λ_exposed·T_window, second-order; window = declared proof-test interval else lifetime/2)", n_pmhf, d),
             None => println!("    {} is the single-point approximation — declare `lifetime = <hours>` in the mission for the dual-point term", n_pmhf),
         }
     }

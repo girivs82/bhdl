@@ -289,6 +289,11 @@ fn parse_duration_s(v: &str) -> Option<f64> {
         "us" | "µs" => Some(num * 1e-6),
         "ns" => Some(num * 1e-9),
         "m" | "min" => Some(num * 60.0),
+        // proof-test intervals are declared in hours/days — without
+        // these an `interval=1h` silently parsed as None and became a
+        // ZERO budget in the FTTI check (wrongly passing)
+        "h" => Some(num * 3600.0),
+        "d" => Some(num * 86400.0),
         _ => None,
     }
 }
@@ -1730,17 +1735,43 @@ pub fn compute_metrics(model: &mut SafetyModel) {
         let lfm = if non_spf > 0.0 { 1.0 - lambda_latent / non_spf } else { 1.0 };
         // Dual-point term (second-order, ISO 26262-10 §8.3.3 shape):
         // for each latent fault L, both L and one of the dangerous
-        // faults it blinds must occur within the service lifetime —
-        // rate ≈ λ_L·λ_exposed·T/2. λ in FIT (1e-9/h), T in hours ⇒
-        // contribution in FIT = w_L·w_exposed·T/2·1e-9. Needs the
-        // mission to DECLARE the lifetime; otherwise PMHF stays the
-        // single-point approximation, stated.
+        // faults it blinds must coexist. The EXPOSURE WINDOW of the
+        // latent fault is, strongest bound first:
+        //   - the defeated mechanism's declared proof-test `interval`
+        //     (a periodic self-test reveals the dormant fault at the
+        //     next test — ISO's multiple-point fault detection
+        //     interval), when the mechanism on the latent fault's part
+        //     declares one;
+        //   - else the service lifetime / 2 (never tested — the
+        //     average dormancy of a uniformly-arriving fault).
+        // λ in FIT (1e-9/h), window in hours ⇒ contribution in FIT =
+        // w_L·w_exposed·T_window·1e-9 (the /2 belongs to the
+        // untested-average case only; a test interval IS the worst-case
+        // window). Needs the mission to DECLARE the lifetime;
+        // otherwise PMHF stays the single-point approximation, stated.
         let lifetime_h = model.mission.as_ref().and_then(|m| m.lifetime_h);
+        // latent part → min declared test interval (hours) over the
+        // mechanisms on that part
+        let mech_interval_h = |part: &str| -> Option<f64> {
+            scope
+                .mechanisms
+                .iter()
+                .filter(|m| m.instance == part)
+                .filter_map(|m| m.interval.as_deref().and_then(parse_duration_s))
+                .map(|s| s / 3600.0)
+                .fold(None, |acc: Option<f64>, v| Some(acc.map_or(v, |a: f64| a.min(v))))
+        };
         let pmhf_dual = lifetime_h.map(|t| {
             measured
                 .iter()
                 .filter(|u| u.latent)
-                .map(|u| u.weight_fit.unwrap() * u.latent_exposed_fit * t / 2.0 * 1e-9)
+                .map(|u| {
+                    let window = match mech_interval_h(&u.part) {
+                        Some(iv) => iv.min(t / 2.0),
+                        None => t / 2.0,
+                    };
+                    u.weight_fit.unwrap() * u.latent_exposed_fit * window * 1e-9
+                })
                 .sum::<f64>()
         });
         let pmhf = lambda_residual + pmhf_dual.unwrap_or(0.0);
@@ -1872,6 +1903,29 @@ mod tests {
         let d = m.pmhf_dual_fit.expect("dual term with lifetime");
         assert!((d - 2.5e-4).abs() < 1e-9, "dual = 2.5e-4 FIT, got {d}");
         assert!((m.pmhf_fit - (0.0 + d)).abs() < 1e-9, "PMHF = residual(0 after coverage fix) + dual");
+
+        // Proof-test interval bounds the latent exposure: a mechanism on
+        // the latent part 'd' declaring interval=1000h means the dormant
+        // fault is revealed at the next test — window = min(1000h,
+        // T/2=5000h) = 1000h ⇒ dual = 5·10·1000·1e-9 = 5e-5 FIT (no /2:
+        // the interval IS the worst-case window).
+        model.scopes[0].mechanisms.push(bhdl_common::safety::Mechanism {
+            instance: "d".into(), handle: "brd.d".into(),
+            kind: bhdl_common::safety::MechanismKind::Psm,
+            goal: "G".into(), detects: vec![], protects: None,
+            claimed_dc: None, dc_source: None,
+            interval: Some("1000h".into()), latency: None,
+            detected_when: None, measured_dc: None, measured_note: None,
+        });
+        model.gaps.clear();
+        compute_metrics(&mut model);
+        let d2 = model.scopes[0].metrics.as_ref().unwrap().pmhf_dual_fit.unwrap();
+        assert!((d2 - 5e-5).abs() < 1e-12, "interval-bounded dual = 5e-5 FIT, got {d2}");
+        model.scopes[0].mechanisms.clear();
+
+        // duration parsing: hours/days are real proof-test units
+        assert_eq!(parse_duration_s("1h"), Some(3600.0));
+        assert_eq!(parse_duration_s("2d"), Some(172800.0));
 
         // SIL mapping: same residual arithmetic gated as SFF/PFH.
         // Restore the residual (b undetected) and set the goal to SIL3:
