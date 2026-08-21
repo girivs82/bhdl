@@ -633,4 +633,14 @@ async fn elaborate_emits_reconstructed_ctors_for_fixture() {
     assert!(out.contains("sense: DemoSense("), "{out}");
     // connectivity present as arrows
     assert!(out.contains(" -> "), "{out}");
+    // board wrapper + power/ground declarations + rail anchors — the
+    // single-pin V12 net must NOT drop
+    assert!(out.contains("board FaultDemo {"), "{out}");
+    assert!(out.contains("power V12 = 12V @ 1A;"), "{out}");
+    assert!(out.contains("ground GND;"), "{out}");
+    assert!(out.contains("@V12 -> r_top.1;"), "{out}");
+    assert!(out.contains("r_bot.2 -> @GND;"), "{out}");
+    // pre-round-trip smoke: the emitted text PARSES as bhdl
+    let reparse = parse(&out);
+    assert!(reparse.errors().is_empty(), "elaborated output must parse: {:?}\n{out}", reparse.errors());
 }

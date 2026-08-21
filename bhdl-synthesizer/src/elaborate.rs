@@ -57,6 +57,34 @@ pub fn emit_elaborated(
          // provenance comment naming the intent that produced it.\n\n"
     ));
     // ── instances, sorted by name for stable diffs ──
+    // ── board wrapper + power/ground declarations ──
+    let board_name = netlist
+        .top_level_module
+        .and_then(|id| netlist.modules.get(id))
+        .map(|m| m.name.clone())
+        .unwrap_or_else(|| "Elaborated".to_string());
+    out.push_str(&format!("board {board_name} {{\n"));
+    let mut rails: Vec<String> = Vec::new();
+    let mut grounds: Vec<String> = Vec::new();
+    for (_, n) in netlist.nets.iter() {
+        let Some(nm) = n.name.clone() else { continue };
+        match n.net_class {
+            bhdl_netlist::types::NetClass::Power { voltage, current } => {
+                let amp = current.map(|c| format!(" @ {c}A")).unwrap_or_default();
+                rails.push(format!("    power {nm} = {voltage}V{amp};"));
+            }
+            bhdl_netlist::types::NetClass::Ground => grounds.push(format!("    ground {nm};")),
+            _ => {}
+        }
+    }
+    rails.sort();
+    grounds.sort();
+    for l in rails.iter().chain(grounds.iter()) {
+        out.push_str(l);
+        out.push('\n');
+    }
+    out.push('\n');
+
     // Phantom entity-definition stubs (instance named exactly like its
     // module, zero connected pins) are template artifacts, not parts —
     // same filter build_board applies.
@@ -145,16 +173,33 @@ pub fn emit_elaborated(
             })
             .collect();
         pins.sort();
-        // TODO(#85): power/ground nets emit @RAIL anchors; plain nets
-        // use the first pin as anchor. Net-name preservation for
-        // auto_* names is validated by the round-trip gate, not by
-        // emitting explicit names.
-        if let Some((a_i, a_p)) = pins.first().cloned() {
-            for (b_i, b_p) in pins.iter().skip(1) {
-                out.push_str(&format!("    {a_i}.{a_p} -> {b_i}.{b_p};  // net {name}\n"));
+        // Power rails anchor every pin at @RAIL (so a single-pin rail
+        // net never drops); ground pins attach to @GND; plain nets use
+        // the first pin as anchor. Net-name preservation for auto_*
+        // names is validated by the round-trip gate, not by emitting
+        // explicit names.
+        let class = netlist.nets.get(*net_id).map(|n| n.net_class.clone());
+        match class {
+            Some(bhdl_netlist::types::NetClass::Power { .. }) => {
+                for (b_i, b_p) in &pins {
+                    out.push_str(&format!("    @{name} -> {b_i}.{b_p};\n"));
+                }
+            }
+            Some(bhdl_netlist::types::NetClass::Ground) => {
+                for (b_i, b_p) in &pins {
+                    out.push_str(&format!("    {b_i}.{b_p} -> @{name};\n"));
+                }
+            }
+            _ => {
+                if let Some((a_i, a_p)) = pins.first().cloned() {
+                    for (b_i, b_p) in pins.iter().skip(1) {
+                        out.push_str(&format!("    {a_i}.{a_p} -> {b_i}.{b_p};  // net {name}\n"));
+                    }
+                }
             }
         }
     }
+    out.push_str("}\n");
     out
 }
 
