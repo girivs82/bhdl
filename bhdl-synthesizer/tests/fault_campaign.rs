@@ -953,17 +953,57 @@ board HighCurrent {
         // 25A rating: integrated FETs out of reach
         let core = by_rail("VCORE");
         assert_eq!(core.topology, Topology::BuckExternal, "{core:#?}");
-        assert!(core.eff_basis.contains("external stages"), "{core:#?}");
+        assert!(core.eff_basis.contains("phase(s)") && core.eff_basis.contains("derated"), "{core:#?}");
         // 3.3V @ 6A: thermal crossover (in-package share over bound)
         let io = by_rail("V3V3");
         assert_eq!(io.topology, Topology::BuckExternal, "same current, higher Vout → more loss → external: {io:#?}");
         // 1.0V @ 6A: same current, a third of the loss → integrated
         let mem = by_rail("V1V0");
         assert_eq!(mem.topology, Topology::Buck, "{mem:#?}");
-        // cost bands: 25A ext = 12, 7A ext = 9, 7A integrated = 9
-        assert!((core.cost_units - 12.0).abs() < 1e-9);
-        assert!((io.cost_units - 9.0).abs() < 1e-9);
+        // phase-based cost: 25A → 2 phases (20A/phase design point,
+        // derated for FIT) → ctrl 4 + 2·1 + 2·5 = 16; 7A ext → 1
+        // phase → 10 (a mild premium over the 9-unit integrated buck
+        // the thermal crossover disqualified); integrated 7A = 9.
+        assert_eq!(core.phases, 2, "{core:#?}");
+        assert!((core.cost_units - 16.0).abs() < 1e-9);
+        assert_eq!(io.phases, 1);
+        assert!((io.cost_units - 10.0).abs() < 1e-9);
         assert!((mem.cost_units - 9.0).abs() < 1e-9);
         assert_eq!(o.ext_buck_count, 2);
+    }
+
+    // modern-SoC scale: a 180A core rail is a 9-phase design and the
+    // cost scales with the phases (and the board area they proxy)
+    let src2 = r#"
+entity MonsterSoc() {
+    pin 1: power in;
+    pin 2: ground;
+    attribute component_class = "ic";
+    domain VCORE pins="1" v=0.85V i_nom=150A i_max=180A source="FIXTURE";
+}
+board Monster {
+    power VIN = 12V @ 20A;
+    power VCORE = 0.85V;
+    ground GND;
+    @VCORE -> soc: MonsterSoc().1;
+    soc.2 -> @GND;
+}
+"#;
+    let pr2 = parse(src2);
+    let sf2 = SourceFile::cast(pr2.syntax()).unwrap();
+    let analysis2 = analyze(&sf2);
+    let mut gen2 = NetlistGenerator::new();
+    let n2 = gen2.generate_from_ast_and_analysis(&sf2, &analysis2).await.unwrap();
+    let h2 = harvest_loads(&n2, &sf2);
+    let opts2 = propose_trees(&h2, "VIN").expect("options");
+    for o in &opts2 {
+        let core = o.stages.iter().find(|s| s.to == "VCORE").unwrap();
+        assert_eq!(core.topology, Topology::BuckExternal);
+        assert_eq!(core.phases, 9, "{core:#?}");
+        // ctrl 4 + 9·1 + 9·5 = 58
+        assert!((core.cost_units - 58.0).abs() < 1e-9, "{core:#?}");
+        // per-phase dissipation stays civil: 0.85V·150A, eff 90% →
+        // ~14.2W over 9 phases ≈ 1.6W/phase
+        assert!(core.p_diss_w / core.phases as f64 <= 2.0, "{core:#?}");
     }
 }

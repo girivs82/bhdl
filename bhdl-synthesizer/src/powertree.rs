@@ -239,7 +239,10 @@ const LDO_DISS_BOUND_W: f64 = 0.5;
 /// integrated package (FETs dominate; the rest is inductor/caps).
 const INTEGRATED_LOSS_IN_PKG: f64 = 0.7;
 /// Integrated-package dissipation bound (W) — QFN-class with decent
-/// copper. Above this, the loss must spread across external FETs.
+/// copper, set BELOW what the package survives: a power part sitting
+/// near its thermal rating is a reliability/FIT liability even when
+/// the system is 125°C-rated. Above this, spread the loss across
+/// external FETs.
 const INTEGRATED_PKG_BOUND_W: f64 = 1.5;
 /// Absolute integrated-FET current ceiling (A) — parts above this are
 /// rare regardless of thermals.
@@ -247,6 +250,31 @@ const INTEGRATED_I_MAX_A: f64 = 8.0;
 /// Controller + external-stage efficiency estimate (better FETs than
 /// integrated at high current) — conservative, stated.
 const EXT_BUCK_EFF_PCT: f64 = 90.0;
+
+// ── multi-phase scaling ──
+// As current rises, PHASES rise: one power stage + inductor per
+// phase, plus a minor controller premium for driving more phases.
+// Modern SoC core rails pull 150–200A — that is 8–10 phases here.
+// Board area and passives scale with phases too; the per-phase cost
+// unit is the proxy that covers them (stated).
+/// Per-phase DESIGN current (A). DrMOS-class stages are RATED well
+/// above this (30A+); we size phases to run derated — a power
+/// component sitting near its rating runs hot, and heat is FIT
+/// (reliability derating, stated), even when everything is
+/// 125°C-rated on paper.
+const PHASE_I_DESIGN_A: f64 = 20.0;
+/// Controller base cost (units) for an external-stage design.
+const EXT_CTRL_BASE_UNITS: f64 = 4.0;
+/// Controller increment per driven phase (more drivers/telemetry).
+const EXT_CTRL_PER_PHASE_UNITS: f64 = 1.0;
+/// Per-phase power stage + inductor + phase passives (+ the board
+/// area they occupy — the unit is the proxy).
+const EXT_PHASE_UNITS: f64 = 5.0;
+
+/// Phase count for an external-stage buck at this rating.
+fn ext_phases(i_max_a: f64) -> usize {
+    ((i_max_a / PHASE_I_DESIGN_A).ceil() as usize).max(1)
+}
 
 /// Does this buck stage need a controller + external power stages?
 /// True when the rating exceeds integrated FETs, or the in-package
@@ -281,14 +309,14 @@ fn stage_cost_units(topology: &Topology, i_max_a: f64) -> f64 {
             x if x <= 5.0 => 6.0,
             _ => 9.0,
         },
-        // controller + drivers + discrete FET pair(s) + bigger
-        // inductor(s); beyond ~30A rating think multi-phase (more FET
-        // pairs, more inductors)
-        Topology::BuckExternal => match i_max_a {
-            x if x <= 15.0 => 9.0,
-            x if x <= 30.0 => 12.0,
-            _ => 16.0,
-        },
+        // controller (base + per-phase premium) + one power stage,
+        // inductor and phase passives PER PHASE — phases sized at the
+        // derated design current, so cost scales with current the way
+        // the board actually does (a 200A rail is ~10 phases)
+        Topology::BuckExternal => {
+            let p = ext_phases(i_max_a) as f64;
+            EXT_CTRL_BASE_UNITS + EXT_CTRL_PER_PHASE_UNITS * p + EXT_PHASE_UNITS * p
+        }
     }
 }
 
@@ -332,7 +360,13 @@ pub struct StagePlan {
     pub serves: Vec<String>,
     /// Relative cost units (class-based ordering, not a price).
     pub cost_units: f64,
+    /// Phase count (1 for LDOs and integrated bucks; external-stage
+    /// designs size phases at the derated design current).
+    #[serde(default = "one_phase")]
+    pub phases: usize,
 }
+
+fn one_phase() -> usize { 1 }
 
 /// One complete tree option.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -403,19 +437,22 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
             noise_assumed_uvrms: LDO_NOISE_UVRMS,
             serves: r.loads.clone(),
             cost_units: stage_cost_units(&Topology::Ldo, max),
+            phases: 1,
         }
     };
     let buck_stage = |from: &str, v_from: f64, r: &RailSummary, nom: f64, max: f64| -> StagePlan {
-        let (topology, eff, basis) = if needs_external_stages(r.voltage, nom, max) {
+        let (topology, eff, basis, phases) = if needs_external_stages(r.voltage, nom, max) {
+            let ph = ext_phases(max);
             (
                 Topology::BuckExternal,
                 EXT_BUCK_EFF_PCT,
                 format!(
-                    "estimate: controller + external stages at {nom:.2}A (integrated package would exceed {INTEGRATED_PKG_BOUND_W}W or {INTEGRATED_I_MAX_A}A)"
+                    "estimate: controller + {ph} phase(s) at {nom:.2}A, {PHASE_I_DESIGN_A:.0}A/phase design point derated from stage rating for reliability/FIT"
                 ),
+                ph,
             )
         } else {
-            (Topology::Buck, buck_eff_pct(nom), format!("estimate: conservative buck band at {nom:.2}A"))
+            (Topology::Buck, buck_eff_pct(nom), format!("estimate: conservative buck band at {nom:.2}A"), 1)
         };
         let p_out = r.voltage * nom;
         StagePlan {
@@ -432,6 +469,7 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
             noise_assumed_uvrms: BUCK_NOISE_FLOOR_UVRMS,
             serves: r.loads.clone(),
             cost_units: stage_cost_units(&topology, max),
+            phases,
         }
     };
     // Buck feeding a generated intermediate rail for one or more LDOs.
@@ -452,6 +490,7 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
             noise_assumed_uvrms: BUCK_NOISE_FLOOR_UVRMS,
             serves,
             cost_units: stage_cost_units(&Topology::Buck, max),
+            phases: 1,
         }
     };
 
@@ -536,9 +575,10 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
                     if needs_external_stages(d.vout, d.i_nom_a, d.i_max_a) {
                         d.topology = Topology::BuckExternal;
                         d.eff_pct = EXT_BUCK_EFF_PCT;
+                        d.phases = ext_phases(d.i_max_a);
                         d.eff_basis = format!(
-                            "estimate: controller + external stages at {:.2}A (integrated package would exceed {INTEGRATED_PKG_BOUND_W}W or {INTEGRATED_I_MAX_A}A)",
-                            d.i_nom_a
+                            "estimate: controller + {} phase(s) at {:.2}A, {PHASE_I_DESIGN_A:.0}A/phase design point derated from stage rating for reliability/FIT",
+                            d.phases, d.i_nom_a
                         );
                     } else {
                         d.eff_pct = buck_eff_pct(d.i_nom_a);

@@ -1815,7 +1815,7 @@ async fn run_powertree(
                 for st in &o.stages {
                     let topo = match st.topology {
                         bhdl_synthesizer::powertree::Topology::Buck => "buck    ".cyan().to_string(),
-                        bhdl_synthesizer::powertree::Topology::BuckExternal => "buck+ext".blue().to_string(),
+                        bhdl_synthesizer::powertree::Topology::BuckExternal => format!("buck+ext {}φ", st.phases).blue().to_string(),
                         bhdl_synthesizer::powertree::Topology::Ldo => "LDO     ".magenta().to_string(),
                     };
                     println!(
