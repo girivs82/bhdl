@@ -30,10 +30,10 @@ use num_complex::Complex64;
 use petgraph::graph::{EdgeIndex, NodeIndex};
 
 use crate::companion_models::{
-    capacitor_admittance, inductor_admittance, resistor_admittance,
+    capacitor_admittance_esl, inductor_admittance, resistor_admittance,
 };
 use crate::circuit::{
-    Circuit, DeviceKind, META_DCR, META_ESR,
+    Circuit, DeviceKind, META_DCR, META_ESL, META_ESR,
 };
 use crate::components::ComponentModel;
 use crate::errors::{Result, SpiceError};
@@ -530,7 +530,10 @@ fn stamp_branches(
                 let esr = branch.metadata.get(META_ESR)
                     .and_then(|s| s.parse::<f64>().ok())
                     .unwrap_or(0.0);
-                capacitor_admittance(branch.value, esr, omega)
+                let esl = branch.metadata.get(META_ESL)
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .unwrap_or(0.0);
+                capacitor_admittance_esl(branch.value, esr, esl, omega)
             }
             "Inductor" => {
                 let dcr = branch.metadata.get(META_DCR)
@@ -1070,5 +1073,129 @@ mod tests {
                 "common-cathode stage phase = {ph}°, want ±180"
             );
         }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PDN impedance sweep
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Small-signal impedance `Z(jω)` seen INTO a node: inject a unit AC
+/// current at `probe_node`, hold every DC-source-driven node at AC
+/// ground (a DC source has zero AC impedance), solve `Y·v = i`, and
+/// read `Z = v[probe]`. This is the PDN target-impedance measurement:
+/// the mask a SoC datasheet publishes is exactly `|Z(f)|` at its
+/// supply pins. Returns `(frequencies, Z)` log-spaced.
+pub fn run_ac_impedance(
+    circuit: &Circuit,
+    probe_node: &str,
+    start_hz: f64,
+    stop_hz: f64,
+    points_per_decade: usize,
+) -> Result<(Vec<f64>, Vec<Complex64>)> {
+    let node_index = NodeIndexMap::build(circuit)?;
+    let probe_idx = node_index
+        .get_by_name(probe_node)
+        .ok_or_else(|| SpiceError::NodeNotFound(probe_node.to_string()))?;
+    let frequencies = log_spaced_frequencies(start_hz, stop_hz, points_per_decade);
+    let n = node_index.size();
+    let dirichlet: Vec<usize> = ac_ground_nodes(circuit, &node_index)
+        .into_iter()
+        .filter(|&idx| idx != probe_idx)
+        .collect();
+    let mut z_out = Vec::with_capacity(frequencies.len());
+    for &f in &frequencies {
+        let omega = 2.0 * PI * f;
+        let mut y = DMatrix::<Complex64>::zeros(n, n);
+        stamp_branches(circuit, &node_index, omega, &HashMap::new(), &mut y);
+        let mut rhs = DVector::<Complex64>::zeros(n);
+        rhs[probe_idx] = Complex64::new(1.0, 0.0); // 1 A injection
+        for &idx in &dirichlet {
+            for j in 0..n {
+                y[(idx, j)] = Complex64::new(0.0, 0.0);
+            }
+            y[(idx, idx)] = Complex64::new(1.0, 0.0);
+            rhs[idx] = Complex64::new(0.0, 0.0);
+        }
+        let solution = y.lu().solve(&rhs).ok_or(SpiceError::SingularMatrix)?;
+        z_out.push(solution[probe_idx]);
+    }
+    Ok((frequencies, z_out))
+}
+
+#[cfg(test)]
+mod pdn_impedance_tests {
+    use super::*;
+
+    fn z_at(freqs: &[f64], z: &[Complex64], f: f64) -> Complex64 {
+        let i = freqs
+            .iter()
+            .enumerate()
+            .min_by(|a, b| (a.1 - f).abs().partial_cmp(&(b.1 - f).abs()).unwrap())
+            .unwrap()
+            .0;
+        z[i]
+    }
+
+    /// Rail node fed from an AC-grounded source through 1Ω, decoupled by
+    /// 1µF + 10mΩ ESR: closed forms at three frequencies.
+    #[test]
+    fn impedance_matches_closed_form_rc() {
+        let mut c = Circuit::new();
+        c.add_node("vin".into(), None);
+        c.add_node("rail".into(), None);
+        c.add_node("0".into(), None);
+        c.add_branch("V1".into(), "vin", "0", "VoltageSource".into(), 12.0, None);
+        c.add_branch("R1".into(), "vin", "rail", "Resistor".into(), 1.0, None);
+        let mut meta = std::collections::HashMap::new();
+        meta.insert(META_ESR.to_string(), "0.01".to_string());
+        c.add_branch_with_metadata("C1".into(), "rail", "0", "Capacitor".into(), 1e-6, None, meta);
+        let (freqs, z) = run_ac_impedance(&c, "rail", 100.0, 100e6, 30).expect("sweep");
+        // low f (1 kHz): cap ≈ open (|Zc| = 159Ω) ⇒ |Z| ≈ 1Ω ∥ 159Ω-ish → close to 1Ω
+        let zl = z_at(&freqs, &z, 1e3).norm();
+        assert!((zl - 1.0).abs() < 0.05, "low-f ≈ R: {zl}");
+        // high f (50 MHz): cap ≈ ESR ⇒ |Z| ≈ 10mΩ
+        let zh = z_at(&freqs, &z, 50e6).norm();
+        assert!((zh - 0.01).abs() < 0.002, "high-f ≈ ESR: {zh}");
+        // mid f (100 kHz): exact parallel combination R ∥ (ESR + 1/jωC)
+        let om = 2.0 * PI * 1e5;
+        let zc = Complex64::new(0.01, -1.0 / (om * 1e-6));
+        let zr = Complex64::new(1.0, 0.0);
+        let want = (zr * zc) / (zr + zc);
+        let got = z_at(&freqs, &z, 1e5);
+        assert!((got - want).norm() < 0.05 * want.norm(), "mid-f: got {got}, want {want}");
+    }
+
+    /// Two decap ranks with ESL: each has a self-resonance minimum, and
+    /// between them sits the ANTI-resonance peak — the feature a PDN
+    /// mask check exists to catch. Verify both self-resonance dips land
+    /// at 1/(2π√(LC)) and the peak between them exceeds both dips.
+    #[test]
+    fn esl_anti_resonance_between_decap_ranks() {
+        let mut c = Circuit::new();
+        c.add_node("rail".into(), None);
+        c.add_node("0".into(), None);
+        let cap = |c_: &mut Circuit, name: &str, val: f64, esr: f64, esl: f64| {
+            let mut m = std::collections::HashMap::new();
+            m.insert(META_ESR.to_string(), esr.to_string());
+            m.insert(META_ESL.to_string(), esl.to_string());
+            c_.add_branch_with_metadata(name.into(), "rail", "0", "Capacitor".into(), val, None, m);
+        };
+        cap(&mut c, "Cbulk", 100e-6, 0.02, 5e-9);  // f_res ≈ 225 kHz
+        cap(&mut c, "Chf", 100e-9, 0.01, 0.5e-9);  // f_res ≈ 22.5 MHz
+        let (freqs, z) = run_ac_impedance(&c, "rail", 10e3, 200e6, 40).expect("sweep");
+        let mag: Vec<f64> = z.iter().map(|v| v.norm()).collect();
+        let f_res1 = 1.0 / (2.0 * PI * (5e-9f64 * 100e-6).sqrt());
+        let f_res2 = 1.0 / (2.0 * PI * (0.5e-9f64 * 100e-9).sqrt());
+        // at each self-resonance the rank is purely its ESR (∥ the other rank)
+        let d1 = z_at(&freqs, &z, f_res1).norm();
+        assert!(d1 < 0.021, "bulk dip ≈ ESR: {d1}");
+        let d2 = z_at(&freqs, &z, f_res2).norm();
+        assert!(d2 < 0.011, "hf dip ≈ ESR: {d2}");
+        // anti-resonance: the max between the two dips exceeds both
+        let i1 = freqs.iter().position(|&f| f > f_res1).unwrap();
+        let i2 = freqs.iter().position(|&f| f > f_res2).unwrap();
+        let peak = mag[i1..i2].iter().cloned().fold(0.0, f64::max);
+        assert!(peak > 3.0 * d1.max(d2), "anti-resonance peak {peak} vs dips {d1}/{d2}");
     }
 }

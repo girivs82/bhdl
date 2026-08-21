@@ -312,6 +312,7 @@ fn split_call_args(txt: &str) -> (Vec<String>, BTreeMap<String, String>) {
 #[derive(Debug, Clone, Default)]
 struct EntityData {
     failure_states: Vec<(String, Option<f64>, Option<f64>, String, Option<String>, Option<String>)>, // (name, fit, of, source, behavior, internal_detection)
+    power_domains: Vec<bhdl_common::safety::PowerDomain>,
     seooc: Option<(Option<f64>, Option<f64>, Option<f64>, String)>,  // (lambda, spfm, lfm, source)
     handbook: Option<(String, String, Option<String>)>,              // (class, source, per-standard)
     /// Vendor-data validity configuration: the FMEDA/safety-manual FIT
@@ -326,6 +327,7 @@ struct EntityData {
 impl EntityData {
     fn merge(&mut self, o: EntityData) {
         self.failure_states.extend(o.failure_states);
+        self.power_domains.extend(o.power_domains);
         if o.seooc.is_some() { self.seooc = o.seooc; }
         if o.handbook.is_some() { self.handbook = o.handbook; }
         if o.config.is_some() { self.config = o.config; }
@@ -349,8 +351,27 @@ fn kv_from_tokens(toks: &[String]) -> BTreeMap<String, String> {
     let mut i = 0;
     while i < toks.len() {
         if i + 2 < toks.len() && toks[i + 1] == "=" {
-            out.insert(toks[i].clone(), toks[i + 2].trim_matches('"').to_string());
-            i += 3;
+            let mut v = toks[i + 2].trim_matches('"').to_string();
+            let mut j = i + 3;
+            // The lexer splits some number+unit literals into two tokens
+            // ("1" "m", "2" "A"). Re-attach a bare unit suffix: a short
+            // non-numeric token that is NOT itself the next key (i.e.
+            // not followed by '=') and not the `of` in `fit=X of Y`.
+            if j < toks.len() {
+                let s = &toks[j];
+                let is_key_next = toks.get(j + 1).map(|t| t == "=").unwrap_or(false);
+                let suffixy = !s.is_empty()
+                    && s.len() <= 4
+                    && s != "of"
+                    && !s.contains('=')
+                    && s.chars().all(|c| c.is_alphabetic() || c == 'µ' || c == 'Ω' || c == '%');
+                if suffixy && !is_key_next {
+                    v.push_str(s);
+                    j += 1;
+                }
+            }
+            out.insert(toks[i].clone(), v);
+            i = j;
         } else if let Some((k, v)) = toks[i].split_once('=') {
             out.insert(k.to_string(), v.trim_matches('"').to_string());
             i += 1;
@@ -388,6 +409,91 @@ fn collect_entity_data(root: &SyntaxNode) -> HashMap<String, EntityData> {
                         let src = kv.get("source").cloned().unwrap_or_default();
                         if src.is_empty() { d.errors.push(format!("{ename}: failure_state {name} has no source")); }
                         d.failure_states.push((name, num(kv.get("fit")), of, src, kv.get("behavior").cloned(), kv.get("detected_internally").cloned()));
+                    }
+                    "domain" => {
+                        let name = toks.get(1).cloned().unwrap_or_default();
+                        let kv = kv_from_tokens(&toks[2..]);
+                        let src = kv.get("source").cloned().unwrap_or_default();
+                        if src.is_empty() { d.errors.push(format!("{ename}: domain {name} has no source")); }
+                        let unit = |v: Option<&String>, mults: &[(&str, f64)]| -> Option<f64> {
+                            let v = v?.trim().trim_matches('"').trim();
+                            let end = v.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(v.len());
+                            let num: f64 = v[..end].parse().ok()?;
+                            let suf = v[end..].trim();
+                            if suf.is_empty() { return Some(num); }
+                            mults.iter().find(|(s2, _)| suf.eq_ignore_ascii_case(s2)).map(|(_, m)| num * m)
+                        };
+                        let volts = |k: &str| unit(kv.get(k), &[("V", 1.0), ("mV", 1e-3)]);
+                        let amps = |k: &str| unit(kv.get(k), &[("A", 1.0), ("mA", 1e-3)]);
+                        let pct = |k: &str| unit(kv.get(k), &[("%", 1.0)]);
+                        let ohms = |k: &str| unit(kv.get(k), &[("m", 1e-3), ("mΩ", 1e-3), ("Ω", 1.0), ("u", 1e-6), ("uΩ", 1e-6)]);
+                        let henr = |k: &str| unit(kv.get(k), &[("n", 1e-9), ("nH", 1e-9), ("p", 1e-12), ("pH", 1e-12), ("u", 1e-6), ("uH", 1e-6)]);
+                        let secs = |k: &str| unit(kv.get(k), &[("s", 1.0), ("ms", 1e-3), ("us", 1e-6), ("ns", 1e-9)]);
+                        let freq_of = |v: &str| -> Option<f64> {
+                            let v = v.trim();
+                            let end = v.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(v.len());
+                            let num: f64 = v[..end].parse().ok()?;
+                            match v[end..].trim() {
+                                "Hz" | "" => Some(num),
+                                "kHz" => Some(num * 1e3),
+                                "MHz" => Some(num * 1e6),
+                                "GHz" => Some(num * 1e9),
+                                _ => None,
+                            }
+                        };
+                        let zmask: Vec<(f64, f64)> = kv
+                            .get("zmask")
+                            .map(|m| {
+                                m.trim_matches('"')
+                                    .split_whitespace()
+                                    .filter_map(|bp| {
+                                        let (f, z) = bp.split_once(':')?;
+                                        let z = z.trim();
+                                        let zend = z.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(z.len());
+                                        let znum: f64 = z[..zend].parse().ok()?;
+                                        let zval = match z[zend..].trim() {
+                                            "m" | "mΩ" => znum * 1e-3,
+                                            "" | "Ω" => znum,
+                                            "u" | "uΩ" => znum * 1e-6,
+                                            _ => return None,
+                                        };
+                                        Some((freq_of(f)?, zval))
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        let pins: Vec<String> = kv
+                            .get("pins")
+                            .map(|pstr| {
+                                pstr.trim_matches('"')
+                                    .split(|c: char| c == ',' || c.is_whitespace())
+                                    .filter(|t| !t.is_empty())
+                                    .map(String::from)
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        let Some(v_nom) = volts("v") else {
+                            d.errors.push(format!("{ename}: domain {name} needs v=<voltage>"));
+                            continue;
+                        };
+                        if pins.is_empty() {
+                            d.errors.push(format!("{ename}: domain {name} needs pins=\"..\""));
+                            continue;
+                        }
+                        d.power_domains.push(bhdl_common::safety::PowerDomain {
+                            name, pins, v_nom,
+                            tol_pct: pct("tol"),
+                            i_nom_a: amps("i_nom"),
+                            i_max_a: amps("i_max"),
+                            zmask,
+                            step_a: amps("step"),
+                            step_rise_s: secs("rise"),
+                            step_dur_s: secs("dur"),
+                            droop_max_pct: pct("droop_max"),
+                            pdn_r_ohm: ohms("pdn_r"),
+                            pdn_l_h: henr("pdn_l"),
+                            source: src,
+                        });
                     }
                     "seooc" => {
                         let kv = kv_from_tokens(&toks[1..]);
@@ -1183,6 +1289,7 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
             type_name: view.inst_type.get(inst).cloned().unwrap_or_default(),
             parent: view.parent_of.get(inst).cloned(),
             data,
+            domains: ed.map(|e| e.power_domains.clone()).unwrap_or_default(),
         });
     }
 

@@ -125,6 +125,24 @@ impl TimedDrive {
     }
 }
 
+/// A load-current step: `i_amps` drawn FROM `node` to ground while
+/// `t_start ≤ t ≤ t_end`, zero outside. This is the PDN droop
+/// stimulus — the SoC's declared load transient (magnitude and window
+/// are vendor data, never guessed).
+#[derive(Debug, Clone)]
+pub struct TimedCurrentDrive {
+    pub node: String,
+    pub i_amps: f64,
+    pub t_start: f64,
+    pub t_end: f64,
+}
+
+impl TimedCurrentDrive {
+    pub fn active_at(&self, t: f64) -> bool {
+        t >= self.t_start && t <= self.t_end
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TransientParams {
     /// Name of the node held at `stimulus(t)`.
@@ -148,6 +166,9 @@ pub struct TransientParams {
     /// multi-pin symptom vector (one λ), never a multi-point fault.
     #[allow(dead_code)]
     pub timed_drives: Vec<TimedDrive>,
+    /// Load-current steps (PDN droop stimulus), active only in-window.
+    #[allow(dead_code)]
+    pub timed_current_drives: Vec<TimedCurrentDrive>,
     /// Optional adaptive timestep control. When `Some(_)`, the `timestep`
     /// field is the *initial* step size and the controller adjusts it as
     /// the simulation proceeds. When `None`, the timestep is fixed.
@@ -171,6 +192,7 @@ impl TransientParams {
             timestep,
             order: IntegrationOrder::default(),
             timed_drives: Vec::new(),
+            timed_current_drives: Vec::new(),
             adaptive: None,
         }
     }
@@ -178,6 +200,12 @@ impl TransientParams {
     /// Builder-style: add fault-injection timed drives.
     pub fn with_timed_drives(mut self, drives: Vec<TimedDrive>) -> Self {
         self.timed_drives = drives;
+        self
+    }
+
+    /// Builder-style: add load-current steps (PDN droop stimulus).
+    pub fn with_timed_current_drives(mut self, drives: Vec<TimedCurrentDrive>) -> Self {
+        self.timed_current_drives = drives;
         self
     }
 

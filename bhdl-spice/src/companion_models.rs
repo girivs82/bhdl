@@ -283,6 +283,22 @@ pub fn capacitor_admittance(capacitance: f64, esr: f64, omega: f64) -> Complex64
     }
 }
 
+/// Admittance of a real capacitor: `Z = ESR + jω·ESL + 1/(jωC)`,
+/// `Y = 1/Z`. ESL sets the self-resonance `f_res = 1/(2π√(L·C))` —
+/// above it the "capacitor" is an inductor, which is exactly the
+/// physics a PDN impedance sweep exists to expose. With `esl = 0`
+/// this reduces to [`capacitor_admittance`].
+pub fn capacitor_admittance_esl(capacitance: f64, esr: f64, esl: f64, omega: f64) -> Complex64 {
+    if esl == 0.0 {
+        return capacitor_admittance(capacitance, esr, omega);
+    }
+    if omega == 0.0 {
+        return Complex64::new(0.0, 0.0); // DC open
+    }
+    let z = Complex64::new(esr, omega * esl - 1.0 / (omega * capacitance));
+    Complex64::new(1.0, 0.0) / z
+}
+
 /// Admittance of an inductor at angular frequency ω, optionally with series DCR.
 ///
 /// `Z = DCR + jωL`, so `Y = 1 / (DCR + jωL)`.

@@ -13,7 +13,7 @@ use crate::{
         DeviceKind,
         META_PARENT_INSTANCE, META_DECOMPOSITION_ROLE, META_COMPONENT_CLASS,
         META_RDS_ON, META_F_SW, META_T_SW, META_I_QUIESCENT, META_MODEL_I_IN,
-        META_TOLERANCE, META_POWER_RATING, META_ESR, META_VOLTAGE_RATING, META_DCR,
+        META_TOLERANCE, META_POWER_RATING, META_ESR, META_ESL, META_VOLTAGE_RATING, META_DCR,
         META_SATURATION_CURRENT, META_EMISSION_COEFFICIENT, META_THERMAL_VOLTAGE,
         META_FORWARD_VOLTAGE, META_FORWARD_CURRENT,
         META_MAX_CURRENT, META_MAX_VOLTAGE, META_MAX_POWER, META_TEMP_MIN, META_TEMP_MAX,
@@ -1946,6 +1946,7 @@ fn build_branch_metadata(model: &ExtractedModel) -> HashMap<String, String> {
     put_num(&mut meta, "tolerance",            META_TOLERANCE);
     put_num(&mut meta, "power_rating",         META_POWER_RATING);
     put_num(&mut meta, "esr",                  META_ESR);
+    put_num(&mut meta, "esl",                  META_ESL);
     put_num(&mut meta, "voltage_rating",       META_VOLTAGE_RATING);
     put_num(&mut meta, "dcr",                  META_DCR);
     put_num(&mut meta, "saturation_current",   META_SATURATION_CURRENT);

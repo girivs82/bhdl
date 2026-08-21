@@ -75,6 +75,10 @@ pub const META_TOLERANCE: &str = "tolerance";
 pub const META_POWER_RATING: &str = "power_rating";
 /// Equivalent series resistance for capacitors, in ohms.
 pub const META_ESR: &str = "esr";
+/// Capacitor equivalent series inductance (henries) — sets the
+/// self-resonance and the inter-rank anti-resonances a PDN impedance
+/// sweep exists to find. Datasheet data, never guessed.
+pub const META_ESL: &str = "esl";
 /// Op-amp positive output saturation (volts) — the positive supply rail.
 pub const META_VSAT_P: &str = "vsat_p";
 /// Op-amp negative output saturation (volts) — the negative supply rail.

@@ -283,6 +283,38 @@ pub enum PartData {
 }
 
 /// One physical instance in the analysed scope.
+/// A declared SoC/regulator power domain — the PDN contract the board
+/// must meet. All numbers are VENDOR data (typically NDA'd — they live
+/// in the customer's own files, never this repo); absence of a field
+/// simply skips that check, stated.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PowerDomain {
+    pub name: String,
+    /// Entity pins belonging to this domain (share one rail net).
+    pub pins: Vec<String>,
+    /// Nominal rail voltage (V).
+    pub v_nom: f64,
+    /// Static tolerance (± percent of v_nom).
+    pub tol_pct: Option<f64>,
+    /// Nominal / maximum current draw (A).
+    pub i_nom_a: Option<f64>,
+    pub i_max_a: Option<f64>,
+    /// Target-impedance mask breakpoints (Hz, Ω), log-log interpolated
+    /// between points; checked only inside the declared span.
+    pub zmask: Vec<(f64, f64)>,
+    /// Load-step stimulus: magnitude (A), rise time (s), hold (s).
+    pub step_a: Option<f64>,
+    pub step_rise_s: Option<f64>,
+    pub step_dur_s: Option<f64>,
+    /// Allowed droop under the step (± percent of v_nom).
+    pub droop_max_pct: Option<f64>,
+    /// Declared layout-PDN budget: series R (Ω) and L (H) between the
+    /// board network and the die — added as labelled series terms.
+    pub pdn_r_ohm: Option<f64>,
+    pub pdn_l_h: Option<f64>,
+    pub source: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Part {
     /// Netlist instance name (`rail_a_mon`).
@@ -293,6 +325,9 @@ pub struct Part {
     /// `None` for top-level parts.
     pub parent: Option<String>,
     pub data: PartData,
+    /// Declared power domains (SoC PDN contract), if any.
+    #[serde(default)]
+    pub domains: Vec<PowerDomain>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

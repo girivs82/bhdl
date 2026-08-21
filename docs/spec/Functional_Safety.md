@@ -668,3 +668,37 @@ analysis (ISO 26262-8 §8) — produced by the build, reviewed by the
 safety engineer, no re-derivation. Phase 1 already emits the baseline
 for `{ parts, mechanisms, assumptions, gaps, verdict }`; Phase 3 adds
 fault classes and metrics.
+
+### 2.10 PDN power-domain checks (design + AoU)
+
+A SoC's PDN contract is declared per entity as
+`domain <NAME> pins=".." v=<V> tol=<%> i_nom=<A> i_max=<A>
+zmask="<f>:<Z> .." step=<A> rise=<t> dur=<t> droop_max=<%>
+pdn_r=<Ω> pdn_l=<H> source="..";` — all numbers VENDOR data
+(typically NDA'd: they live in the customer's own files, never this
+repo; in-repo examples are FIXTURE-labelled). Checks, each skipped
+with a statement when its datum is absent:
+
+- **Static window** — the rail's healthy-operating-point voltage vs
+  `v ± tol` (measured; declared-draw stamping is a later increment).
+- **Target-impedance mask** — a small-signal AC impedance sweep of the
+  WHOLE tree (1 A injection at the domain net, DC sources as AC
+  grounds), 100 kHz–50 MHz — the board's band of responsibility
+  (below: the regulator control loop per its model; above:
+  package/die — both hand-offs stated). `|Z(f)|` plus the declared
+  PDN budget (`pdn_r + jω·pdn_l`, the layout parasitics a pre-layout
+  netlist cannot know) is checked against the mask, log-log
+  interpolated between breakpoints, inside the declared span only.
+  Capacitors carry `esr`/`esl` attributes — ESL sets the
+  self-resonances and the inter-rank ANTI-resonances the mask check
+  exists to find (datasheet data, never guessed).
+- **Load-step droop** — a timed current drive (`step` amps for `dur`,
+  released after) from the healthy operating point, solved over the
+  whole tree; measured board droop + the budget's analytic terms
+  (`step·pdn_r + pdn_l·step/rise`) vs `droop_max`. Regulator recovery
+  is only as good as its converter model — stated in the basis line.
+
+The impedance sweep and the droop solve validate the ENTIRE upstream
+tree in one circuit — a leaf step propagates through every rank of
+decoupling into the intermediate rails naturally, because the netlist
+IS one circuit.

@@ -785,9 +785,9 @@ source = "§10.12 p.10-21"
             mission: Some(Mission { ambient_c: 40.0, on_hours: None, cycles: None, environment: None, quality: None, profile: None, phases: vec![], time_basis: None, lifetime_h: None }),
             scopes: vec![], universe: vec![], gaps: vec![], errors: vec![],
             parts: vec![
-                Part { instance: "r1".into(), type_name: "Res".into(), parent: None, data: hb(Some("IEC62380")) },
-                Part { instance: "r2".into(), type_name: "Res".into(), parent: None, data: hb(Some("IEC62380")) }, // no stress
-                Part { instance: "r3".into(), type_name: "Res".into(), parent: None, data: hb(None) },             // no standard: untouched
+                Part { instance: "r1".into(), type_name: "Res".into(), parent: None, data: hb(Some("IEC62380")), domains: vec![] },
+                Part { instance: "r2".into(), type_name: "Res".into(), parent: None, data: hb(Some("IEC62380")), domains: vec![] }, // no stress
+                Part { instance: "r3".into(), type_name: "Res".into(), parent: None, data: hb(None), domains: vec![] },             // no standard: untouched
             ],
         };
         let stress: StressMap = [("r1".to_string(), InstanceStress { applied: 0.25, rated: 0.5, resistance_ohm: Some(1e3), capacitance_f: None, power_w: None, theta_ja_c_per_w: None, rated_power_w: None, temp_rise_c: None })].into();
@@ -817,7 +817,7 @@ source = "§10.12 p.10-21"
             mission: Some(Mission { ambient_c: 26.7, on_hours: None, cycles: None, environment: Some("GB".into()), quality: Some("M".into()), profile: Some("p".into()), phases: phases.clone(), time_basis: None, lifetime_h: None }),
             scopes: vec![], universe: vec![], gaps: vec![], errors: vec![],
             parts: vec![Part { instance: "r1".into(), type_name: "Res".into(), parent: None, data: PartData::Handbook {
-                class: "res_fixed_film".into(), source: "t".into(), per: Some("MILHDBK217F".into()), fit: None, fit_basis: None } }],
+                class: "res_fixed_film".into(), source: "t".into(), per: Some("MILHDBK217F".into()), fit: None, fit_basis: None }, domains: vec![] }],
         };
         let stress: StressMap = [("r1".to_string(), InstanceStress { applied: 0.1, rated: 1.0, resistance_ohm: Some(1e3), capacitance_f: None, power_w: None, theta_ja_c_per_w: None, rated_power_w: None, temp_rise_c: None })].into();
         apply_reliability(&mut model, &stress, &tables);

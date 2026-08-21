@@ -282,6 +282,11 @@ pub fn run_transient_ibis_ic(
             return Err(SpiceError::NodeNotFound(d.node.clone()));
         }
     }
+    for d in &params.timed_current_drives {
+        if !names.contains(d.node.as_str()) {
+            return Err(SpiceError::NodeNotFound(d.node.clone()));
+        }
+    }
     // Both stamped branches of a split buffer map to the same drive;
     // the bool = "is the VCC-referenced branch".
     let mut drive_of: HashMap<&str, (&IbisDrive, bool)> = HashMap::new();
@@ -386,6 +391,24 @@ pub fn run_transient_ibis_ic(
                     &ground_name,
                     "VoltageSource".to_string(),
                     d.level_v,
+                    None,
+                );
+            }
+        }
+        // Load-current steps: a CurrentSource from the node to ground,
+        // stamped only in-window (zero draw outside — released).
+        for (di, d) in params.timed_current_drives.iter().enumerate() {
+            if d.active_at(t_clamped) {
+                // negated: the solver's CurrentSource convention pushes
+                // value INTO its first node — a load DRAW is the reverse
+                // (unit test pins this: +2A must droop the rail, not
+                // boost it)
+                c.add_branch(
+                    format!("__IDRV{di}__"),
+                    &d.node,
+                    &ground_name,
+                    "CurrentSource".to_string(),
+                    -d.i_amps,
                     None,
                 );
             }
@@ -864,5 +887,46 @@ mod timed_drive_tests {
         assert!(out[at(3.9e-3)] > 11.0, "out recovered: {}", out[at(3.9e-3)]);
         // the aux window being shorter is visible: aux leads out everywhere after 0.5ms
         assert!(aux[at(2.0e-3)] > out[at(2.0e-3)], "aux leads out");
+    }
+}
+
+#[cfg(test)]
+mod current_drive_tests {
+    use super::*;
+    use crate::circuit::Circuit;
+    use crate::transient::{Stimulus, TimedCurrentDrive, TransientParams};
+
+    /// 12V through 1Ω to `rail` with 10µF hold-up: a 2A load step must
+    /// droop the rail by I·R = 2V at settle (9.99..10V), and recover
+    /// to ~12V after release. Verifies the CurrentSource stamp SIGN
+    /// (draw pulls the node DOWN) and the window release.
+    #[test]
+    fn current_step_droops_by_ir_and_recovers() {
+        let mut c = Circuit::new();
+        c.add_node("vin".into(), None);
+        c.add_node("rail".into(), None);
+        c.add_node("0".into(), None);
+        c.add_branch("V1".into(), "vin", "0", "VoltageSource".into(), 12.0, None);
+        c.add_branch("R1".into(), "vin", "rail", "Resistor".into(), 1.0, None);
+        c.add_branch("C1".into(), "rail", "0", "Capacitor".into(), 10e-6, None);
+        let params = TransientParams::new("", Stimulus::Constant(0.0), vec!["rail"], 200e-6, 0.5e-6)
+            .with_timed_current_drives(vec![TimedCurrentDrive {
+                node: "rail".into(),
+                i_amps: 2.0,
+                t_start: 0.0,
+                t_end: 100e-6,
+            }]);
+        let mut ic = std::collections::HashMap::new();
+        ic.insert("vin".to_string(), 12.0);
+        ic.insert("rail".to_string(), 12.0);
+        let r = run_transient_ibis_ic(&c, &params, &[], Some(&ic)).expect("transient");
+        let rail = &r.probe_voltages["rail"];
+        let at = |t: f64| rail[r.times.iter().position(|&x| x >= t).unwrap()];
+        // settled during window (τ = 10µs, sample at 80µs = 8τ)
+        let v_loaded = at(80e-6);
+        assert!((v_loaded - 10.0).abs() < 0.05, "droop = I·R: {v_loaded}");
+        // recovered after release (sample at 190µs, 9τ past release)
+        let v_rec = at(190e-6);
+        assert!((v_rec - 12.0).abs() < 0.05, "recovered: {v_rec}");
     }
 }
