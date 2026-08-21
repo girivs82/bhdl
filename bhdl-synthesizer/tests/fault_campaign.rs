@@ -1154,3 +1154,55 @@ board Protected {
         assert!((o.p_in_w - o.p_load_w - o.p_diss_w).abs() < 1e-6, "{o:#?}");
     }
 }
+
+/// --emit closes the loop: the emitted region (generic placeholders +
+/// wiring + assumption attributes) makes every load rail DRIVEN — the
+/// worklist empties, and the scoped assumption attributes land on the
+/// instances as the acceptance contract for the real parts.
+#[tokio::test]
+async fn powertree_emit_closes_the_loop() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    use bhdl_synthesizer::powertree::{
+        emit_power_region, harvest_loads, propose_trees, splice_power_region, strip_power_region,
+    };
+    let src = std::fs::read_to_string(ws.join("tests/circuits/realistic/test_powertree_loads.bhdl")).unwrap();
+    let pr = parse(&src);
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let netlist = gen.generate_from_ast_and_analysis(&sf, &analysis).await.unwrap();
+    let h = harvest_loads(&netlist, &sf);
+    let opts = propose_trees(&h, "VIN").unwrap();
+
+    let region = emit_power_region(&opts[0], "GND");
+    let emitted = splice_power_region(&src, &region).unwrap();
+
+    // the emitted board parses and synthesizes
+    let pr2 = parse(&emitted);
+    assert!(pr2.errors().is_empty(), "{:?}", pr2.errors());
+    let sf2 = SourceFile::cast(pr2.syntax()).unwrap();
+    let analysis2 = analyze(&sf2);
+    let mut gen2 = NetlistGenerator::new();
+    let n2 = gen2.generate_from_ast_and_analysis(&sf2, &analysis2).await.expect("emitted board synthesizes");
+
+    // every load rail is now DRIVEN — the worklist is empty
+    let h2 = harvest_loads(&n2, &sf2);
+    for r in h2.rails.iter().filter(|r| !r.loads.is_empty()) {
+        assert!(r.driven, "emitted tree must drive {}: {r:#?}", r.net);
+    }
+    // the assumption attributes landed on the placeholder instances
+    // (scoped-attribute consumption) — the acceptance contract is ON
+    // the netlist, not just in text
+    let (_, u) = n2.instances.iter().find(|(_, i)| i.name == "u_v1v8").expect("LDO placeholder");
+    assert_eq!(u.attributes.get("powertree_eff_assumed_pct").map(String::as_str), Some("54.5"), "{:#?}", u.attributes);
+    assert!(u.attributes.contains_key("powertree_noise_assumed_uvrms"));
+    // uniform contract: ctor args resolved onto attributes (rename-ready)
+    assert!(u.attributes.contains_key("i_rating"), "{:#?}", u.attributes);
+
+    // strip → byte-identical replanning source
+    let stripped = strip_power_region(&emitted).expect("region present");
+    // (import line remains — harmless; the board body is restored)
+    assert!(!stripped.contains("BEGIN GENERATED"));
+    assert!(stripped.contains("@V1V0 -> soc: SocCore().1;"));
+}

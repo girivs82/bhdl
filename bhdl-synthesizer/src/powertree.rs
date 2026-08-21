@@ -1057,3 +1057,164 @@ pub fn propose_trees_with_policy(
     });
     Ok(options)
 }
+
+// ─── Emission ───────────────────────────────────────────────────────
+
+/// Region markers — regeneration REPLACES everything between them;
+/// hand edits inside are lost by design (generated-only discipline).
+pub const EMIT_BEGIN: &str =
+    "// ── BEGIN GENERATED POWER TREE (bhdl powertree --emit — regenerate, never hand-edit) ──";
+pub const EMIT_END: &str = "// ── END GENERATED POWER TREE ──";
+
+/// The import the emitted region needs at file level.
+pub const EMIT_IMPORT: &str = "import { GenericBuck, GenericBuckExt, GenericLdo, GenericPrereg } from \"bhdl-stdlib/power/generic_regulators.bhdl\";";
+
+fn fmt_v(v: f64) -> String {
+    format!("{v}V")
+}
+fn fmt_a_ceil(a: f64) -> String {
+    format!("{}A", (a * 100.0).ceil() / 100.0)
+}
+
+/// Render the chosen option as a board-body region: generated rail
+/// declarations, generic placeholder instances (uniform ctor —
+/// committing a real part is a RENAME), wiring, and the per-stage
+/// ASSUMPTIONS as scoped attributes — the acceptance contract the
+/// real part must meet or beat at sign-off.
+pub fn emit_power_region(option: &TreeOption, gnd: &str) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("    {EMIT_BEGIN}\n"));
+    out.push_str(&format!(
+        "    // option \"{}\" — {}\n    // assumptions are CONSERVATIVE ESTIMATES (stated per stage); the real part swapped in must MEET OR BEAT them\n",
+        option.label, option.strategy
+    ));
+    // generated rails (bulk/intermediate/protected) need declarations
+    let known_outputs: Vec<&str> = option.stages.iter().map(|s| s.to.as_str()).collect();
+    for st in &option.stages {
+        if st.to.starts_with("V_PROT") || st.to.starts_with("V_BULK") || st.to.starts_with("V_INT") {
+            out.push_str(&format!("    power {} = {};\n", st.to, fmt_v(st.vout)));
+        }
+    }
+    // stages: sources before consumers (a stage whose `from` is another
+    // stage's output comes after it)
+    let mut ordered: Vec<&StagePlan> = Vec::new();
+    let mut remaining: Vec<&StagePlan> = option.stages.iter().collect();
+    while !remaining.is_empty() {
+        let before = remaining.len();
+        remaining.retain(|st| {
+            let ready = !known_outputs.contains(&st.from.as_str())
+                || ordered.iter().any(|o| o.to == st.from);
+            if ready {
+                ordered.push(st);
+            }
+            !ready
+        });
+        if remaining.len() == before {
+            ordered.extend(remaining.drain(..)); // cycle-proof fallback
+        }
+    }
+    for st in ordered {
+        let inst = format!("u_{}", st.to.to_lowercase());
+        let entity = match st.topology {
+            Topology::Prereg => "GenericPrereg",
+            Topology::Buck => "GenericBuck",
+            Topology::BuckExternal => "GenericBuckExt",
+            Topology::Ldo => "GenericLdo",
+        };
+        // NAMED ctor args: they stamp onto the instance by name in
+        // synthesis (positional binding on standalone instantiations
+        // is unreliable), they read unambiguously, and the param
+        // names (vin/vout/rated) ARE the uniform contract a real
+        // regulator entity must share for the rename-swap.
+        out.push_str(&format!(
+            "\n    {inst}: {entity}(vin={}, vout={}, rated={});\n",
+            fmt_v(st.vin),
+            fmt_v(st.vout),
+            fmt_a_ceil(st.required_rating_a)
+        ));
+        out.push_str(&format!("    @{} -> {inst}.VIN;\n", st.from));
+        out.push_str(&format!("    {inst}.VOUT -> @{};\n", st.to));
+        out.push_str(&format!("    {inst}.GND -> @{gnd};\n"));
+        out.push_str(&format!(
+            "    attribute {inst}.powertree_eff_assumed_pct = \"{:.1}\";\n",
+            st.eff_pct
+        ));
+        out.push_str(&format!(
+            "    attribute {inst}.powertree_noise_assumed_uvrms = \"{:.0}\";\n",
+            st.noise_assumed_uvrms
+        ));
+        if st.phases > 1 {
+            out.push_str(&format!(
+                "    attribute {inst}.powertree_phases = \"{}\";\n",
+                st.phases
+            ));
+        }
+        out.push_str(&format!(
+            "    attribute {inst}.powertree_basis = \"{}\";\n",
+            st.eff_basis.replace('"', "'")
+        ));
+        out.push_str(&format!(
+            "    attribute {inst}.powertree_serves = \"{}\";\n",
+            st.serves.join(", ").replace('"', "'")
+        ));
+    }
+    out.push_str(&format!("    {EMIT_END}\n"));
+    out
+}
+
+/// Remove an existing generated region (for REPLANNING: the region's
+/// own drivers would otherwise empty the worklist and a re-emit would
+/// plan against its previous self). Returns None when no region.
+pub fn strip_power_region(source: &str) -> Option<String> {
+    let b = source.find(EMIT_BEGIN)?;
+    let e = source.find(EMIT_END)?;
+    if e < b {
+        return None;
+    }
+    let end = e + EMIT_END.len();
+    let b = source[..b].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let end = source[end..].find('\n').map(|i| end + i + 1).unwrap_or(source.len());
+    let mut t = source.to_string();
+    t.replace_range(b..end, "");
+    Some(t)
+}
+
+/// Splice the region into the board source: replace an existing
+/// marked region, else insert before the board's closing brace; and
+/// ensure the generic-regulators import exists at file level.
+pub fn splice_power_region(source: &str, region: &str) -> Result<String, String> {
+    let mut text = source.to_string();
+    // import line (file level, after the last existing import or at top)
+    if !text.contains(EMIT_IMPORT) {
+        let insert_at = text
+            .lines()
+            .scan(0usize, |pos, l| {
+                let start = *pos;
+                *pos += l.len() + 1;
+                Some((start, l))
+            })
+            .filter(|(_, l)| l.trim_start().starts_with("import "))
+            .map(|(start, l)| start + l.len() + 1)
+            .last()
+            .unwrap_or(0);
+        text.insert_str(insert_at, &format!("{EMIT_IMPORT}\n"));
+    }
+    // region
+    if let (Some(b), Some(e)) = (text.find(EMIT_BEGIN), text.find(EMIT_END)) {
+        if e < b {
+            return Err("powertree emit: corrupted region markers (END before BEGIN)".into());
+        }
+        let end = e + EMIT_END.len();
+        // swallow the line indentation before BEGIN
+        let b = text[..b].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        text.replace_range(b..end, region.trim_end());
+        Ok(text)
+    } else {
+        // insert before the LAST closing brace (the board's)
+        let brace = text
+            .rfind('}')
+            .ok_or("powertree emit: no closing brace found — is there a board definition?")?;
+        text.insert_str(brace, &format!("\n{region}"));
+        Ok(text)
+    }
+}

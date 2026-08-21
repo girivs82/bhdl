@@ -1,0 +1,62 @@
+// Generic placeholder regulators — the power tree's emission targets.
+//
+// THE CONTRACT: all four entities share the SAME positional ctor
+// (vin_nom, vout_nom, i_rating), the same pin names (VIN, VOUT, GND)
+// and the same exported attributes. Committing a real part is a
+// RENAME of the entity instantiation — the ctor args and wiring stay;
+// real regulator entities in the library should keep this contract so
+// the swap never touches the tree. The per-stage ASSUMPTIONS
+// (efficiency, noise, phases) ride as scoped attributes on the
+// instance — they are the acceptance test the real part must meet or
+// beat at sign-off.
+//
+// These are placeholders: no expansion blocks, no vendor data — a
+// board carrying them is a planned tree, not a finished design.
+
+entity GenericBuck(vin: voltage, vout: voltage, rated: current) {
+    pin VIN: power in;
+    pin VOUT: power out;
+    pin GND: ground;
+    attribute component_class = "regulator";
+    attribute vin_nom = vin;
+    attribute vout_nom = vout;
+    attribute i_rating = rated;
+    attribute topology = "buck";
+    attribute kicad_symbol = "Regulator_Switching:Generic";
+}
+
+entity GenericBuckExt(vin: voltage, vout: voltage, rated: current) {
+    pin VIN: power in;
+    pin VOUT: power out;
+    pin GND: ground;
+    attribute component_class = "regulator";
+    attribute vin_nom = vin;
+    attribute vout_nom = vout;
+    attribute i_rating = rated;
+    attribute topology = "buck_external_stages";
+    attribute kicad_symbol = "Regulator_Switching:Generic";
+}
+
+entity GenericLdo(vin: voltage, vout: voltage, rated: current) {
+    pin VIN: power in;
+    pin VOUT: power out;
+    pin GND: ground;
+    attribute component_class = "regulator";
+    attribute vin_nom = vin;
+    attribute vout_nom = vout;
+    attribute i_rating = rated;
+    attribute topology = "ldo";
+    attribute kicad_symbol = "Regulator_Linear:Generic";
+}
+
+entity GenericPrereg(vin: voltage, vout: voltage, rated: current) {
+    pin VIN: power in;
+    pin VOUT: power out;
+    pin GND: ground;
+    attribute component_class = "protection";
+    attribute vin_nom = vin;
+    attribute vout_nom = vout;
+    attribute i_rating = rated;
+    attribute topology = "prereg";
+    attribute kicad_symbol = "Power_Protection:Generic";
+}

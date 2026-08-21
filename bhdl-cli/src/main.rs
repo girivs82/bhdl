@@ -165,6 +165,15 @@ enum Commands {
         /// with a declared budget and no attached loads.
         #[arg(long)]
         input: Option<String>,
+        /// Emit the chosen tree option (1-based index from the printed
+        /// list) INTO the board file as a marked generated region —
+        /// generic placeholder regulators wired to the rails, with the
+        /// stage assumptions as scoped attributes (the acceptance
+        /// contract for the real parts). Re-running replaces the
+        /// region; the modified board is re-verified through the full
+        /// pipeline and restored on failure.
+        #[arg(long, value_name = "OPTION#")]
+        emit: Option<usize>,
         /// Require a protected front end (OV/UV, reverse, transient)
         /// between the input and EVERY rail — the argument states the
         /// protection reason and is recorded. Rails whose loads declare
@@ -615,8 +624,8 @@ async fn main() -> Result<()> {
             run_elaborate(&source_file, &input_content, &cli.input, output).await?;
         }
 
-        Some(Commands::Powertree { json, input, prereg }) => {
-            run_powertree(&source_file, &input_content, &cli.input, cli.no_elaborate, json, input, prereg).await?;
+        Some(Commands::Powertree { json, input, emit, prereg }) => {
+            run_powertree(&source_file, &input_content, &cli.input, cli.no_elaborate, json, input, prereg, emit).await?;
         }
 
         Some(Commands::Freeze { output }) => {
@@ -1728,7 +1737,32 @@ async fn run_powertree(
     json_out: Option<PathBuf>,
     input_rail: Option<String>,
     prereg: Option<String>,
+    emit: Option<usize>,
 ) -> Result<()> {
+    // Regeneration: an existing generated region drives the rails and
+    // would empty its own worklist — strip it and replan from the
+    // hand-authored board when emitting.
+    let stripped_holder;
+    let reparsed_holder;
+    let (source_file, input_content): (&SourceFile, &str) = if emit.is_some() {
+        let disk = fs::read_to_string(input_path)?;
+        match bhdl_synthesizer::powertree::strip_power_region(&disk) {
+            Some(stripped) => {
+                println!("  existing generated power region stripped for replanning (regenerate-and-diff)");
+                let pr = parse(&stripped);
+                if !pr.errors().is_empty() {
+                    anyhow::bail!("board without its generated region does not parse: {:?}", pr.errors());
+                }
+                stripped_holder = stripped;
+                reparsed_holder = SourceFile::cast(pr.syntax()).unwrap();
+                (&reparsed_holder, stripped_holder.as_str())
+            }
+            None => (source_file, input_content),
+        }
+    } else {
+        (source_file, input_content)
+    };
+
     let netlist = verified_netlist(source_file, input_content, input_path, no_elaborate).await?;
     let harvest = bhdl_synthesizer::powertree::harvest_loads(&netlist, source_file);
 
@@ -1862,6 +1896,47 @@ async fn run_powertree(
                 });
                 fs::write(&p, serde_json::to_string_pretty(&dump)?)?;
                 println!("\n  harvest + options JSON → {}", p.display());
+            }
+            if let Some(n) = emit {
+                let Some(opt) = options.get(n.wrapping_sub(1)) else {
+                    anyhow::bail!("--emit {n}: no such option (1..{})", options.len());
+                };
+                let gnd = netlist
+                    .nets
+                    .iter()
+                    .filter(|(_, nn)| matches!(nn.net_class, bhdl_netlist::types::NetClass::Ground))
+                    .filter_map(|(_, nn)| nn.name.clone())
+                    .max_by_key(|nm| (nm == "GND") as u8)
+                    .ok_or_else(|| anyhow::anyhow!("--emit: the board has no ground net"))?;
+                let region = bhdl_synthesizer::powertree::emit_power_region(opt, &gnd);
+                // splice into the ON-DISK text (input_content is the
+                // desugared form — never write that back)
+                let disk_raw = fs::read_to_string(input_path)?;
+                let disk = bhdl_synthesizer::powertree::strip_power_region(&disk_raw).unwrap_or(disk_raw.clone());
+                let new_text = bhdl_synthesizer::powertree::splice_power_region(&disk, &region)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                fs::write(input_path, &new_text)?;
+                println!(
+                    "\n  emitted option [{n}] \"{}\" into {} ({} stage(s) as generic placeholders)",
+                    opt.label, input_path.display(), opt.stages.len()
+                );
+                // GATE: the modified board must still build through the
+                // verified pipeline — restore the original on failure.
+                let re_pr = parse(&new_text);
+                let ok = if re_pr.errors().is_empty() {
+                    let re_sf = SourceFile::cast(re_pr.syntax()).unwrap();
+                    verified_netlist(&re_sf, &new_text, input_path, no_elaborate).await.is_ok()
+                } else {
+                    false
+                };
+                if !ok {
+                    fs::write(input_path, &disk_raw)?;
+                    anyhow::bail!(
+                        "--emit: the emitted board FAILED to re-verify — original file restored; this is a powertree emission bug, report it"
+                    );
+                }
+                println!("  {} emitted board re-verified through the full pipeline", "✓".green().bold());
+                println!("  committing a real part = RENAME the Generic* instantiation; sign-off must check the part meets the powertree_* assumption attributes");
             }
         }
     }
