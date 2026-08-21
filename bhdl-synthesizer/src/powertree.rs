@@ -231,6 +231,35 @@ const LDO_HEADROOM_V: f64 = 0.5;
 /// comfort, conservative.
 const LDO_DISS_BOUND_W: f64 = 0.5;
 
+// ── integrated buck → controller + external power stages crossover ──
+// Driven by PACKAGE DISSIPATION and thermals, not a folklore current:
+// an integrated buck's FET conduction + switching loss lands mostly
+// in one package. Stated model, conservative:
+/// Fraction of a buck stage's conversion loss assumed to land in the
+/// integrated package (FETs dominate; the rest is inductor/caps).
+const INTEGRATED_LOSS_IN_PKG: f64 = 0.7;
+/// Integrated-package dissipation bound (W) — QFN-class with decent
+/// copper. Above this, the loss must spread across external FETs.
+const INTEGRATED_PKG_BOUND_W: f64 = 1.5;
+/// Absolute integrated-FET current ceiling (A) — parts above this are
+/// rare regardless of thermals.
+const INTEGRATED_I_MAX_A: f64 = 8.0;
+/// Controller + external-stage efficiency estimate (better FETs than
+/// integrated at high current) — conservative, stated.
+const EXT_BUCK_EFF_PCT: f64 = 90.0;
+
+/// Does this buck stage need a controller + external power stages?
+/// True when the rating exceeds integrated FETs, or the in-package
+/// share of the conversion loss exceeds the package bound.
+fn needs_external_stages(vout: f64, i_nom: f64, i_max: f64) -> bool {
+    if i_max > INTEGRATED_I_MAX_A {
+        return true;
+    }
+    let eff = buck_eff_pct(i_nom);
+    let p_diss = vout * i_nom * (100.0 / eff - 1.0);
+    p_diss * INTEGRATED_LOSS_IN_PKG > INTEGRATED_PKG_BOUND_W
+}
+
 /// RELATIVE cost model — an ORDERING between regulator classes, never
 /// prices (exact cost/availability live outside the repo). Basis,
 /// stated: an LDO is a small IC + two caps; a buck adds a controller,
@@ -252,6 +281,14 @@ fn stage_cost_units(topology: &Topology, i_max_a: f64) -> f64 {
             x if x <= 5.0 => 6.0,
             _ => 9.0,
         },
+        // controller + drivers + discrete FET pair(s) + bigger
+        // inductor(s); beyond ~30A rating think multi-phase (more FET
+        // pairs, more inductors)
+        Topology::BuckExternal => match i_max_a {
+            x if x <= 15.0 => 9.0,
+            x if x <= 30.0 => 12.0,
+            _ => 16.0,
+        },
     }
 }
 
@@ -261,7 +298,11 @@ fn buck_eff_pct(i_a: f64) -> f64 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Topology {
+    /// Integrated buck (converter with internal FETs).
     Buck,
+    /// Controller + external power stages — high current, loss spread
+    /// across discrete FETs.
+    BuckExternal,
     Ldo,
 }
 
@@ -307,6 +348,9 @@ pub struct TreeOption {
     pub p_diss_w: f64,
     /// Cost/area proxies — counts, never invented prices.
     pub buck_count: usize,
+    /// Controller + external power-stage bucks (high-current class).
+    #[serde(default)]
+    pub ext_buck_count: usize,
     pub ldo_count: usize,
     /// Σ relative cost units — the sort key. An ordering between
     /// configurations, never a price.
@@ -362,10 +406,20 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
         }
     };
     let buck_stage = |from: &str, v_from: f64, r: &RailSummary, nom: f64, max: f64| -> StagePlan {
-        let eff = buck_eff_pct(nom);
+        let (topology, eff, basis) = if needs_external_stages(r.voltage, nom, max) {
+            (
+                Topology::BuckExternal,
+                EXT_BUCK_EFF_PCT,
+                format!(
+                    "estimate: controller + external stages at {nom:.2}A (integrated package would exceed {INTEGRATED_PKG_BOUND_W}W or {INTEGRATED_I_MAX_A}A)"
+                ),
+            )
+        } else {
+            (Topology::Buck, buck_eff_pct(nom), format!("estimate: conservative buck band at {nom:.2}A"))
+        };
         let p_out = r.voltage * nom;
         StagePlan {
-            topology: Topology::Buck,
+            topology: topology.clone(),
             from: from.to_string(),
             to: r.net.clone(),
             vin: v_from,
@@ -373,11 +427,11 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
             i_nom_a: nom,
             i_max_a: max,
             eff_pct: eff,
-            eff_basis: format!("estimate: conservative buck band at {nom:.2}A"),
+            eff_basis: basis,
             p_diss_w: p_out * (100.0 / eff - 1.0),
             noise_assumed_uvrms: BUCK_NOISE_FLOOR_UVRMS,
             serves: r.loads.clone(),
-            cost_units: stage_cost_units(&Topology::Buck, max),
+            cost_units: stage_cost_units(&topology, max),
         }
     };
     // Buck feeding a generated intermediate rail for one or more LDOs.
@@ -464,7 +518,7 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
             let donor = stages
                 .iter()
                 .enumerate()
-                .filter(|(_, st)| st.topology == Topology::Buck)
+                .filter(|(_, st)| matches!(st.topology, Topology::Buck | Topology::BuckExternal))
                 .filter(|(_, st)| st.vout >= r.voltage + LDO_HEADROOM_V)
                 .filter(|(_, st)| (st.vout - r.voltage) * nom <= LDO_DISS_BOUND_W)
                 .min_by(|(_, a), (_, b)| a.vout.partial_cmp(&b.vout).unwrap())
@@ -473,14 +527,25 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
                 Some(di) => {
                     let (dfrom, dv) = (stages[di].to.clone(), stages[di].vout);
                     stages.push(ldo_stage(&dfrom, dv, r, nom, max));
-                    // resize the donor for the added draw
+                    // resize the donor for the added draw — the bump
+                    // can even push an integrated buck across the
+                    // external-stage crossover
                     let d = &mut stages[di];
                     d.i_nom_a += nom;
                     d.i_max_a += max;
-                    d.eff_pct = buck_eff_pct(d.i_nom_a);
-                    d.eff_basis = format!("estimate: conservative buck band at {:.2}A", d.i_nom_a);
+                    if needs_external_stages(d.vout, d.i_nom_a, d.i_max_a) {
+                        d.topology = Topology::BuckExternal;
+                        d.eff_pct = EXT_BUCK_EFF_PCT;
+                        d.eff_basis = format!(
+                            "estimate: controller + external stages at {:.2}A (integrated package would exceed {INTEGRATED_PKG_BOUND_W}W or {INTEGRATED_I_MAX_A}A)",
+                            d.i_nom_a
+                        );
+                    } else {
+                        d.eff_pct = buck_eff_pct(d.i_nom_a);
+                        d.eff_basis = format!("estimate: conservative buck band at {:.2}A", d.i_nom_a);
+                    }
                     d.p_diss_w = d.vout * d.i_nom_a * (100.0 / d.eff_pct - 1.0);
-                    d.cost_units = stage_cost_units(&Topology::Buck, d.i_max_a);
+                    d.cost_units = stage_cost_units(&d.topology, d.i_max_a);
                     d.serves.push(r.net.clone());
                 }
                 None => still_pending.push((r, nom, max)),
@@ -545,6 +610,7 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
             label: label.into(),
             strategy: note.into(),
             buck_count: stages.iter().filter(|s| s.topology == Topology::Buck).count(),
+            ext_buck_count: stages.iter().filter(|s| s.topology == Topology::BuckExternal).count(),
             ldo_count: stages.iter().filter(|s| s.topology == Topology::Ldo).count(),
             cost_units: stages.iter().map(|s| s.cost_units).sum(),
             p_load_w: p_load,

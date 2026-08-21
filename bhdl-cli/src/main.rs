@@ -1814,8 +1814,9 @@ async fn run_powertree(
                 println!("\n  [{}] {} — {}", oi + 1, o.label.bold(), o.strategy);
                 for st in &o.stages {
                     let topo = match st.topology {
-                        bhdl_synthesizer::powertree::Topology::Buck => "buck".cyan().to_string(),
-                        bhdl_synthesizer::powertree::Topology::Ldo => "LDO ".magenta().to_string(),
+                        bhdl_synthesizer::powertree::Topology::Buck => "buck    ".cyan().to_string(),
+                        bhdl_synthesizer::powertree::Topology::BuckExternal => "buck+ext".blue().to_string(),
+                        bhdl_synthesizer::powertree::Topology::Ldo => "LDO     ".magenta().to_string(),
                     };
                     println!(
                         "    {} {:>10} → {:<10} {:>5.2}V→{:<4.2}V  {:.3}A nom (rate ≥ {:.2}A)  eff {:>5.1}% ({})  diss {:>5.0}mW  noise ≤ {:.0}µVrms  [{}]",
@@ -1826,8 +1827,8 @@ async fn run_powertree(
                 }
                 let draw = o.p_in_w / vin_v;
                 println!(
-                    "    totals: load {:.2}W, input {:.2}W ({:.2}A @ {}), system eff {:.1}%, dissipation {:.2}W — {} buck(s), {} LDO(s), relative cost {:.1} units",
-                    o.p_load_w, o.p_in_w, draw, input, o.eff_pct, o.p_diss_w, o.buck_count, o.ldo_count, o.cost_units
+                    "    totals: load {:.2}W, input {:.2}W ({:.2}A @ {}), system eff {:.1}%, dissipation {:.2}W — {} buck(s), {} ctrl+ext-stage(s), {} LDO(s), relative cost {:.1} units",
+                    o.p_load_w, o.p_in_w, draw, input, o.eff_pct, o.p_diss_w, o.buck_count, o.ext_buck_count, o.ldo_count, o.cost_units
                 );
                 if let Some(budget) = harvest.rails.iter().find(|r| r.net == input).and_then(|r| r.declared_budget_a) {
                     if draw > budget {

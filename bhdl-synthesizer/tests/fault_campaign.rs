@@ -906,3 +906,64 @@ board OnlyNoise {
         assert!((o.cost_units - 5.0).abs() < 1e-9, "{o:#?}");
     }
 }
+
+/// Integrated-buck → controller+external-stages crossover is a
+/// THERMAL estimate, not a current rule: same 6A/7A load goes
+/// external at 3.3V (2.2W loss, 1.54W in-package > 1.5W bound) but
+/// stays integrated at 1.0V (0.67W loss); 25A exceeds integrated FETs
+/// outright. Each class carries its own cost band.
+#[tokio::test]
+async fn powertree_external_stage_crossover_is_thermal() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    use bhdl_synthesizer::powertree::{harvest_loads, propose_trees, Topology};
+    let src = r#"
+entity BigSoc() {
+    pin 1: power in;
+    pin 2: power in;
+    pin 3: power in;
+    pin 4: ground;
+    attribute component_class = "ic";
+    domain VCORE pins="1" v=0.9V i_nom=20A i_max=25A source="FIXTURE";
+    domain VIO   pins="2" v=3.3V i_nom=6A  i_max=7A  source="FIXTURE";
+    domain VMEM  pins="3" v=1.0V i_nom=6A  i_max=7A  source="FIXTURE";
+}
+board HighCurrent {
+    power VIN = 12V @ 10A;
+    power VCORE = 0.9V;
+    power V3V3 = 3.3V;
+    power V1V0 = 1.0V;
+    ground GND;
+    @VCORE -> soc: BigSoc().1;
+    @V3V3 -> soc.2;
+    @V1V0 -> soc.3;
+    soc.4 -> @GND;
+}
+"#;
+    let pr = parse(src);
+    assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.unwrap();
+    let h = harvest_loads(&n, &sf);
+    let opts = propose_trees(&h, "VIN").expect("options");
+    for o in &opts {
+        let by_rail = |net: &str| o.stages.iter().find(|s| s.to == net).unwrap();
+        // 25A rating: integrated FETs out of reach
+        let core = by_rail("VCORE");
+        assert_eq!(core.topology, Topology::BuckExternal, "{core:#?}");
+        assert!(core.eff_basis.contains("external stages"), "{core:#?}");
+        // 3.3V @ 6A: thermal crossover (in-package share over bound)
+        let io = by_rail("V3V3");
+        assert_eq!(io.topology, Topology::BuckExternal, "same current, higher Vout → more loss → external: {io:#?}");
+        // 1.0V @ 6A: same current, a third of the loss → integrated
+        let mem = by_rail("V1V0");
+        assert_eq!(mem.topology, Topology::Buck, "{mem:#?}");
+        // cost bands: 25A ext = 12, 7A ext = 9, 7A integrated = 9
+        assert!((core.cost_units - 12.0).abs() < 1e-9);
+        assert!((io.cost_units - 9.0).abs() < 1e-9);
+        assert!((mem.cost_units - 9.0).abs() < 1e-9);
+        assert_eq!(o.ext_buck_count, 2);
+    }
+}
