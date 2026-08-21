@@ -128,14 +128,21 @@ Accordingly, designer-owned composition is NOT a new construct:
    instance path; the mangled flat name (`phase1_ctrl`) remains the
    netlist identity, so refdes allocation, FMEDA fault enumeration,
    PnR, BOM and every other flat consumer are untouched.
-3. **Partness is a derived property, not a keyword.** An entity mints
-   a self-part iff it declares physical package identity (footprint /
-   `kicad_symbol` / `pkg`). A pure composition has children and no
-   package — no self-part, no BOM line. This makes the
+3. **Partness is DECLARED with the existing `as` keyword**
+   (implemented 8f2f9f6, VHDL-flavored role declaration):
+   `entity X as part { }` mints a physical self-part;
+   `entity X as design { }` is a hierarchical design block — module
+   kind `DesignBlock`, no BOM line, not a fault site (both flow
+   through the BOM builder's and safety model's EXISTING ModuleKind
+   whitelists with zero consumer changes); only its children are
+   physical. `as design` plus declared package identity is a hard
+   error ("a design block has no body to solder"). Undeclared
+   entities keep derived behavior — no migration cliff.
+   NB a related but DISTINCT implicit bit remains on the ledger: the
    `name == module && no connected pins` phantom-stub heuristic
-   (currently replicated in the elaborate emitter, the round-trip
-   comparator, the expansion interpreter and the powertree harvester
-   — and the source of one live bug) collapse into one declared bit.
+   (four sites) detects definition-TEMPLATE instances, which occur
+   for part entities too — it wants an explicit template marker at
+   the stub creation paths, not the partness tag.
 4. **The one idiomatic divergence that stays is `expansion {}`
    itself**, inside entity — because it marks a real semantic
    difference the reader must see. Plain body instantiation is
