@@ -611,130 +611,155 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
                 .filter(|r| !needs_ldo(r))
                 .filter_map(|r| op_current(r).map(|(n, m)| (r, n, m)))
                 .collect();
-            let direct_diss: f64 = buckable
-                .iter()
-                .map(|(r, n, _)| {
-                    let e = chain_eff_direct(r, *n, r.i_max_total_a.unwrap_or(*n));
-                    r.voltage * n * (100.0 / e - 1.0)
-                })
-                .sum();
-            let mut best: Option<(f64, f64, Vec<String>, f64, f64)> = None; // (diss, vb, assigned, i_nom_b, i_max_b)
-            let mut vb = 1.5;
-            while vb <= vin - 1.5 {
-                let this_vb = vb;
-                vb += BULK_SWEEP_STEP_V;
-                let vb = this_vb;
-                // two passes: bulk efficiency band depends on the bulk
-                // current, which depends on the assignment
-                let mut bulk_eff_est = 90.0 - ratio_penalty_pct(vin, vb);
-                let mut assigned: Vec<(&&RailSummary, f64, f64)> = Vec::new();
-                for _pass in 0..2 {
-                    assigned = buckable
-                        .iter()
-                        .filter(|(r, n, m)| {
-                            if r.voltage + 0.5 >= vb {
-                                return false; // no room to convert down from vb
-                            }
-                            let e_down = if needs_external_stages(vb, r.voltage, *m) {
-                                ext_eff_at(vb, r.voltage)
-                            } else {
-                                buck_eff_at(*n, vb, r.voltage)
-                            };
-                            let chain = bulk_eff_est / 100.0 * e_down / 100.0;
-                            let e_dir = chain_eff_direct(r, *n, *m) / 100.0;
-                            chain > e_dir
-                        })
-                        .cloned()
-                        .collect();
-                    if assigned.is_empty() {
-                        break;
-                    }
-                    let i_nom_b: f64 = assigned
-                        .iter()
-                        .map(|(r, n, m)| {
-                            let e_down = if needs_external_stages(vb, r.voltage, *m) {
-                                ext_eff_at(vb, r.voltage)
-                            } else {
-                                buck_eff_at(*n, vb, r.voltage)
-                            };
-                            r.voltage * n / (e_down / 100.0) / vb
-                        })
-                        .sum();
-                    bulk_eff_est = if needs_external_stages(vin, vb, i_nom_b) {
-                        ext_eff_at(vin, vb)
-                    } else {
-                        buck_eff_at(i_nom_b, vin, vb)
-                    };
-                }
-                if assigned.is_empty() {
-                    continue;
-                }
-                let (mut i_nom_b, mut i_max_b) = (0.0f64, 0.0f64);
-                let mut chain_diss = 0.0f64;
-                for (r, n, m) in &assigned {
-                    let e_down = if needs_external_stages(vb, r.voltage, *m) {
-                        ext_eff_at(vb, r.voltage)
-                    } else {
-                        buck_eff_at(*n, vb, r.voltage)
-                    };
-                    let p_in_down = r.voltage * n / (e_down / 100.0);
-                    chain_diss += p_in_down - r.voltage * n;
-                    i_nom_b += p_in_down / vb;
-                    i_max_b += r.voltage * m / (e_down / 100.0) / vb;
-                }
-                // bulk stage's own loss + the direct rails unchanged
-                chain_diss += vb * i_nom_b * (100.0 / bulk_eff_est - 1.0);
-                let unassigned_diss: f64 = buckable
+
+            // MULTI-BULK greedy: sweep for the best single bulk over
+            // the still-direct rails; commit it if it wins; re-sweep
+            // the remainder for a SECOND (different) voltage — a
+            // multi-level distribution earns each level or it does
+            // not exist. Every round's arithmetic is reported. (With
+            // monotone ratio penalties one intermediate usually
+            // dominates — a chain multiplies losses — and the round-2
+            // note SAYS none improves rather than silently stopping.)
+            for round in 1..=3 {
+                let remaining: Vec<&(&&RailSummary, f64, f64)> = buckable
                     .iter()
-                    .filter(|(r, ..)| !assigned.iter().any(|(a, ..)| a.net == r.net))
+                    .filter(|(r, ..)| !bulk_assign.contains_key(&r.net))
+                    .collect();
+                if remaining.is_empty() {
+                    break;
+                }
+                let direct_diss: f64 = remaining
+                    .iter()
                     .map(|(r, n, m)| {
                         let e = chain_eff_direct(r, *n, *m);
                         r.voltage * n * (100.0 / e - 1.0)
                     })
                     .sum();
-                let total = chain_diss + unassigned_diss;
-                let better = match &best {
-                    None => true,
-                    // ties prefer the higher voltage: same watts,
-                    // less bulk current, less copper
-                    Some((b, bvb, ..)) => total < *b - 1e-9 || (total < *b + 1e-9 && vb > *bvb),
-                };
-                if better {
-                    best = Some((total, vb, assigned.iter().map(|(r, ..)| r.net.clone()).collect(), i_nom_b, i_max_b));
-                }
-            }
-            match best {
-                Some((diss, vb, rails, i_nom_b, i_max_b)) if diss + 1e-9 < direct_diss => {
-                    let name = format!("V_BULK_{}", format!("{vb:.1}").replace('.', "V"));
-                    notes.push(format!(
-                        "bulk intermediate EVALUATED (swept 1.5–{:.1}V in {BULK_SWEEP_STEP_V}V steps) and chosen: {vb}V feeding [{}] — chain dissipation {:.2}W vs {:.2}W all-direct (ratio penalties composed)",
-                        vin - 1.5, rails.join(", "), diss, direct_diss
-                    ));
-                    for rn in &rails {
-                        bulk_assign.insert(rn.clone(), (name.clone(), vb));
+                let mut best: Option<(f64, f64, Vec<String>, f64, f64)> = None;
+                let mut vb = 1.5;
+                while vb <= vin - 1.5 {
+                    let this_vb = vb;
+                    vb += BULK_SWEEP_STEP_V;
+                    let vb = this_vb;
+                    if bulk_rails.iter().any(|b| (b.voltage - vb).abs() < 1e-9) {
+                        continue; // a committed bulk already sits here
                     }
-                    bulk_rails.push(RailSummary {
-                        net: name,
-                        voltage: vb,
-                        declared_budget_a: None,
-                        i_nom_total_a: Some(i_nom_b),
-                        i_max_total_a: Some(i_max_b),
-                        noise_uvrms: None,
-                        driven: false,
-                        loads: rails,
-                    });
+                    // two passes: the bulk efficiency band depends on
+                    // the bulk current, which depends on the assignment
+                    let mut bulk_eff_est = 90.0 - ratio_penalty_pct(vin, vb);
+                    let mut assigned: Vec<(&&RailSummary, f64, f64)> = Vec::new();
+                    for _pass in 0..2 {
+                        assigned = remaining
+                            .iter()
+                            .filter(|(r, n, m)| {
+                                if r.voltage + 0.5 >= vb {
+                                    return false; // no room to convert down
+                                }
+                                let e_down = if needs_external_stages(vb, r.voltage, *m) {
+                                    ext_eff_at(vb, r.voltage)
+                                } else {
+                                    buck_eff_at(*n, vb, r.voltage)
+                                };
+                                let chain = bulk_eff_est / 100.0 * e_down / 100.0;
+                                let e_dir = chain_eff_direct(r, *n, *m) / 100.0;
+                                chain > e_dir
+                            })
+                            .map(|t| (*t).clone())
+                            .collect();
+                        if assigned.is_empty() {
+                            break;
+                        }
+                        let i_nom_b: f64 = assigned
+                            .iter()
+                            .map(|(r, n, m)| {
+                                let e_down = if needs_external_stages(vb, r.voltage, *m) {
+                                    ext_eff_at(vb, r.voltage)
+                                } else {
+                                    buck_eff_at(*n, vb, r.voltage)
+                                };
+                                r.voltage * n / (e_down / 100.0) / vb
+                            })
+                            .sum();
+                        bulk_eff_est = if needs_external_stages(vin, vb, i_nom_b) {
+                            ext_eff_at(vin, vb)
+                        } else {
+                            buck_eff_at(i_nom_b, vin, vb)
+                        };
+                    }
+                    if assigned.is_empty() {
+                        continue;
+                    }
+                    let (mut i_nom_b, mut i_max_b) = (0.0f64, 0.0f64);
+                    let mut chain_diss = 0.0f64;
+                    for (r, n, m) in &assigned {
+                        let e_down = if needs_external_stages(vb, r.voltage, *m) {
+                            ext_eff_at(vb, r.voltage)
+                        } else {
+                            buck_eff_at(*n, vb, r.voltage)
+                        };
+                        let p_in_down = r.voltage * n / (e_down / 100.0);
+                        chain_diss += p_in_down - r.voltage * n;
+                        i_nom_b += p_in_down / vb;
+                        i_max_b += r.voltage * m / (e_down / 100.0) / vb;
+                    }
+                    chain_diss += vb * i_nom_b * (100.0 / bulk_eff_est - 1.0);
+                    let unassigned_diss: f64 = remaining
+                        .iter()
+                        .filter(|(r, ..)| !assigned.iter().any(|(a, ..)| a.net == r.net))
+                        .map(|(r, n, m)| {
+                            let e = chain_eff_direct(r, *n, *m);
+                            r.voltage * n * (100.0 / e - 1.0)
+                        })
+                        .sum();
+                    let total = chain_diss + unassigned_diss;
+                    let better = match &best {
+                        None => true,
+                        // ties prefer the higher voltage: same watts,
+                        // less bulk current, less copper
+                        Some((b, bvb, ..)) => total < *b - 1e-9 || (total < *b + 1e-9 && vb > *bvb),
+                    };
+                    if better {
+                        best = Some((total, vb, assigned.iter().map(|(r, ..)| r.net.clone()).collect(), i_nom_b, i_max_b));
+                    }
                 }
-                Some((diss, vb, ..)) => notes.push(format!(
-                    "bulk intermediate EVALUATED (swept 1.5–{:.1}V in {BULK_SWEEP_STEP_V}V steps), direct wins: best candidate {vb}V would dissipate {:.2}W vs {:.2}W all-direct (ratio penalties composed)",
-                    vin - 1.5, diss, direct_diss
-                )),
-                None => notes.push(format!(
-                    "bulk intermediate EVALUATED (swept 1.5–{:.1}V in {BULK_SWEEP_STEP_V}V steps): no voltage improves any rail's chain efficiency — all-direct",
-                    vin - 1.5
-                )),
+                match best {
+                    Some((diss, vb, rails, i_nom_b, i_max_b)) if diss + 1e-9 < direct_diss => {
+                        let name = format!("V_BULK_{}", format!("{vb:.1}").replace('.', "V"));
+                        notes.push(format!(
+                            "bulk round {round} (swept 1.5–{:.1}V in {BULK_SWEEP_STEP_V}V steps): {vb}V CHOSEN feeding [{}] — chain dissipation {:.2}W vs {:.2}W direct for those rails (ratio penalties composed)",
+                            vin - 1.5, rails.join(", "), diss, direct_diss
+                        ));
+                        for rn in &rails {
+                            bulk_assign.insert(rn.clone(), (name.clone(), vb));
+                        }
+                        bulk_rails.push(RailSummary {
+                            net: name,
+                            voltage: vb,
+                            declared_budget_a: None,
+                            i_nom_total_a: Some(i_nom_b),
+                            i_max_total_a: Some(i_max_b),
+                            noise_uvrms: None,
+                            driven: false,
+                            loads: rails,
+                        });
+                    }
+                    Some((diss, vb, ..)) => {
+                        notes.push(format!(
+                            "bulk round {round} (swept 1.5–{:.1}V): direct wins for the remaining rails — best candidate {vb}V would dissipate {:.2}W vs {:.2}W (ratio penalties composed)",
+                            vin - 1.5, diss, direct_diss
+                        ));
+                        break;
+                    }
+                    None => {
+                        notes.push(format!(
+                            "bulk round {round} (swept 1.5–{:.1}V): no voltage improves any remaining rail — direct",
+                            vin - 1.5
+                        ));
+                        break;
+                    }
+                }
             }
         }
-
         for r in &work {
             let Some((nom, max)) = op_current(r) else {
                 unplannable.push(format!("{}: no i_nom/i_max on any attached load", r.net));

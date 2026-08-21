@@ -1019,7 +1019,7 @@ board Monster {
         // not — the note proves the chain arithmetic ran
         if o.label == "max-efficiency" {
             assert!(
-                o.notes.iter().any(|n| n.contains("bulk intermediate EVALUATED")),
+                o.notes.iter().any(|n| n.contains("bulk round") && n.contains("swept")),
                 "{:#?}", o.notes
             );
         }
@@ -1041,14 +1041,18 @@ async fn powertree_bulk_sweep_flips_at_48v() {
 entity Soc48() {
     pin 1: power in;
     pin 2: ground;
+    pin 3: power in;
     attribute component_class = "ic";
     domain VCORE pins="1" v=0.85V i_nom=150A i_max=180A source="FIXTURE";
+    domain VIO pins="3" v=3.3V i_nom=2A i_max=3A source="FIXTURE";
 }
 board FortyEight {
     power VIN = 48V @ 8A;
     power VCORE = 0.85V;
+    power V3V3 = 3.3V;
     ground GND;
     @VCORE -> soc: Soc48().1;
+    @V3V3 -> soc.3;
     soc.2 -> @GND;
 }
 "#;
@@ -1063,7 +1067,7 @@ board FortyEight {
     let eff_opt = opts.iter().find(|o| o.label == "max-efficiency").expect("efficiency option");
     // bulk chosen, with the sweep note carrying the arithmetic
     assert!(
-        eff_opt.notes.iter().any(|nn| nn.contains("swept") && nn.contains("chosen")),
+        eff_opt.notes.iter().any(|nn| nn.contains("swept") && nn.contains("CHOSEN")),
         "{:#?}", eff_opt.notes
     );
     let bulk = eff_opt.stages.iter().find(|s| s.to.starts_with("V_BULK")).expect("bulk stage");
@@ -1076,4 +1080,16 @@ board FortyEight {
     assert_eq!(vrm.topology, Topology::BuckExternal);
     // chain beats direct: composed eff ≈ 88% × 88% = 77.4% > 75%
     assert!(eff_opt.eff_pct > 75.0, "{eff_opt:#?}");
+    // MULTI-ROUND: after committing the 8.5V bulk, round 2 re-swept
+    // the REMAINING rails (V3V3) for a second, different voltage and
+    // reported its verdict — each distribution level earns its place
+    // or the note says why not
+    assert!(
+        eff_opt.notes.iter().any(|nn| nn.contains("bulk round 2")),
+        "{:#?}", eff_opt.notes
+    );
+    // V3V3 assignment is whatever the arithmetic said — but it must be
+    // fed from ONE of: VIN direct or a bulk, never dangling
+    let vio = eff_opt.stages.iter().find(|s| s.to == "V3V3").unwrap();
+    assert!(vio.from == "VIN" || vio.from.starts_with("V_BULK"), "{vio:#?}");
 }
