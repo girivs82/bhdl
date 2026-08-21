@@ -609,7 +609,7 @@ impl NetView {
             .and_then(|m| netlist.modules.get(m))
             .map(|m| m.name.clone())
             .unwrap_or_default();
-        for (_, inst) in netlist.instances.iter() {
+        for (iid, inst) in netlist.instances.iter() {
             let Some(def) = netlist.modules.get(inst.definition) else { continue };
             inst_type.insert(inst.name.clone(), def.name.clone());
             attrs_of.insert(inst.name.clone(), inst.attributes.clone());
@@ -624,8 +624,8 @@ impl NetView {
                 parent_of.insert(inst.name.clone(), p.clone());
                 children_of.entry(p.clone()).or_default().push(inst.name.clone());
             }
-            // definition shadows are instances named exactly like their type
-            let shadow = inst.name == def.name;
+            // definition-template stubs excluded by the one judgment
+            let shadow = crate::is_template_stub(netlist, iid);
             let kind_ok = matches!(def.kind, ModuleKind::PhysicalComponent | ModuleKind::Component | ModuleKind::Module);
             if kind_ok && !shadow {
                 physical.push(inst.name.clone());

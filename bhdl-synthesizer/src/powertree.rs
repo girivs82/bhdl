@@ -87,24 +87,16 @@ pub fn harvest_loads(netlist: &Netlist, sf: &SourceFile) -> PowerTreeLoads {
     let mut out = PowerTreeLoads::default();
 
     // ── loads: every instance of an entity with domain contracts ──
-    // (phantom definition stubs — instance named like its module with
-    // zero connected pins — are template artifacts, same filter as
-    // everywhere else)
-    let connected: std::collections::HashSet<_> = netlist
-        .pin_instances
-        .values()
-        .filter(|pi| pi.net.is_some())
-        .map(|pi| pi.instance)
-        .collect();
+    // (definition-template stubs excluded by the one judgment)
     for (inst_id, inst) in netlist.instances.iter() {
+        if crate::is_template_stub(netlist, inst_id) {
+            continue;
+        }
         let ety = netlist
             .modules
             .get(inst.definition)
             .map(|m| m.name.clone())
             .unwrap_or_default();
-        if inst.name == ety && !connected.contains(&inst_id) {
-            continue;
-        }
         let Some((doms, _)) = domains.get(&ety) else { continue };
         for dom in doms {
             // resolve the rail net through the domain's first pin

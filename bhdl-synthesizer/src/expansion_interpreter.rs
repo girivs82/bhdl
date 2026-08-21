@@ -238,24 +238,15 @@ fn find_expansion_candidates(
             continue;
         }
 
-        // Definition stubs — an instance named exactly like its module
-        // with ZERO connected pins — are template artifacts, not parts
-        // (the same rule the elaborate emitter and its round-trip
-        // comparator apply). Expanding one mints floating support
-        // circuitry off a template; boards where the entity is defined
-        // in-file but only instantiated through other paths hit this.
-        if inst.name == mod_def.name {
-            let any_connected = netlist
-                .pin_instances
-                .values()
-                .any(|pi| pi.instance == inst_id && pi.net.is_some());
-            if !any_connected {
-                info!(
-                    "Instance '{}' is an unconnected definition stub — expansion skipped",
-                    inst.name
-                );
-                continue;
-            }
+        // Definition-template stubs never expand — a template must not
+        // mint floating support circuitry. One judgment
+        // (crate::is_template_stub), marked at creation.
+        if crate::is_template_stub(netlist, inst_id) {
+            info!(
+                "Instance '{}' is a definition-template stub — expansion skipped",
+                inst.name
+            );
+            continue;
         }
 
         // Resolve a vendor `design { }` recipe (if any) for this candidate.

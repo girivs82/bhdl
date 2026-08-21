@@ -111,26 +111,12 @@ pub fn emit_elaborated_with_preamble(
     }
     out.push('\n');
 
-    // Phantom entity-definition stubs (instance named exactly like its
-    // module, zero connected pins) are template artifacts, not parts —
-    // same filter build_board applies.
-    let connected: std::collections::HashSet<_> = netlist
-        .pin_instances
-        .values()
-        .filter(|pi| pi.net.is_some())
-        .map(|pi| pi.instance)
-        .collect();
+    // Definition-template stubs are marked at creation; one judgment
+    // (is_template_stub) replaces the old per-site name heuristic.
     let mut insts: Vec<_> = netlist
         .instances
         .iter()
-        .filter(|(id, i)| {
-            let is_stub_name = netlist
-                .modules
-                .get(i.definition)
-                .map(|m| m.name == i.name)
-                .unwrap_or(false);
-            !(is_stub_name && !connected.contains(id))
-        })
+        .filter(|(id, _)| !crate::is_template_stub(netlist, *id))
         .map(|(_, i)| i)
         .collect();
     insts.sort_by(|a, b| a.name.cmp(&b.name));
@@ -347,24 +333,16 @@ pub fn netlist_equiv(a: &Netlist, b: &Netlist) -> Result<(), Vec<String>> {
     let mut diffs: Vec<String> = Vec::new();
 
     fn instance_set(n: &Netlist) -> std::collections::BTreeSet<(String, String)> {
-        // Phantom definition-stubs (name == module name, zero connected
-        // pins) are template artifacts the emitter filters — exclude
-        // them here by the SAME rule, else every board with an in-file
-        // entity definition fails its own round-trip.
-        let connected: std::collections::HashSet<_> = n
-            .pin_instances
-            .values()
-            .filter(|pi| pi.net.is_some())
-            .map(|pi| pi.instance)
-            .collect();
+        // Definition-template stubs are excluded by the ONE judgment
+        // (is_template_stub) — same rule the emitter applies, else
+        // every board with an in-file entity definition fails its own
+        // round-trip.
         n.instances
             .iter()
-            .filter_map(|(id, i)| {
+            .filter(|(id, _)| !crate::is_template_stub(n, *id))
+            .map(|(_, i)| {
                 let m = n.modules.get(i.definition).map(|m| m.name.clone()).unwrap_or_default();
-                if i.name == m && !connected.contains(&id) {
-                    return None;
-                }
-                Some((i.name.clone(), m))
+                (i.name.clone(), m)
             })
             .collect()
     }

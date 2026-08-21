@@ -1409,3 +1409,29 @@ board B {
     let err = gen2.generate_from_ast_and_analysis(&sf2, &analysis2).await.expect_err("contradiction");
     assert!(format!("{err:#}").contains("no body to solder"), "{err:#}");
 }
+
+/// Definition-template stubs are MARKED at creation (`template=true`)
+/// and judged by the one helper — the five consumer sites no longer
+/// each re-derive the name-shape heuristic.
+#[tokio::test]
+async fn template_stubs_are_marked_at_creation() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let src = std::fs::read_to_string(ws.join("tests/circuits/realistic/test_safety_fault_campaign.bhdl")).unwrap();
+    let pr = parse(&src);
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.unwrap();
+    // the DemoSense definition stub carries the explicit marker
+    let (stub_id, stub) = n
+        .instances
+        .iter()
+        .find(|(_, i)| i.name == "DemoSense")
+        .expect("definition stub exists");
+    assert_eq!(stub.attributes.get("template").map(String::as_str), Some("true"), "{:#?}", stub.attributes);
+    assert!(bhdl_synthesizer::is_template_stub(&n, stub_id));
+    // a real, connected instance is never a stub
+    let (real_id, _) = n.instances.iter().find(|(_, i)| i.name == "sense").unwrap();
+    assert!(!bhdl_synthesizer::is_template_stub(&n, real_id));
+}

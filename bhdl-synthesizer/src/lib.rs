@@ -1152,6 +1152,21 @@ impl NetlistGenerator {
                     if let Some(instance_id) = instance_id {
                         debug!("Created component instance: {} -> {:?}", name, instance_id);
 
+                        // Definition-TEMPLATE marker: the analyzer
+                        // registers entity definitions as instance-like
+                        // symbols, so this walk mints one instance PER
+                        // DEFINITION named exactly like its type
+                        // (`Res: Res`). Mark it explicitly at the source
+                        // instead of every consumer re-deriving it by
+                        // name-shape — is_template_stub() is the one
+                        // place that judges.
+                        if name == type_name {
+                            if let Some(inst) = self.netlist.instances.get_mut(instance_id) {
+                                inst.attributes.insert("template".to_string(), "true".to_string());
+                                debug!("Marked definition-template instance '{}'", name);
+                            }
+                        }
+
                         // Register the instance by its board handle so later
                         // phases (power-domain distribution lowering, Phase
                         // 2.7) can resolve it — the semantic path does this
@@ -3709,3 +3724,38 @@ mod tests {
 
 */
 pub mod elaborate;
+
+
+/// THE definition-template-stub judgment — the single place that
+/// decides whether an instance is a template artifact (an entity
+/// definition the analyzer registered as an instance-like symbol)
+/// rather than a real part. Marked explicitly at creation
+/// (`template = "true"`); the name-shape fallback remains for any
+/// unmarked creation path and SAYS SO when it fires, so gaps surface
+/// instead of hiding. A connected instance is never a stub, whatever
+/// its name.
+pub fn is_template_stub(netlist: &bhdl_netlist::Netlist, id: bhdl_netlist::types::InstanceId) -> bool {
+    let Some(inst) = netlist.instances.get(id) else { return false };
+    let connected = netlist
+        .pin_instances
+        .values()
+        .any(|pi| pi.instance == id && pi.net.is_some());
+    if connected {
+        return false;
+    }
+    if inst.attributes.get("template").map(String::as_str) == Some("true") {
+        return true;
+    }
+    let name_match = netlist
+        .modules
+        .get(inst.definition)
+        .map(|m| m.name == inst.name)
+        .unwrap_or(false);
+    if name_match {
+        log::debug!(
+            "template-stub NAME-SHAPE FALLBACK fired for '{}' — an unmarked creation path exists",
+            inst.name
+        );
+    }
+    name_match
+}
