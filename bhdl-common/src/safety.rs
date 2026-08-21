@@ -346,6 +346,10 @@ pub enum GapClass {
     /// computed for (`config k=v … source=…`) and this instance's actual
     /// configuration differs — the FIT/failure split does not apply here.
     ConfigMismatch,
+    /// A vendor assumption of use (PDN mask, droop window, supply
+    /// capability) is VIOLATED by the measured board — blocks the
+    /// verdict like any other gap.
+    AouViolated,
     /// A measured architectural metric (SPFM/LFM/PMHF) misses its ISO
     /// target, or the measurement is incomplete at a level that has one.
     MetricMissed,
@@ -362,6 +366,7 @@ impl GapClass {
             GapClass::FaultUnrun => "FAULT_UNRUN",
             GapClass::FitUncomputed => "FIT_UNCOMPUTED",
             GapClass::ConfigMismatch => "CONFIG_MISMATCH",
+            GapClass::AouViolated => "AOU_VIOLATED",
             GapClass::MetricMissed => "METRIC_MISSED",
         }
     }

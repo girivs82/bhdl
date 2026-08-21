@@ -1992,6 +1992,192 @@ async fn run_safety(
         bhdl_synthesizer::fault_campaign::compute_metrics(&mut model);
     }
 
+    // ── PDN (power-domain) checks ────────────────────────────────────
+    // The vendor's PDN contract: target-impedance mask Z(f) checked by a
+    // small-signal AC impedance sweep of the WHOLE tree, and the
+    // declared load step checked by a transient droop solve from the
+    // healthy operating point. Vendor numbers only — every absent
+    // datum skips its check, stated.
+    let mut pdn_lines: Vec<String> = Vec::new();
+    macro_rules! pdn_out { ($($a:tt)*) => { pdn_lines.push(format!($($a)*)) } }
+    if healthy_solved && model.parts.iter().any(|p| !p.domains.is_empty()) {
+        pdn_out!("\n  {}", "PDN (power domains)".bold());
+        pdn_out!("    band of responsibility: 100kHz–50MHz (below: regulator control loop per its model; above: package/die — both stated hand-offs)");
+        let overrides2 = bhdl_synthesizer::model_evaluator::evaluate_model_overrides(
+            &netlist, &analysis.model_recipes, &analysis.entity_attribute_index);
+        let mut conv = NetlistToSpiceConverter::new();
+        conv.set_model_overrides(overrides2.clone());
+        let circuit = conv.convert(&netlist).ok();
+        // (instance, pin) → net name
+        let pin_net = |inst: &str, pin: &str| -> Option<String> {
+            netlist.pin_instances.values().find_map(|pi| {
+                let i = netlist.instances.get(pi.instance)?;
+                if i.name != inst { return None; }
+                let p = netlist.pins.get(pi.pin_def)?;
+                if p.name != pin { return None; }
+                netlist.nets.get(pi.net?)?.name.clone()
+            })
+        };
+        for part in model.parts.iter().filter(|p| !p.domains.is_empty()) {
+            for dom in &part.domains {
+                let Some(net) = dom.pins.first().and_then(|p0| pin_net(&part.instance, p0)) else {
+                    pdn_out!("    {} {}: pins not connected — no rail net", part.instance, dom.name);
+                    continue;
+                };
+                pdn_out!("    {} {} @ net {} ({})", part.instance.bold(), dom.name.bold(), net, dom.source);
+                // static window at the healthy operating point (loads =
+                // whatever the netlist models; declared-draw stamping is a
+                // later increment, stated)
+                if let (Some(v), Some(tol)) = (healthy_volts.get(&net), dom.tol_pct) {
+                    let lo = dom.v_nom * (1.0 - tol / 100.0);
+                    let hi = dom.v_nom * (1.0 + tol / 100.0);
+                    let ok = *v >= lo && *v <= hi;
+                    if !ok {
+                        model.gaps.push(bhdl_common::safety::Gap {
+                            class: bhdl_common::safety::GapClass::AouViolated,
+                            goal: dom.name.clone(),
+                            subject: format!("{} static window", part.instance),
+                            fix: format!("rail {v:.3}V outside [{lo:.3}, {hi:.3}] at the healthy operating point — fix the supply or the declared window"),
+                        });
+                    }
+                    pdn_out!("      static: rail {v:.3}V vs window [{lo:.3}, {hi:.3}] (healthy operating point) → {}",
+                        if ok { "OK".green().to_string() } else { "VIOLATED".red().to_string() });
+                }
+                // supply capability: i_max vs the board's declared
+                // supply rating — checkable only when the board has
+                // exactly ONE rated power source (multi-supply
+                // attribution needs tree tracing, a later increment —
+                // stated).
+                if let Some(imax) = dom.i_max_a {
+                    let supplies: Vec<(String, f64)> = netlist
+                        .nets
+                        .values()
+                        .filter_map(|n| match n.net_class {
+                            bhdl_netlist::types::NetClass::Power { current: Some(c), .. } => {
+                                n.name.clone().map(|nm| (nm, c))
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    match supplies.as_slice() {
+                        [(snm, c)] => {
+                            let ok = imax <= *c;
+                            if !ok {
+                                model.gaps.push(bhdl_common::safety::Gap {
+                                    class: bhdl_common::safety::GapClass::AouViolated,
+                                    goal: dom.name.clone(),
+                                    subject: format!("{} supply capability", part.instance),
+                                    fix: format!("domain i_max {imax}A exceeds the {snm} supply rating {c}A — upsize the supply or renegotiate i_max"),
+                                });
+                            }
+                            pdn_out!("      supply: i_max {imax}A vs {snm} rated {c}A → {}",
+                                if ok { "OK".green().to_string() } else { "VIOLATED".red().to_string() });
+                        }
+                        [] => pdn_out!("      supply: no rated power source declared — i_max unchecked, stated"),
+                        _ => pdn_out!("      supply: {} rated sources — attribution needs tree tracing (later increment); i_max unchecked, stated", supplies.len()),
+                    }
+                }
+                // Z(f) mask sweep
+                if let Some(circ) = &circuit {
+                    match bhdl_spice::ac::run_ac_impedance(circ, &net, 100e3, 50e6, 20) {
+                        Err(e) => pdn_out!("      zmask: sweep failed ({e})"),
+                        Ok((freqs, z)) => {
+                            let budget = |f: f64| -> f64 {
+                                let r = dom.pdn_r_ohm.unwrap_or(0.0);
+                                let l = dom.pdn_l_h.unwrap_or(0.0);
+                                (r * r + (2.0 * std::f64::consts::PI * f * l).powi(2)).sqrt()
+                            };
+                            let mask_at = |f: f64| -> Option<f64> {
+                                let m = &dom.zmask;
+                                if m.len() < 2 || f < m[0].0 || f > m[m.len() - 1].0 { return None; }
+                                let w = m.windows(2).find(|w| f >= w[0].0 && f <= w[1].0)?;
+                                let t = (f.ln() - w[0].0.ln()) / (w[1].0.ln() - w[0].0.ln());
+                                Some((w[0].1.ln() + t * (w[1].1.ln() - w[0].1.ln())).exp())
+                            };
+                            let mut worst: Option<(f64, f64, f64)> = None; // ratio, f, |Z|
+                            let mut zmax: (f64, f64) = (0.0, 0.0);
+                            for (i, &f) in freqs.iter().enumerate() {
+                                let zt = z[i].norm() + budget(f);
+                                if zt > zmax.0 { zmax = (zt, f); }
+                                if let Some(mk) = mask_at(f) {
+                                    let r = zt / mk;
+                                    if worst.map(|(wr, ..)| r > wr).unwrap_or(true) {
+                                        worst = Some((r, f, zt));
+                                    }
+                                }
+                            }
+                            let btxt = if dom.pdn_r_ohm.is_some() || dom.pdn_l_h.is_some() {
+                                format!(" (incl. declared PDN budget R={:?}Ω L={:?}H as series terms)", dom.pdn_r_ohm.unwrap_or(0.0), dom.pdn_l_h.unwrap_or(0.0))
+                            } else {
+                                " (no PDN budget declared — layout parasitics EXCLUDED, stated)".to_string()
+                            };
+                            match worst {
+                                Some((r, f, zt)) => {
+                                    if r > 1.0 {
+                                        model.gaps.push(bhdl_common::safety::Gap {
+                                            class: bhdl_common::safety::GapClass::AouViolated,
+                                            goal: dom.name.clone(),
+                                            subject: format!("{} zmask", part.instance),
+                                            fix: format!("|Z| exceeds the target-impedance mask {r:.2}x at {:.2}MHz — add/relocate decoupling or renegotiate the mask", f / 1e6),
+                                        });
+                                    }
+                                    let v = if r <= 1.0 { "OK".green().to_string() } else { "VIOLATED".red().to_string() };
+                                    pdn_out!("      zmask: worst |Z|/mask = {:.2} at {:.2}MHz (|Z|={:.1}mΩ){} → {}",
+                                        r, f / 1e6, zt * 1e3, btxt, v);
+                                }
+                                None => pdn_out!("      zmask: no mask declared in band — info: max |Z| = {:.1}mΩ at {:.2}MHz{}", zmax.0 * 1e3, zmax.1 / 1e6, btxt),
+                            }
+                        }
+                    }
+                }
+                // load-step droop
+                if let (Some(step), Some(circ)) = (dom.step_a, &circuit) {
+                    let rise = dom.step_rise_s.unwrap_or(1e-6);
+                    let dur = dom.step_dur_s.unwrap_or(10.0 * rise);
+                    let total = 4.0 * dur;
+                    let params = bhdl_spice::transient::TransientParams::new(
+                        "", bhdl_spice::transient::Stimulus::Constant(0.0),
+                        circ.nodes().map(|(_, n)| n.name.clone()).filter(|n| n != "0").collect::<Vec<_>>(),
+                        total, total / 400.0,
+                    )
+                    .with_timed_current_drives(vec![bhdl_spice::transient::TimedCurrentDrive {
+                        node: net.clone(), i_amps: step, t_start: 0.0, t_end: dur,
+                    }]);
+                    match bhdl_spice::ibis_transient::run_transient_ibis_ic(circ, &params, &[], Some(&healthy_volts)) {
+                        Err(e) => pdn_out!("      droop: transient failed ({e})"),
+                        Ok(r) => {
+                            let tr = &r.probe_voltages[&net];
+                            let v0 = tr.first().copied().unwrap_or(dom.v_nom);
+                            let vmin = tr.iter().cloned().fold(f64::MAX, f64::min);
+                            let board = v0 - vmin;
+                            let extra = step * dom.pdn_r_ohm.unwrap_or(0.0)
+                                + dom.pdn_l_h.unwrap_or(0.0) * step / rise;
+                            let droop_pct = (board + extra) / dom.v_nom * 100.0;
+                            let verdict = match dom.droop_max_pct {
+                                Some(dm) => {
+                                    if droop_pct > dm {
+                                        model.gaps.push(bhdl_common::safety::Gap {
+                                            class: bhdl_common::safety::GapClass::AouViolated,
+                                            goal: dom.name.clone(),
+                                            subject: format!("{} droop", part.instance),
+                                            fix: format!("measured droop {droop_pct:.2}% exceeds the declared {dm}% under the vendor load step — more bulk/ceramic capacitance or a tighter budget"),
+                                        });
+                                    }
+                                    if droop_pct <= dm { format!("≤ {dm}% → {}", "OK".green()) } else { format!("> {dm}% → {}", "VIOLATED".red()) }
+                                }
+                                None => "(no droop_max declared — info only)".to_string(),
+                            };
+                            pdn_out!("      droop: {step}A step ({:.1}µs rise, {:.1}µs hold) → board {:.1}mV + budget {:.1}mV = {:.2}% of {}V {}",
+                                rise * 1e6, dur * 1e6, board * 1e3, extra * 1e3, droop_pct, dom.v_nom, verdict);
+                            pdn_out!("      basis: transient from healthy operating point, step {:.2}µs; regulators respond per their converter models (control-loop dynamics only as modeled)", total / 400.0 * 1e6);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+
     // ── Report ───────────────────────────────────────────────────────
     println!("{}", format!("Functional safety — {}", model.board).bold().cyan());
     if !model.errors.is_empty() {
@@ -2212,129 +2398,8 @@ async fn run_safety(
         println!("  fmeda metrics: {}", met_path.display());
     }
 
-    // ── PDN (power-domain) checks ────────────────────────────────────
-    // The vendor's PDN contract: target-impedance mask Z(f) checked by a
-    // small-signal AC impedance sweep of the WHOLE tree, and the
-    // declared load step checked by a transient droop solve from the
-    // healthy operating point. Vendor numbers only — every absent
-    // datum skips its check, stated.
-    if healthy_solved && model.parts.iter().any(|p| !p.domains.is_empty()) {
-        println!("\n  {}", "PDN (power domains)".bold());
-        println!("    band of responsibility: 100kHz–50MHz (below: regulator control loop per its model; above: package/die — both stated hand-offs)");
-        let overrides2 = bhdl_synthesizer::model_evaluator::evaluate_model_overrides(
-            &netlist, &analysis.model_recipes, &analysis.entity_attribute_index);
-        let mut conv = NetlistToSpiceConverter::new();
-        conv.set_model_overrides(overrides2.clone());
-        let circuit = conv.convert(&netlist).ok();
-        // (instance, pin) → net name
-        let pin_net = |inst: &str, pin: &str| -> Option<String> {
-            netlist.pin_instances.values().find_map(|pi| {
-                let i = netlist.instances.get(pi.instance)?;
-                if i.name != inst { return None; }
-                let p = netlist.pins.get(pi.pin_def)?;
-                if p.name != pin { return None; }
-                netlist.nets.get(pi.net?)?.name.clone()
-            })
-        };
-        for part in model.parts.iter().filter(|p| !p.domains.is_empty()) {
-            for dom in &part.domains {
-                let Some(net) = dom.pins.first().and_then(|p0| pin_net(&part.instance, p0)) else {
-                    println!("    {} {}: pins not connected — no rail net", part.instance, dom.name);
-                    continue;
-                };
-                println!("    {} {} @ net {} ({})", part.instance.bold(), dom.name.bold(), net, dom.source);
-                // static window at the healthy operating point (loads =
-                // whatever the netlist models; declared-draw stamping is a
-                // later increment, stated)
-                if let (Some(v), Some(tol)) = (healthy_volts.get(&net), dom.tol_pct) {
-                    let lo = dom.v_nom * (1.0 - tol / 100.0);
-                    let hi = dom.v_nom * (1.0 + tol / 100.0);
-                    let ok = *v >= lo && *v <= hi;
-                    println!("      static: rail {v:.3}V vs window [{lo:.3}, {hi:.3}] (healthy operating point) → {}",
-                        if ok { "OK".green().to_string() } else { "VIOLATED".red().to_string() });
-                }
-                // Z(f) mask sweep
-                if let Some(circ) = &circuit {
-                    match bhdl_spice::ac::run_ac_impedance(circ, &net, 100e3, 50e6, 20) {
-                        Err(e) => println!("      zmask: sweep failed ({e})"),
-                        Ok((freqs, z)) => {
-                            let budget = |f: f64| -> f64 {
-                                let r = dom.pdn_r_ohm.unwrap_or(0.0);
-                                let l = dom.pdn_l_h.unwrap_or(0.0);
-                                (r * r + (2.0 * std::f64::consts::PI * f * l).powi(2)).sqrt()
-                            };
-                            let mask_at = |f: f64| -> Option<f64> {
-                                let m = &dom.zmask;
-                                if m.len() < 2 || f < m[0].0 || f > m[m.len() - 1].0 { return None; }
-                                let w = m.windows(2).find(|w| f >= w[0].0 && f <= w[1].0)?;
-                                let t = (f.ln() - w[0].0.ln()) / (w[1].0.ln() - w[0].0.ln());
-                                Some((w[0].1.ln() + t * (w[1].1.ln() - w[0].1.ln())).exp())
-                            };
-                            let mut worst: Option<(f64, f64, f64)> = None; // ratio, f, |Z|
-                            let mut zmax: (f64, f64) = (0.0, 0.0);
-                            for (i, &f) in freqs.iter().enumerate() {
-                                let zt = z[i].norm() + budget(f);
-                                if zt > zmax.0 { zmax = (zt, f); }
-                                if let Some(mk) = mask_at(f) {
-                                    let r = zt / mk;
-                                    if worst.map(|(wr, ..)| r > wr).unwrap_or(true) {
-                                        worst = Some((r, f, zt));
-                                    }
-                                }
-                            }
-                            let btxt = if dom.pdn_r_ohm.is_some() || dom.pdn_l_h.is_some() {
-                                format!(" (incl. declared PDN budget R={:?}Ω L={:?}H as series terms)", dom.pdn_r_ohm.unwrap_or(0.0), dom.pdn_l_h.unwrap_or(0.0))
-                            } else {
-                                " (no PDN budget declared — layout parasitics EXCLUDED, stated)".to_string()
-                            };
-                            match worst {
-                                Some((r, f, zt)) => {
-                                    let v = if r <= 1.0 { "OK".green().to_string() } else { "VIOLATED".red().to_string() };
-                                    println!("      zmask: worst |Z|/mask = {:.2} at {:.2}MHz (|Z|={:.1}mΩ){} → {}",
-                                        r, f / 1e6, zt * 1e3, btxt, v);
-                                }
-                                None => println!("      zmask: no mask declared in band — info: max |Z| = {:.1}mΩ at {:.2}MHz{}", zmax.0 * 1e3, zmax.1 / 1e6, btxt),
-                            }
-                        }
-                    }
-                }
-                // load-step droop
-                if let (Some(step), Some(circ)) = (dom.step_a, &circuit) {
-                    let rise = dom.step_rise_s.unwrap_or(1e-6);
-                    let dur = dom.step_dur_s.unwrap_or(10.0 * rise);
-                    let total = 4.0 * dur;
-                    let params = bhdl_spice::transient::TransientParams::new(
-                        "", bhdl_spice::transient::Stimulus::Constant(0.0),
-                        circ.nodes().map(|(_, n)| n.name.clone()).filter(|n| n != "0").collect::<Vec<_>>(),
-                        total, total / 400.0,
-                    )
-                    .with_timed_current_drives(vec![bhdl_spice::transient::TimedCurrentDrive {
-                        node: net.clone(), i_amps: step, t_start: 0.0, t_end: dur,
-                    }]);
-                    match bhdl_spice::ibis_transient::run_transient_ibis_ic(circ, &params, &[], Some(&healthy_volts)) {
-                        Err(e) => println!("      droop: transient failed ({e})"),
-                        Ok(r) => {
-                            let tr = &r.probe_voltages[&net];
-                            let v0 = tr.first().copied().unwrap_or(dom.v_nom);
-                            let vmin = tr.iter().cloned().fold(f64::MAX, f64::min);
-                            let board = v0 - vmin;
-                            let extra = step * dom.pdn_r_ohm.unwrap_or(0.0)
-                                + dom.pdn_l_h.unwrap_or(0.0) * step / rise;
-                            let droop_pct = (board + extra) / dom.v_nom * 100.0;
-                            let verdict = match dom.droop_max_pct {
-                                Some(dm) => {
-                                    if droop_pct <= dm { format!("≤ {dm}% → {}", "OK".green()) } else { format!("> {dm}% → {}", "VIOLATED".red()) }
-                                }
-                                None => "(no droop_max declared — info only)".to_string(),
-                            };
-                            println!("      droop: {step}A step ({:.1}µs rise, {:.1}µs hold) → board {:.1}mV + budget {:.1}mV = {:.2}% of {}V {}",
-                                rise * 1e6, dur * 1e6, board * 1e3, extra * 1e3, droop_pct, dom.v_nom, verdict);
-                            println!("      basis: transient from healthy operating point, step {:.2}µs; regulators respond per their converter models (control-loop dynamics only as modeled)", total / 400.0 * 1e6);
-                        }
-                    }
-                }
-            }
-        }
+    for l in &pdn_lines {
+        println!("{l}");
     }
 
     // ── Baseline / delta ─────────────────────────────────────────────
