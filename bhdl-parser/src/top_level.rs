@@ -76,6 +76,26 @@ impl<'t> Parser<'t> {
             self.parse_where_clause();
         }
 
+        // Optional PARTNESS declaration (VHDL-flavored role tag):
+        //   entity X as part { }    — instantiation mints a physical
+        //                             self-part (BOM line, refdes)
+        //   entity X as design { }  — hierarchical design block: only
+        //                             its children are physical
+        // Undeclared entities keep today's derived behavior. The tag
+        // is the one declared bit the phantom-stub heuristics have
+        // been reconstructing by name-matching.
+        if self.peek() == Some(SyntaxKind::AS_KW) {
+            self.builder.start_node(SyntaxKind::ENTITY_KIND.into());
+            self.bump(); // as
+            self.skip_trivia();
+            match self.peek_text().as_deref() {
+                Some("part") | Some("design") => self.bump(),
+                _ => self.error("entity kind must be `part` or `design` (entity X as part { })".to_string()),
+            }
+            self.builder.finish_node();
+            self.skip_trivia();
+        }
+
         self.expect(SyntaxKind::L_BRACE);
 
         // Parse entity contents (v2.0 syntax)

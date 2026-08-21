@@ -110,6 +110,24 @@ impl AstNode for Entity {
 impl HasName for Entity {}
 
 impl Entity {
+    /// Declared partness: Some("part") / Some("design") from
+    /// `entity X as part|design { }`, None when undeclared (derived
+    /// behavior applies).
+    pub fn declared_kind(&self) -> Option<String> {
+        self.0
+            .children()
+            .find(|n| n.kind() == SyntaxKind::ENTITY_KIND)
+            .and_then(|n| {
+                // `part` and `design` lex as KEYWORDS (PART_KW /
+                // DESIGN_KW), not IDENT — match by text.
+                n.children_with_tokens()
+                    .filter_map(|e| e.into_token())
+                    .find(|t| matches!(t.text(), "part" | "design"))
+                    .map(|t| t.text().to_string())
+            })
+    }
+
+
     // v2.0 entities have pins and metadata
     pub fn pins(&self) -> impl Iterator<Item = PinDecl> {
         self.0.children().filter_map(PinDecl::cast)

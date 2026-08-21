@@ -1315,3 +1315,97 @@ async fn powertree_swap_by_rename_to_real_part() {
         assert!(r.driven, "swap must not undrive {}: {r:#?}", r.net);
     }
 }
+
+/// Partness (`entity X as part|design`): the declared bit — a design
+/// block's instantiation mints no physical self-part (module kind
+/// DesignBlock; BOM and the safety parts table exclude it via their
+/// existing kind whitelists), only its children are physical. A
+/// design block declaring package identity is a contradiction and a
+/// hard error.
+#[tokio::test]
+async fn entity_partness_as_design_and_as_part() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    use bhdl_netlist::types::ModuleKind;
+
+    let src = r#"
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+// designer composition: no package identity, children are the copper
+entity DividerBlock(r_top: resistance = 10kΩ, r_bot: resistance = 10kΩ) as design {
+    pin VIN: power in;
+    pin VOUT: signal out virtual;
+    pin GND: ground;
+    expansion {
+        VIN -> R_top: Res(r_top).1; R_top.2 -> VOUT;
+        VOUT -> R_bot: Res(r_bot).1; R_bot.2 -> GND;
+    }
+}
+
+entity LoadPart() as part {
+    pin 1: signal in;
+    pin 2: ground;
+    attribute component_class = "resistor";
+    attribute resistance = 100kΩ;
+    attribute kicad_symbol = "Device:R";
+}
+
+board PartnessDemo {
+    power V5 = 5V @ 1A;
+    ground GND;
+    @V5 -> div: DividerBlock().VIN;
+    div.GND -> @GND;
+    div.VOUT -> load: LoadPart().1;
+    load.2 -> @GND;
+}
+"#;
+    let pr = parse(src);
+    assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    // AST surface
+    use bhdl_ast::HasName;
+    let kinds: std::collections::HashMap<String, Option<String>> = sf
+        .entities()
+        .filter_map(|e| e.name().map(|n| (n.text().to_string(), e.declared_kind())))
+        .collect();
+    assert_eq!(kinds["DividerBlock"], Some("design".to_string()));
+    assert_eq!(kinds["LoadPart"], Some("part".to_string()));
+
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+    // module kinds carry the declaration
+    let kind_of = |name: &str| n.modules.iter().find(|(_, m)| m.name == name).map(|(_, m)| m.kind);
+    assert_eq!(kind_of("DividerBlock"), Some(ModuleKind::DesignBlock));
+    assert_eq!(kind_of("LoadPart"), Some(ModuleKind::PhysicalComponent));
+    // the design block's instance exists as a binding skeleton, its
+    // children exist as physical parts
+    assert!(n.instances.iter().any(|(_, i)| i.name == "div"));
+    assert!(n.instances.iter().any(|(_, i)| i.name == "div_R_top"), "{:?}",
+        n.instances.iter().map(|(_, i)| i.name.clone()).collect::<Vec<_>>());
+    // the safety parts view excludes the design block, includes children
+    let model = build_safety_model(&n, &[&sf]);
+    let part_names: Vec<&str> = model.parts.iter().map(|p| p.instance.as_str()).collect();
+    assert!(!part_names.contains(&"div"), "design block must not be a part: {part_names:?}");
+    assert!(part_names.contains(&"div_R_top"), "{part_names:?}");
+
+    // contradiction: as design + package identity = hard error
+    let bad = r#"
+entity BadBlock() as design {
+    pin 1: signal in;
+    attribute kicad_symbol = "Device:R";
+}
+board B {
+    ground GND;
+    b: BadBlock();
+    b.1 -> @GND;
+}
+"#;
+    let pr2 = parse(bad);
+    assert!(pr2.errors().is_empty(), "{:?}", pr2.errors());
+    let sf2 = SourceFile::cast(pr2.syntax()).unwrap();
+    let analysis2 = analyze(&sf2);
+    let mut gen2 = NetlistGenerator::new();
+    let err = gen2.generate_from_ast_and_analysis(&sf2, &analysis2).await.expect_err("contradiction");
+    assert!(format!("{err:#}").contains("no body to solder"), "{err:#}");
+}

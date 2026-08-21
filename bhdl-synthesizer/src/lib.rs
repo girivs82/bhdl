@@ -445,6 +445,51 @@ impl NetlistGenerator {
         self.generate_from_ast_and_analysis_internal(Some(ast), analysis).await
     }
     
+    /// Phase 4.65: apply declared entity partness (`as part|design`)
+    /// onto module kinds. See the call site for semantics.
+    fn apply_entity_partness(&mut self) -> Result<()> {
+        let mut updates: Vec<(bhdl_netlist::types::ModuleId, String)> = Vec::new();
+        for (mid, module) in self.netlist.modules.iter() {
+            let ent = self
+                .import_loader
+                .get_entity(&module.name)
+                .or_else(|| self.local_entities.get(&module.name));
+            let Some(ent) = ent else { continue };
+            let Some(kind) = ent.declared_kind() else { continue };
+            if kind == "design" {
+                // package identity lives in the ENTITY's attribute
+                // declarations (it is stamped onto instances, not
+                // modules) — inspect the AST
+                use bhdl_ast::HasName as _;
+                let phys_attr = ent.attributes().find_map(|a| {
+                    a.name().map(|n| n.text().to_string()).filter(|k| {
+                        matches!(k.as_str(), "kicad_symbol" | "pkg" | "footprint" | "package_name")
+                    })
+                });
+                if let Some(a) = phys_attr {
+                    anyhow::bail!(
+                        "entity {} is declared `as design` but carries physical package identity ({a}) — a design block has no body to solder; drop the attribute or declare it `as part`",
+                        module.name
+                    );
+                }
+                updates.push((mid, kind));
+            } else {
+                updates.push((mid, kind));
+            }
+        }
+        for (mid, kind) in updates {
+            if let Some(m) = self.netlist.modules.get_mut(mid) {
+                m.kind = if kind == "design" {
+                    bhdl_netlist::types::ModuleKind::DesignBlock
+                } else {
+                    bhdl_netlist::types::ModuleKind::PhysicalComponent
+                };
+                info!("entity {} declared as {kind} → module kind {:?}", m.name, m.kind);
+            }
+        }
+        Ok(())
+    }
+
     /// Apply board-scope scoped attributes (`attribute inst.key = v;`)
     /// onto their instances. Values are stored with string quotes
     /// stripped. Only DIRECT children of the board definition count —
@@ -718,6 +763,16 @@ impl NetlistGenerator {
         // model unable to recover the operating point. This pass runs after
         // all instances exist; an attribute already present is not overwritten.
         self.stamp_entity_attributes_on_instances();
+
+        // Phase 4.65: entity PARTNESS (`entity X as part|design`).
+        // A design-kind entity is a hierarchical design block: its
+        // instantiation mints no physical self-part — the module is
+        // marked DesignBlock and physical consumers (BOM, safety parts
+        // table) skip its instances; only its children are physical.
+        // Declaring `as design` while also declaring package identity
+        // (kicad_symbol/pkg/footprint) is a contradiction and a HARD
+        // error — a design block has no body to solder.
+        self.apply_entity_partness()?;
 
         // Phase 4.7: decap-network synthesis from domain Z(f) masks
         // (`decouple <inst>.<domain> from "<lib>" ...;`). Runs after

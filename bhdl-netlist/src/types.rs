@@ -24,6 +24,10 @@ pub enum ModuleKind {
     Board,         // Top-level board
     PhysicalComponent, // Resistor, Capacitor, IC, etc. (post-synthesis board)
     Primitive,     // LUT, FF, Gate (post-synthesis ASIC)
+    /// `entity X as design`: a hierarchical design block —
+    /// instantiation mints NO physical self-part (no BOM line, no
+    /// refdes, not a fault site); only its children are physical.
+    DesignBlock,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Hash, Clone, Copy)]

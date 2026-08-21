@@ -487,6 +487,10 @@ pub enum SyntaxKind {
     // infeasibility is a hard error naming the physics.
     DECOUPLE_STMT,      // decouple x.D from "lib" k=v ...;
 
+    // Entity partness declaration: `entity X as part|design { }` —
+    // whether instantiation mints a physical self-part.
+    ENTITY_KIND,        // as part | as design
+
     // ERROR must be the last variant for the assertion in kind_from_raw
     ERROR = 65534, // Represents a parsing error node
 }
