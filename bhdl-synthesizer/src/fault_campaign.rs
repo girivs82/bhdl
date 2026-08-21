@@ -485,13 +485,188 @@ fn eval_effect(
     Ok(v)
 }
 
-/// Time-domain solver for FTTI measurement: (faulted netlist,
-/// duration_s) → (sample times, net name → voltage series). The
-/// caller supplies the engine (bhdl-spice transient with the HEALTHY
-/// operating point as initial conditions — the fault itself is the
-/// stimulus); the campaign only reads the trace.
+/// One pin-level symptom drive of a chip-internal transient fault: the
+/// net is HELD at `level_v` from t=0 to `t_end_s` and released after.
+/// A state with several drives is ONE fault (one λ) whose correlated
+/// multi-pin symptom vector plays out together — never a multi-point
+/// fault (that would wrongly discount a first-order λ to a product).
+#[derive(Debug, Clone)]
+pub struct PinDrive {
+    pub net: String,
+    pub level_v: f64,
+    pub t_end_s: f64,
+}
+
+/// Time-domain solver: (faulted netlist, duration_s, fault drives) →
+/// (sample times, net name → voltage series). The caller supplies the
+/// engine (bhdl-spice transient with the HEALTHY operating point as
+/// initial conditions — the fault itself is the stimulus); the
+/// campaign only reads the trace. Empty `drives` = pure relaxation
+/// (the FTTI measurement).
 pub type TranSolver<'a> =
-    dyn Fn(&Netlist, f64) -> Result<(Vec<f64>, HashMap<String, Vec<f64>>), String> + 'a;
+    dyn Fn(&Netlist, f64, &[PinDrive]) -> Result<(Vec<f64>, HashMap<String, Vec<f64>>), String> + 'a;
+
+/// Split a behavior string into DC mutation ops and transient pulse
+/// ops. `pulse(PIN, <V>, <duration>)` is transient; everything else is
+/// applied as a permanent mutation. Several ';'-separated ops are ONE
+/// fault's symptom vector.
+fn split_behavior_ops(behavior: &str) -> (Vec<String>, Vec<(String, f64, f64)>) {
+    let mut dc = Vec::new();
+    let mut pulses = Vec::new();
+    for op in behavior.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+        let is_pulse = op.starts_with("pulse");
+        if !is_pulse {
+            dc.push(op.to_string());
+            continue;
+        }
+        let args: Vec<&str> = op
+            .trim_start_matches("pulse")
+            .trim()
+            .trim_start_matches('(')
+            .trim_end_matches(')')
+            .split(',')
+            .map(str::trim)
+            .collect();
+        if args.len() == 3 {
+            let v = args[1].trim_end_matches('V').parse::<f64>();
+            let d = parse_duration_s(args[2]);
+            if let (Ok(v), Some(d)) = (v, d) {
+                pulses.push((args[0].to_string(), v, d));
+                continue;
+            }
+        }
+        // malformed pulse: surface as a DC op so the DC path errors
+        // loudly instead of silently dropping the symptom
+        dc.push(op.to_string());
+    }
+    (dc, pulses)
+}
+
+/// Outcome of running a transient (pulse-symptom) failure state.
+struct TransientOutcome {
+    fired: Vec<String>,
+    /// (mechanism handle, measured first-crossing time of detected_when)
+    detected_ext: Vec<(String, f64)>,
+    /// vendor-declared internal detection: Some(Some(latency_s)) with
+    /// timing, Some(None) declared without timing, None = not declared
+    detected_int: Option<Option<f64>>,
+    note: String,
+}
+
+/// Run one pulse-symptom state: apply any DC ops, drive the pulse nets,
+/// classify over the WHOLE trace (a transient effect that self-clears
+/// is still dangerous while asserted). External detection is the
+/// measured FIRST CROSSING of detected_when (a real monitor latches —
+/// stated); internal detection is the vendor's declaration.
+#[allow(clippy::too_many_arguments)]
+fn run_transient_state(
+    netlist: &Netlist,
+    view: &View,
+    prefix: &str,
+    ns: &str,
+    effects: &[(String, String)],
+    mechs: &[(String, Option<String>)],
+    inst: &str,
+    dc_ops: &[String],
+    pulses: &[(String, f64, f64)],
+    internal_detection: Option<&str>,
+    tran: &TranSolver,
+    within_s: Option<f64>,
+) -> Result<TransientOutcome, String> {
+    let mut faulted = netlist.clone();
+    let mut alias: HashMap<String, String> = HashMap::new();
+    for op in dc_ops {
+        apply_state_behavior(&mut faulted, view, inst, op, &mut alias)?;
+    }
+    let max_dur = pulses.iter().map(|p| p.2).fold(0.0f64, f64::max);
+    let duration = within_s.map(|w| (2.0 * w).max(4.0 * max_dur)).unwrap_or(10.0 * max_dur);
+    let drives: Vec<PinDrive> = pulses
+        .iter()
+        .map(|(pin, v, d)| {
+            let net = view
+                .pin_net
+                .get(&(inst.to_string(), pin.clone()))
+                .cloned()
+                .ok_or_else(|| format!("pulse pin '{inst}.{pin}' is not connected"))?;
+            let net = alias.get(&net).cloned().unwrap_or(net);
+            Ok(PinDrive { net, level_v: *v, t_end_s: *d })
+        })
+        .collect::<Result<_, String>>()?;
+    let (times, traces) = tran(&faulted, duration, &drives)?;
+    if times.len() < 2 {
+        return Err("transient returned <2 samples".into());
+    }
+    let sample = |k: usize| -> HashMap<String, f64> {
+        traces
+            .iter()
+            .map(|(name, vs)| (name.clone(), vs.get(k).copied().unwrap_or(f64::NAN)))
+            .collect()
+    };
+    let n = times.len();
+    let mut fired: Vec<String> = Vec::new();
+    let mut fired_span: Option<(f64, f64)> = None;
+    for (path, expr) in effects {
+        let mut first: Option<usize> = None;
+        let mut last: Option<usize> = None;
+        for k in 0..n {
+            if let Ok(true) = eval_effect(expr, prefix, ns, view, &alias, &sample(k)) {
+                if first.is_none() {
+                    first = Some(k);
+                }
+                last = Some(k);
+            }
+        }
+        if let (Some(a), Some(b)) = (first, last) {
+            fired.push(path.clone());
+            let span = (times[a], times[b]);
+            fired_span = Some(match fired_span {
+                Some((x, y)) => (x.min(span.0), y.max(span.1)),
+                None => span,
+            });
+        }
+    }
+    let mut detected_ext: Vec<(String, f64)> = Vec::new();
+    for (handle, dw) in mechs {
+        let Some(pred) = dw else { continue };
+        for k in 0..n {
+            if let Ok(true) = eval_effect(pred, prefix, ns, view, &alias, &sample(k)) {
+                detected_ext.push((handle.clone(), times[k]));
+                break;
+            }
+        }
+    }
+    let detected_int = internal_detection.map(|v| {
+        let t = v.trim().trim_matches('"');
+        if t.eq_ignore_ascii_case("yes") || t.eq_ignore_ascii_case("true") {
+            None
+        } else {
+            parse_duration_s(t)
+        }
+    });
+    let mut notes = vec![format!(
+        "transient: {} pin drive(s), longest {:.1}µs, simulated {:.1}µs",
+        pulses.len(),
+        max_dur * 1e6,
+        duration * 1e6
+    )];
+    if let Some((a, b)) = fired_span {
+        notes.push(format!("effect asserted {:.1}µs..{:.1}µs of the trace", a * 1e6, b * 1e6));
+    }
+    for (h, t) in &detected_ext {
+        notes.push(format!("{h} crossed at {:.1}µs (measured)", t * 1e6));
+    }
+    match &detected_int {
+        Some(Some(l)) => notes.push(format!("vendor declares INTERNAL detection, latency {:.1}µs", l * 1e6)),
+        Some(None) => notes.push("vendor declares INTERNAL detection (no timing data — FTTI unverifiable via this path)".into()),
+        None => {}
+    }
+    Ok(TransientOutcome {
+        fired,
+        detected_ext,
+        detected_int,
+        note: notes.join("; "),
+    })
+}
 
 /// Run every declared fault. Marks each fault run (or notes exactly why
 /// it could not run), records fired effects + whether the expectation
@@ -514,6 +689,21 @@ pub fn run_declared_faults(
                 states
                     .iter()
                     .map(|st| ((p.instance.clone(), st.name.clone()), st.behavior.clone()))
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    // (instance, state name) → vendor internal-detection declaration
+    let state_internal: HashMap<(String, String), Option<String>> = model
+        .parts
+        .iter()
+        .filter_map(|p| match &p.data {
+            bhdl_common::safety::PartData::Behavioral { states, .. } => Some(
+                states
+                    .iter()
+                    .map(|st| ((p.instance.clone(), st.name.clone()), st.internal_detection.clone()))
                     .collect::<Vec<_>>(),
             ),
             _ => None,
@@ -588,8 +778,78 @@ pub fn run_declared_faults(
                     let inst = f.targets.first().cloned().unwrap_or_default();
                     let sname = f.targets.get(1).map(|s| s.trim_matches('"').to_string()).unwrap_or_default();
                     match state_behaviors.get(&(inst.clone(), sname.clone())) {
-                        Some(Some(beh)) => apply_state_behavior(&mut faulted, &view, &inst, beh, &mut alias),
-                        Some(None) => Err(format!("failure_state '{sname}' declares no behavior=\"open(P)|short(A,B)|force(P,V)\" — the vendor model must say what the state DOES")),
+                        Some(Some(beh)) => {
+                            let (dc_ops, pulses) = split_behavior_ops(beh);
+                            if !pulses.is_empty() {
+                                // TRANSIENT state: classify over the trace,
+                                // not the endpoint (post-pulse steady state
+                                // is healthy by construction).
+                                let within_s = f.within.as_deref().and_then(parse_duration_s);
+                                let internal = state_internal.get(&(inst.clone(), sname.clone())).cloned().flatten();
+                                match tran {
+                                    None => {
+                                        f.note = Some("transient behavior (pulse) needs a time-domain engine — not run".into());
+                                    }
+                                    Some(tr) => match run_transient_state(
+                                        netlist, &view, prefix, ns, effects,
+                                        &scopes_mechs[si].iter().map(|(h, _, dw, _, _)| (h.clone(), dw.clone())).collect::<Vec<_>>(),
+                                        &inst, &dc_ops, &pulses, internal.as_deref(), tr, within_s,
+                                    ) {
+                                        Err(e) => {
+                                            f.run = true;
+                                            f.expectation_met = None;
+                                            f.note = Some(format!("transient state did not run to a verdict: {e}"));
+                                            ran += 1;
+                                        }
+                                        Ok(out) => {
+                                            f.run = true;
+                                            ran += 1;
+                                            f.fired = out.fired.clone();
+                                            let expect_full = &f.expect;
+                                            let met = out.fired.iter().any(|p| p == expect_full || p.ends_with(&format!(".{expect_full}")) || expect_full.ends_with(p.as_str()));
+                                            f.expectation_met = Some(met);
+                                            if !met {
+                                                mismatched += 1;
+                                            }
+                                            // FTTI: min over (external crossing
+                                            // + that monitor's declared chip
+                                            // latency + interval) and (vendor
+                                            // internal latency, end-to-end)
+                                            if let Some(w) = within_s {
+                                                let mut best: Option<f64> = None;
+                                                for (h, t_ext) in &out.detected_ext {
+                                                    let m = scopes_mechs[si].iter().find(|(mh, ..)| mh == h);
+                                                    let extra = m
+                                                        .map(|(_, _, _, i, l)| {
+                                                            i.as_deref().and_then(parse_duration_s).unwrap_or(0.0)
+                                                                + l.as_deref().and_then(parse_duration_s).unwrap_or(0.0)
+                                                        })
+                                                        .unwrap_or(0.0);
+                                                    let tot = t_ext + extra;
+                                                    if best.map(|b| tot < b).unwrap_or(true) {
+                                                        best = Some(tot);
+                                                    }
+                                                }
+                                                if let Some(Some(l)) = &out.detected_int {
+                                                    if best.map(|b| *l < b).unwrap_or(true) {
+                                                        best = Some(*l);
+                                                    }
+                                                }
+                                                f.timing_met = match best {
+                                                    Some(b) => Some(b <= w),
+                                                    None if matches!(out.detected_int, Some(None)) => None, // detected, timing unknowable
+                                                    None => Some(false), // never detected
+                                                };
+                                            }
+                                            f.note = Some(out.note);
+                                        }
+                                    },
+                                }
+                                continue;
+                            }
+                            apply_state_behavior(&mut faulted, &view, &inst, beh, &mut alias)
+                        }
+                        Some(None) => Err(format!("failure_state '{sname}' declares no behavior=\"open(P)|short(A,B)|force(P,V)|pulse(P,V,T)\" — the vendor model must say what the state DOES")),
                         None => Err(format!("no failure_state '{sname}' on {inst}")),
                     }
                 }
@@ -668,7 +928,7 @@ pub fn run_declared_faults(
                         let mut verdict: Option<bool> = None;
                         let mut tnote: Option<String> = None;
                         if let Some(tr) = tran {
-                            match tr(&faulted, 2.0 * t) {
+                            match tr(&faulted, 2.0 * t, &[]) {
                                 Ok((times, traces)) if times.len() >= 2 => {
                                     // per-mechanism measured settle time of
                                     // detected_when; keep the best
@@ -845,6 +1105,7 @@ pub fn run_universe(
     model: &mut SafetyModel,
     solve: &Solver,
     geo_adjacency: &HashMap<String, Vec<(String, String)>>,
+    tran: Option<&TranSolver>,
 ) {
     use bhdl_common::safety::{PartData, UniverseFault};
     let view = View::build(netlist);
@@ -857,6 +1118,21 @@ pub fn run_universe(
                 states
                     .iter()
                     .map(|st| ((p.instance.clone(), st.name.clone()), st.behavior.clone()))
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    // (instance, state name) → vendor internal-detection declaration
+    let state_internal: HashMap<(String, String), Option<String>> = model
+        .parts
+        .iter()
+        .filter_map(|p| match &p.data {
+            PartData::Behavioral { states, .. } => Some(
+                states
+                    .iter()
+                    .map(|st| ((p.instance.clone(), st.name.clone()), st.internal_detection.clone()))
                     .collect::<Vec<_>>(),
             ),
             _ => None,
@@ -1173,6 +1449,56 @@ pub fn run_universe(
                 }
                 universe.push(uf);
                 continue;
+            }
+            // TRANSIENT (pulse-symptom) states: classify over the trace
+            // — the post-pulse steady state is healthy by construction,
+            // so an endpoint solve would call every one of them SAFE.
+            if mode == "state" {
+                let pulses_present = behavior
+                    .as_deref()
+                    .map(|b| !split_behavior_ops(b).1.is_empty())
+                    .unwrap_or(false);
+                if pulses_present {
+                    let beh = behavior.as_deref().unwrap();
+                    let (dc_ops, pulses) = split_behavior_ops(beh);
+                    let sc = &scopes[si];
+                    match tran {
+                        None => {
+                            uf.note = Some("transient behavior (pulse) needs a time-domain engine — not run".into());
+                        }
+                        Some(tr) => {
+                            let internal = state_internal
+                                .get(&(targets[0].clone(), targets.get(1).cloned().unwrap_or_default()))
+                                .cloned()
+                                .flatten();
+                            let mech_pairs: Vec<(String, Option<String>)> =
+                                sc.mechs.iter().map(|(h, _, dw)| (h.clone(), dw.clone())).collect();
+                            match run_transient_state(
+                                netlist, &view, &sc.prefix, &sc.ns, &sc.effects, &mech_pairs,
+                                &targets[0], &dc_ops, &pulses, internal.as_deref(), tr, None,
+                            ) {
+                                Err(e) => {
+                                    uf.note = Some(format!("transient state did not run to a verdict: {e}"));
+                                }
+                                Ok(out) => {
+                                    uf.ran = true;
+                                    uf.fired = out.fired;
+                                    uf.detected = out.detected_ext.iter().map(|(h, _)| h.clone()).collect();
+                                    if out.detected_int.is_some() {
+                                        uf.detected.push("internal (vendor-declared)".to_string());
+                                    }
+                                    uf.false_alarm = uf.fired.is_empty() && !uf.detected.is_empty();
+                                    uf.note = Some(match uf.note.take() {
+                                        Some(nn) => format!("{nn}; {}", out.note),
+                                        None => out.note,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    universe.push(uf);
+                    continue;
+                }
             }
             // mutate + solve
             let mut faulted = netlist.clone();

@@ -1,0 +1,81 @@
+// bhdl-sweep: skip — safety-engine fixture, not a layout target
+// Transient pin-disturbance fixture (docs/spec/Functional_Safety.md
+// §2.5): a chip-internal gate-driver glitch whose EFFECTS propagate
+// out of the pins into the board — the transient's ORIGIN is vendor
+// data (the pulse amplitude/duration on each pin), its PROPAGATION
+// through the output network is solved physics.
+//
+// Healthy: OUT ≈ 11.8V (12V through 2Ω into 100Ω load), PG = 12V
+// (10k pullup), FLAG ≈ OUT/2 behind a 5ms RC (deliberately slow).
+//
+// gd_glitch: ONE die event, TWO correlated pin symptoms (SW collapses
+//   to 0V AND PG collapses to 0V for 20µs — one λ, never a multi-point
+//   fault). OUT crashes (τ ≈ 0.1µs) → undervoltage fires transiently
+//   and self-clears after the window. The PG comparator crosses
+//   immediately: EXTERNALLY detected, measured.
+// gd_sw_only: same die, SW symptom only. The 5ms FLAG filter cannot
+//   move in 20µs — the external monitors are BLIND (the classic
+//   transient blind spot) — but the vendor declares INTERNAL
+//   detection with a 5µs reaction: detected via the chip's own path.
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+
+// Behavioral gate-driver stand-in: electrically high-Z across SW/PG
+// (10MΩ, negligible), carrying the vendor's transient failure states.
+// FIT numbers and waveforms are FIXTURE values for the pipeline demo.
+entity GateDriver() {
+    pin 1: signal inout;
+    pin 2: signal inout;
+    attribute component_class = "resistor";
+    attribute resistance = 10MΩ;
+    attribute kicad_symbol = "Device:R";
+    safety {
+        failure_state gd_glitch  fit=2 of 10 source="FIXTURE — illustrative split" behavior="pulse(1, 0V, 20us); pulse(2, 0V, 20us)";
+        failure_state gd_sw_only fit=1 of 10 source="FIXTURE — illustrative split" behavior="pulse(1, 0V, 20us)" detected_internally="5us";
+    }
+}
+
+board TransientPulse {
+    power V12 = 12V @ 1A;
+    ground GND;
+
+    // power path: 12V —1Ω— SW —1Ω— OUT, 100nF + 100Ω load at OUT
+    @V12 -> rds: Res(1Ω).1; rds.2 -> rsw: Res(1Ω).1; rsw.2 -> r_load: Res(100Ω).1; r_load.2 -> @GND;
+    rsw.2 -> c_out: Cap(100nF).1; c_out.2 -> @GND;
+
+    // PG rail: 10k pullup to 12V, idles HIGH (the gate driver's pin 2
+    // is high-Z against it — only the fault pulls it low)
+    @V12 -> r_pg: Res(10kΩ).1;
+
+    // the gate driver straddles SW and PG
+    rds.2 -> gd: GateDriver().1;
+    r_pg.2 -> gd.2;
+
+    // slow OUT monitor: divider + 1µF ⇒ τ = 5ms (cannot see 20µs)
+    rsw.2 -> r_m1: Res(10kΩ).1; r_m1.2 -> r_m2: Res(10kΩ).1; r_m2.2 -> @GND;
+    r_m1.2 -> c_f: Cap(1µF).1; c_f.2 -> @GND;
+}
+
+safety TransientPulse as brd {
+    mission { ambient = 40degC; lifetime = 15000h; }
+
+    goal SG_OUT: ASIL_B "output stays above its floor" (id="SG-TP-1") {
+        effect undervoltage = brd.r_load.1 < 8V severity S2;
+    }
+
+    // PG comparator (fast, sees the second symptom of gd_glitch);
+    // latency = its chip-internal reaction claim.
+    mechanism brd.gd: psm(SG_OUT, detects=[undervoltage],
+                          detected_when = brd.gd.2 < 6V,
+                          latency=10us,
+                          dc=0.90, source="FIXTURE claim");
+    // slow FLAG monitor (5ms RC — blind to 20µs glitches, on purpose)
+    mechanism brd.r_m2: psm(SG_OUT, detects=[undervoltage],
+                            detected_when = brd.r_m2.1 < 3V,
+                            latency=10us,
+                            dc=0.50, source="FIXTURE claim");
+
+    fault state(brd.gd, "gd_glitch")  expect SG_OUT.undervoltage detected_by brd.gd within 100us;
+    fault state(brd.gd, "gd_sw_only") expect SG_OUT.undervoltage detected_by brd.gd within 100us;
+}

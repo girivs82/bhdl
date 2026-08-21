@@ -311,7 +311,7 @@ fn split_call_args(txt: &str) -> (Vec<String>, BTreeMap<String, String>) {
 /// Entity-level safety data (spec §2.7), keyed by entity name.
 #[derive(Debug, Clone, Default)]
 struct EntityData {
-    failure_states: Vec<(String, Option<f64>, Option<f64>, String, Option<String>)>, // (name, fit, of, source, behavior)
+    failure_states: Vec<(String, Option<f64>, Option<f64>, String, Option<String>, Option<String>)>, // (name, fit, of, source, behavior, internal_detection)
     seooc: Option<(Option<f64>, Option<f64>, Option<f64>, String)>,  // (lambda, spfm, lfm, source)
     handbook: Option<(String, String, Option<String>)>,              // (class, source, per-standard)
     /// Vendor-data validity configuration: the FMEDA/safety-manual FIT
@@ -387,7 +387,7 @@ fn collect_entity_data(root: &SyntaxNode) -> HashMap<String, EntityData> {
                         let of = toks.iter().position(|t| t == "of").and_then(|i| toks.get(i + 1)).and_then(|v| v.parse::<f64>().ok());
                         let src = kv.get("source").cloned().unwrap_or_default();
                         if src.is_empty() { d.errors.push(format!("{ename}: failure_state {name} has no source")); }
-                        d.failure_states.push((name, num(kv.get("fit")), of, src, kv.get("behavior").cloned()));
+                        d.failure_states.push((name, num(kv.get("fit")), of, src, kv.get("behavior").cloned(), kv.get("detected_internally").cloned()));
                     }
                     "seooc" => {
                         let kv = kv_from_tokens(&toks[1..]);
@@ -1127,6 +1127,7 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
                     source: src,
                     states: ed.failure_states.iter().map(|f| bhdl_common::safety::FailureState {
                         name: f.0.clone(), fit: f.1, behavior: f.4.clone(),
+                        internal_detection: f.5.clone(),
                     }).collect(),
                 }
             } else if let Some((lambda, _, _, src)) = &ed.seooc {

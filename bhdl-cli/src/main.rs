@@ -1831,7 +1831,8 @@ async fn run_safety(
         // — no external stimulus, the fault is the step. Same converter
         // and params shape as the schematic panel's settle loop.
         let tran = |faulted: &bhdl_netlist::Netlist,
-                    duration: f64|
+                    duration: f64,
+                    fault_drives: &[bhdl_synthesizer::fault_campaign::PinDrive]|
          -> Result<(Vec<f64>, HashMap<String, Vec<f64>>), String> {
             let mut converter = NetlistToSpiceConverter::new();
             converter.set_model_overrides(overrides.clone());
@@ -1855,6 +1856,17 @@ async fn run_safety(
                 // diverges. Resolution = duration/400, stated in the
                 // measurement note.
                 duration / 400.0,
+            )
+            .with_timed_drives(
+                fault_drives
+                    .iter()
+                    .map(|d| bhdl_spice::transient::TimedDrive {
+                        node: d.net.clone(),
+                        level_v: d.level_v,
+                        t_start: 0.0,
+                        t_end: d.t_end_s,
+                    })
+                    .collect(),
             );
             let r = bhdl_spice::ibis_transient::run_transient_ibis_ic(
                 &circuit,
@@ -1950,7 +1962,7 @@ async fn run_safety(
                 geo_adjacency.insert(inst.name.clone(), pairs);
             }
         }
-        bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solver, &geo_adjacency);
+        bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solver, &geo_adjacency, Some(&tran));
         // FMEDA metrics from the measured universe.
         bhdl_synthesizer::fault_campaign::compute_metrics(&mut model);
     }

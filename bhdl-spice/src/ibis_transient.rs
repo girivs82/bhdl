@@ -277,6 +277,11 @@ pub fn run_transient_ibis_ic(
             return Err(SpiceError::NodeNotFound(p.clone()));
         }
     }
+    for d in &params.timed_drives {
+        if !names.contains(d.node.as_str()) {
+            return Err(SpiceError::NodeNotFound(d.node.clone()));
+        }
+    }
     // Both stamped branches of a split buffer map to the same drive;
     // the bool = "is the VCC-referenced branch".
     let mut drive_of: HashMap<&str, (&IbisDrive, bool)> = HashMap::new();
@@ -340,6 +345,9 @@ pub fn run_transient_ibis_ic(
     for name in &params.probe_nodes {
         let v = if name == &params.input_node {
             v0
+        } else if let Some(d) = params.timed_drives.iter().find(|d| &d.node == name && d.active_at(0.0)) {
+            // a fault drive active at t = 0 holds its node from the start
+            d.level_v
         } else {
             initial_v.and_then(|m| m.get(name)).copied().unwrap_or(0.0)
         };
@@ -365,6 +373,22 @@ pub fn run_transient_ibis_ic(
                 params.stimulus.at(t_clamped),
                 None,
             );
+        }
+        // Fault-injection drives: each node is CLAMPED only while its
+        // window is active and released outside it — no source is
+        // stamped then, so the circuit decides the node's voltage
+        // before and after the disturbance.
+        for (di, d) in params.timed_drives.iter().enumerate() {
+            if d.active_at(t_clamped) {
+                c.add_branch(
+                    format!("__FDRV{di}__"),
+                    &d.node,
+                    &ground_name,
+                    "VoltageSource".to_string(),
+                    d.level_v,
+                    None,
+                );
+            }
         }
 
         for (edge, branch) in circuit.branches() {
@@ -781,5 +805,64 @@ dV/dt_f 3.0/1.0n NA NA
                 "2kΩ cross-prediction deviates {max_err} V (swing {swing} V)"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod timed_drive_tests {
+    use super::*;
+    use crate::circuit::Circuit;
+    use crate::transient::{Stimulus, TimedDrive, TransientParams};
+
+    /// A 12V source charges node `out` through 1k with 1µF to GND
+    /// (τ = 1ms), starting at the settled 12V operating point. A fault
+    /// drive clamps `out` to 0V for 1ms then RELEASES it: during the
+    /// window the node is held, after it the RC recovers toward 12V.
+    /// Multi-drive correlation: a second node `aux` (own 1k/1µF from
+    /// the same rail) is clamped by the SAME event's second drive with
+    /// a shorter window — both are one fault's symptoms.
+    #[test]
+    fn timed_drives_clamp_then_release() {
+        let mut c = Circuit::new();
+        c.add_node("vcc".into(), None);
+        c.add_node("out".into(), None);
+        c.add_node("aux".into(), None);
+        c.add_node("0".into(), None);
+        c.add_branch("V1".into(), "vcc", "0", "VoltageSource".into(), 12.0, None);
+        c.add_branch("R1".into(), "vcc", "out", "Resistor".into(), 1000.0, None);
+        c.add_branch("C1".into(), "out", "0", "Capacitor".into(), 1e-6, None);
+        c.add_branch("R2".into(), "vcc", "aux", "Resistor".into(), 1000.0, None);
+        c.add_branch("C2".into(), "aux", "0", "Capacitor".into(), 1e-6, None);
+        let params = TransientParams::new(
+            "",
+            Stimulus::Constant(0.0),
+            vec!["out", "aux"],
+            4e-3,
+            1e-5,
+        )
+        .with_timed_drives(vec![
+            TimedDrive { node: "out".into(), level_v: 0.0, t_start: 0.0, t_end: 1e-3 },
+            TimedDrive { node: "aux".into(), level_v: 0.0, t_start: 0.0, t_end: 0.5e-3 },
+        ]);
+        let mut ic = std::collections::HashMap::new();
+        ic.insert("vcc".to_string(), 12.0);
+        ic.insert("out".to_string(), 12.0);
+        ic.insert("aux".to_string(), 12.0);
+        let r = run_transient_ibis_ic(&c, &params, &[], Some(&ic)).expect("transient");
+        let out = &r.probe_voltages["out"];
+        let aux = &r.probe_voltages["aux"];
+        let at = |t: f64| -> usize {
+            r.times.iter().position(|&x| x >= t).unwrap_or(r.times.len() - 1)
+        };
+        // held during the window
+        assert!(out[at(0.5e-3)].abs() < 0.1, "out clamped during window: {}", out[at(0.5e-3)]);
+        // aux released at 0.5ms: by 1ms it recovered toward 12V (τ=1ms
+        // ⇒ ~39% of the 12V gap in 0.5ms) while out is still clamped
+        assert!(aux[at(1.0e-3)] > 3.0, "aux recovering after release: {}", aux[at(1.0e-3)]);
+        assert!(out[at(1.0e-3)].abs() < 0.2, "out still clamped at 1ms: {}", out[at(1.0e-3)]);
+        // after release both recover: at 4ms out has had 3τ ⇒ > 11V
+        assert!(out[at(3.9e-3)] > 11.0, "out recovered: {}", out[at(3.9e-3)]);
+        // the aux window being shorter is visible: aux leads out everywhere after 0.5ms
+        assert!(aux[at(2.0e-3)] > out[at(2.0e-3)], "aux leads out");
     }
 }

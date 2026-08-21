@@ -257,6 +257,31 @@ value-carrying key — different consumers read different ones) by
 magnitude deliberately; the universe additionally probes its own
 labelled magnitudes (tolerance edge + 0.5×/2× convention, above).
 
+**Transient pin-disturbance states**: a chip-internal transient (a
+gate-driver glitch, an SEU) cannot be simulated inside the die — but
+its pin-level symptoms can, and their propagation through the board is
+solved physics. A `failure_state` behavior may contain
+`pulse(PIN, <V>, <duration>)` ops: the pin's net is HELD at that
+voltage for the window and RELEASED after (the circuit decides the
+node before and afterwards). Several ';'-separated ops are ONE fault's
+correlated multi-pin symptom vector — one die event, one λ — never a
+multi-point fault (that would wrongly discount a first-order λ to a
+second-order product; genuinely independent coexisting faults remain
+the latent double-fault probe's territory). The waveform is VENDOR
+data; no declaration, no simulation — never a guessed pulse. The
+state runs as a transient from the healthy operating point and is
+classified over the WHOLE trace (the endpoint is healthy by
+construction — endpoint classification would call every transient
+SAFE): the effect fired if TRUE at any sample, with its assertion
+window reported. Detection is two-path: **external** = the measured
+first crossing of a mechanism's `detected_when` (a real monitor
+latches); **internal** = the vendor's `detected_internally=` claim on
+the failure state — a duration is the chip's reaction latency, a bare
+`yes` credits detection with unverifiable timing (stated). The FTTI
+verdict takes the best available path: min(external crossing + that
+monitor's declared latency+interval, internal latency) ≤ within.
+Without a time-domain engine the state is honestly not run, stated.
+
 `within <FTTI>` requires the fault DETECTED (a mechanism's
 `detected_when` TRUE on the faulted point); the TIME argument is,
 strongest first: **MEASURED** — a transient solve of the faulted board

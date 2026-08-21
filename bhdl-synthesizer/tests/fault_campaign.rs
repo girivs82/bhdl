@@ -90,7 +90,7 @@ async fn declared_faults_run_classify_and_regenerate_gaps() {
     // (+0 states). Under the all-12V mock with alias-following, the
     // classification is deterministic; measured DC exists for the
     // mechanism because the fixture declares detected_when.
-    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve, &HashMap::new());
+    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve, &HashMap::new(), None);
     // 3 generic 2-pin parts × 4 modes (short/open + drift_high/drift_low
     // — value-carrying parts get parametric drift probed at the declared
     // tolerance edge and the labelled 0.5×/2× convention point) +
@@ -201,7 +201,7 @@ safety GeoDemo as g {
 
     // No geometry → ordering fallback: 4 opens + 3 consecutive bridges.
     let mut model = build_safety_model(&netlist, &[&sf]);
-    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve, &HashMap::new());
+    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve, &HashMap::new(), None);
     let bridges: Vec<_> = model.universe.iter().filter(|u| u.mode == "short_adjacent").collect();
     assert_eq!(bridges.len(), 3, "{:#?}", model.universe);
     assert!(
@@ -217,7 +217,7 @@ safety GeoDemo as g {
     let mut geo: HashMap<String, Vec<(String, String)>> = HashMap::new();
     geo.insert("u1".into(), vec![("1".into(), "2".into()), ("3".into(), "4".into())]);
     let mut model2 = build_safety_model(&netlist, &[&sf]);
-    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model2, &solve, &geo);
+    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model2, &solve, &geo, None);
     let bridges2: Vec<_> = model2.universe.iter().filter(|u| u.mode == "short_adjacent").collect();
     assert_eq!(bridges2.len(), 2, "{:#?}", model2.universe);
     assert!(
@@ -254,7 +254,7 @@ async fn fmeda_export_serializes_the_measured_model() {
             .collect())
     };
     run_declared_faults(&netlist, &mut model, &solve, None);
-    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve, &HashMap::new());
+    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve, &HashMap::new(), None);
     bhdl_synthesizer::fault_campaign::compute_metrics(&mut model);
     let csvs = bhdl_synthesizer::fault_campaign::export_fmeda(&model);
 
@@ -326,7 +326,8 @@ async fn transient_ftti_measurement_supersedes_declared_latency() {
     };
     // Mock transient: 11 samples, every non-GND net ramps 0→12V.
     let tran = |faulted: &bhdl_netlist::Netlist,
-                duration: f64|
+                duration: f64,
+                _drives: &[bhdl_synthesizer::fault_campaign::PinDrive]|
      -> Result<(Vec<f64>, HashMap<String, Vec<f64>>), String> {
         let times: Vec<f64> = (0..=10).map(|k| duration * k as f64 / 10.0).collect();
         let traces: HashMap<String, Vec<f64>> = faulted
@@ -358,11 +359,128 @@ async fn transient_ftti_measurement_supersedes_declared_latency() {
     assert!(t_500.note.as_deref().unwrap_or("").contains("chip-internal"), "{t_500:?}");
     // A refusing engine falls back to the declared budget, stated.
     let mut model2 = build_safety_model(&netlist, &[&sf]);
-    let no_tran = |_: &bhdl_netlist::Netlist, _: f64| -> Result<(Vec<f64>, HashMap<String, Vec<f64>>), String> {
+    let no_tran = |_: &bhdl_netlist::Netlist, _: f64, _: &[bhdl_synthesizer::fault_campaign::PinDrive]| -> Result<(Vec<f64>, HashMap<String, Vec<f64>>), String> {
         Err("no transient engine".into())
     };
     run_declared_faults(&netlist, &mut model2, &solve, Some(&no_tran));
     let t2 = model2.scopes[0].faults.iter().find(|f| f.within.as_deref() == Some("500us")).unwrap();
     assert_eq!(t2.timing_met, Some(false), "declared 1ms budget > 500µs: {t2:?}");
     assert!(t2.note.as_deref().unwrap_or("").contains("declared budget used"), "{t2:?}");
+}
+
+/// Transient pin-disturbance states: a pulse-symptom behavior is
+/// classified over the TRACE (the endpoint is healthy by construction),
+/// a multi-pin vector is ONE fault with one λ, and detection may be the
+/// measured external crossing or the vendor's declared internal path.
+#[tokio::test]
+async fn transient_pulse_states_classify_over_the_trace() {
+    let src = r#"
+entity Drv() {
+    pin 1: signal inout;
+    pin 2: signal inout;
+    attribute component_class = "resistor";
+    attribute resistance = 10MΩ;
+    safety {
+        failure_state glitch fit=2 of 10 source="FIXTURE" behavior="pulse(1, 0V, 20us); pulse(2, 0V, 20us)";
+        failure_state quiet  fit=1 of 10 source="FIXTURE" behavior="pulse(1, 0V, 20us)" detected_internally="5us";
+    }
+}
+
+board PulseDemo {
+    power V12 = 12V @ 1A;
+    ground GND;
+    @V12 -> r1: Res(1kΩ).1; r1.2 -> d: Drv().1;
+    d.2 -> r2: Res(10kΩ).1; r2.2 -> @GND;
+}
+
+safety PulseDemo as g {
+    goal SG: ASIL_B "node floor" (id="SG-P-1") {
+        effect uv = g.r1.2 < 8V severity S2;
+    }
+    mechanism g.r2: psm(SG, detects=[uv], detected_when = g.r2.1 < 6V, latency=10us, dc=0.9, source="FIXTURE");
+    fault state(g.d, "glitch") expect SG.uv detected_by g.r2 within 100us;
+    fault state(g.d, "quiet")  expect SG.uv within 100us;
+}
+"#;
+    let src = format!("import {{ Res }} from \"bhdl-stdlib/passives/resistor.bhdl\";\n{src}");
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let pr = parse(&src);
+    assert!(pr.errors().is_empty(), "parse: {:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let netlist = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+    let mut model = build_safety_model(&netlist, &[&sf]);
+    assert!(model.errors.is_empty(), "{:#?}", model.errors);
+    let solve = |faulted: &bhdl_netlist::Netlist| -> Result<HashMap<String, f64>, String> {
+        Ok(faulted
+            .nets
+            .iter()
+            .filter_map(|(_, n)| n.name.clone())
+            .map(|name| (name.clone(), if name == "GND" { 0.0 } else { 12.0 }))
+            .collect())
+    };
+    // Mock transient: nets DRIVEN by the fault dip to their drive level
+    // for the first 3 of 11 samples; everything else holds 12V (GND 0).
+    // The dip makes the uv effect and the detection predicate true
+    // mid-trace and false at the endpoint — endpoint classification
+    // would call this SAFE.
+    let tran = |faulted: &bhdl_netlist::Netlist,
+                duration: f64,
+                drives: &[bhdl_synthesizer::fault_campaign::PinDrive]|
+     -> Result<(Vec<f64>, HashMap<String, Vec<f64>>), String> {
+        let times: Vec<f64> = (0..=10).map(|k| duration * k as f64 / 10.0).collect();
+        let traces = faulted
+            .nets
+            .iter()
+            .filter_map(|(_, n)| n.name.clone())
+            .map(|name| {
+                let driven = drives.iter().find(|d| d.net == name);
+                let series: Vec<f64> = (0..=10)
+                    .map(|k| {
+                        if name == "GND" {
+                            0.0
+                        } else if driven.is_some() && k <= 3 {
+                            driven.unwrap().level_v
+                        } else {
+                            12.0
+                        }
+                    })
+                    .collect();
+                (name, series)
+            })
+            .collect();
+        Ok((times, traces))
+    };
+    run_declared_faults(&netlist, &mut model, &solve, Some(&tran));
+    let faults = &model.scopes[0].faults;
+    // glitch: pin2's drive collapses the monitored net → uv fires AND
+    // the external predicate crosses (measured); expectation + timing OK
+    let fg = faults.iter().find(|f| f.targets.iter().any(|t| t.contains("glitch"))).unwrap();
+    assert_eq!(fg.expectation_met, Some(true), "{fg:?}");
+    assert_eq!(fg.timing_met, Some(true), "{fg:?}");
+    assert!(fg.note.as_deref().unwrap_or("").contains("crossed at"), "{fg:?}");
+    assert!(fg.note.as_deref().unwrap_or("").contains("2 pin drive(s)"), "{fg:?}");
+    // quiet: only pin1 driven — the monitored net never dips, so the
+    // external monitor is BLIND; the uv effect still fires (r1.2 IS the
+    // driven net) and the vendor's internal 5µs path carries the timing
+    let fq = faults.iter().find(|f| f.targets.iter().any(|t| t.contains("quiet"))).unwrap();
+    assert_eq!(fq.expectation_met, Some(true), "{fq:?}");
+    assert_eq!(fq.timing_met, Some(true), "{fq:?}");
+    assert!(fq.note.as_deref().unwrap_or("").contains("INTERNAL detection"), "{fq:?}");
+    assert!(!fq.note.as_deref().unwrap_or("").contains("crossed at"), "external monitor must be blind: {fq:?}");
+    // universe: state rows classified over the trace, one λ each
+    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve, &HashMap::new(), Some(&tran));
+    let states: Vec<_> = model.universe.iter().filter(|u| u.mode == "state").collect();
+    assert_eq!(states.len(), 2, "{states:#?}");
+    assert!(states.iter().all(|u| u.ran && !u.fired.is_empty()), "{states:#?}");
+    let uq = states.iter().find(|u| u.targets.iter().any(|t| t.contains("quiet"))).unwrap();
+    assert!(uq.detected.iter().any(|d| d.contains("internal")), "{uq:#?}");
+    assert!(uq.weight_fit == Some(1.0), "one fault, one λ: {uq:#?}");
+    // no engine ⇒ honest not-run, stated
+    let mut model2 = build_safety_model(&netlist, &[&sf]);
+    run_declared_faults(&netlist, &mut model2, &solve, None);
+    let f2 = &model2.scopes[0].faults[0];
+    assert!(!f2.run && f2.note.as_deref().unwrap_or("").contains("time-domain engine"), "{f2:?}");
 }

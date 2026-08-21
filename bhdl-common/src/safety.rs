@@ -242,9 +242,18 @@ pub struct FailureState {
     /// fraction, used as the λ weight in the fault universe.
     pub fit: Option<f64>,
     /// What the state DOES, as a board-observable mutation:
-    /// `open(PIN)` | `short(PIN_A,PIN_B)` | `force(PIN, <voltage>)`.
+    /// `open(PIN)` | `short(PIN_A,PIN_B)` | `force(PIN, <voltage>)` |
+    /// `pulse(PIN, <voltage>, <duration>)` (transient pin symptom;
+    /// several ';'-separated ops = ONE fault's correlated multi-pin
+    /// symptom vector, one λ — never a multi-point fault).
     /// Absent ⇒ the state cannot be simulated (honest gap, never a guess).
     pub behavior: Option<String>,
+    /// Vendor declaration that the CHIP detects this state internally:
+    /// a duration ⇒ detection with that reaction latency; "yes"/"true"
+    /// ⇒ detected but with no timing data (FTTI unverifiable, stated).
+    /// Absent ⇒ no internal detection claimed.
+    #[serde(default)]
+    pub internal_detection: Option<String>,
 }
 
 /// What kind of safety data a physical part carries (Phase 2 fills the

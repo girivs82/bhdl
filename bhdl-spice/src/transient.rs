@@ -103,6 +103,28 @@ impl Default for IntegrationOrder {
     fn default() -> Self { Self::Bdf1 }
 }
 
+/// A node held at a fixed voltage for a time window, released outside
+/// it. Used for transient fault injection (a chip-internal event's
+/// pin-level symptom).
+#[derive(Debug, Clone)]
+pub struct TimedDrive {
+    /// Node (net) name to drive.
+    pub node: String,
+    /// Voltage the node is held at during the window.
+    pub level_v: f64,
+    /// Window start (seconds).
+    pub t_start: f64,
+    /// Window end (seconds).
+    pub t_end: f64,
+}
+
+impl TimedDrive {
+    /// Is the drive active at time `t`?
+    pub fn active_at(&self, t: f64) -> bool {
+        t >= self.t_start && t <= self.t_end
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TransientParams {
     /// Name of the node held at `stimulus(t)`.
@@ -118,6 +140,14 @@ pub struct TransientParams {
     /// Time-integration order. Defaults to BDF1 for backward compatibility
     /// with existing tests and callers that don't care about accuracy ordering.
     pub order: IntegrationOrder,
+    /// Fault-injection drives: each node is HELD at `level_v` only
+    /// while `t_start ≤ t ≤ t_end` and RELEASED outside the window —
+    /// the circuit decides the node's voltage before and after. This is
+    /// the pin-level symptom of a chip-internal transient fault; a
+    /// state with several drives is ONE fault with a correlated
+    /// multi-pin symptom vector (one λ), never a multi-point fault.
+    #[allow(dead_code)]
+    pub timed_drives: Vec<TimedDrive>,
     /// Optional adaptive timestep control. When `Some(_)`, the `timestep`
     /// field is the *initial* step size and the controller adjusts it as
     /// the simulation proceeds. When `None`, the timestep is fixed.
@@ -140,8 +170,15 @@ impl TransientParams {
             duration,
             timestep,
             order: IntegrationOrder::default(),
+            timed_drives: Vec::new(),
             adaptive: None,
         }
+    }
+
+    /// Builder-style: add fault-injection timed drives.
+    pub fn with_timed_drives(mut self, drives: Vec<TimedDrive>) -> Self {
+        self.timed_drives = drives;
+        self
     }
 
     /// Builder-style override for the integration order.
