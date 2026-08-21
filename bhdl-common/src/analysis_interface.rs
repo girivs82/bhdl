@@ -52,6 +52,56 @@ pub struct AnalysisData {
     /// Per-instance analysis results (instance_id -> analysis data)
     #[serde(skip_serializing_if = "HashMap::is_empty", default)]
     pub instance_analysis: HashMap<String, InstanceAnalysisData>,
+    /// Decap-synthesis reports (`decouple` statements), one per
+    /// statement — what was chosen, why, and what was verified.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub decap_reports: Vec<DecapReport>,
+}
+
+/// One `decouple` statement's synthesis record: the machine-readable
+/// form of "what did the mask force, what margin was added, and what
+/// was verified" — printed by the CLI report section and archived
+/// with the netlist's analysis data.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DecapReport {
+    /// "<instance>.<domain>"
+    pub target: String,
+    /// rail net the network hangs on
+    pub net: String,
+    /// library path as written in the statement
+    pub lib: String,
+    pub mask_breakpoints: usize,
+    /// mask derating headroom applied to every check
+    pub z_margin_pct: f64,
+    pub candidates_usable: usize,
+    /// skipped library entities with the stated reason
+    pub candidates_skipped: Vec<String>,
+    /// greedy selections in commit order
+    pub steps: Vec<DecapStep>,
+    /// margin instances added (instance + entity), N+1 per non-bulk value
+    pub margin_added: Vec<String>,
+    /// bulk values exempt from margin, stated
+    pub bulk_exempt: Vec<String>,
+    /// single-open fault sweeps that passed vs the derated mask
+    pub opens_verified: usize,
+    /// bulk caps whose open was NOT verified (margin-exempt), stated
+    pub opens_bulk_exempt: usize,
+    /// final worst |Z|/mask against the derated mask
+    pub final_ratio: f64,
+    pub final_freq_hz: f64,
+    /// true when the caps already existed (elaborated/hand-carried
+    /// input) and synthesis skipped
+    pub already_present: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DecapStep {
+    pub instance: String,
+    pub entity: String,
+    pub value: String,
+    /// worst |Z|/mask AFTER committing this part
+    pub ratio_after: f64,
+    pub freq_hz: f64,
 }
 
 impl AnalysisData {
@@ -60,6 +110,7 @@ impl AnalysisData {
             module_definitions: HashMap::new(),
             symbol_data: HashMap::new(),
             instance_analysis: HashMap::new(),
+            decap_reports: Vec::new(),
         }
     }
 }

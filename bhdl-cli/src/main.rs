@@ -1654,6 +1654,7 @@ async fn run_elaborate(
         board.netlist.nets.len(),
         out_path.display()
     );
+    print_decap_report(&board.netlist);
     Ok(())
 }
 
@@ -1689,6 +1690,71 @@ async fn verified_netlist(
         .netlist)
 }
 
+/// Print the decap-synthesis report section — one block per
+/// `decouple` statement, from the reports the synthesizer archived in
+/// the netlist's analysis data.
+fn print_decap_report(netlist: &Netlist) {
+    let Some(reports) = netlist.get_analysis_data().map(|a| &a.decap_reports) else { return };
+    if reports.is_empty() {
+        return;
+    }
+    println!("\n  {}", "Decap synthesis (decouple)".bold());
+    for r in reports {
+        if r.already_present {
+            println!(
+                "    {} ← {}: synthesized caps already present — skipped (elaborated/hand-carried input)",
+                r.target.bold(), r.lib
+            );
+            continue;
+        }
+        println!("    {} @ net {} ← {}", r.target.bold(), r.net, r.lib);
+        println!(
+            "      mask: {} breakpoints, derated {}% for unmodeled layout parasitics (z_margin)",
+            r.mask_breakpoints, r.z_margin_pct
+        );
+        if r.candidates_skipped.is_empty() {
+            println!("      candidates: {} usable", r.candidates_usable);
+        } else {
+            println!(
+                "      candidates: {} usable, {} skipped ({})",
+                r.candidates_usable,
+                r.candidates_skipped.len(),
+                r.candidates_skipped.join("; ")
+            );
+        }
+        for (i, st) in r.steps.iter().enumerate() {
+            println!(
+                "      {}. {}: {} ({}) → worst |Z|/mask {:.2} @ {:.2}MHz",
+                i + 1, st.instance, st.entity, st.value, st.ratio_after, st.freq_hz / 1e6
+            );
+        }
+        if !r.margin_added.is_empty() {
+            println!(
+                "      margin: +{} — N+1 per non-bulk value",
+                r.margin_added.join(", +")
+            );
+        }
+        if !r.bulk_exempt.is_empty() {
+            println!("      bulk exempt from margin (stated): {}", r.bulk_exempt.join(", "));
+        }
+        println!(
+            "      open-fault: {} single-open(s) verified vs the derated mask{}",
+            r.opens_verified,
+            if r.opens_bulk_exempt > 0 {
+                format!(" ({} bulk open(s) NOT verified — margin-exempt, stated)", r.opens_bulk_exempt)
+            } else {
+                String::new()
+            }
+        );
+        println!(
+            "      final: worst |Z|/mask {:.2} @ {:.2}MHz → {}",
+            r.final_ratio,
+            r.final_freq_hz / 1e6,
+            if r.final_ratio <= 1.0 { "OK".green().to_string() } else { "VIOLATED".red().to_string() }
+        );
+    }
+}
+
 async fn run_synthesis(
     source_file: &SourceFile,
     input_content: &str,
@@ -1716,6 +1782,7 @@ async fn run_synthesis(
     let netlist = verified_netlist(source_file, input_content, input_path, no_elaborate).await?;
 
     println!("{}", "✓ Synthesis successful".green().bold());
+    print_decap_report(&netlist);
     println!("  Instances: {}", netlist.instances.len());
     println!("  Nets: {}", netlist.nets.len());
     

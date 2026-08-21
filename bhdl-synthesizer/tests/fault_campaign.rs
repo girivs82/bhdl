@@ -708,6 +708,19 @@ async fn decap_synthesis_double_generate_partitions() {
         }).filter(|e| !e.is_empty()).collect();
         v.sort(); v
     };
+    // the synthesis report is archived in the netlist's analysis data
+    // (the CLI report section reads it from there)
+    let reps = &n1.get_analysis_data().expect("analysis data").decap_reports;
+    assert_eq!(reps.len(), 1, "{reps:#?}");
+    let r = &reps[0];
+    assert_eq!(r.target, "soc.VDD");
+    assert_eq!(r.steps.len(), 2, "{r:#?}");
+    assert_eq!(r.margin_added.len(), 1);
+    assert_eq!(r.opens_verified, 3);
+    assert!(r.final_ratio <= 1.0 && r.final_ratio > 0.0);
+    assert!(r.candidates_skipped.iter().any(|c| c.contains("DecapNoEsl")), "{r:#?}");
+    assert!((r.z_margin_pct - 20.0).abs() < 1e-9);
+
     // non-vacuous: the ground net must be a real merged net (load,
     // soc and all decaps), not per-pin fragments
     let p1 = nets(&n1);

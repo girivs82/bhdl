@@ -182,7 +182,7 @@ fn parse_unit(v: &str, mults: &[(&str, f64)]) -> Option<f64> {
 /// Load the candidate library: entities with declared capacitance, esr
 /// and esl attributes. Entities missing any of the three are skipped
 /// with a stated note (Real-Data: an undeclared parasite is not zero).
-fn load_library(lib_path: &str) -> Result<Vec<Candidate>, String> {
+fn load_library(lib_path: &str) -> Result<(Vec<Candidate>, Vec<String>), String> {
     let resolved = bhdl_common::import_search::resolve_relative(lib_path, std::path::Path::new("."));
     let text = std::fs::read_to_string(&resolved)
         .map_err(|e| format!("decouple: cannot read library '{}': {e}", resolved.display()))?;
@@ -192,6 +192,7 @@ fn load_library(lib_path: &str) -> Result<Vec<Candidate>, String> {
     }
     let sf = SourceFile::cast(pr.syntax()).ok_or("decouple: library is not a source file")?;
     let mut out = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
     for item in sf.items() {
         let Some(ent) = bhdl_ast::Entity::cast(item.syntax().clone()) else { continue };
         use bhdl_ast::HasName;
@@ -208,18 +209,22 @@ fn load_library(lib_path: &str) -> Result<Vec<Candidate>, String> {
             attrs.get("esl").cloned(),
         ) else {
             info!("decouple: library entity '{name}' skipped — needs declared capacitance, esr AND esl (Real-Data: an undeclared parasite is not zero)");
+            skipped.push(format!("{name}: capacitance/esr/esl not all declared"));
             continue;
         };
         let Some(c_f) = parse_farads(&c_text) else {
             info!("decouple: library entity '{name}' skipped — capacitance '{c_text}' unparseable");
+            skipped.push(format!("{name}: capacitance '{c_text}' unparseable"));
             continue;
         };
         let Some(esr_ohm) = parse_unit(&esr_text, &[("uΩ", 1e-6), ("mΩ", 1e-3), ("Ω", 1.0), ("mohm", 1e-3), ("ohm", 1.0)]) else {
             info!("decouple: library entity '{name}' skipped — esr '{esr_text}' unparseable");
+            skipped.push(format!("{name}: esr '{esr_text}' unparseable"));
             continue;
         };
         let Some(esl_h) = parse_unit(&esl_text, &[("pH", 1e-12), ("nH", 1e-9), ("uH", 1e-6), ("µH", 1e-6), ("H", 1.0)]) else {
             info!("decouple: library entity '{name}' skipped — esl '{esl_text}' unparseable");
+            skipped.push(format!("{name}: esl '{esl_text}' unparseable"));
             continue;
         };
         out.push(Candidate { entity: name, c_f, esr_ohm, esl_h, c_text });
@@ -227,7 +232,7 @@ fn load_library(lib_path: &str) -> Result<Vec<Candidate>, String> {
     if out.is_empty() {
         return Err(format!("decouple: library '{lib_path}' has no usable candidates (capacitance+esr+esl declared)"));
     }
-    Ok(out)
+    Ok((out, skipped))
 }
 
 /// Piecewise log-log interpolation of the mask; None outside its span.
@@ -347,10 +352,12 @@ pub fn run_decap_synthesis(
     netlist: &mut Netlist,
     sf: &SourceFile,
     overrides: &std::collections::HashMap<String, bhdl_common::model::EvaluatedModel>,
-) -> Result<(), String> {
+) -> Result<Vec<bhdl_common::analysis_interface::DecapReport>, String> {
+    use bhdl_common::analysis_interface::{DecapReport, DecapStep};
+    let mut reports: Vec<DecapReport> = Vec::new();
     let stmts = parse_decouple_stmts(sf)?;
     if stmts.is_empty() {
-        return Ok(());
+        return Ok(reports);
     }
     let domains = entity_domain_map(&sf.syntax().clone());
 
@@ -368,6 +375,13 @@ pub fn run_decap_synthesis(
             .count();
         if already > 0 {
             info!("decouple {}.{}: {already} synthesized decap(s) already present — skipped", stmt.instance, stmt.domain);
+            reports.push(DecapReport {
+                target: format!("{}.{}", stmt.instance, stmt.domain),
+                lib: stmt.lib.clone(),
+                z_margin_pct: stmt.z_margin_pct,
+                already_present: true,
+                ..Default::default()
+            });
             continue;
         }
 
@@ -463,7 +477,7 @@ pub fn run_decap_synthesis(
             }
         }
 
-        let cands = load_library(&stmt.lib)?;
+        let (cands, cand_skips) = load_library(&stmt.lib)?;
         info!(
             "decouple {}.{} @ net {}: {} candidate(s) from {}, mask {} breakpoints, max_parts {}",
             stmt.instance, stmt.domain, rail_name, cands.len(), stmt.lib, dom.zmask.len(), stmt.max_parts
@@ -472,6 +486,9 @@ pub fn run_decap_synthesis(
         // Greedy: trial every candidate, commit the argmin of the worst
         // ratio, until the mask is met or max_parts exhausted.
         let mut chosen: Vec<Candidate> = Vec::new();
+        let mut steps: Vec<DecapStep> = Vec::new();
+        let mut margin_added: Vec<String> = Vec::new();
+        let mut bulk_exempt: Vec<String> = Vec::new();
         let (mut ratio, mut wf, mut wz) = worst_ratio(netlist, &rail_name, &dom, overrides)?;
         let mut n = 0usize;
         while ratio > 1.0 && n < stmt.max_parts {
@@ -501,6 +518,13 @@ pub fn run_decap_synthesis(
                 "decouple {}.{}: +{} ({}) → worst |Z|/mask {:.2} at {:.2}MHz",
                 stmt.instance, stmt.domain, name, cands[best_ci].entity, w.0, w.1 / 1e6
             );
+            steps.push(DecapStep {
+                instance: name,
+                entity: cands[best_ci].entity.clone(),
+                value: cands[best_ci].c_text.clone(),
+                ratio_after: w.0,
+                freq_hz: w.1,
+            });
             (ratio, wf, wz) = w;
         }
         if ratio > 1.0 {
@@ -526,6 +550,7 @@ pub fn run_decap_synthesis(
                         "decouple {}.{}: margin — {} ({}) is bulk (> {}F), exempt (stated)",
                         stmt.instance, stmt.domain, c.entity, c.c_text, stmt.bulk_over_f
                     );
+                    bulk_exempt.push(format!("{} ({})", c.entity, c.c_text));
                     continue;
                 }
                 for _ in 0..stmt.margin {
@@ -534,6 +559,7 @@ pub fn run_decap_synthesis(
                     let name = format!("{}_{}_dec{}", stmt.instance, stmt.domain, n);
                     mint_decap(netlist, c, &name, rail_id, gnd_id, stmt)?;
                     info!("decouple {}.{}: margin +{} ({})", stmt.instance, stmt.domain, name, c.entity);
+                    margin_added.push(format!("{name} ({})", c.entity));
                 }
             }
         }
@@ -554,10 +580,13 @@ pub fn run_decap_synthesis(
                 (i.name.clone(), c)
             })
             .collect();
+        let mut opens_verified = 0usize;
+        let mut opens_bulk_exempt = 0usize;
         if stmt.margin > 0 {
             for (name, c_f) in &all {
                 if *c_f > stmt.bulk_over_f {
                     info!("decouple {}.{}: open({name}) not verified — bulk, margin-exempt (stated)", stmt.instance, stmt.domain);
+                    opens_bulk_exempt += 1;
                     continue;
                 }
                 // open = detach pin 1 from the rail
@@ -581,6 +610,7 @@ pub fn run_decap_synthesis(
                         stmt.instance, stmt.domain, z_open * 1e3, f_open / 1e6, r_open
                     ));
                 }
+                opens_verified += 1;
             }
         }
 
@@ -588,8 +618,26 @@ pub fn run_decap_synthesis(
             "decouple {}.{}: SYNTHESIZED {} cap(s) + {} margin — final worst |Z|/mask {:.2} at {:.2}MHz against the {}%-derated mask; every non-bulk single-open verified against the same derated mask",
             stmt.instance, stmt.domain, chosen.len(), extra, ratio, wf / 1e6, stmt.z_margin_pct
         );
+        let _ = extra;
+        reports.push(DecapReport {
+            target: format!("{}.{}", stmt.instance, stmt.domain),
+            net: rail_name.clone(),
+            lib: stmt.lib.clone(),
+            mask_breakpoints: dom.zmask.len(),
+            z_margin_pct: stmt.z_margin_pct,
+            candidates_usable: cands.len(),
+            candidates_skipped: cand_skips,
+            steps,
+            margin_added,
+            bulk_exempt,
+            opens_verified,
+            opens_bulk_exempt,
+            final_ratio: ratio,
+            final_freq_hz: wf,
+            already_present: false,
+        });
     }
-    Ok(())
+    Ok(reports)
 }
 
 #[cfg(test)]

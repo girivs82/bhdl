@@ -332,6 +332,9 @@ pub struct NetlistGenerator {
     import_loader: ImportLoader,
     // Import preprocessor for pre-processed imports
     import_preprocessor: Option<ImportPreprocessor>,
+    /// Decap-synthesis reports from phase 4.7, merged into the
+    /// netlist's analysis data in phase 8 (which rebuilds it).
+    decap_reports: Vec<bhdl_common::analysis_interface::DecapReport>,
     // Same-file entity definitions (board-local `entity X { … }` blocks),
     // captured at synthesis start so add_pins_for_component can read their
     // DECLARED pin directions — previously local entities silently fell to
@@ -391,6 +394,7 @@ impl NetlistGenerator {
             type_mapper: ComponentTypeMapper::new(),
             import_loader,
             import_preprocessor: None,
+            decap_reports: Vec::new(),
             local_entities: HashMap::new(),
             component_calculator: ComponentCalculator::new(),
             supporting_component_instances: HashMap::new(),
@@ -725,8 +729,9 @@ impl NetlistGenerator {
                 &analysis.model_recipes,
                 &analysis.entity_attribute_index,
             );
-            if let Err(e) = crate::decap_synthesis::run_decap_synthesis(&mut self.netlist, ast, &overrides) {
-                return Err(anyhow::anyhow!("{e}"));
+            match crate::decap_synthesis::run_decap_synthesis(&mut self.netlist, ast, &overrides) {
+                Ok(reports) => self.decap_reports = reports,
+                Err(e) => return Err(anyhow::anyhow!("{e}")),
             }
         }
 
@@ -2229,6 +2234,10 @@ impl NetlistGenerator {
         }
         
         // Set the analysis data in the netlist
+        // Carry the phase-4.7 decap reports: this function REBUILDS
+        // analysis_data, and the reports must survive into the netlist
+        // the CLI report section reads.
+        analysis_data.decap_reports = std::mem::take(&mut self.decap_reports);
         self.netlist.set_analysis_data(analysis_data);
         
         info!("Analysis data populated: {} module definitions, {} symbol entries", 
