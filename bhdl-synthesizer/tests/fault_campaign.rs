@@ -484,3 +484,126 @@ safety PulseDemo as g {
     let f2 = &model2.scopes[0].faults[0];
     assert!(!f2.run && f2.note.as_deref().unwrap_or("").contains("time-domain engine"), "{f2:?}");
 }
+
+/// Latent probe over TRANSIENT dangerous faults: a benign+silent DC
+/// fault on the monitor part (dormant damage) blinds the glitch's
+/// external detection — the classic unprotected-transient scenario.
+/// The mock transient couples the monitor's flag net to the driven net
+/// only while the monitor part is INTACT; opening it kills the
+/// coupling. An internally-detected transient is NOT blindable by a
+/// board fault and must not convict.
+#[tokio::test]
+async fn latent_probe_convicts_dormant_monitor_fault_blinding_a_transient() {
+    let src = r#"
+entity Drv() {
+    pin 1: signal inout;
+    pin 2: signal inout;
+    attribute component_class = "resistor";
+    attribute resistance = 10MΩ;
+    safety {
+        failure_state glitch fit=2 of 10 source="FIXTURE" behavior="pulse(1, 0V, 20us)";
+        failure_state quiet  fit=1 of 10 source="FIXTURE" behavior="pulse(1, 0V, 20us)" detected_internally="5us";
+    }
+}
+
+board LatentDemo {
+    power V12 = 12V @ 1A;
+    ground GND;
+    @V12 -> r1: Res(1kΩ).1; r1.2 -> d: Drv().1;
+    d.2 -> r2: Res(10kΩ).1; r2.2 -> @GND;
+    r1.2 -> m: Res(10kΩ).1; m.2 -> rm2: Res(10kΩ).1; rm2.2 -> @GND;
+}
+
+safety LatentDemo as g {
+    goal SG: ASIL_B "node floor" (id="SG-L-1") {
+        effect uv = g.r1.2 < 8V severity S2;
+    }
+    mechanism g.m: psm(SG, detects=[uv], detected_when = g.m.2 < 6V, latency=10us, dc=0.9, source="FIXTURE");
+}
+"#;
+    let src = format!("import {{ Res }} from \"bhdl-stdlib/passives/resistor.bhdl\";\n{src}");
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let pr = parse(&src);
+    assert!(pr.errors().is_empty(), "parse: {:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let netlist = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+    let mut model = build_safety_model(&netlist, &[&sf]);
+    assert!(model.errors.is_empty(), "{:#?}", model.errors);
+    let solve = |faulted: &bhdl_netlist::Netlist| -> Result<HashMap<String, f64>, String> {
+        Ok(faulted
+            .nets
+            .iter()
+            .filter_map(|(_, n)| n.name.clone())
+            .map(|name| (name.clone(), if name == "GND" { 0.0 } else { 12.0 }))
+            .collect())
+    };
+    // Mock transient: driven nets dip 12→0 for the first 3 of 11
+    // samples; the flag net (nets of instance `m`) mirrors the dip ONLY
+    // while m is intact in the faulted netlist — a removed monitor
+    // cannot couple.
+    let tran = |faulted: &bhdl_netlist::Netlist,
+                duration: f64,
+                drives: &[bhdl_synthesizer::fault_campaign::PinDrive]|
+     -> Result<(Vec<f64>, HashMap<String, Vec<f64>>), String> {
+        let m_alive = faulted.instances.iter().any(|(_, i)| i.name == "m");
+        let m_nets: Vec<String> = faulted
+            .pin_instances
+            .values()
+            .filter(|pi| {
+                faulted
+                    .instances
+                    .get(pi.instance)
+                    .map(|i| i.name == "m")
+                    .unwrap_or(false)
+            })
+            .filter_map(|pi| pi.net.and_then(|nid| faulted.nets.get(nid)).and_then(|n| n.name.clone()))
+            .collect();
+        let times: Vec<f64> = (0..=10).map(|k| duration * k as f64 / 10.0).collect();
+        let traces = faulted
+            .nets
+            .iter()
+            .filter_map(|(_, n)| n.name.clone())
+            .map(|name| {
+                let driven = drives.iter().any(|d| d.net == name);
+                let coupled = m_alive && m_nets.contains(&name);
+                let series: Vec<f64> = (0..=10)
+                    .map(|k| {
+                        if name == "GND" {
+                            0.0
+                        } else if (driven || coupled) && k <= 3 {
+                            0.0
+                        } else {
+                            12.0
+                        }
+                    })
+                    .collect();
+                (name, series)
+            })
+            .collect();
+        Ok((times, traces))
+    };
+    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve, &HashMap::new(), Some(&tran));
+    // base classification: glitch is dangerous + EXTERNALLY detected
+    // (flag couples while m intact); quiet detected internally too
+    let ug = model.universe.iter().find(|u| u.targets.iter().any(|t| t.contains("glitch"))).unwrap();
+    assert!(!ug.fired.is_empty() && ug.detected.iter().any(|d| d == "g.m"), "{ug:#?}");
+    // m's open is benign+silent alone (flat 12V mock) → candidate; the
+    // probe co-injects it with the TRANSIENT glitch: coupling gone,
+    // effect still fires → LATENT, exposed by the glitch's λ share (2.0)
+    let um = model.universe.iter().find(|u| u.part == "m" && u.mode == "open").unwrap();
+    assert!(um.latent, "dormant monitor open must be convicted: {um:#?}");
+    assert!(
+        um.note.as_deref().unwrap_or("").contains("TRANSIENT"),
+        "{um:#?}"
+    );
+    // exposure == glitch share ONLY (2.0): the internally-detected
+    // 'quiet' state is NOT blindable by a board fault and must not
+    // contribute
+    assert!((um.latent_exposed_fit - 2.0).abs() < 1e-9, "exposed = glitch λ only: {um:#?}");
+    // pulse states are never latent CANDIDATES (a transient cannot be
+    // dormant)
+    assert!(model.universe.iter().filter(|u| u.mode == "state").all(|u| !u.latent));
+}

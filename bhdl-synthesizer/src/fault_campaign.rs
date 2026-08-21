@@ -577,9 +577,13 @@ fn run_transient_state(
     internal_detection: Option<&str>,
     tran: &TranSolver,
     within_s: Option<f64>,
+    // aliases from mutations the CALLER already applied to `netlist`
+    // (the latent probe co-injects a DC fault before the transient) —
+    // merged so predicates and drive nets follow those merges too
+    pre_alias: &HashMap<String, String>,
 ) -> Result<TransientOutcome, String> {
     let mut faulted = netlist.clone();
-    let mut alias: HashMap<String, String> = HashMap::new();
+    let mut alias: HashMap<String, String> = pre_alias.clone();
     for op in dc_ops {
         apply_state_behavior(&mut faulted, view, inst, op, &mut alias)?;
     }
@@ -799,6 +803,7 @@ pub fn run_declared_faults(
                                         netlist, &view, prefix, ns, effects,
                                         &scopes_mechs[si].iter().map(|(h, _, dw, _, _)| (h.clone(), dw.clone())).collect::<Vec<_>>(),
                                         &inst, &dc_ops, &pulses, internal.as_deref(), tr, within_s,
+                                        &HashMap::new(),
                                     ) {
                                         Err(e) => {
                                             f.run = true;
@@ -1481,6 +1486,7 @@ pub fn run_universe(
                             match run_transient_state(
                                 netlist, &view, &sc.prefix, &sc.ns, &sc.effects, &mech_pairs,
                                 &targets[0], &dc_ops, &pulses, internal.as_deref(), tr, None,
+                                &HashMap::new(),
                             ) {
                                 Err(e) => {
                                     uf.note = Some(format!("transient state did not run to a verdict: {e}"));
@@ -1588,8 +1594,14 @@ pub fn run_universe(
                     && u.detected.is_empty()
                     && mech_parts.contains(&(u.scope.clone(), u.part.clone()))
                     && (matches!(u.mode.as_str(), "short" | "short_adjacent" | "open" | "open_pin" | "drift_high" | "drift_low")
+                        // A pulse state is NOT a latent candidate: a
+                        // transient cannot be DORMANT — its exposure is
+                        // its own pulse width, not a dormancy window.
                         || (u.mode == "state"
-                            && state_behaviors.get(&(u.part.clone(), u.targets.get(1).cloned().unwrap_or_default())).map(|b| b.is_some()).unwrap_or(false)))
+                            && state_behaviors
+                                .get(&(u.part.clone(), u.targets.get(1).cloned().unwrap_or_default()))
+                                .map(|b| b.as_deref().map(|beh| split_behavior_ops(beh).1.is_empty()).unwrap_or(false))
+                                .unwrap_or(false)))
             })
             .map(|(i, _)| i)
             .collect();
@@ -1603,6 +1615,74 @@ pub fn run_universe(
                 }
                 let mut faulted = netlist.clone();
                 let mut alias: HashMap<String, String> = HashMap::new();
+                // TRANSIENT dangerous fault (pulse state) blinded by a
+                // DORMANT board fault — the real latent scenario for
+                // transients: the candidate's damage sits silent until
+                // the glitch arrives, and the glitch's external
+                // detection is gone. Apply the candidate's DC mutation,
+                // then re-run the transient over it. A vendor-declared
+                // INTERNAL detection is chip-side — a board fault
+                // cannot blind it, so such states are skipped.
+                let d_state_key = (
+                    d_targets.first().cloned().unwrap_or_default(),
+                    d_targets.get(1).cloned().unwrap_or_default(),
+                );
+                let d_pulse_behavior = (*d_mode == "state")
+                    .then(|| state_behaviors.get(&d_state_key).cloned().flatten())
+                    .flatten()
+                    .filter(|b| !split_behavior_ops(b).1.is_empty());
+                if let Some(beh) = d_pulse_behavior {
+                    let Some(tr) = tran else { continue };
+                    if state_internal.get(&d_state_key).cloned().flatten().is_some() {
+                        continue; // internally detected — not blindable
+                    }
+                    let (dc_ops, pulses) = split_behavior_ops(&beh);
+                    // apply the CANDIDATE's mutation first
+                    let apply_c = |n: &mut Netlist, alias: &mut HashMap<String, String>| -> Result<(), String> {
+                        match c_mode.as_str() {
+                            "short" | "short_adjacent" => apply_short(n, &view, &c_targets[0], &c_targets[1]).map(|a| {
+                                if let Some((from, to)) = a {
+                                    alias.insert(from, to);
+                                }
+                            }),
+                            "open" | "open_pin" => apply_open(n, &view, &c_targets[0]),
+                            "drift_high" | "drift_low" => {
+                                apply_drift(n, &view, &c_targets[0], c_targets.get(1).map(|s| s.as_str()).unwrap_or("+0%"))
+                            }
+                            "state" => match state_behaviors.get(&(c_targets[0].clone(), c_targets.get(1).cloned().unwrap_or_default())) {
+                                Some(Some(b)) => apply_state_behavior(n, &view, &c_targets[0], b, alias),
+                                _ => Err("state without behavior".into()),
+                            },
+                            _ => Err("unsupported".into()),
+                        }
+                    };
+                    if apply_c(&mut faulted, &mut alias).is_err() {
+                        continue;
+                    }
+                    let mech_pairs: Vec<(String, Option<String>)> =
+                        sc.mechs.iter().map(|(h, _, dw)| (h.clone(), dw.clone())).collect();
+                    let Ok(out) = run_transient_state(
+                        &faulted, &view, &sc.prefix, &sc.ns, &sc.effects, &mech_pairs,
+                        &d_state_key.0, &dc_ops, &pulses, None, tr, None, &alias,
+                    ) else {
+                        continue;
+                    };
+                    let still_dangerous = out.fired.iter().any(|p| universe[*di].fired.contains(p));
+                    if still_dangerous && out.detected_ext.is_empty() {
+                        universe[ci].latent = true;
+                        if universe[ci].note.is_none() {
+                            universe[ci].note = Some(format!(
+                                "LATENT: with the TRANSIENT {}({}) also injected, its dangerous effect fires with external detection GONE",
+                                d_mode,
+                                d_targets.join(",")
+                            ));
+                        }
+                        if let Some(wd) = universe[*di].weight_fit {
+                            universe[ci].latent_exposed_fit += wd;
+                        }
+                    }
+                    continue;
+                }
                 let apply = |n: &mut Netlist, mode: &str, targets: &[String], alias: &mut HashMap<String, String>| -> Result<(), String> {
                     match mode {
                         "short" | "short_adjacent" => apply_short(n, &view, &targets[0], &targets[1]).map(|a| {

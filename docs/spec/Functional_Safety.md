@@ -537,7 +537,16 @@ computed from MEASURED λ, never from claims:
 - **λ_latent** — from the DOUBLE-FAULT probe: a fault on a mechanism
   part that alone is neither dangerous nor annunciated, co-injected
   with each otherwise-detected dangerous fault; if the dangerous effect
-  persists undetected, the mechanism-part mode is latent.
+  persists undetected, the mechanism-part mode is latent. The probe
+  also pairs candidates with TRANSIENT dangerous faults (pulse states):
+  the candidate's DC mutation is applied first, the transient re-run
+  over it, and the conviction lands when the effect still fires in the
+  trace with NO external detection crossing — the dormant monitor
+  damage that leaves a glitch unprotected. A vendor-declared INTERNAL
+  detection is chip-side: a board fault cannot blind it, so internally
+  detected transients never convict a board candidate. Pulse states
+  themselves are never latent CANDIDATES — a transient cannot be
+  dormant; its exposure is its own pulse width, not a dormancy window.
 - **SPFM** = 1 − λ_residual/λ_total (ISO 26262-5 §8.4.5),
   **LFM** = 1 − λ_latent/(λ_total − λ_residual) (§8.4.6),
   **PMHF** = λ_residual plus, when the mission declares
