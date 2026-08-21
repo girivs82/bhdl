@@ -167,7 +167,7 @@ pub fn emit_elaborated_with_preamble(
                         .and_then(|a| inst.attributes.get(a))
                         .filter(|v| !v.is_empty())
                     {
-                        Some(v) => vals.push(v.clone()),
+                        Some(v) => vals.push(quote_if_not_bare(v)),
                         None => {
                             stopped_at = Some(i);
                             break;
@@ -300,6 +300,25 @@ mod tests {
         assert!(out.contains("sense: Res();"), "{out}");
         assert!(!out.contains("Res(,"), "{out}");
         assert!(!out.contains("WARNING"), "{out}");
+    }
+}
+
+/// Attribute storage strips string quotes, so a reconstructed ctor
+/// arg like `NCP1117-5.0_SOT223` would re-parse as IDENT MINUS NUMBER.
+/// Re-quote anything that is not a legal bare atom: an identifier, or
+/// a number-led value literal (10kΩ, 0.7V, 5%, 100nF…).
+fn quote_if_not_bare(v: &str) -> String {
+    let is_ident = {
+        let mut ch = v.chars();
+        matches!(ch.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+            && ch.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    };
+    let is_value_literal = v.starts_with(|c: char| c.is_ascii_digit())
+        && v.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | 'µ' | 'Ω' | '%'));
+    if is_ident || is_value_literal {
+        v.to_string()
+    } else {
+        format!("\"{}\"", v.replace('"', "\\\""))
     }
 }
 
