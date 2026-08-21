@@ -599,6 +599,46 @@ impl NetlistGenerator {
             );
         }
 
+        // Phase 4.55: Net-class reconciliation. A net's class is
+        // frozen at whichever statement CREATED it — a board that
+        // wires `ch_c_g.2 -> ch.GND` first mints a Signal net that a
+        // ground-TYPED pin then silently joins, leaving a ground node
+        // classed Signal (and its mirror image for round-tripped
+        // files, where the same net re-forms in a different order and
+        // lands Ground). The class must reflect what is ON the net:
+        // any ground-typed pin makes it Ground. Power nets keep their
+        // declared class — voltage/current are declarations, never
+        // inferred here.
+        {
+            use bhdl_netlist::types::{NetClass, PinType};
+            let mut upgrades: Vec<bhdl_netlist::types::NetId> = Vec::new();
+            for (net_id, net) in self.netlist.nets.iter() {
+                if !matches!(net.net_class, NetClass::Signal) {
+                    continue;
+                }
+                let has_ground_pin = self.netlist.pin_instances.values().any(|pi| {
+                    pi.net == Some(net_id)
+                        && self
+                            .netlist
+                            .pins
+                            .get(pi.pin_def)
+                            .is_some_and(|p| p.pin_type == PinType::Ground)
+                });
+                if has_ground_pin {
+                    upgrades.push(net_id);
+                }
+            }
+            for net_id in upgrades {
+                if let Some(net) = self.netlist.nets.get_mut(net_id) {
+                    info!(
+                        "Net '{}' carries a ground-typed pin — class upgraded Signal → Ground",
+                        net.name.as_deref().unwrap_or("<anon>")
+                    );
+                    net.net_class = NetClass::Ground;
+                }
+            }
+        }
+
         // Phase 4.6: Stamp entity `attribute` declarations onto every
         // instance, making them FIRST-CLASS on the netlist. Entity attributes
         // (component_class, switching_frequency, topology, output_current, …)
