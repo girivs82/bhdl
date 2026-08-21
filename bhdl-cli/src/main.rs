@@ -1691,10 +1691,35 @@ async fn run_safety(
                 Ok((result, circuit_ref)) => {
                     healthy_solved = true;
                     let ann = build_simulation_annotations(&result, &circuit_ref);
-                    healthy_volts = ann.net_voltages.clone();
+                    // The safety engine needs the operating point of
+                    // EVERY net. build_simulation_annotations is a
+                    // RENDERER helper: it unions inductor-bridged nets
+                    // and DELETES the "internal" side so the schematic
+                    // doesn't draw duplicate annotations — right for a
+                    // buck_sw virtual-pin artifact, wrong for a real
+                    // net behind a real inductor (the deleted voltage
+                    // silently became a 0V transient initial
+                    // condition). Build the complete map from the raw
+                    // solve instead.
+                    healthy_volts = result
+                        .node_voltages
+                        .iter()
+                        .filter_map(|(idx, v)| {
+                            circuit_ref.get_node_name(*idx).map(|n| (n.to_string(), *v))
+                        })
+                        .collect();
+                    healthy_volts.entry("GND".to_string()).or_insert(0.0);
+                    if dbg {
+                        let mut hv: Vec<_> = healthy_volts.iter().collect();
+                        hv.sort_by(|a, b| a.0.cmp(b.0));
+                        eprintln!("safety debug: HEALTHY operating point: {hv:?}");
+                    }
+                    // signoff gets the COMPLETE map too — a part hanging
+                    // off an inductor's far side has a real applied
+                    // voltage, not a renderer-suppressed one.
                     let rows = bhdl_synthesizer::signoff::compute_signoff(
                         &netlist,
-                        &ann.net_voltages,
+                        &healthy_volts,
                         &ann.instance_power,
                         &ann.instance_currents,
                         &analysis.entity_attribute_index,
