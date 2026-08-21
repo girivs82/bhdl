@@ -49,6 +49,19 @@ pub fn emit_elaborated(
     source: &str,
     ctors: &HashMap<String, EntityCtor>,
 ) -> String {
+    emit_elaborated_with_preamble(netlist, source, ctors, "")
+}
+
+/// Like [`emit_elaborated`] but carries `preamble` — the original
+/// file's non-board items (imports, entity/safety definitions)
+/// verbatim, so the elaborated file re-synthesizes standalone. Build
+/// it with [`extract_preamble`].
+pub fn emit_elaborated_with_preamble(
+    netlist: &Netlist,
+    source: &str,
+    ctors: &HashMap<String, EntityCtor>,
+    preamble: &str,
+) -> String {
     let mut out = String::new();
     out.push_str(&format!(
         "// ELABORATED bhdl — generated from {source}; DO NOT EDIT.\n\
@@ -56,6 +69,10 @@ pub fn emit_elaborated(
          // IDENTICAL netlist. Every synthesized element carries a\n\
          // provenance comment naming the intent that produced it.\n\n"
     ));
+    if !preamble.is_empty() {
+        out.push_str(preamble.trim_end());
+        out.push_str("\n\n");
+    }
     // ── instances, sorted by name for stable diffs ──
     // ── board wrapper + power/ground declarations ──
     let board_name = netlist
@@ -131,7 +148,16 @@ pub fn emit_elaborated(
                 let mut vals: Vec<String> = Vec::new();
                 let mut stopped_at: Option<usize> = None;
                 for (i, (_p, attr, _d)) in c.params.iter().enumerate() {
-                    match attr.as_ref().and_then(|a| inst.attributes.get(a)) {
+                    // An empty attribute value means expansion never
+                    // resolved it (seen on board-local entities whose
+                    // param was left to its default) — treat as absent
+                    // so the default-omission path applies instead of
+                    // emitting a hole like `Ent(, 5%)`.
+                    match attr
+                        .as_ref()
+                        .and_then(|a| inst.attributes.get(a))
+                        .filter(|v| !v.is_empty())
+                    {
                         Some(v) => vals.push(v.clone()),
                         None => {
                             stopped_at = Some(i);
@@ -242,6 +268,61 @@ mod tests {
         assert!(out.contains("// synthesized: expansion_origin = vpin V5"), "{out}");
         assert!(out.contains("o1: Odd();"), "{out}");
     }
+
+    /// An EMPTY attribute value means expansion never resolved it
+    /// (board-local entity left to its param default). It must count
+    /// as absent — the whole prefix stops there and defaults carry the
+    /// round-trip — never be emitted as a positional hole `Res(, 1%)`.
+    #[test]
+    fn empty_attribute_value_counts_as_unresolved() {
+        let mut n = Netlist::new();
+        let m = n.add_module("Res".into(), ModuleKind::PhysicalComponent);
+        let r = n.add_instance("sense".into(), m).unwrap();
+        n.instances[r].attributes.insert("resistance".into(), "".into());
+        n.instances[r].attributes.insert("tolerance".into(), "1%".into());
+        let mut ctors = HashMap::new();
+        ctors.insert("Res".into(), EntityCtor {
+            params: vec![
+                ("value".into(), Some("resistance".into()), Some("10kΩ".into())),
+                ("tolerance".into(), Some("tolerance".into()), Some("5%".into())),
+            ],
+        });
+        let out = emit_elaborated(&n, "test.bhdl", &ctors);
+        assert!(out.contains("sense: Res();"), "{out}");
+        assert!(!out.contains("Res(,"), "{out}");
+        assert!(!out.contains("WARNING"), "{out}");
+    }
+}
+
+/// The original file's non-board content, verbatim: imports, entity
+/// definitions, safety blocks — everything the elaborated board still
+/// needs to re-synthesize standalone. Splices every BOARD_DEF span
+/// out of the source text; nothing is reformatted, so definitions
+/// keep their comments and the Real-Data provenance they carry.
+pub fn extract_preamble(source_text: &str, sf: &bhdl_ast::SourceFile) -> String {
+    use bhdl_ast::Board;
+    use rowan::ast::AstNode;
+    let mut cut: Vec<(usize, usize)> = sf
+        .items()
+        .filter_map(|it| Board::cast(it.syntax().clone()))
+        .map(|b| {
+            let r = b.syntax().text_range();
+            (usize::from(r.start()), usize::from(r.end()))
+        })
+        .collect();
+    cut.sort();
+    let mut out = String::new();
+    let mut pos = 0;
+    for (s, e) in cut {
+        out.push_str(&source_text[pos..s]);
+        pos = e;
+    }
+    out.push_str(&source_text[pos..]);
+    // collapse the hole's leftover blank runs at the seams
+    while out.contains("\n\n\n") {
+        out = out.replace("\n\n\n", "\n\n");
+    }
+    out.trim().to_string()
 }
 
 /// Extract every entity's ctor signature from parsed sources (main

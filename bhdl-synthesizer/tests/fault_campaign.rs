@@ -625,7 +625,10 @@ async fn elaborate_emits_reconstructed_ctors_for_fixture() {
     let mut gen = NetlistGenerator::new();
     let netlist = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
     let ctors = bhdl_synthesizer::elaborate::extract_ctors(&[&sf, &sf2]);
-    let out = bhdl_synthesizer::elaborate::emit_elaborated(&netlist, "test_safety_fault_campaign.bhdl", &ctors);
+    let preamble = bhdl_synthesizer::elaborate::extract_preamble(&src, &sf);
+    let out = bhdl_synthesizer::elaborate::emit_elaborated_with_preamble(
+        &netlist, "test_safety_fault_campaign.bhdl", &ctors, &preamble,
+    );
     println!("{out}");
     // stdlib Res instances reconstruct value (+tolerance default fills)
     assert!(out.contains("r_top: Res(") && out.contains("r_bot: Res("), "{out}");
@@ -640,6 +643,12 @@ async fn elaborate_emits_reconstructed_ctors_for_fixture() {
     assert!(out.contains("ground GND;"), "{out}");
     assert!(out.contains("@V12 -> r_top.1;"), "{out}");
     assert!(out.contains("r_bot.2 -> @GND;"), "{out}");
+    // preamble carries the original imports and local entity defs
+    // verbatim — the elaborated file is SELF-CONTAINED
+    assert!(out.contains("import { Res } from \"bhdl-stdlib/passives/resistor.bhdl\";"), "{out}");
+    assert!(out.contains("entity DemoSense"), "{out}");
+    // ...but never a second copy of the board block
+    assert_eq!(out.matches("board FaultDemo").count(), 1, "{out}");
     // pre-round-trip smoke: the emitted text PARSES as bhdl
     let reparse = parse(&out);
     assert!(reparse.errors().is_empty(), "elaborated output must parse: {:?}\n{out}", reparse.errors());
