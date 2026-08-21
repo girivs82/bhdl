@@ -23,6 +23,7 @@ use bhdl_parser::parse;
 use bhdl_ast::{SourceFile, AstNode, HasName};
 use bhdl_analyzer::{analyze, documentation::{generate_documentation, DocumentationOptions, OutputFormat}};
 use bhdl_synthesizer::NetlistGenerator;
+use bhdl_netlist::Netlist;
 use bhdl_schematic;
 use bhdl_spice::{ComponentRoleDetector, NetlistToSpiceConverter, SpiceAnalysisAugmenter};
 use bhdl_common::AnalysisData;
@@ -109,7 +110,11 @@ enum Commands {
         show_intents: bool,
     },
     
-    /// Synthesize netlist
+    /// Synthesize netlist. The default pipeline is
+    /// bhdl → elaborate → synthesize: the board is elaborated to
+    /// structural bhdl, the round-trip gate proves the structural form
+    /// re-synthesizes identically, and that verified netlist is the
+    /// output. `--no-elaborate` skips the gate (no structural proof).
     Synthesize {
         /// Output netlist file
         #[arg(short, long)]
@@ -118,6 +123,10 @@ enum Commands {
         /// Netlist format (json, spice)
         #[arg(short, long, default_value = "json")]
         format: String,
+
+        /// Skip elaboration + round-trip gate (unverified netlist)
+        #[arg(long)]
+        no_elaborate: bool,
     },
 
     /// Elaborate: desugar every higher-abstraction construct (virtual
@@ -568,8 +577,8 @@ async fn main() -> Result<()> {
             run_analysis_with_intents(&source_file, all, &format, show_intents).await?;
         }
         
-        Some(Commands::Synthesize { output, format }) => {
-            run_synthesis(&source_file, output, &format).await?;
+        Some(Commands::Synthesize { output, format, no_elaborate }) => {
+            run_synthesis(&source_file, &input_content, &cli.input, output, &format, no_elaborate).await?;
         }
 
         Some(Commands::Elaborate { output }) => {
@@ -1394,12 +1403,26 @@ fn find_stdlib_entity_file(stdlib: &Path, name: &str) -> Option<String> {
     walk(stdlib, name, stdlib)
 }
 
-async fn run_elaborate(
+/// The elaborated board: the verified structural form plus the netlist
+/// that RE-SYNTHESIS of that form produced. After the round-trip gate
+/// passes, `netlist` is the pipeline's authority — every downstream
+/// consumer sees the netlist the structural text actually produces,
+/// so there is no question of higher abstractions diverging from it.
+struct ElaboratedBoard {
+    netlist: Netlist,
+    text: String,
+}
+
+/// bhdl → elaborate → verify: synthesize the source, emit structural
+/// bhdl, re-synthesize the emission, and require structural identity
+/// (the ROUND-TRIP GATE). On failure the rejected text lands at
+/// `<evidence_stem>.failed.bhdl` — the failure IS the bug report.
+async fn elaborate_pipeline(
     source_file: &SourceFile,
     input_content: &str,
     input_path: &Path,
-    output: Option<PathBuf>,
-) -> Result<()> {
+    evidence_stem: &Path,
+) -> Result<ElaboratedBoard> {
     use bhdl_synthesizer::elaborate;
     let analysis = analyze(source_file);
     gate_constructor_args(&analysis)?;
@@ -1500,11 +1523,7 @@ async fn run_elaborate(
     // structurally IDENTICAL board. This is the pipeline's contract —
     // a mismatch means the emitter (or an abstraction it desugars)
     // lied, and the output must not be trusted or written silently.
-    // On any round-trip failure the rejected text is still written —
-    // to `<output>.failed.bhdl` — because the failure IS the bug
-    // report and the operator needs the evidence.
-    let out_path = output.unwrap_or_else(|| input_path.with_extension("elab.bhdl"));
-    let failed_path = out_path.with_extension("failed.bhdl");
+    let failed_path = evidence_stem.with_extension("failed.bhdl");
     let re_pr = parse(&out_text);
     if !re_pr.errors().is_empty() {
         for e in re_pr.errors() {
@@ -1541,19 +1560,37 @@ async fn run_elaborate(
         anyhow::bail!("elaborated netlist differs from the original");
     }
 
-    fs::write(&out_path, &out_text)
-        .with_context(|| format!("write {}", out_path.display()))?;
     println!("{}", "✓ Elaboration round-trip verified".green().bold());
+    Ok(ElaboratedBoard { netlist: re_netlist, text: out_text })
+}
+
+async fn run_elaborate(
+    source_file: &SourceFile,
+    input_content: &str,
+    input_path: &Path,
+    output: Option<PathBuf>,
+) -> Result<()> {
+    let out_path = output.unwrap_or_else(|| input_path.with_extension("elab.bhdl"));
+    let board = elaborate_pipeline(source_file, input_content, input_path, &out_path).await?;
+    fs::write(&out_path, &board.text)
+        .with_context(|| format!("write {}", out_path.display()))?;
     println!(
         "  Instances: {}   Nets: {}   → {}",
-        netlist.instances.len(),
-        netlist.nets.len(),
+        board.netlist.instances.len(),
+        board.netlist.nets.len(),
         out_path.display()
     );
     Ok(())
 }
 
-async fn run_synthesis(source_file: &SourceFile, output: Option<PathBuf>, format: &str) -> Result<()> {
+async fn run_synthesis(
+    source_file: &SourceFile,
+    input_content: &str,
+    input_path: &Path,
+    output: Option<PathBuf>,
+    format: &str,
+    no_elaborate: bool,
+) -> Result<()> {
     // First run analysis
     let analysis = analyze(source_file);
     gate_constructor_args(&analysis)?;
@@ -1562,12 +1599,30 @@ async fn run_synthesis(source_file: &SourceFile, output: Option<PathBuf>, format
     if !analysis.diagnostics.is_empty() {
         eprintln!("{}", "Warning: Analysis found issues".yellow().bold());
     }
-    
-    // Synthesize
-    let mut generator = NetlistGenerator::new();
-    let netlist = generator.generate_from_ast_and_analysis(source_file, &analysis).await
-        .context("Failed to synthesize netlist")?;
-    
+
+    // THE default pipeline is bhdl → elaborate → synthesize: the board
+    // is elaborated to structural bhdl, the round-trip gate proves the
+    // structural form re-synthesizes IDENTICALLY, and the elaborated
+    // netlist is the one every consumer sees — higher abstractions
+    // cannot diverge from it. `--no-elaborate` is the escape hatch
+    // (and says so loudly): the netlist it produces carries no
+    // round-trip proof.
+    let netlist = if no_elaborate {
+        eprintln!(
+            "{}",
+            "⚠ --no-elaborate: skipping the round-trip gate — this netlist carries no structural proof"
+                .yellow()
+                .bold()
+        );
+        let mut generator = NetlistGenerator::new();
+        generator.generate_from_ast_and_analysis(source_file, &analysis).await
+            .context("Failed to synthesize netlist")?
+    } else {
+        elaborate_pipeline(source_file, input_content, input_path, input_path)
+            .await?
+            .netlist
+    };
+
     println!("{}", "✓ Synthesis successful".green().bold());
     println!("  Instances: {}", netlist.instances.len());
     println!("  Nets: {}", netlist.nets.len());
