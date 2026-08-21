@@ -253,18 +253,25 @@ open(r_top) expect SG_MID.overvoltage  → ran: fired [SG_MID.undervoltage] — 
 
 `drift(part, ±pct)` scales the part's value attributes (every
 value-carrying key — different consumers read different ones) by
-1 + pct/100 and runs like any other fault. Drift is DECLARED-only: a
-universe drift magnitude would be invented data.
+1 + pct/100 and runs like any other fault. Declared drift asserts a
+magnitude deliberately; the universe additionally probes its own
+labelled magnitudes (tolerance edge + 0.5×/2× convention, above).
 
-`within <FTTI>` is checked at steady state: the fault must be DETECTED
-(a mechanism's `detected_when` TRUE on the faulted point), and the
-detecting mechanism's declared `interval` + `latency` budget must fit
-inside the FTTI — the standard timing argument for periodic and
-continuous mechanisms. Never detected, or budget exceeds FTTI ⇒ the
-FTTI check fails and the fault keeps a gap even when its effect
-expectation held; a detecting mechanism with no declared budget ⇒
-UNVERIFIABLE, stated (true transient simulation of the detection path
-is future work — an undeclared budget is never assumed).
+`within <FTTI>` requires the fault DETECTED (a mechanism's
+`detected_when` TRUE on the faulted point); the TIME argument is,
+strongest first: **MEASURED** — a transient solve of the faulted board
+relaxing from the healthy operating point (the fault is the stimulus;
+initial conditions = the healthy DC solution); the measured settle
+time of `detected_when` plus the mechanism's declared test `interval`
+must fit inside the FTTI, and the declared `latency` claim is
+SUPERSEDED by the measurement (the fault line prints the settle time
+and the integration step — the resolution). A predicate that does not
+settle TRUE within 2×FTTI ⇒ MEASURED FAIL. **DECLARED** — when no
+transient engine is available, the mechanism's `interval` + `latency`
+budget, stated as declared. **UNVERIFIABLE** — neither, stated; an
+undeclared budget is never assumed. Never detected, or the time
+argument exceeds the FTTI ⇒ the FTTI check fails and the fault keeps a
+gap even when its effect expectation held.
 
 A fault clears its FAULT_UNRUN gap only when it ran AND the expectation
 held AND any `within` check passed. An expectation the physics did not

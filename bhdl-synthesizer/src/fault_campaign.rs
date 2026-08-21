@@ -485,10 +485,25 @@ fn eval_effect(
     Ok(v)
 }
 
+/// Time-domain solver for FTTI measurement: (faulted netlist,
+/// duration_s) → (sample times, net name → voltage series). The
+/// caller supplies the engine (bhdl-spice transient with the HEALTHY
+/// operating point as initial conditions — the fault itself is the
+/// stimulus); the campaign only reads the trace.
+pub type TranSolver<'a> =
+    dyn Fn(&Netlist, f64) -> Result<(Vec<f64>, HashMap<String, Vec<f64>>), String> + 'a;
+
 /// Run every declared fault. Marks each fault run (or notes exactly why
 /// it could not run), records fired effects + whether the expectation
 /// was met, and clears the corresponding FAULT_UNRUN gaps.
-pub fn run_declared_faults(netlist: &Netlist, model: &mut SafetyModel, solve: &Solver) -> (usize, usize) {
+/// `tran` (when given) upgrades the FTTI check from declared budgets to
+/// a MEASURED detection settle time.
+pub fn run_declared_faults(
+    netlist: &Netlist,
+    model: &mut SafetyModel,
+    solve: &Solver,
+    tran: Option<&TranSolver>,
+) -> (usize, usize) {
     let view = View::build(netlist);
     // (instance, state name) → behavior (None = declared without one)
     let state_behaviors: HashMap<(String, String), Option<String>> = model
@@ -614,13 +629,18 @@ pub fn run_declared_faults(netlist: &Netlist, model: &mut SafetyModel, solve: &S
             }
             let expect_full = &f.expect; // e.g. "SG_MID.overvoltage" or "rail_a.SG_OV.overvoltage"
             let met = fired.iter().any(|p| p == expect_full || p.ends_with(&format!(".{expect_full}")) || expect_full.ends_with(p.as_str()));
-            // FTTI: `within T` claims DETECTION inside T. Steady-state
-            // detection comes from the mechanisms' detected_when on the
-            // faulted point; the time argument is the mechanism's
-            // DECLARED interval+latency budget (the standard argument
-            // for periodic/continuous mechanisms). True transient
-            // simulation of the detection path is future work — an
-            // undeclared budget is UNVERIFIABLE, stated, never assumed.
+            // FTTI: `within T` claims DETECTION inside T. Detection
+            // presence comes from the mechanisms' detected_when on the
+            // faulted point. The TIME argument, strongest first:
+            //   1. MEASURED — transient solve of the FAULTED board
+            //      relaxing from the HEALTHY operating point (the fault
+            //      is the stimulus); measured settle time of the
+            //      detection predicate + the mechanism's declared
+            //      test interval ≤ within. The declared latency claim
+            //      is SUPERSEDED by the measurement.
+            //   2. DECLARED — the mechanism's interval+latency budget
+            //      (when no transient engine is available, stated).
+            //   3. UNVERIFIABLE — neither, stated, never assumed.
             if let Some(w) = &f.within {
                 let ftti = parse_duration_s(w);
                 let mut detecting: Vec<(f64, bool)> = Vec::new(); // (budget_s, budget_known)
@@ -645,13 +665,86 @@ pub fn run_declared_faults(netlist: &Netlist, model: &mut SafetyModel, solve: &S
                     }
                     (Some(_), true) => Some(false), // never detected ⇒ FTTI missed
                     (Some(t), false) => {
-                        if detecting.iter().any(|(_, known)| *known) {
-                            let best = detecting.iter().filter(|(_, k)| *k).map(|(b, _)| *b).fold(f64::INFINITY, f64::min);
-                            Some(best <= t)
-                        } else {
-                            f.note = Some("FTTI unverifiable: detecting mechanism declares no interval/latency budget (and there is no transient sim)".into());
-                            None
+                        let mut verdict: Option<bool> = None;
+                        let mut tnote: Option<String> = None;
+                        if let Some(tr) = tran {
+                            match tr(&faulted, 2.0 * t) {
+                                Ok((times, traces)) if times.len() >= 2 => {
+                                    // per-mechanism measured settle time of
+                                    // detected_when; keep the best
+                                    // (t_detect + declared test interval)
+                                    let n = times.len();
+                                    let sample = |k: usize| -> HashMap<String, f64> {
+                                        traces
+                                            .iter()
+                                            .map(|(name, vs)| (name.clone(), vs.get(k).copied().unwrap_or(f64::NAN)))
+                                            .collect()
+                                    };
+                                    let mut best: Option<f64> = None;
+                                    let mut best_detect = 0.0f64;
+                                    for (_h2, _d2, dw, interval, _lat) in &scopes_mechs[si] {
+                                        let Some(pred) = dw else { continue };
+                                        let holds = |k: usize| {
+                                            eval_effect(pred, prefix, ns, &view, &alias, &sample(k)).unwrap_or(false)
+                                        };
+                                        if !holds(n - 1) {
+                                            continue; // never ends detected
+                                        }
+                                        let mut k = n - 1;
+                                        while k > 0 && holds(k - 1) {
+                                            k -= 1;
+                                        }
+                                        let t_detect = times[k];
+                                        let b_int = interval.as_deref().and_then(parse_duration_s).unwrap_or(0.0);
+                                        let total = t_detect + b_int;
+                                        if best.map(|b| total < b).unwrap_or(true) {
+                                            best = Some(total);
+                                            best_detect = t_detect;
+                                        }
+                                    }
+                                    match best {
+                                        Some(total) => {
+                                            verdict = Some(total <= t);
+                                            let dt = times[1] - times[0];
+                                            tnote = Some(format!(
+                                                "FTTI MEASURED: detection settles {:.4}ms after the fault (transient from the healthy operating point, step {:.4}ms — resolution = one step) — declared latency claim superseded",
+                                                best_detect * 1e3,
+                                                dt * 1e3
+                                            ));
+                                        }
+                                        None => {
+                                            verdict = Some(false);
+                                            tnote = Some(format!(
+                                                "FTTI MEASURED: no detection predicate settles TRUE within {:.4}ms of the fault (transient)",
+                                                2.0 * t * 1e3
+                                            ));
+                                        }
+                                    }
+                                }
+                                Ok(_) => {
+                                    tnote = Some("transient returned <2 samples — declared budget used".into());
+                                }
+                                Err(e) => {
+                                    tnote = Some(format!("transient unavailable ({e}) — declared budget used"));
+                                }
+                            }
                         }
+                        if verdict.is_none() {
+                            verdict = if detecting.iter().any(|(_, known)| *known) {
+                                let best = detecting.iter().filter(|(_, k)| *k).map(|(b, _)| *b).fold(f64::INFINITY, f64::min);
+                                Some(best <= t)
+                            } else {
+                                f.note = Some("FTTI unverifiable: detecting mechanism declares no interval/latency budget (and no transient measurement was possible)".into());
+                                None
+                            };
+                        }
+                        if let Some(tn) = tnote {
+                            f.note = Some(match f.note.take() {
+                                Some(existing) => format!("{existing}; {tn}"),
+                                None => tn,
+                            });
+                        }
+                        verdict
                     }
                 };
             }

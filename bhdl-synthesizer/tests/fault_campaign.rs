@@ -48,7 +48,7 @@ async fn declared_faults_run_classify_and_regenerate_gaps() {
             })
             .collect())
     };
-    let (ran, mismatched) = run_declared_faults(&netlist, &mut model, &solve);
+    let (ran, mismatched) = run_declared_faults(&netlist, &mut model, &solve, None);
     assert_eq!(ran, 6); // state runs via its behavior, drift via value scaling
     // Under the mock, aliasing makes the short/open expectations hold
     // and the state's ov fires (12V everywhere) — but the DRIFT fault
@@ -146,7 +146,7 @@ async fn declared_faults_run_classify_and_regenerate_gaps() {
     // gaps that say so (the fault is NOT silently classified).
     let mut model2 = build_safety_model(&netlist, &[&sf]);
     let refuse = |_: &bhdl_netlist::Netlist| -> Result<HashMap<String, f64>, String> { Err("no convergence".into()) };
-    let (ran2, _) = run_declared_faults(&netlist, &mut model2, &refuse);
+    let (ran2, _) = run_declared_faults(&netlist, &mut model2, &refuse, None);
     assert_eq!(ran2, 6);
     let unrun2: Vec<_> = model2.gaps.iter().filter(|g| g.class == GapClass::FaultUnrun).collect();
     assert_eq!(unrun2.len(), 6);
@@ -253,7 +253,7 @@ async fn fmeda_export_serializes_the_measured_model() {
             .map(|name| (name.clone(), if name == "GND" { 0.0 } else { 12.0 }))
             .collect())
     };
-    run_declared_faults(&netlist, &mut model, &solve);
+    run_declared_faults(&netlist, &mut model, &solve, None);
     bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve, &HashMap::new());
     bhdl_synthesizer::fault_campaign::compute_metrics(&mut model);
     let csvs = bhdl_synthesizer::fault_campaign::export_fmeda(&model);
@@ -296,4 +296,73 @@ async fn fmeda_export_serializes_the_measured_model() {
     let mlines: Vec<&str> = csvs.metrics.trim_end().lines().collect();
     assert_eq!(mlines.len(), 2, "{}", csvs.metrics);
     assert!(mlines[1].ends_with("false"), "{}", csvs.metrics);
+}
+
+/// Transient FTTI: with a time-domain engine, the timing verdict comes
+/// from the MEASURED settle time of detected_when, superseding the
+/// mechanism's declared latency claim. The mock trace ramps every net
+/// 0→12V over the run: `brd.sense.1 > 4V` settles at ~1/3 of the
+/// duration (= 2/3 of `within`), so BOTH within-budget faults now pass
+/// — including the 500µs one the DECLARED 1ms latency claim failed:
+/// the measured path is faster than the vendor's claim.
+#[tokio::test]
+async fn transient_ftti_measurement_supersedes_declared_latency() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let src = std::fs::read_to_string(ws.join("tests/circuits/realistic/test_safety_fault_campaign.bhdl")).unwrap();
+    let pr = parse(&src);
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let netlist = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+    let mut model = build_safety_model(&netlist, &[&sf]);
+    let solve = |faulted: &bhdl_netlist::Netlist| -> Result<HashMap<String, f64>, String> {
+        Ok(faulted
+            .nets
+            .iter()
+            .filter_map(|(_, n)| n.name.clone())
+            .map(|name| (name.clone(), if name == "GND" { 0.0 } else { 12.0 }))
+            .collect())
+    };
+    // Mock transient: 11 samples, every non-GND net ramps 0→12V.
+    let tran = |faulted: &bhdl_netlist::Netlist,
+                duration: f64|
+     -> Result<(Vec<f64>, HashMap<String, Vec<f64>>), String> {
+        let times: Vec<f64> = (0..=10).map(|k| duration * k as f64 / 10.0).collect();
+        let traces: HashMap<String, Vec<f64>> = faulted
+            .nets
+            .iter()
+            .filter_map(|(_, n)| n.name.clone())
+            .map(|name| {
+                let series: Vec<f64> = (0..=10)
+                    .map(|k| if name == "GND" { 0.0 } else { 12.0 * k as f64 / 10.0 })
+                    .collect();
+                (name, series)
+            })
+            .collect();
+        Ok((times, traces))
+    };
+    run_declared_faults(&netlist, &mut model, &solve, Some(&tran));
+    let scope = &model.scopes[0];
+    // 10ms budget: measured settle ≈ 8ms (0.4 × 2×within) ≤ 10ms → OK
+    let t_ok = scope.faults.iter().find(|f| f.within.as_deref() == Some("10ms")).unwrap();
+    assert_eq!(t_ok.timing_met, Some(true), "{t_ok:?}");
+    assert!(t_ok.note.as_deref().unwrap_or("").contains("FTTI MEASURED"), "{t_ok:?}");
+    // 500µs budget: measured settle ≈ 0.4ms ≤ 0.5ms → the measurement
+    // FLIPS the declared-budget FAIL to a pass, and says so
+    let t_500 = scope.faults.iter().find(|f| f.within.as_deref() == Some("500us")).unwrap();
+    assert_eq!(t_500.timing_met, Some(true), "{t_500:?}");
+    assert!(
+        t_500.note.as_deref().unwrap_or("").contains("declared latency claim superseded"),
+        "{t_500:?}"
+    );
+    // A refusing engine falls back to the declared budget, stated.
+    let mut model2 = build_safety_model(&netlist, &[&sf]);
+    let no_tran = |_: &bhdl_netlist::Netlist, _: f64| -> Result<(Vec<f64>, HashMap<String, Vec<f64>>), String> {
+        Err("no transient engine".into())
+    };
+    run_declared_faults(&netlist, &mut model2, &solve, Some(&no_tran));
+    let t2 = model2.scopes[0].faults.iter().find(|f| f.within.as_deref() == Some("500us")).unwrap();
+    assert_eq!(t2.timing_met, Some(false), "declared 1ms budget > 500µs: {t2:?}");
+    assert!(t2.note.as_deref().unwrap_or("").contains("declared budget used"), "{t2:?}");
 }

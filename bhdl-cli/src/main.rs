@@ -1588,6 +1588,10 @@ async fn run_safety(
     let mut model = build_safety_model(&netlist, &sources);
 
     let mut healthy_solved = false;
+    // Healthy operating point — the transient FTTI measurement's initial
+    // conditions (the faulted board relaxes FROM here; the fault is the
+    // stimulus).
+    let mut healthy_volts: HashMap<String, f64> = HashMap::new();
     // ── Reliability (spec §2.8): handbook FITs from the named standard's
     // equations, the mission profile and SIM-DERIVED stress. The stress
     // ratio comes from the same GLACIER DC solve + sign-off rows the
@@ -1687,6 +1691,7 @@ async fn run_safety(
                 Ok((result, circuit_ref)) => {
                     healthy_solved = true;
                     let ann = build_simulation_annotations(&result, &circuit_ref);
+                    healthy_volts = ann.net_voltages.clone();
                     let rows = bhdl_synthesizer::signoff::compute_signoff(
                         &netlist,
                         &ann.net_voltages,
@@ -1821,7 +1826,50 @@ async fn run_safety(
             }
             Ok(ann.net_voltages)
         };
-        let (ran, mismatched) = bhdl_synthesizer::fault_campaign::run_declared_faults(&netlist, &mut model, &solver);
+        // Transient engine for FTTI measurement: the FAULTED circuit
+        // relaxes from the HEALTHY operating point (initial conditions)
+        // — no external stimulus, the fault is the step. Same converter
+        // and params shape as the schematic panel's settle loop.
+        let tran = |faulted: &bhdl_netlist::Netlist,
+                    duration: f64|
+         -> Result<(Vec<f64>, HashMap<String, Vec<f64>>), String> {
+            let mut converter = NetlistToSpiceConverter::new();
+            converter.set_model_overrides(overrides.clone());
+            let circuit = converter
+                .convert(faulted)
+                .map_err(|e| format!("spice convert: {e}"))?;
+            let drives = converter.take_ibis_drives();
+            let probes: Vec<String> = circuit
+                .nodes()
+                .map(|(_, n)| n.name.clone())
+                .filter(|n| n != "0")
+                .collect();
+            let params = bhdl_spice::transient::TransientParams::new(
+                "",
+                bhdl_spice::transient::Stimulus::Constant(0.0),
+                probes,
+                duration,
+                // 400 steps: same rationale as the panel — h sets the
+                // capacitor companion conductance (C/h); tiny h turns
+                // decoupling caps into sub-mΩ shorts and Newton
+                // diverges. Resolution = duration/400, stated in the
+                // measurement note.
+                duration / 400.0,
+            );
+            let r = bhdl_spice::ibis_transient::run_transient_ibis_ic(
+                &circuit,
+                &params,
+                &drives,
+                Some(&healthy_volts),
+            )
+            .map_err(|e| format!("{e}"))?;
+            let mut traces = r.probe_voltages;
+            // GND is node "0" in spice — the predicate evaluator needs
+            // it by its net name.
+            traces.entry("GND".to_string()).or_insert_with(|| vec![0.0; r.times.len()]);
+            Ok((r.times, traces))
+        };
+        let (ran, mismatched) = bhdl_synthesizer::fault_campaign::run_declared_faults(&netlist, &mut model, &solver, Some(&tran));
         if ran > 0 {
             println!("  fault campaign: {ran} declared fault(s) run, {mismatched} expectation(s) NOT met");
         }
@@ -1957,9 +2005,17 @@ async fn run_safety(
             let run = s.faults.iter().filter(|f| f.run).count();
             println!("    faults    {} declared, {} run", s.faults.len(), run);
             for f in &s.faults {
+                // Surface the FTTI measurement (settle time, resolution)
+                // next to the verdict — the number IS the evidence.
+                let tmeas = f
+                    .note
+                    .as_deref()
+                    .and_then(|n| n.split("; ").find(|p| p.starts_with("FTTI MEASURED")))
+                    .map(|p| format!("  [{p}]"))
+                    .unwrap_or_default();
                 let timing = match (f.within.as_deref(), f.timing_met) {
-                    (Some(w), Some(true)) => format!("  ⏱ within {w} OK").green().to_string(),
-                    (Some(w), Some(false)) => format!("  ⏱ within {w} FAILED").red().to_string(),
+                    (Some(w), Some(true)) => format!("  ⏱ within {w} OK{tmeas}").green().to_string(),
+                    (Some(w), Some(false)) => format!("  ⏱ within {w} FAILED{tmeas}").red().to_string(),
                     (Some(w), None) if f.run => format!("  ⏱ within {w} UNVERIFIABLE").yellow().to_string(),
                     _ => String::new(),
                 };

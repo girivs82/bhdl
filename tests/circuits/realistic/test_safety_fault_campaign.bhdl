@@ -66,9 +66,14 @@ safety FaultDemo as brd {
                              latency=1ms,
                              dc=0.90, source="FIXTURE claim — measured DC supersedes");
 
-    fault short(brd.r_top.1, brd.r_top.2) expect SG_MID.overvoltage detected_by brd.sense within 10ms;   // 1ms ≤ 10ms → ⏱ OK
+    // Under the transient FTTI measurement this R-only board detects in
+    // one integration step — both budgets pass MEASURED, superseding the
+    // 1ms declared claim (which alone would fail 500µs). The measured
+    // FTTI FAIL demonstration lives in test_safety_ftti_rc.bhdl, where
+    // an RC filter makes the settle time real.
+    fault short(brd.r_top.1, brd.r_top.2) expect SG_MID.overvoltage detected_by brd.sense within 10ms;
     fault short(brd.r_bot.1, brd.r_bot.2) expect SG_MID.undervoltage;
-    fault open(brd.r_bot)                 expect SG_MID.overvoltage detected_by brd.sense within 500us;  // 1ms > 500µs → ⏱ FAILED
+    fault open(brd.r_bot)                 expect SG_MID.overvoltage detected_by brd.sense within 500us;
     fault open(brd.r_top)                 expect SG_MID.overvoltage;   // deliberately wrong — see header
     // Parametric fault: +200% drift on the top leg → 3kΩ/1kΩ divider,
     // mid = 3V < 4V → undervoltage. Declared-only (a universe drift
