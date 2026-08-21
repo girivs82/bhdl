@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "mappings": {
+    "C": {
+      "c_555": "C1",
+      "c_595": "C2",
+      "c_bulk": "C3",
+      "clk_c_cont": "C4",
+      "clk_c_t": "C5"
+    },
+    "D": {
+      "led_a": "D1",
+      "led_b": "D2",
+      "led_c": "D3",
+      "led_d": "D4",
+      "led_e": "D5",
+      "led_f": "D6",
+      "led_g": "D7",
+      "led_h": "D8"
+    },
+    "J": {
+      "J1": "J1"
+    },
+    "R": {
+      "clk_r_a": "R1",
+      "clk_r_b": "R2",
+      "r_a": "R3",
+      "r_b": "R4",
+      "r_c": "R5",
+      "r_d": "R6",
+      "r_e": "R7",
+      "r_f": "R8",
+      "r_g": "R9",
+      "r_h": "R10"
+    },
+    "U": {
+      "clk": "U1",
+      "clk_timer": "U2",
+      "sr": "U3"
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "mappings": {
+    "J": {
+      "j1": "J1"
+    },
+    "R": {
+      "r_heavy": "R1",
+      "r_light": "R2"
+    }
+  }
+}

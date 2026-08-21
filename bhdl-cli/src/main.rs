@@ -46,6 +46,14 @@ struct Cli {
     #[arg(short, long)]
     verbose: bool,
 
+    /// Skip the default bhdl → elaborate → synthesize pipeline and its
+    /// round-trip gate for this run. The netlist consumers then see is
+    /// the direct synthesis of the source — it carries NO structural
+    /// proof, and the run says so loudly. Applies to every
+    /// netlist-consuming subcommand.
+    #[arg(long, global = true)]
+    no_elaborate: bool,
+
     /// Select a board SKU variant declared via `variant <Name> { ... }`
     /// in the .bhdl file. Patches the post-expansion netlist with the
     /// variant's value overrides and DNP marks before any consuming
@@ -124,9 +132,6 @@ enum Commands {
         #[arg(short, long, default_value = "json")]
         format: String,
 
-        /// Skip elaboration + round-trip gate (unverified netlist)
-        #[arg(long)]
-        no_elaborate: bool,
     },
 
     /// Elaborate: desugar every higher-abstraction construct (virtual
@@ -577,8 +582,8 @@ async fn main() -> Result<()> {
             run_analysis_with_intents(&source_file, all, &format, show_intents).await?;
         }
         
-        Some(Commands::Synthesize { output, format, no_elaborate }) => {
-            run_synthesis(&source_file, &input_content, &cli.input, output, &format, no_elaborate).await?;
+        Some(Commands::Synthesize { output, format }) => {
+            run_synthesis(&source_file, &input_content, &cli.input, output, &format, cli.no_elaborate).await?;
         }
 
         Some(Commands::Elaborate { output }) => {
@@ -586,19 +591,19 @@ async fn main() -> Result<()> {
         }
 
         Some(Commands::Freeze { output }) => {
-            run_freeze(&source_file, &cli.input, output, frozen_libraries).await?;
+            run_freeze(&source_file, &input_content, &cli.input, output, frozen_libraries, cli.no_elaborate).await?;
         }
 
         Some(Commands::Safety { baseline, update_baseline, json, fmeda }) => {
-            run_safety(&source_file, &cli.input, baseline, update_baseline, json, fmeda).await?;
+            run_safety(&source_file, &input_content, &cli.input, cli.no_elaborate, baseline, update_baseline, json, fmeda).await?;
         }
         
         Some(Commands::Visualize { output, json, svg_v4, binder }) => {
-            run_visualization(&source_file, output, json, &cli.input, svg_v4.as_deref(), binder.as_deref()).await?;
+            run_visualization(&source_file, &input_content, output, json, &cli.input, svg_v4.as_deref(), binder.as_deref(), cli.no_elaborate).await?;
         }
         
         Some(Commands::Spice { analysis, output, use_metadata }) => {
-            run_spice(&source_file, &analysis, output, use_metadata, cli.sku.as_deref()).await?;
+            run_spice(&source_file, &input_content, &cli.input, &analysis, output, use_metadata, cli.sku.as_deref(), cli.no_elaborate).await?;
         }
         
         Some(Commands::MinePriors { dir, output }) => {
@@ -663,18 +668,18 @@ async fn main() -> Result<()> {
             return Ok(());
         }
         Some(Commands::Transient { output, probe, duration, timestep, corners }) => {
-            cmd_transient(&source_file, &cli.input, output, probe, duration, timestep, corners).await?;
+            cmd_transient(&source_file, &input_content, &cli.input, cli.no_elaborate, output, probe, duration, timestep, corners).await?;
         }
         Some(Commands::Pipeline { output_dir, no_viz, no_spice }) => {
-            run_pipeline(&source_file, &cli.input, output_dir, no_viz, no_spice).await?;
+            run_pipeline(&source_file, &input_content, &cli.input, output_dir, no_viz, no_spice, cli.no_elaborate).await?;
         }
         
         Some(Commands::Simulate { testbench, output, format, verbose: _verbose }) => {
-            run_simulation(&source_file, testbench, output, &format).await?;
+            run_simulation(&source_file, &input_content, &cli.input, testbench, output, &format, cli.no_elaborate).await?;
         }
 
         Some(Commands::Layout { output, trials, max_iterations, html, fab, seed, fab_profile }) => {
-            run_layout(&source_file, output, trials, max_iterations, html, fab, &cli.input, seed, fab_profile.as_deref()).await?;
+            run_layout(&source_file, &input_content, cli.no_elaborate, output, trials, max_iterations, html, fab, &cli.input, seed, fab_profile.as_deref()).await?;
         }
 
         Some(Commands::Doc { output, bom_only, budget_only, no_tree, no_patterns }) => {
@@ -684,7 +689,9 @@ async fn main() -> Result<()> {
         Some(Commands::Bom { output, format, supply_profile, supply_qty, supply_net, simulate }) => {
             cmd_bom(
                 &source_file,
+                &input_content,
                 &cli.input,
+                cli.no_elaborate,
                 output,
                 &format,
                 cli.sku.as_deref(),
@@ -848,7 +855,9 @@ async fn main() -> Result<()> {
             println!("## Design, simulation, sign-off and BOM\n");
             cmd_bom(
                 &source_file,
+                &input_content,
                 &cli.input,
+                cli.no_elaborate,
                 None,
                 "markdown",
                 cli.sku.as_deref(),
@@ -1422,11 +1431,15 @@ async fn elaborate_pipeline(
     input_content: &str,
     input_path: &Path,
     evidence_stem: &Path,
+    refdes_lut: Option<&Path>,
 ) -> Result<ElaboratedBoard> {
     use bhdl_synthesizer::elaborate;
     let analysis = analyze(source_file);
     gate_constructor_args(&analysis)?;
     let mut generator = NetlistGenerator::new();
+    if let Some(lut) = refdes_lut {
+        generator.set_refdes_lut_path(lut.to_path_buf());
+    }
     let netlist = generator
         .generate_from_ast_and_analysis(source_file, &analysis)
         .await
@@ -1583,6 +1596,11 @@ async fn elaborate_pipeline(
     }
     let re_sf = SourceFile::cast(re_pr.syntax()).expect("parsed source file");
     let re_analysis = analyze(&re_sf);
+    // NB: the re-synthesis generator does NOT get the refdes LUT — it
+    // would REWRITE the LUT file in elaborated order, and the next
+    // run's primary generate would read the mutated file back: refdes
+    // drift across runs. Equivalence never compares refdes; the
+    // re-synthesized netlist is discarded after the gate.
     let mut re_gen = NetlistGenerator::new();
     let re_netlist = match re_gen.generate_from_ast_and_analysis(&re_sf, &re_analysis).await {
         Ok(n) => n,
@@ -1607,7 +1625,14 @@ async fn elaborate_pipeline(
     }
 
     println!("{}", "✓ Elaboration round-trip verified".green().bold());
-    Ok(ElaboratedBoard { netlist: re_netlist, text: out_text })
+    // Consumers get the ORIGINAL netlist, not the re-synthesized one.
+    // The gate has just PROVEN them structurally identical — that proof
+    // is the authority — and the original keeps two things the re-synth
+    // loses: source-order arena ids (layout/schematic are positional
+    // consumers; ecc83 stays byte-identical) and the full attribute set
+    // (synthesis provenance, numeric solver attrs) that the structural
+    // text only carries as comments.
+    Ok(ElaboratedBoard { netlist, text: out_text })
 }
 
 async fn run_elaborate(
@@ -1617,7 +1642,10 @@ async fn run_elaborate(
     output: Option<PathBuf>,
 ) -> Result<()> {
     let out_path = output.unwrap_or_else(|| input_path.with_extension("elab.bhdl"));
-    let board = elaborate_pipeline(source_file, input_content, input_path, &out_path).await?;
+    let board = elaborate_pipeline(
+        source_file, input_content, input_path, &out_path,
+        Some(&input_path.with_extension("bhdl.refdes")),
+    ).await?;
     fs::write(&out_path, &board.text)
         .with_context(|| format!("write {}", out_path.display()))?;
     println!(
@@ -1627,6 +1655,38 @@ async fn run_elaborate(
         out_path.display()
     );
     Ok(())
+}
+
+/// The netlist every consuming command sees: bhdl → elaborate →
+/// re-synthesize, gated on structural identity (the default pipeline).
+/// `no_elaborate` (global flag) skips the gate — loudly: the returned
+/// netlist then carries no structural proof.
+async fn verified_netlist(
+    source_file: &SourceFile,
+    input_content: &str,
+    input_path: &Path,
+    no_elaborate: bool,
+) -> Result<Netlist> {
+    let lut = input_path.with_extension("bhdl.refdes");
+    if no_elaborate {
+        eprintln!(
+            "{}",
+            "⚠ --no-elaborate: skipping the round-trip gate — this netlist carries no structural proof"
+                .yellow()
+                .bold()
+        );
+        let analysis = analyze(source_file);
+        gate_constructor_args(&analysis)?;
+        let mut generator = NetlistGenerator::new();
+        generator.set_refdes_lut_path(lut);
+        return generator
+            .generate_from_ast_and_analysis(source_file, &analysis)
+            .await
+            .context("Failed to synthesize netlist");
+    }
+    Ok(elaborate_pipeline(source_file, input_content, input_path, input_path, Some(&lut))
+        .await?
+        .netlist)
 }
 
 async fn run_synthesis(
@@ -1653,21 +1713,7 @@ async fn run_synthesis(
     // cannot diverge from it. `--no-elaborate` is the escape hatch
     // (and says so loudly): the netlist it produces carries no
     // round-trip proof.
-    let netlist = if no_elaborate {
-        eprintln!(
-            "{}",
-            "⚠ --no-elaborate: skipping the round-trip gate — this netlist carries no structural proof"
-                .yellow()
-                .bold()
-        );
-        let mut generator = NetlistGenerator::new();
-        generator.generate_from_ast_and_analysis(source_file, &analysis).await
-            .context("Failed to synthesize netlist")?
-    } else {
-        elaborate_pipeline(source_file, input_content, input_path, input_path)
-            .await?
-            .netlist
-    };
+    let netlist = verified_netlist(source_file, input_content, input_path, no_elaborate).await?;
 
     println!("{}", "✓ Synthesis successful".green().bold());
     println!("  Instances: {}", netlist.instances.len());
@@ -1744,18 +1790,15 @@ async fn run_synthesis(
 /// Emit the frozen structural netlist — the immutable as-fabbed record.
 async fn run_freeze(
     source_file: &SourceFile,
+    input_content: &str,
     source_path: &Path,
     output: Option<PathBuf>,
     libraries: Vec<bhdl_common::library::LockedLibrary>,
+    no_elaborate: bool,
 ) -> Result<()> {
     use bhdl_synthesizer::freeze::{freeze_netlist, Provenance};
 
-    let analysis = analyze(source_file);
-    gate_constructor_args(&analysis)?;
-    let mut generator = NetlistGenerator::new();
-    generator.set_refdes_lut_path(source_path.with_extension("bhdl.refdes"));
-    let netlist = generator
-        .generate_from_ast_and_analysis(source_file, &analysis)
+    let netlist = verified_netlist(source_file, input_content, source_path, no_elaborate)
         .await
         .context("Failed to synthesize netlist for freeze")?;
 
@@ -1789,7 +1832,9 @@ async fn run_freeze(
 /// Phase-1 report (docs/spec/Functional_Safety.md §4, §5).
 async fn run_safety(
     source_file: &SourceFile,
+    input_content: &str,
     source_path: &Path,
+    no_elaborate: bool,
     baseline: Option<PathBuf>,
     update_baseline: bool,
     json_out: Option<PathBuf>,
@@ -1880,13 +1925,17 @@ async fn run_safety(
         );
     };
 
-    // Synthesize the board (same path as freeze).
+    // Synthesize the board through the default verified pipeline. The
+    // board may be a DIFFERENT file than the input (safety sidecar
+    // importing the board) — its text comes from disk in that case.
     let analysis = analyze(&board_source);
-    gate_constructor_args(&analysis)?;
-    let mut generator = NetlistGenerator::new();
-    generator.set_refdes_lut_path(board_path.with_extension("bhdl.refdes"));
-    let netlist = generator
-        .generate_from_ast_and_analysis(&board_source, &analysis)
+    let board_content = if board_path == *source_path {
+        input_content.to_string()
+    } else {
+        fs::read_to_string(&board_path)
+            .with_context(|| format!("read board file {}", board_path.display()))?
+    };
+    let netlist = verified_netlist(&board_source, &board_content, &board_path, no_elaborate)
         .await
         .context("Failed to synthesize netlist for safety analysis")?;
 
@@ -2837,14 +2886,10 @@ async fn run_safety(
     Ok(())
 }
 
-async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, json_output: bool, source_path: &Path, svg_v4: Option<&str>, binder: Option<&str>) -> Result<()> {
-    // Run full pipeline to get netlist
+async fn run_visualization(source_file: &SourceFile, input_content: &str, output: Option<PathBuf>, json_output: bool, source_path: &Path, svg_v4: Option<&str>, binder: Option<&str>, no_elaborate: bool) -> Result<()> {
+    // Verified pipeline netlist; analysis kept for intent stamping.
     let analysis = analyze(source_file);
-    gate_constructor_args(&analysis)?;
-
-    let mut generator = NetlistGenerator::new();
-    generator.set_refdes_lut_path(source_path.with_extension("bhdl.refdes"));
-    let mut netlist = generator.generate_from_ast_and_analysis(source_file, &analysis).await?;
+    let mut netlist = verified_netlist(source_file, input_content, source_path, no_elaborate).await?;
 
     // Stamp intent attributes from FlowTracker onto netlist instances
     // (bridges analyzer intents → synthesizer attributes for downstream passes)
@@ -3192,6 +3237,8 @@ async fn run_visualization(source_file: &SourceFile, output: Option<PathBuf>, js
 
 async fn run_layout(
     source_file: &SourceFile,
+    input_content: &str,
+    no_elaborate: bool,
     output: Option<PathBuf>,
     trials: usize,
     max_iterations: usize,
@@ -3211,10 +3258,8 @@ async fn run_layout(
     gate_constructor_args(&analysis)?;
     println!("  {} Analysis complete ({} diagnostics)", "✓".green(), analysis.diagnostics.len());
 
-    // 2. Synthesize
-    let mut generator = NetlistGenerator::new();
-    generator.set_refdes_lut_path(source_path.with_extension("bhdl.refdes"));
-    let mut netlist = generator.generate_from_ast_and_analysis(source_file, &analysis).await?;
+    // 2. Synthesize (verified pipeline)
+    let mut netlist = verified_netlist(source_file, input_content, source_path, no_elaborate).await?;
     println!("  {} Synthesis: {} instances", "✓".green(), netlist.instances.len());
 
     // 3. Stamp intents
@@ -3785,13 +3830,10 @@ async fn run_layout(
     Ok(())
 }
 
-async fn run_spice(source_file: &SourceFile, analysis_type: &str, _output: Option<PathBuf>, use_metadata: bool, sku: Option<&str>) -> Result<()> {
-    // Run pipeline to get netlist
+async fn run_spice(source_file: &SourceFile, input_content: &str, input_path: &Path, analysis_type: &str, _output: Option<PathBuf>, use_metadata: bool, sku: Option<&str>, no_elaborate: bool) -> Result<()> {
+    // Verified pipeline netlist; analysis kept for stamping/expansion.
     let analysis_result = analyze(source_file);
-    gate_constructor_args(&analysis_result)?;
-
-    let mut generator = NetlistGenerator::new();
-    let mut netlist = generator.generate_from_ast_and_analysis(source_file, &analysis_result).await?;
+    let mut netlist = verified_netlist(source_file, input_content, input_path, no_elaborate).await?;
 
     // Expand virtual-pin composites (e.g. SignalTubeStage, switching
     // regulators) before SPICE conversion — otherwise a design built from
@@ -3862,7 +3904,7 @@ async fn run_spice(source_file: &SourceFile, analysis_type: &str, _output: Optio
     Ok(())
 }
 
-async fn run_pipeline(source_file: &SourceFile, _input_path: &PathBuf, output_dir: PathBuf, no_viz: bool, no_spice: bool) -> Result<()> {
+async fn run_pipeline(source_file: &SourceFile, input_content: &str, _input_path: &PathBuf, output_dir: PathBuf, no_viz: bool, no_spice: bool, no_elaborate: bool) -> Result<()> {
     println!("{}", "Running complete BHDL pipeline...".bold());
     
     // Create output directory
@@ -3879,11 +3921,9 @@ async fn run_pipeline(source_file: &SourceFile, _input_path: &PathBuf, output_di
     // println!("  ✓ Analysis saved to {}", analysis_path.display());
     println!("  ✓ Analysis complete (JSON export not implemented)");
     
-    // Step 2: Synthesis
+    // Step 2: Synthesis (verified pipeline)
     println!("\n{}", "2. Synthesis".blue().bold());
-    let mut generator = NetlistGenerator::new();
-    generator.set_refdes_lut_path(_input_path.with_extension("bhdl.refdes"));
-    let netlist = generator.generate_from_ast_and_analysis(source_file, &analysis).await?;
+    let netlist = verified_netlist(source_file, input_content, _input_path, no_elaborate).await?;
     
     let netlist_path = output_dir.join("netlist.json");
     fs::write(&netlist_path, serde_json::to_string_pretty(&netlist)?)?;
@@ -3997,7 +4037,7 @@ async fn run_pipeline(source_file: &SourceFile, _input_path: &PathBuf, output_di
     Ok(())
 }
 
-async fn run_simulation(source_file: &SourceFile, testbench_path: PathBuf, output_dir: PathBuf, format: &str) -> Result<()> {
+async fn run_simulation(source_file: &SourceFile, input_content: &str, input_path: &Path, testbench_path: PathBuf, output_dir: PathBuf, format: &str, no_elaborate: bool) -> Result<()> {
     println!("{}", "Running BHDL simulation...".bold());
     
     // Create output directory
@@ -4015,10 +4055,9 @@ async fn run_simulation(source_file: &SourceFile, testbench_path: PathBuf, outpu
         }
     }
     
-    // Step 2: Synthesize netlist
+    // Step 2: Synthesize netlist (verified pipeline)
     println!("\n{}", "2. Synthesizing netlist".blue().bold());
-    let mut generator = NetlistGenerator::new();
-    let netlist = generator.generate_from_ast_and_analysis(source_file, &analysis).await?;
+    let netlist = verified_netlist(source_file, input_content, input_path, no_elaborate).await?;
     println!("  ✓ Netlist generated: {} instances, {} nets", 
         netlist.instances.len(), netlist.nets.len());
     
@@ -4572,7 +4611,9 @@ fn cmd_vendor(args: &[String]) -> Result<()> {
 /// sources power the circuit; the edges are the stimulus.
 async fn cmd_transient(
     source_file: &SourceFile,
+    input_content: &str,
     source_path: &Path,
+    no_elaborate: bool,
     output: Option<PathBuf>,
     extra_probes: Vec<String>,
     duration: Option<String>,
@@ -4587,10 +4628,7 @@ async fn cmd_transient(
         eprintln!("{}", "Warning: Analysis found issues".yellow().bold());
     }
 
-    let mut generator = NetlistGenerator::new();
-    generator.set_refdes_lut_path(source_path.with_extension("bhdl.refdes"));
-    let mut netlist = generator
-        .generate_from_ast_and_analysis(source_file, &analysis)
+    let mut netlist = verified_netlist(source_file, input_content, source_path, no_elaborate)
         .await
         .context("Failed to synthesize netlist")?;
     if let Some(ref flow_tracker) = analysis.flow_tracker {
@@ -4850,7 +4888,9 @@ async fn cmd_transient(
 
 async fn cmd_bom(
     source_file: &SourceFile,
+    input_content: &str,
     source_path: &Path,
+    no_elaborate: bool,
     output: Option<PathBuf>,
     format: &str,
     sku: Option<&str>,
@@ -4872,10 +4912,8 @@ async fn cmd_bom(
         eprintln!("{}", "Warning: Analysis found issues".yellow().bold());
     }
 
-    // 2. Build the netlist (logical instances).
-    let mut generator = NetlistGenerator::new();
-    generator.set_refdes_lut_path(source_path.with_extension("bhdl.refdes"));
-    let mut netlist = generator.generate_from_ast_and_analysis(source_file, &analysis).await
+    // 2. Build the netlist (verified pipeline).
+    let mut netlist = verified_netlist(source_file, input_content, source_path, no_elaborate).await
         .context("Failed to synthesize netlist")?;
 
     // 3. Stamp intent attributes so design recipes see them.

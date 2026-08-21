@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "mappings": {
+    "C": {
+      "c_bias": "C1",
+      "c_bulk": "C2",
+      "c_inl": "C3",
+      "c_inr": "C4",
+      "c_op": "C5",
+      "c_outl": "C6",
+      "c_outr": "C7"
+    },
+    "J": {
+      "J_IN": "J1",
+      "J_OUT": "J2",
+      "J_PWR": "J3"
+    },
+    "R": {
+      "r_b1": "R1",
+      "r_b2": "R2",
+      "r_bl": "R3",
+      "r_br": "R4",
+      "r_ol": "R5",
+      "r_or": "R6"
+    },
+    "U": {
+      "U1": "U1"
+    }
+  }
+}

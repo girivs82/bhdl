@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "mappings": {
+    "C": {
+      "mcu_C_bulk": "C1",
+      "mcu_C_nrst": "C2",
+      "mcu_C_vbat": "C3",
+      "mcu_C_vdd1": "C4",
+      "mcu_C_vdd2": "C5",
+      "mcu_C_vdd3": "C6",
+      "mcu_C_vdd4": "C7",
+      "mcu_C_vdda1": "C8",
+      "mcu_C_vdda2": "C9"
+    },
+    "D": {
+      "D_rtc": "D1"
+    },
+    "J": {
+      "J_BTN": "J1",
+      "J_I2C": "J2",
+      "J_SWD": "J3"
+    },
+    "R": {
+      "mcu_R_nrst": "R1",
+      "mcu_R_pu_scl1": "R2",
+      "mcu_R_pu_sda1": "R3",
+      "r_led": "R4",
+      "r_wkup": "R5"
+    },
+    "U": {
+      "mcu": "U1"
+    }
+  }
+}

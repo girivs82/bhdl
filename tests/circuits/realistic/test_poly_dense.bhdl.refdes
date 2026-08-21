@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "mappings": {
+    "C": {
+      "c1": "C1",
+      "c2": "C2",
+      "c3": "C3",
+      "c4": "C4",
+      "mcu_C_bulk": "C5",
+      "mcu_C_nrst": "C6",
+      "mcu_C_vbat": "C7",
+      "mcu_C_vdd1": "C8",
+      "mcu_C_vdd2": "C9",
+      "mcu_C_vdd3": "C10",
+      "mcu_C_vdda1": "C11",
+      "mcu_C_vdda2": "C12"
+    },
+    "R": {
+      "mcu_R_nrst": "R1",
+      "mcu_R_pu_scl1": "R2",
+      "mcu_R_pu_sda1": "R3",
+      "r0": "R4",
+      "r1": "R5",
+      "r2": "R6",
+      "r3": "R7",
+      "r4": "R8",
+      "r5": "R9",
+      "r6": "R10",
+      "r7": "R11"
+    },
+    "U": {
+      "mcu": "U1"
+    }
+  }
+}

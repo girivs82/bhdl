@@ -2,6 +2,8 @@
   "version": 1,
   "mappings": {
     "C": {
+      "c_scl": "C5",
+      "c_sda": "C6",
       "mcu_C_aref": "C4",
       "mcu_C_avcc": "C3",
       "mcu_C_bulk": "C2",

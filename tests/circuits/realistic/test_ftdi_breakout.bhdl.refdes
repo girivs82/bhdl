@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "mappings": {
+    "C": {
+      "C_vb": "C1",
+      "U1_C_bulk": "C2",
+      "U1_C_reset": "C3",
+      "U1_C_v3out": "C4",
+      "U1_C_vcc": "C5",
+      "U1_C_vccio": "C6"
+    },
+    "D": {
+      "LED_RX": "D1",
+      "LED_TX": "D2",
+      "U1_TVS_dn": "D3",
+      "U1_TVS_dp": "D4"
+    },
+    "J": {
+      "J_UART": "J1",
+      "J_USB": "J2"
+    },
+    "R": {
+      "R_cc1": "R1",
+      "R_cc2": "R2",
+      "R_rx": "R3",
+      "R_tx": "R4",
+      "U1_R_reset": "R5"
+    },
+    "U": {
+      "FB1": "U1",
+      "U1": "U2"
+    }
+  }
+}

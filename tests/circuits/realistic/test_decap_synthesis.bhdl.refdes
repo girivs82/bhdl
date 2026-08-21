@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "mappings": {
+    "C": {
+      "soc_VDD_dec1": "C1",
+      "soc_VDD_dec2": "C2",
+      "soc_VDD_dec3": "C3"
+    },
+    "L": {
+      "l_feed": "L1"
+    },
+    "R": {
+      "r_load": "R1",
+      "soc": "R2"
+    }
+  }
+}

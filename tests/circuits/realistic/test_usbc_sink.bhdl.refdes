@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "mappings": {
+    "C": {
+      "c_bulk": "C1",
+      "c_hf": "C2"
+    },
+    "D": {
+      "D_pwr": "D1"
+    },
+    "J": {
+      "J_DATA": "J1",
+      "J_USB": "J2",
+      "J_USB_j": "J3"
+    },
+    "R": {
+      "J_USB_r_cc1": "R1",
+      "J_USB_r_cc2": "R2",
+      "r_led": "R3"
+    }
+  }
+}

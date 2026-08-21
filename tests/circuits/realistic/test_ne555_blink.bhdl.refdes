@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "mappings": {
+    "C": {
+      "blinker_c_cont": "C1",
+      "blinker_c_t": "C2",
+      "c_555": "C3",
+      "c_bulk": "C4",
+      "c_gate": "C5"
+    },
+    "D": {
+      "led_blink": "D1"
+    },
+    "J": {
+      "J1": "J1"
+    },
+    "R": {
+      "blinker_r_a": "R1",
+      "blinker_r_b": "R2",
+      "r_en": "R3",
+      "r_led": "R4"
+    },
+    "U": {
+      "blinker": "U1",
+      "blinker_timer": "U2",
+      "gate": "U3"
+    }
+  }
+}

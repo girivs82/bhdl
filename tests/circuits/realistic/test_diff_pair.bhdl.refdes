@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "mappings": {
+    "U": {
+      "drv": "U1",
+      "snk": "U2"
+    }
+  }
+}
