@@ -103,18 +103,49 @@ later swap to real parts. The two mechanisms answer different
 questions and merely share an interface; nothing at expansion-design
 time forced the comparison.
 
-## Open ledger item: designer-owned composition
+## Settled direction: composition unifies under `entity`
 
-BHDL currently has no *designer-owned* composition mechanism. A
-designer wanting a reusable three-port block of their own — "my 60A
-phase": controller + FETs + inductor + sense network — would today
-write an entity with an expansion block. That works, but it borrows
-machinery whose discipline (datasheet-sourced values, vendor
-provenance) was designed for library parts.
+(Settled 2026-08-21, superseding an earlier `block`-keyword sketch.)
 
-If a real board demands it, the shape is a `block` (name open) that
-**reuses the expansion engine** — same flat contribution, same
-takeover and gating rules — with *designer* provenance labeling
-instead of datasheet provenance. It should not be built speculatively;
-this paragraph exists so the eventual need lands on a recorded
-decision instead of a re-derivation.
+The question above has a sharper answer than the sealed-vs-open
+dichotomy first suggested: **the dichotomy was about the wrong
+layer**. Verilog/VHDL keep hierarchy at the language surface and
+restore the enclosing scope's reach through hierarchical references
+and `generate`; synthesis flattens. BHDL's `{inst}_{child}` names
+are, seen correctly, a mangled hierarchical path — the flat netlist
+is the *implementation*, not the semantic model. Openness comes from
+accessors, not from denying hierarchy.
+
+Accordingly, designer-owned composition is NOT a new construct:
+
+1. **One construct.** Entity bodies compose by plain instantiation —
+   vendor parts, designer compositions ("my 60A phase") and
+   placeholders all use `entity`. `generate if` (already parsed in
+   entity bodies) covers conditional contents. Vendor and designer
+   write the same language.
+2. **Hierarchical accessors** are the piece to add when a real board
+   demands composition: `phase1.ctrl.FB` resolves through the
+   instance path; the mangled flat name (`phase1_ctrl`) remains the
+   netlist identity, so refdes allocation, FMEDA fault enumeration,
+   PnR, BOM and every other flat consumer are untouched.
+3. **Partness is a derived property, not a keyword.** An entity mints
+   a self-part iff it declares physical package identity (footprint /
+   `kicad_symbol` / `pkg`). A pure composition has children and no
+   package — no self-part, no BOM line. This makes the
+   `name == module && no connected pins` phantom-stub heuristic
+   (currently replicated in the elaborate emitter, the round-trip
+   comparator, the expansion interpreter and the powertree harvester
+   — and the source of one live bug) collapse into one declared bit.
+4. **The one idiomatic divergence that stays is `expansion {}`
+   itself**, inside entity — because it marks a real semantic
+   difference the reader must see. Plain body instantiation is
+   **firm**: the designer asked for exactly these children; a
+   duplicate is a collision. `expansion {}` is **yieldable**: a
+   datasheet recipe with live-children gating that the board may take
+   over (ERC029). Same engine underneath; two spellings because two
+   meanings.
+
+Divergence criterion (the rule that settled this): a second mechanism
+or keyword is justified ONLY by an idiomatic/readability advantage —
+never by implementation convenience. `block` failed that test;
+`expansion {}` passes it.
