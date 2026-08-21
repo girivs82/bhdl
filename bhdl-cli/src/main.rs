@@ -1841,6 +1841,9 @@ async fn run_powertree(
                 for u in &o.unplannable {
                     println!("    {} unplannable: {u}", "⚠".yellow());
                 }
+                for n in &o.notes {
+                    println!("    note: {n}");
+                }
             }
             if let Some(p) = json_out {
                 let dump = serde_json::json!({

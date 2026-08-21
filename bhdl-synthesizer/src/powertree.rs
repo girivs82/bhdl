@@ -290,7 +290,7 @@ fn ext_phases(i_max_a: f64) -> usize {
 /// Does this buck stage need a controller + external power stages?
 /// True when the rating exceeds integrated FETs, or the in-package
 /// share of the conversion loss exceeds the package bound.
-fn needs_external_stages(vout: f64, _i_nom: f64, i_max: f64) -> bool {
+fn needs_external_stages(vin: f64, vout: f64, i_max: f64) -> bool {
     // rating check under derating: the integrated part would have to
     // be RATED i_max/derate — beyond the integrated-FET ceiling means
     // external
@@ -300,7 +300,7 @@ fn needs_external_stages(vout: f64, _i_nom: f64, i_max: f64) -> bool {
     // thermal check at WORST-CASE current, not the operating point —
     // the reliability bound must hold when the load actually pulls
     // i_max
-    let eff = buck_eff_pct(i_max);
+    let eff = buck_eff_at(i_max, vin, vout);
     let p_diss = vout * i_max * (100.0 / eff - 1.0);
     p_diss * INTEGRATED_LOSS_IN_PKG > INTEGRATED_PKG_BOUND_W
 }
@@ -345,6 +345,37 @@ fn stage_cost_units(topology: &Topology, rating_a: f64, phases: usize) -> f64 {
 fn buck_eff_pct(i_a: f64) -> f64 {
     BUCK_EFF_BANDS.iter().find(|(cap, _)| i_a <= *cap).map(|(_, e)| *e).unwrap_or(90.0)
 }
+
+/// Conversion-ratio penalty (percentage points) — a buck running a
+/// deep step-down (narrow duty cycle) loses efficiency to switching-
+/// dominated operation. CONSERVATIVE stated bands; this is the term
+/// that makes "direct 12→0.85V" comparable against "12→5V bulk, then
+/// 5→0.85V" as a CHAIN.
+fn ratio_penalty_pct(vin: f64, vout: f64) -> f64 {
+    let ratio = vin / vout.max(1e-9);
+    match ratio {
+        r if r <= 5.0 => 0.0,
+        r if r <= 10.0 => 2.0,
+        r if r <= 15.0 => 4.0,
+        _ => 6.0,
+    }
+}
+
+/// Buck efficiency estimate: current band minus the ratio penalty
+/// (floored — a working design never estimates below 70%).
+fn buck_eff_at(i_a: f64, vin: f64, vout: f64) -> f64 {
+    (buck_eff_pct(i_a) - ratio_penalty_pct(vin, vout)).max(70.0)
+}
+
+/// External-stage efficiency with the same ratio penalty.
+fn ext_eff_at(vin: f64, vout: f64) -> f64 {
+    (EXT_BUCK_EFF_PCT - ratio_penalty_pct(vin, vout)).max(70.0)
+}
+
+/// Candidate bulk-intermediate voltages the combination search tries
+/// (standard distribution rails, stated). "None" is always a
+/// candidate; the chain arithmetic decides.
+const BULK_CANDIDATES: &[f64] = &[5.0, 3.3];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Topology {
@@ -419,6 +450,10 @@ pub struct TreeOption {
     pub cost_units: f64,
     /// Rails that cannot be planned (missing current data) — stated.
     pub unplannable: Vec<String>,
+    /// Decisions considered and their arithmetic — the combinations
+    /// that were EVALUATED, chosen or not (bulk intermediates etc.).
+    #[serde(default)]
+    pub notes: Vec<String>,
 }
 
 /// Propose tree options for the undriven rails, fed from `input`.
@@ -470,18 +505,27 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
         }
     };
     let buck_stage = |from: &str, v_from: f64, r: &RailSummary, nom: f64, max: f64| -> StagePlan {
-        let (topology, eff, basis, phases) = if needs_external_stages(r.voltage, nom, max) {
+        let (topology, eff, basis, phases) = if needs_external_stages(v_from, r.voltage, max) {
             let ph = ext_phases(max);
             (
                 Topology::BuckExternal,
-                EXT_BUCK_EFF_PCT,
+                ext_eff_at(v_from, r.voltage),
                 format!(
-                    "estimate: controller + {ph} phase(s) at {nom:.2}A, {PHASE_I_DESIGN_A:.0}A/phase design point derated from stage rating for reliability/FIT"
+                    "estimate: controller + {ph} phase(s) at {nom:.2}A, {PHASE_I_DESIGN_A:.0}A/phase design point derated from stage rating for reliability/FIT; ratio {:.1}:1 penalty {:.0}pt",
+                    v_from / r.voltage, ratio_penalty_pct(v_from, r.voltage)
                 ),
                 ph,
             )
         } else {
-            (Topology::Buck, buck_eff_pct(nom), format!("estimate: conservative buck band at {nom:.2}A"), 1)
+            (
+                Topology::Buck,
+                buck_eff_at(nom, v_from, r.voltage),
+                format!(
+                    "estimate: conservative buck band at {nom:.2}A; ratio {:.1}:1 penalty {:.0}pt",
+                    v_from / r.voltage, ratio_penalty_pct(v_from, r.voltage)
+                ),
+                1,
+            )
         };
         let p_out = r.voltage * nom;
         StagePlan {
@@ -504,7 +548,7 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
     };
     // Buck feeding a generated intermediate rail for one or more LDOs.
     let buck_intermediate = |name: &str, v_int: f64, nom: f64, max: f64, serves: Vec<String>| -> StagePlan {
-        let eff = buck_eff_pct(nom);
+        let eff = buck_eff_at(nom, vin, v_int);
         let p_out = v_int * nom;
         StagePlan {
             topology: Topology::Buck,
@@ -533,8 +577,148 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
     for strategy in ["efficiency", "cost", "area"] {
         let mut stages: Vec<StagePlan> = Vec::new();
         let mut unplannable: Vec<String> = Vec::new();
+        let mut notes: Vec<String> = Vec::new();
         // noise rails that must hang off a minimal-headroom intermediate
         let mut pending_ldo: Vec<(&RailSummary, f64, f64)> = Vec::new();
+
+        // ── bulk-intermediate combination search (efficiency
+        // strategy): the intermediate rail VOLTAGE is an efficiency
+        // axis of its own — a deep direct conversion pays the ratio
+        // penalty, a two-stage chain pays the bulk stage's loss. The
+        // arithmetic decides, and the comparison is REPORTED whether
+        // or not a bulk rail wins, so the designer sees that the
+        // combination was considered. ──
+        let mut bulk_assign: std::collections::HashMap<String, (String, f64)> =
+            std::collections::HashMap::new();
+        let mut bulk_rails: Vec<RailSummary> = Vec::new();
+        if strategy == "efficiency" {
+            let chain_eff_direct = |r: &RailSummary, nom: f64, max: f64| -> f64 {
+                if needs_external_stages(vin, r.voltage, max) {
+                    ext_eff_at(vin, r.voltage)
+                } else {
+                    buck_eff_at(nom, vin, r.voltage)
+                }
+            };
+            let buckable: Vec<(&&RailSummary, f64, f64)> = work
+                .iter()
+                .filter(|r| !needs_ldo(r))
+                .filter_map(|r| op_current(r).map(|(n, m)| (r, n, m)))
+                .collect();
+            let direct_diss: f64 = buckable
+                .iter()
+                .map(|(r, n, _)| {
+                    let e = chain_eff_direct(r, *n, r.i_max_total_a.unwrap_or(*n));
+                    r.voltage * n * (100.0 / e - 1.0)
+                })
+                .sum();
+            let mut best: Option<(f64, f64, Vec<String>, f64, f64)> = None; // (diss, vb, assigned, i_nom_b, i_max_b)
+            for &vb in BULK_CANDIDATES {
+                if vb >= vin - 1.0 {
+                    continue;
+                }
+                // two passes: bulk efficiency band depends on the bulk
+                // current, which depends on the assignment
+                let mut bulk_eff_est = 90.0 - ratio_penalty_pct(vin, vb);
+                let mut assigned: Vec<(&&RailSummary, f64, f64)> = Vec::new();
+                for _pass in 0..2 {
+                    assigned = buckable
+                        .iter()
+                        .filter(|(r, n, m)| {
+                            if r.voltage + 0.5 >= vb {
+                                return false; // no room to convert down from vb
+                            }
+                            let e_down = if needs_external_stages(vb, r.voltage, *m) {
+                                ext_eff_at(vb, r.voltage)
+                            } else {
+                                buck_eff_at(*n, vb, r.voltage)
+                            };
+                            let chain = bulk_eff_est / 100.0 * e_down / 100.0;
+                            let e_dir = chain_eff_direct(r, *n, *m) / 100.0;
+                            chain > e_dir
+                        })
+                        .cloned()
+                        .collect();
+                    if assigned.is_empty() {
+                        break;
+                    }
+                    let i_nom_b: f64 = assigned
+                        .iter()
+                        .map(|(r, n, m)| {
+                            let e_down = if needs_external_stages(vb, r.voltage, *m) {
+                                ext_eff_at(vb, r.voltage)
+                            } else {
+                                buck_eff_at(*n, vb, r.voltage)
+                            };
+                            r.voltage * n / (e_down / 100.0) / vb
+                        })
+                        .sum();
+                    bulk_eff_est = if needs_external_stages(vin, vb, i_nom_b) {
+                        ext_eff_at(vin, vb)
+                    } else {
+                        buck_eff_at(i_nom_b, vin, vb)
+                    };
+                }
+                if assigned.is_empty() {
+                    continue;
+                }
+                let (mut i_nom_b, mut i_max_b) = (0.0f64, 0.0f64);
+                let mut chain_diss = 0.0f64;
+                for (r, n, m) in &assigned {
+                    let e_down = if needs_external_stages(vb, r.voltage, *m) {
+                        ext_eff_at(vb, r.voltage)
+                    } else {
+                        buck_eff_at(*n, vb, r.voltage)
+                    };
+                    let p_in_down = r.voltage * n / (e_down / 100.0);
+                    chain_diss += p_in_down - r.voltage * n;
+                    i_nom_b += p_in_down / vb;
+                    i_max_b += r.voltage * m / (e_down / 100.0) / vb;
+                }
+                // bulk stage's own loss + the direct rails unchanged
+                chain_diss += vb * i_nom_b * (100.0 / bulk_eff_est - 1.0);
+                let unassigned_diss: f64 = buckable
+                    .iter()
+                    .filter(|(r, ..)| !assigned.iter().any(|(a, ..)| a.net == r.net))
+                    .map(|(r, n, m)| {
+                        let e = chain_eff_direct(r, *n, *m);
+                        r.voltage * n * (100.0 / e - 1.0)
+                    })
+                    .sum();
+                let total = chain_diss + unassigned_diss;
+                if best.as_ref().map(|(b, ..)| total < *b).unwrap_or(true) {
+                    best = Some((total, vb, assigned.iter().map(|(r, ..)| r.net.clone()).collect(), i_nom_b, i_max_b));
+                }
+            }
+            match best {
+                Some((diss, vb, rails, i_nom_b, i_max_b)) if diss + 1e-9 < direct_diss => {
+                    let name = format!("V_BULK_{}", format!("{vb:.1}").replace('.', "V"));
+                    notes.push(format!(
+                        "bulk intermediate EVALUATED and chosen: {vb}V feeding [{}] — chain dissipation {:.2}W vs {:.2}W all-direct (ratio penalties composed)",
+                        rails.join(", "), diss, direct_diss
+                    ));
+                    for rn in &rails {
+                        bulk_assign.insert(rn.clone(), (name.clone(), vb));
+                    }
+                    bulk_rails.push(RailSummary {
+                        net: name,
+                        voltage: vb,
+                        declared_budget_a: None,
+                        i_nom_total_a: Some(i_nom_b),
+                        i_max_total_a: Some(i_max_b),
+                        noise_uvrms: None,
+                        driven: false,
+                        loads: rails,
+                    });
+                }
+                Some((diss, vb, ..)) => notes.push(format!(
+                    "bulk intermediate EVALUATED, direct wins: best candidate {vb}V would dissipate {:.2}W vs {:.2}W all-direct (ratio penalties composed)",
+                    diss, direct_diss
+                )),
+                None => notes.push(
+                    "bulk intermediate EVALUATED: no candidate voltage improves any rail's chain efficiency — all-direct".into(),
+                ),
+            }
+        }
 
         for r in &work {
             let Some((nom, max)) = op_current(r) else {
@@ -560,8 +744,17 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
                 "cost" if direct_ldo_diss <= LDO_DISS_BOUND_W => {
                     stages.push(ldo_stage(input, vin, r, nom, max));
                 }
-                _ => stages.push(buck_stage(input, vin, r, nom, max)),
+                _ => match bulk_assign.get(&r.net) {
+                    Some((bname, bv)) => stages.push(buck_stage(bname, *bv, r, nom, max)),
+                    None => stages.push(buck_stage(input, vin, r, nom, max)),
+                },
             }
+        }
+        // the bulk stage itself (full topology/crossover/ratio
+        // treatment via the same constructor)
+        for br in &bulk_rails {
+            let (n, m) = (br.i_nom_total_a.unwrap(), br.i_max_total_a.unwrap());
+            stages.push(buck_stage(input, vin, br, n, m));
         }
 
         // Before minting an intermediate: is there a rail already in
@@ -605,16 +798,16 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
                     let d = &mut stages[di];
                     d.i_nom_a += nom;
                     d.i_max_a += max;
-                    if needs_external_stages(d.vout, d.i_nom_a, d.i_max_a) {
+                    if needs_external_stages(d.vin, d.vout, d.i_max_a) {
                         d.topology = Topology::BuckExternal;
-                        d.eff_pct = EXT_BUCK_EFF_PCT;
+                        d.eff_pct = ext_eff_at(d.vin, d.vout);
                         d.phases = ext_phases(d.i_max_a);
                         d.eff_basis = format!(
                             "estimate: controller + {} phase(s) at {:.2}A, {PHASE_I_DESIGN_A:.0}A/phase design point derated from stage rating for reliability/FIT",
                             d.phases, d.i_nom_a
                         );
                     } else {
-                        d.eff_pct = buck_eff_pct(d.i_nom_a);
+                        d.eff_pct = buck_eff_at(d.i_nom_a, d.vin, d.vout);
                         d.eff_basis = format!("estimate: conservative buck band at {:.2}A", d.i_nom_a);
                     }
                     d.p_diss_w = d.vout * d.i_nom_a * (100.0 / d.eff_pct - 1.0);
@@ -693,6 +886,7 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
             p_diss_w: stages.iter().map(|s| s.p_diss_w).sum(),
             stages,
             unplannable,
+            notes,
         });
     }
     // Every option already MEETS requirements (noise floors, thermal

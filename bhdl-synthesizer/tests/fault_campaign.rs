@@ -1010,8 +1010,18 @@ board Monster {
         assert_eq!(core.phases, 9, "{core:#?}");
         // ctrl 4 + 9·1 + 9·5 = 58
         assert!((core.cost_units - 58.0).abs() < 1e-9, "{core:#?}");
-        // per-phase dissipation stays civil: 0.85V·150A, eff 90% →
-        // ~14.2W over 9 phases ≈ 1.6W/phase
-        assert!(core.p_diss_w / core.phases as f64 <= 2.0, "{core:#?}");
+        // per-phase dissipation stays civil: 0.85V·150A, eff 86%
+        // (90 band − 4pt ratio penalty at 14:1) → ~20.8W over 9
+        // phases ≈ 2.3W/phase
+        assert!((core.eff_pct - 86.0).abs() < 1e-9, "{core:#?}");
+        assert!(core.p_diss_w / core.phases as f64 <= 2.5, "{core:#?}");
+        // the intermediate-rail COMBINATION was evaluated, chosen or
+        // not — the note proves the chain arithmetic ran
+        if o.label == "max-efficiency" {
+            assert!(
+                o.notes.iter().any(|n| n.contains("bulk intermediate EVALUATED")),
+                "{:#?}", o.notes
+            );
+        }
     }
 }
