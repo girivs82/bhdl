@@ -803,12 +803,14 @@ async fn powertree_harvests_loads_from_partial_board() {
     let netlist = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
     let h = bhdl_synthesizer::powertree::harvest_loads(&netlist, &sf);
 
-    // two real loads — the definition stubs must NOT harvest
-    assert_eq!(h.loads.len(), 2, "{:#?}", h.loads);
+    // three real loads — the definition stubs must NOT harvest
+    assert_eq!(h.loads.len(), 3, "{:#?}", h.loads);
     assert!(h.unwired.is_empty(), "{:#?}", h.unwired);
 
     let rail = |n: &str| h.rails.iter().find(|r| r.net == n).unwrap();
-    assert_eq!(h.rails.len(), 3);
+    assert_eq!(h.rails.len(), 4);
+    let v33 = rail("V3V3");
+    assert!((v33.i_nom_total_a.unwrap() - 0.4).abs() < 1e-9);
     let v1 = rail("V1V0");
     assert!((v1.i_nom_total_a.unwrap() - 2.0).abs() < 1e-9);
     assert!((v1.i_max_total_a.unwrap() - 4.0).abs() < 1e-9);
@@ -823,4 +825,74 @@ async fn powertree_harvests_loads_from_partial_board() {
     assert!(vin.loads.is_empty());
     // every rail undriven — the whole tree is the worklist
     assert!(h.rails.iter().all(|r| !r.driven));
+}
+
+/// Option calculator: donor-rail selection (feed the noise LDO from a
+/// nearby existing rail — the decision variable is DISSIPATION, not
+/// headroom volts) and intermediate minting only when no donor is
+/// feasible.
+#[tokio::test]
+async fn powertree_options_donor_and_intermediate() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    use bhdl_synthesizer::powertree::{harvest_loads, propose_trees, Topology};
+
+    // fixture: V3V3 exists → the V1V8 LDO must feed from it, resized
+    let src = std::fs::read_to_string(ws.join("tests/circuits/realistic/test_powertree_loads.bhdl")).unwrap();
+    let pr = parse(&src);
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let netlist = gen.generate_from_ast_and_analysis(&sf, &analysis).await.unwrap();
+    let h = harvest_loads(&netlist, &sf);
+    let opts = propose_trees(&h, "VIN").expect("options");
+    assert!(!opts.is_empty());
+    for o in &opts {
+        let ldo = o.stages.iter().find(|s| s.topology == Topology::Ldo).expect("noise rail gets an LDO");
+        assert_eq!(ldo.from, "V3V3", "donor rail, not a minted intermediate: {o:#?}");
+        assert!(!o.stages.iter().any(|s| s.to.starts_with("V_INT")), "{o:#?}");
+        // donor resized: V3V3 buck carries IO + LDO draw
+        let donor = o.stages.iter().find(|s| s.to == "V3V3").unwrap();
+        assert!((donor.i_nom_a - 0.45).abs() < 1e-9, "{donor:#?}");
+        assert!(donor.serves.iter().any(|x| x == "V1V8"));
+        // energy books balance: p_in = p_load + dissipation
+        assert!((o.p_in_w - o.p_load_w - o.p_diss_w).abs() < 1e-6, "{o:#?}");
+        // LDO efficiency is physics, stated as such
+        assert!(ldo.eff_basis.contains("physics"));
+        assert!((ldo.eff_pct - 1.8 / 3.3 * 100.0).abs() < 1e-6);
+    }
+
+    // no donor in reach → a minimal-headroom intermediate is minted
+    let src2 = r#"
+entity Pll2() {
+    pin 1: power in;
+    pin 2: ground;
+    attribute component_class = "ic";
+    domain VDDA pins="1" v=1.8V i_nom=50mA i_max=80mA noise=100uV source="FIXTURE";
+}
+board OnlyNoise {
+    power VIN = 12V @ 1A;
+    power V1V8 = 1.8V;
+    ground GND;
+    @V1V8 -> pll: Pll2().1;
+    pll.2 -> @GND;
+}
+"#;
+    let pr2 = parse(src2);
+    assert!(pr2.errors().is_empty(), "{:?}", pr2.errors());
+    let sf2 = SourceFile::cast(pr2.syntax()).unwrap();
+    let analysis2 = analyze(&sf2);
+    let mut gen2 = NetlistGenerator::new();
+    let n2 = gen2.generate_from_ast_and_analysis(&sf2, &analysis2).await.unwrap();
+    let h2 = harvest_loads(&n2, &sf2);
+    let opts2 = propose_trees(&h2, "VIN").expect("options");
+    for o in &opts2 {
+        // direct LDO from 12V would dissipate (12-1.8)*0.05 = 0.51W —
+        // over the package bound — so the intermediate MUST appear at
+        // minimal headroom 1.8+0.5 = 2.3V
+        let int_buck = o.stages.iter().find(|s| s.to.starts_with("V_INT")).expect("intermediate minted: {o:#?}");
+        assert!((int_buck.vout - 2.3).abs() < 1e-9, "{int_buck:#?}");
+        let ldo = o.stages.iter().find(|s| s.topology == Topology::Ldo).unwrap();
+        assert!((ldo.p_diss_w - 0.5 * 0.05).abs() < 1e-9, "minimal headroom heat: {ldo:#?}");
+    }
 }

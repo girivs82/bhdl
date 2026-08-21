@@ -11,9 +11,12 @@ entity SocCore() {
     pin 1: power in;
     pin 2: signal inout;
     pin 3: ground;
+    pin 4: power in;
     attribute component_class = "ic";
     attribute kicad_symbol = "Device:U";
     domain VDD_CORE pins="1" v=1.0V tol=3% i_nom=2A i_max=4A
+        source="FIXTURE — stands in for NDA vendor data";
+    domain VDD_IO pins="4" v=3.3V tol=5% i_nom=0.4A i_max=0.6A
         source="FIXTURE — stands in for NDA vendor data";
 }
 
@@ -32,9 +35,11 @@ board PowertreeDemo {
     power VIN = 12V @ 3A;
     power V1V0 = 1.0V;
     power V1V8 = 1.8V;
+    power V3V3 = 3.3V;
     ground GND;
 
     @V1V0 -> soc: SocCore().1;
+    @V3V3 -> soc.4;
     soc.3 -> @GND;
     @V1V8 -> pll: PllBlock().1;
     pll.2 -> @GND;

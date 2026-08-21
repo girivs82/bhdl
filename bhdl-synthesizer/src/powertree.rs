@@ -197,3 +197,340 @@ pub fn harvest_loads(netlist: &Netlist, sf: &SourceFile) -> PowerTreeLoads {
     out.loads.sort_by(|a, b| (a.instance.clone(), a.domain.clone()).cmp(&(b.instance.clone(), b.domain.clone())));
     out
 }
+
+// ─── Option calculator ──────────────────────────────────────────────
+//
+// Three things fight: EFFICIENCY, COST, AREA. Exact parts (and hence
+// real cost/area) are not choosable here — BOM and availability live
+// outside the repo — so the calculator presents named strategies with
+// HONEST PROXIES (inductor count for cost/area, stage count for
+// area/complexity) and stated-estimate efficiency bands. The designer
+// decides; bhdl generation follows.
+//
+// LDO headroom doctrine: an LDO's dissipation is (Vin − Vout)·I —
+// physics, not estimate. Excessive headroom is excessive heat, so the
+// calculator NEVER feeds an LDO from a source that pushes its
+// dissipation over LDO_DISS_BOUND_W when it can insert an
+// intermediate rail at Vout + LDO_HEADROOM_V (minimal headroom =
+// minimal heat). LDO efficiency Vout/Vin is likewise physics.
+
+/// Assumed buck efficiency by output-current band — CONSERVATIVE
+/// ESTIMATES, stated in every report line that uses them. The real
+/// part chosen later must meet or beat these (acceptance test).
+const BUCK_EFF_BANDS: &[(f64, f64)] = &[(0.1, 80.0), (1.0, 85.0), (5.0, 88.0), (f64::MAX, 90.0)];
+/// Assumed buck output noise floor (µVrms), conservative — a rail
+/// with a tighter target cannot be served by a buck alone.
+const BUCK_NOISE_FLOOR_UVRMS: f64 = 500.0;
+/// Assumed low-noise-LDO class output noise (µVrms), conservative.
+const LDO_NOISE_UVRMS: f64 = 30.0;
+/// LDO headroom for intermediate-rail sizing: assumed worst-case
+/// dropout 0.3V + 0.2V regulation margin.
+const LDO_HEADROOM_V: f64 = 0.5;
+/// Per-LDO dissipation bound (W) before the calculator inserts an
+/// intermediate rail — small-package (SOT-23/DFN class) thermal
+/// comfort, conservative.
+const LDO_DISS_BOUND_W: f64 = 0.5;
+
+fn buck_eff_pct(i_a: f64) -> f64 {
+    BUCK_EFF_BANDS.iter().find(|(cap, _)| i_a <= *cap).map(|(_, e)| *e).unwrap_or(90.0)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum Topology {
+    Buck,
+    Ldo,
+}
+
+/// One proposed regulator stage.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StagePlan {
+    pub topology: Topology,
+    /// Source rail (net name) this stage draws from.
+    pub from: String,
+    /// Output rail (net name; intermediate rails get generated names).
+    pub to: String,
+    pub vin: f64,
+    pub vout: f64,
+    /// Operating-point current (sum of served loads' i_nom).
+    pub i_nom_a: f64,
+    /// Rating current (sum of i_max) the eventual part must supply.
+    pub i_max_a: f64,
+    /// Stage efficiency %, with its basis.
+    pub eff_pct: f64,
+    /// "physics" (LDO Vout/Vin) or "estimate: buck band" — stated.
+    pub eff_basis: String,
+    /// Dissipation at the operating point (W).
+    pub p_diss_w: f64,
+    /// Assumed output noise (µVrms), conservative, stated.
+    pub noise_assumed_uvrms: f64,
+    /// Loads served (instance.domain or rail names).
+    pub serves: Vec<String>,
+}
+
+/// One complete tree option.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TreeOption {
+    pub label: String,
+    pub strategy: String,
+    pub stages: Vec<StagePlan>,
+    /// Σ load power (W) at the rails.
+    pub p_load_w: f64,
+    /// Power drawn from the input (W), chains composed.
+    pub p_in_w: f64,
+    pub eff_pct: f64,
+    pub p_diss_w: f64,
+    /// Cost/area proxies — counts, never invented prices.
+    pub buck_count: usize,
+    pub ldo_count: usize,
+    /// Rails that cannot be planned (missing current data) — stated.
+    pub unplannable: Vec<String>,
+}
+
+/// Propose tree options for the undriven rails, fed from `input`.
+pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>, String> {
+    let vin_rail = h
+        .rails
+        .iter()
+        .find(|r| r.net == input)
+        .ok_or_else(|| format!("powertree: input rail '{input}' not found"))?;
+    let vin = vin_rail.voltage;
+
+    // The worklist: undriven rails with loads (the input itself and
+    // already-driven rails are not ours to plan).
+    let mut work: Vec<&RailSummary> = h
+        .rails
+        .iter()
+        .filter(|r| !r.driven && r.net != input && !r.loads.is_empty())
+        .collect();
+    work.sort_by(|a, b| a.net.cmp(&b.net));
+    if work.is_empty() {
+        return Err("powertree: no undriven rails with attached loads — nothing to plan".into());
+    }
+
+    // A rail is plannable when it has an operating-point current.
+    // i_nom preferred; i_max accepted with a note; neither = stated gap.
+    let op_current = |r: &RailSummary| -> Option<(f64, f64)> {
+        let nom = r.i_nom_total_a.or(r.i_max_total_a)?;
+        let max = r.i_max_total_a.or(r.i_nom_total_a)?;
+        Some((nom, max))
+    };
+
+    let ldo_stage = |from: &str, v_from: f64, r: &RailSummary, nom: f64, max: f64| -> StagePlan {
+        StagePlan {
+            topology: Topology::Ldo,
+            from: from.to_string(),
+            to: r.net.clone(),
+            vin: v_from,
+            vout: r.voltage,
+            i_nom_a: nom,
+            i_max_a: max,
+            eff_pct: r.voltage / v_from * 100.0,
+            eff_basis: "physics: Vout/Vin".into(),
+            p_diss_w: (v_from - r.voltage) * nom,
+            noise_assumed_uvrms: LDO_NOISE_UVRMS,
+            serves: r.loads.clone(),
+        }
+    };
+    let buck_stage = |from: &str, v_from: f64, r: &RailSummary, nom: f64, max: f64| -> StagePlan {
+        let eff = buck_eff_pct(nom);
+        let p_out = r.voltage * nom;
+        StagePlan {
+            topology: Topology::Buck,
+            from: from.to_string(),
+            to: r.net.clone(),
+            vin: v_from,
+            vout: r.voltage,
+            i_nom_a: nom,
+            i_max_a: max,
+            eff_pct: eff,
+            eff_basis: format!("estimate: conservative buck band at {nom:.2}A"),
+            p_diss_w: p_out * (100.0 / eff - 1.0),
+            noise_assumed_uvrms: BUCK_NOISE_FLOOR_UVRMS,
+            serves: r.loads.clone(),
+        }
+    };
+    // Buck feeding a generated intermediate rail for one or more LDOs.
+    let buck_intermediate = |name: &str, v_int: f64, nom: f64, max: f64, serves: Vec<String>| -> StagePlan {
+        let eff = buck_eff_pct(nom);
+        let p_out = v_int * nom;
+        StagePlan {
+            topology: Topology::Buck,
+            from: input.to_string(),
+            to: name.to_string(),
+            vin,
+            vout: v_int,
+            i_nom_a: nom,
+            i_max_a: max,
+            eff_pct: eff,
+            eff_basis: format!("estimate: conservative buck band at {nom:.2}A"),
+            p_diss_w: p_out * (100.0 / eff - 1.0),
+            noise_assumed_uvrms: BUCK_NOISE_FLOOR_UVRMS,
+            serves,
+        }
+    };
+
+    let needs_ldo = |r: &RailSummary| -> bool {
+        r.noise_uvrms.map(|n| n < BUCK_NOISE_FLOOR_UVRMS).unwrap_or(false)
+    };
+
+    let mut options: Vec<TreeOption> = Vec::new();
+    for strategy in ["efficiency", "cost", "area"] {
+        let mut stages: Vec<StagePlan> = Vec::new();
+        let mut unplannable: Vec<String> = Vec::new();
+        // noise rails that must hang off a minimal-headroom intermediate
+        let mut pending_ldo: Vec<(&RailSummary, f64, f64)> = Vec::new();
+
+        for r in &work {
+            let Some((nom, max)) = op_current(r) else {
+                unplannable.push(format!("{}: no i_nom/i_max on any attached load", r.net));
+                continue;
+            };
+            let direct_ldo_diss = (vin - r.voltage) * nom;
+            if needs_ldo(r) {
+                if direct_ldo_diss <= LDO_DISS_BOUND_W && strategy != "efficiency" {
+                    // small enough to eat the headroom — one stage, no inductor
+                    stages.push(ldo_stage(input, vin, r, nom, max));
+                } else {
+                    // excessive headroom = excessive heat: intermediate rail
+                    pending_ldo.push((r, nom, max));
+                }
+                continue;
+            }
+            match strategy {
+                // cost: avoid the inductor when the LDO can thermally
+                // afford the headroom
+                "cost" if direct_ldo_diss <= LDO_DISS_BOUND_W => {
+                    stages.push(ldo_stage(input, vin, r, nom, max));
+                }
+                _ => stages.push(buck_stage(input, vin, r, nom, max)),
+            }
+        }
+
+        // Before minting an intermediate: is there a rail already in
+        // this tree that can feed the LDO? The decision variable is
+        // DISSIPATION, not headroom voltage — 5V of headroom at 5mA is
+        // 25mW and does not matter; 0.7V at 3A is 2.1W and does. The
+        // constraints are the real ones:
+        //   physics:  V_donor ≥ Vout + LDO_HEADROOM_V (dropout+margin);
+        //   thermals: (V_donor − Vout)·I ≤ LDO_DISS_BOUND_W (package
+        //             class bound — a small LDO cannot dump watts);
+        //   choice:   among feasible donors the LOWEST voltage wins
+        //             (minimal heat).
+        // A feasible donor is used in EVERY strategy: a dedicated
+        // pre-regulator stage carries fixed overheads (quiescent draw,
+        // inductor, area, failure surface) that are not recoverable
+        // for sub-bound savings — adding a stage to save tens of mW is
+        // not an engineering win. The dedicated intermediate exists
+        // only for LDOs NO existing rail can feed within the bound.
+        // The donor's own stage is RESIZED (current added, efficiency
+        // band + dissipation recomputed), and the LDO's dissipation is
+        // in the report for the designer to overrule.
+        // Donors are buck outputs only — LDO-from-LDO chains just
+        // stack headroom heat.
+        let mut still_pending: Vec<(&RailSummary, f64, f64)> = Vec::new();
+        for (r, nom, max) in pending_ldo {
+            let donor = stages
+                .iter()
+                .enumerate()
+                .filter(|(_, st)| st.topology == Topology::Buck)
+                .filter(|(_, st)| st.vout >= r.voltage + LDO_HEADROOM_V)
+                .filter(|(_, st)| (st.vout - r.voltage) * nom <= LDO_DISS_BOUND_W)
+                .min_by(|(_, a), (_, b)| a.vout.partial_cmp(&b.vout).unwrap())
+                .map(|(i, _)| i);
+            match donor {
+                Some(di) => {
+                    let (dfrom, dv) = (stages[di].to.clone(), stages[di].vout);
+                    stages.push(ldo_stage(&dfrom, dv, r, nom, max));
+                    // resize the donor for the added draw
+                    let d = &mut stages[di];
+                    d.i_nom_a += nom;
+                    d.i_max_a += max;
+                    d.eff_pct = buck_eff_pct(d.i_nom_a);
+                    d.eff_basis = format!("estimate: conservative buck band at {:.2}A", d.i_nom_a);
+                    d.p_diss_w = d.vout * d.i_nom_a * (100.0 / d.eff_pct - 1.0);
+                    d.serves.push(r.net.clone());
+                }
+                None => still_pending.push((r, nom, max)),
+            }
+        }
+        let pending_ldo = still_pending;
+
+        // Intermediate-rail insertion for the pending LDOs.
+        // efficiency/area: one intermediate PER DISTINCT Vout at
+        // Vout + headroom (minimal headroom = minimal heat).
+        // cost: ONE shared intermediate at max(Vout)+headroom — fewer
+        // inductors, the extra headroom dissipation is the stated price.
+        if !pending_ldo.is_empty() {
+            let groups: Vec<Vec<&(&RailSummary, f64, f64)>> = if strategy == "cost" {
+                vec![pending_ldo.iter().collect()]
+            } else {
+                let mut vs: Vec<f64> = pending_ldo.iter().map(|(r, _, _)| r.voltage).collect();
+                vs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                vs.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+                vs.iter()
+                    .map(|v| pending_ldo.iter().filter(|(r, _, _)| (r.voltage - v).abs() < 1e-9).collect())
+                    .collect()
+            };
+            for g in groups {
+                let v_int = g.iter().map(|(r, _, _)| r.voltage).fold(0.0, f64::max) + LDO_HEADROOM_V;
+                let nom: f64 = g.iter().map(|(_, n, _)| n).sum();
+                let max: f64 = g.iter().map(|(_, _, m)| m).sum();
+                let int_name = format!("V_INT_{}", format!("{v_int:.1}").replace('.', "V"));
+                for (r, n, m) in &g {
+                    stages.push(ldo_stage(&int_name, v_int, r, *n, *m));
+                }
+                stages.push(buck_intermediate(
+                    &int_name, v_int, nom, max,
+                    g.iter().map(|(r, _, _)| r.net.clone()).collect(),
+                ));
+            }
+        }
+
+        // Totals: chains compose — an LDO fed by an intermediate buck
+        // draws through that buck's efficiency.
+        let p_load: f64 = work
+            .iter()
+            .filter_map(|r| op_current(r).map(|(nom, _)| r.voltage * nom))
+            .sum();
+        let mut p_in = 0.0;
+        for st in stages.iter().filter(|s| s.from == input) {
+            let p_out_stage = st.vout * st.i_nom_a;
+            p_in += p_out_stage / (st.eff_pct / 100.0);
+        }
+        // p_out/eff is uniform for both topologies: for an LDO the
+        // physics efficiency Vout/Vin makes it exactly Vin·I; for the
+        // intermediate buck its output power already includes the
+        // downstream LDO draw (the LDO's input current IS its output
+        // current), so chains compose.
+        let eff = if p_in > 0.0 { p_load / p_in * 100.0 } else { 0.0 };
+        let (label, note) = match strategy {
+            "efficiency" => ("max-efficiency", "bucks everywhere; noise rails get minimal-headroom intermediates + post-LDOs"),
+            "cost" => ("min-inductors (cost)", "LDO wherever the dissipation bound allows (no inductor); ONE shared intermediate for the rest"),
+            _ => ("min-stages (area)", "fewest stages: direct conversion per rail; intermediates only where noise + thermals force them"),
+        };
+        options.push(TreeOption {
+            label: label.into(),
+            strategy: note.into(),
+            buck_count: stages.iter().filter(|s| s.topology == Topology::Buck).count(),
+            ldo_count: stages.iter().filter(|s| s.topology == Topology::Ldo).count(),
+            p_load_w: p_load,
+            p_in_w: p_in,
+            eff_pct: eff,
+            p_diss_w: stages.iter().map(|s| s.p_diss_w).sum(),
+            stages,
+            unplannable,
+        });
+    }
+    // Drop strategy duplicates (same stage shape) — a small tree often
+    // collapses two strategies into the same answer; showing it twice
+    // is noise.
+    options.dedup_by(|a, b| {
+        let key = |o: &TreeOption| {
+            let mut v: Vec<String> = o.stages.iter().map(|s| format!("{:?}{}→{}", s.topology, s.from, s.to)).collect();
+            v.sort();
+            v
+        };
+        key(a) == key(b)
+    });
+    Ok(options)
+}

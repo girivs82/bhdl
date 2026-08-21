@@ -158,9 +158,13 @@ enum Commands {
     /// thermal planning, never a gate. The option calculator consumes
     /// this harvest (next increment).
     Powertree {
-        /// Also dump the harvest as JSON to this path.
+        /// Also dump the harvest + options as JSON to this path.
         #[arg(long)]
         json: Option<PathBuf>,
+        /// Input rail to plan from. Default: the single undriven rail
+        /// with a declared budget and no attached loads.
+        #[arg(long)]
+        input: Option<String>,
     },
 
     /// Emit a frozen structural netlist — the immutable "as-fabbed"
@@ -604,8 +608,8 @@ async fn main() -> Result<()> {
             run_elaborate(&source_file, &input_content, &cli.input, output).await?;
         }
 
-        Some(Commands::Powertree { json }) => {
-            run_powertree(&source_file, &input_content, &cli.input, cli.no_elaborate, json).await?;
+        Some(Commands::Powertree { json, input }) => {
+            run_powertree(&source_file, &input_content, &cli.input, cli.no_elaborate, json, input).await?;
         }
 
         Some(Commands::Freeze { output }) => {
@@ -1715,6 +1719,7 @@ async fn run_powertree(
     input_path: &Path,
     no_elaborate: bool,
     json_out: Option<PathBuf>,
+    input_rail: Option<String>,
 ) -> Result<()> {
     let netlist = verified_netlist(source_file, input_content, input_path, no_elaborate).await?;
     let harvest = bhdl_synthesizer::powertree::harvest_loads(&netlist, source_file);
@@ -1763,16 +1768,88 @@ async fn run_powertree(
         );
     }
     let undriven = harvest.rails.iter().filter(|r| !r.driven).count();
-    println!(
-        "
-  {} rail(s), {} undriven — the tree calculator (next increment) proposes stages for these",
-        harvest.rails.len(),
-        undriven
-    );
-    if let Some(p) = json_out {
-        fs::write(&p, serde_json::to_string_pretty(&harvest)?)
-            .with_context(|| format!("write {}", p.display()))?;
-        println!("  harvest JSON → {}", p.display());
+    println!("\n  {} rail(s), {} undriven", harvest.rails.len(), undriven);
+
+    // ── input rail: explicit, or the single undriven budgeted rail
+    // with no attached loads ──
+    let input = match input_rail {
+        Some(r) => r,
+        None => {
+            let cands: Vec<&str> = harvest
+                .rails
+                .iter()
+                .filter(|r| !r.driven && r.declared_budget_a.is_some() && r.loads.is_empty())
+                .map(|r| r.net.as_str())
+                .collect();
+            match cands.as_slice() {
+                [one] => one.to_string(),
+                [] => {
+                    println!("\n  no input rail identified (undriven + budgeted + loadless) — pass --input <RAIL> to plan a tree");
+                    if let Some(p) = json_out {
+                        fs::write(&p, serde_json::to_string_pretty(&harvest)?)?;
+                        println!("  harvest JSON → {}", p.display());
+                    }
+                    return Ok(());
+                }
+                many => {
+                    println!("\n  multiple input candidates ({}) — pass --input <RAIL>", many.join(", "));
+                    return Ok(());
+                }
+            }
+        }
+    };
+
+    // ── options ──
+    let vin_v = harvest.rails.iter().find(|r| r.net == input).map(|r| r.voltage).unwrap_or(1.0);
+    match bhdl_synthesizer::powertree::propose_trees(&harvest, &input) {
+        Err(e) => println!("\n  {e}"),
+        Ok(options) => {
+            println!(
+                "\n  {} (input: {}) — pick one; bhdl generation follows in the next increment",
+                "Tree options".bold(), input.bold()
+            );
+            println!("  assumptions are CONSERVATIVE ESTIMATES unless marked physics; the real part chosen later must meet or beat them");
+            for (oi, o) in options.iter().enumerate() {
+                println!("\n  [{}] {} — {}", oi + 1, o.label.bold(), o.strategy);
+                for st in &o.stages {
+                    let topo = match st.topology {
+                        bhdl_synthesizer::powertree::Topology::Buck => "buck".cyan().to_string(),
+                        bhdl_synthesizer::powertree::Topology::Ldo => "LDO ".magenta().to_string(),
+                    };
+                    println!(
+                        "    {} {:>10} → {:<10} {:>5.2}V→{:<4.2}V  {:.3}A nom (rate ≥ {:.2}A)  eff {:>5.1}% ({})  diss {:>5.0}mW  noise ≤ {:.0}µVrms  [{}]",
+                        topo, st.from, st.to, st.vin, st.vout, st.i_nom_a, st.i_max_a,
+                        st.eff_pct, st.eff_basis, st.p_diss_w * 1e3, st.noise_assumed_uvrms,
+                        st.serves.join(", ")
+                    );
+                }
+                let draw = o.p_in_w / vin_v;
+                println!(
+                    "    totals: load {:.2}W, input {:.2}W ({:.2}A @ {}), system eff {:.1}%, dissipation {:.2}W — {} buck(s), {} LDO(s)",
+                    o.p_load_w, o.p_in_w, draw, input, o.eff_pct, o.p_diss_w, o.buck_count, o.ldo_count
+                );
+                if let Some(budget) = harvest.rails.iter().find(|r| r.net == input).and_then(|r| r.declared_budget_a) {
+                    if draw > budget {
+                        println!(
+                            "    {} input draw {:.2}A exceeds {}'s declared budget {}A",
+                            "⚠".yellow().bold(), draw, input, budget
+                        );
+                    }
+                }
+                for u in &o.unplannable {
+                    println!("    {} unplannable: {u}", "⚠".yellow());
+                }
+            }
+            if let Some(p) = json_out {
+                let dump = serde_json::json!({
+                    "harvest": &harvest,
+                    "input": &input,
+                    "options": &options,
+                });
+                fs::write(&p, serde_json::to_string_pretty(&dump)?)?;
+                println!("\n  harvest + options JSON → {}", p.display());
+            }
+        }
     }
     Ok(())
 }
