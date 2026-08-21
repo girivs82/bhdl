@@ -1809,6 +1809,7 @@ async fn run_powertree(
                 "Tree options".bold(), input.bold()
             );
             println!("  assumptions are CONSERVATIVE ESTIMATES unless marked physics; the real part chosen later must meet or beat them");
+            println!("  options sorted by RELATIVE cost (class-based ordering, not prices), dissipation breaking ties — all options meet the requirements");
             for (oi, o) in options.iter().enumerate() {
                 println!("\n  [{}] {} — {}", oi + 1, o.label.bold(), o.strategy);
                 for st in &o.stages {
@@ -1825,8 +1826,8 @@ async fn run_powertree(
                 }
                 let draw = o.p_in_w / vin_v;
                 println!(
-                    "    totals: load {:.2}W, input {:.2}W ({:.2}A @ {}), system eff {:.1}%, dissipation {:.2}W — {} buck(s), {} LDO(s)",
-                    o.p_load_w, o.p_in_w, draw, input, o.eff_pct, o.p_diss_w, o.buck_count, o.ldo_count
+                    "    totals: load {:.2}W, input {:.2}W ({:.2}A @ {}), system eff {:.1}%, dissipation {:.2}W — {} buck(s), {} LDO(s), relative cost {:.1} units",
+                    o.p_load_w, o.p_in_w, draw, input, o.eff_pct, o.p_diss_w, o.buck_count, o.ldo_count, o.cost_units
                 );
                 if let Some(budget) = harvest.rails.iter().find(|r| r.net == input).and_then(|r| r.declared_budget_a) {
                     if draw > budget {

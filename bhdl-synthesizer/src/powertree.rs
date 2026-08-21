@@ -231,6 +231,30 @@ const LDO_HEADROOM_V: f64 = 0.5;
 /// comfort, conservative.
 const LDO_DISS_BOUND_W: f64 = 0.5;
 
+/// RELATIVE cost model — an ORDERING between regulator classes, never
+/// prices (exact cost/availability live outside the repo). Basis,
+/// stated: an LDO is a small IC + two caps; a buck adds a controller,
+/// an inductor and more passives, and grows with current (bigger
+/// inductor, FETs, thermal copper). Units are dimensionless; sorting
+/// configurations by their total picks the cheapest tree that meets
+/// requirements — and prices stage-count decisions automatically (a
+/// minted intermediate buck costs 4–9 units, feeding from an existing
+/// rail costs 0).
+fn stage_cost_units(topology: &Topology, i_max_a: f64) -> f64 {
+    match topology {
+        Topology::Ldo => match i_max_a {
+            x if x <= 0.3 => 1.0,
+            x if x <= 1.0 => 1.5,
+            _ => 2.5,
+        },
+        Topology::Buck => match i_max_a {
+            x if x <= 1.0 => 4.0,
+            x if x <= 5.0 => 6.0,
+            _ => 9.0,
+        },
+    }
+}
+
 fn buck_eff_pct(i_a: f64) -> f64 {
     BUCK_EFF_BANDS.iter().find(|(cap, _)| i_a <= *cap).map(|(_, e)| *e).unwrap_or(90.0)
 }
@@ -265,6 +289,8 @@ pub struct StagePlan {
     pub noise_assumed_uvrms: f64,
     /// Loads served (instance.domain or rail names).
     pub serves: Vec<String>,
+    /// Relative cost units (class-based ordering, not a price).
+    pub cost_units: f64,
 }
 
 /// One complete tree option.
@@ -282,6 +308,9 @@ pub struct TreeOption {
     /// Cost/area proxies — counts, never invented prices.
     pub buck_count: usize,
     pub ldo_count: usize,
+    /// Σ relative cost units — the sort key. An ordering between
+    /// configurations, never a price.
+    pub cost_units: f64,
     /// Rails that cannot be planned (missing current data) — stated.
     pub unplannable: Vec<String>,
 }
@@ -329,6 +358,7 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
             p_diss_w: (v_from - r.voltage) * nom,
             noise_assumed_uvrms: LDO_NOISE_UVRMS,
             serves: r.loads.clone(),
+            cost_units: stage_cost_units(&Topology::Ldo, max),
         }
     };
     let buck_stage = |from: &str, v_from: f64, r: &RailSummary, nom: f64, max: f64| -> StagePlan {
@@ -347,6 +377,7 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
             p_diss_w: p_out * (100.0 / eff - 1.0),
             noise_assumed_uvrms: BUCK_NOISE_FLOOR_UVRMS,
             serves: r.loads.clone(),
+            cost_units: stage_cost_units(&Topology::Buck, max),
         }
     };
     // Buck feeding a generated intermediate rail for one or more LDOs.
@@ -366,6 +397,7 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
             p_diss_w: p_out * (100.0 / eff - 1.0),
             noise_assumed_uvrms: BUCK_NOISE_FLOOR_UVRMS,
             serves,
+            cost_units: stage_cost_units(&Topology::Buck, max),
         }
     };
 
@@ -448,6 +480,7 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
                     d.eff_pct = buck_eff_pct(d.i_nom_a);
                     d.eff_basis = format!("estimate: conservative buck band at {:.2}A", d.i_nom_a);
                     d.p_diss_w = d.vout * d.i_nom_a * (100.0 / d.eff_pct - 1.0);
+                    d.cost_units = stage_cost_units(&Topology::Buck, d.i_max_a);
                     d.serves.push(r.net.clone());
                 }
                 None => still_pending.push((r, nom, max)),
@@ -513,6 +546,7 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
             strategy: note.into(),
             buck_count: stages.iter().filter(|s| s.topology == Topology::Buck).count(),
             ldo_count: stages.iter().filter(|s| s.topology == Topology::Ldo).count(),
+            cost_units: stages.iter().map(|s| s.cost_units).sum(),
             p_load_w: p_load,
             p_in_w: p_in,
             eff_pct: eff,
@@ -521,6 +555,17 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
             unplannable,
         });
     }
+    // Every option already MEETS requirements (noise floors, thermal
+    // bounds, headroom are enforced during construction) — so the
+    // relative cost function is the sort key: cheapest configuration
+    // first, dissipation breaking ties.
+    options.sort_by(|a, b| {
+        a.cost_units
+            .partial_cmp(&b.cost_units)
+            .unwrap()
+            .then(a.p_diss_w.partial_cmp(&b.p_diss_w).unwrap())
+    });
+
     // Drop strategy duplicates (same stage shape) — a small tree often
     // collapses two strategies into the same answer; showing it twice
     // is noise.

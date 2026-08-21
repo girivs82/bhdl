@@ -860,7 +860,14 @@ async fn powertree_options_donor_and_intermediate() {
         // LDO efficiency is physics, stated as such
         assert!(ldo.eff_basis.contains("physics"));
         assert!((ldo.eff_pct - 1.8 / 3.3 * 100.0).abs() < 1e-6);
+        // relative cost: V1V0 buck (rate 4A → 6) + V3V3 buck (0.68A →
+        // 4) + LDO (0.08A → 1) = 11 units. The donor decision is what
+        // the cost function prices: a minted intermediate would ADD a
+        // buck's 4 units for zero requirement gain.
+        assert!((o.cost_units - 11.0).abs() < 1e-9, "{o:#?}");
     }
+    // options come sorted by relative cost, dissipation breaking ties
+    assert!(opts.windows(2).all(|w| w[0].cost_units <= w[1].cost_units + 1e-9));
 
     // no donor in reach → a minimal-headroom intermediate is minted
     let src2 = r#"
@@ -894,5 +901,8 @@ board OnlyNoise {
         assert!((int_buck.vout - 2.3).abs() < 1e-9, "{int_buck:#?}");
         let ldo = o.stages.iter().find(|s| s.topology == Topology::Ldo).unwrap();
         assert!((ldo.p_diss_w - 0.5 * 0.05).abs() < 1e-9, "minimal headroom heat: {ldo:#?}");
+        // the forced intermediate is PRICED: buck 4 + LDO 1 = 5 units —
+        // visibly more than the 1-unit donor-fed LDO it replaces
+        assert!((o.cost_units - 5.0).abs() < 1e-9, "{o:#?}");
     }
 }
