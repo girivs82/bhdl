@@ -607,3 +607,30 @@ safety LatentDemo as g {
     // dormant)
     assert!(model.universe.iter().filter(|u| u.mode == "state").all(|u| !u.latent));
 }
+
+/// Elaboration emitter on a REAL synthesized fixture: ctor args
+/// reconstruct from resolved attributes, connectivity emits as anchor
+/// arrows. (Round-trip gating lands with the CLI command.)
+#[tokio::test]
+async fn elaborate_emits_reconstructed_ctors_for_fixture() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let src = std::fs::read_to_string(ws.join("tests/circuits/realistic/test_safety_fault_campaign.bhdl")).unwrap();
+    let pr = parse(&src);
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let stdlib_src = std::fs::read_to_string(ws.join("bhdl-stdlib/passives/resistor.bhdl")).unwrap();
+    let pr2 = parse(&stdlib_src);
+    let sf2 = SourceFile::cast(pr2.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let netlist = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+    let ctors = bhdl_synthesizer::elaborate::extract_ctors(&[&sf, &sf2]);
+    let out = bhdl_synthesizer::elaborate::emit_elaborated(&netlist, "test_safety_fault_campaign.bhdl", &ctors);
+    println!("{out}");
+    // stdlib Res instances reconstruct value (+tolerance default fills)
+    assert!(out.contains("r_top: Res(") && out.contains("r_bot: Res("), "{out}");
+    // the fixture-local DemoSense entity reconstructs too
+    assert!(out.contains("sense: DemoSense("), "{out}");
+    // connectivity present as arrows
+    assert!(out.contains(" -> "), "{out}");
+}
