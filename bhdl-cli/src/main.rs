@@ -2327,6 +2327,7 @@ async fn run_safety(
                 netlist.nets.get(pi.net?)?.name.clone()
             })
         };
+        let mut assumed_refs: Vec<(String, String)> = Vec::new(); // (ref, instance)
         for part in model.parts.iter().filter(|p| !p.domains.is_empty()) {
             for dom in &part.domains {
                 let Some(net) = dom.pins.first().and_then(|p0| pin_net(&part.instance, p0)) else {
@@ -2334,6 +2335,20 @@ async fn run_safety(
                     continue;
                 };
                 pdn_out!("    {} {} @ net {} ({})", part.instance.bold(), dom.name.bold(), net, dom.source);
+                // Design contract vs safety case: the domain is an ENTITY
+                // declaration (design item); the safety case consumes it
+                // via `assume pdn(<instance>.<domain>)`. State which.
+                let aref = format!("{}.{}", part.instance, dom.name);
+                let assumed = model
+                    .scopes
+                    .iter()
+                    .any(|sc| sc.assumptions.iter().any(|a| a.id == format!("pdn:{aref}")));
+                if assumed {
+                    assumed_refs.push((aref.clone(), part.instance.clone()));
+                    pdn_out!("      safety case: consumed via assume pdn({aref})");
+                } else {
+                    pdn_out!("      safety case: NOT consumed (no assume pdn({aref})) — design-only check, stated");
+                }
                 // static window at the healthy operating point (loads =
                 // whatever the netlist models; declared-draw stamping is a
                 // later increment, stated)
@@ -2480,6 +2495,28 @@ async fn run_safety(
                                 rise * 1e6, dur * 1e6, board * 1e3, extra * 1e3, droop_pct, dom.v_nom, verdict);
                             pdn_out!("      basis: transient from healthy operating point, step {:.2}µs; regulators respond per their converter models (control-loop dynamics only as modeled)", total / 400.0 * 1e6);
                         }
+                    }
+                }
+            }
+        }
+        // Discharge consumed PDN assumptions the checks did NOT violate:
+        // the AoU "board meets the vendor contract" is machine-verified,
+        // so a clean run marks it SatisfiedBy. A violated one stays Open
+        // with its AouViolated gap carrying the finding.
+        for (aref, inst) in assumed_refs {
+            let violated = model.gaps.iter().any(|g| {
+                matches!(g.class, bhdl_common::safety::GapClass::AouViolated)
+                    && g.subject.starts_with(&format!("{inst} "))
+            });
+            if violated {
+                continue;
+            }
+            for sc in &mut model.scopes {
+                for a in &mut sc.assumptions {
+                    if a.id == format!("pdn:{aref}") {
+                        a.status = bhdl_common::safety::AssumptionStatus::SatisfiedBy(
+                            "machine-verified: PDN checks pass (Z(f) mask + droop)".to_string(),
+                        );
                     }
                 }
             }

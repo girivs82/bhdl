@@ -308,6 +308,98 @@ fn split_call_args(txt: &str) -> (Vec<String>, BTreeMap<String, String>) {
     (pos, kw)
 }
 
+
+/// Parse one `domain NAME k=v ...;` item (entity-scope DESIGN contract;
+/// docs/spec/Functional_Safety.md §2.10). `toks` excludes the `domain`
+/// head. Errors and the parsed domain land on `d`.
+fn parse_domain_item(ename: &str, toks: &[String], d: &mut EntityData) {
+
+                        let name = toks.first().cloned().unwrap_or_default();
+                        let kv = kv_from_tokens(&toks[1..]);
+                        let src = kv.get("source").cloned().unwrap_or_default();
+                        if src.is_empty() { d.errors.push(format!("{ename}: domain {name} has no source")); }
+                        let unit = |v: Option<&String>, mults: &[(&str, f64)]| -> Option<f64> {
+                            let v = v?.trim().trim_matches('"').trim();
+                            let end = v.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(v.len());
+                            let num: f64 = v[..end].parse().ok()?;
+                            let suf = v[end..].trim();
+                            if suf.is_empty() { return Some(num); }
+                            mults.iter().find(|(s2, _)| suf.eq_ignore_ascii_case(s2)).map(|(_, m)| num * m)
+                        };
+                        let volts = |k: &str| unit(kv.get(k), &[("V", 1.0), ("mV", 1e-3)]);
+                        let amps = |k: &str| unit(kv.get(k), &[("A", 1.0), ("mA", 1e-3)]);
+                        let pct = |k: &str| unit(kv.get(k), &[("%", 1.0)]);
+                        let ohms = |k: &str| unit(kv.get(k), &[("m", 1e-3), ("mΩ", 1e-3), ("Ω", 1.0), ("u", 1e-6), ("uΩ", 1e-6)]);
+                        let henr = |k: &str| unit(kv.get(k), &[("n", 1e-9), ("nH", 1e-9), ("p", 1e-12), ("pH", 1e-12), ("u", 1e-6), ("uH", 1e-6)]);
+                        let secs = |k: &str| unit(kv.get(k), &[("s", 1.0), ("ms", 1e-3), ("us", 1e-6), ("ns", 1e-9)]);
+                        let freq_of = |v: &str| -> Option<f64> {
+                            let v = v.trim();
+                            let end = v.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(v.len());
+                            let num: f64 = v[..end].parse().ok()?;
+                            match v[end..].trim() {
+                                "Hz" | "" => Some(num),
+                                "kHz" => Some(num * 1e3),
+                                "MHz" => Some(num * 1e6),
+                                "GHz" => Some(num * 1e9),
+                                _ => None,
+                            }
+                        };
+                        let zmask: Vec<(f64, f64)> = kv
+                            .get("zmask")
+                            .map(|m| {
+                                m.trim_matches('"')
+                                    .split_whitespace()
+                                    .filter_map(|bp| {
+                                        let (f, z) = bp.split_once(':')?;
+                                        let z = z.trim();
+                                        let zend = z.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(z.len());
+                                        let znum: f64 = z[..zend].parse().ok()?;
+                                        let zval = match z[zend..].trim() {
+                                            "m" | "mΩ" => znum * 1e-3,
+                                            "" | "Ω" => znum,
+                                            "u" | "uΩ" => znum * 1e-6,
+                                            _ => return None,
+                                        };
+                                        Some((freq_of(f)?, zval))
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        let pins: Vec<String> = kv
+                            .get("pins")
+                            .map(|pstr| {
+                                pstr.trim_matches('"')
+                                    .split(|c: char| c == ',' || c.is_whitespace())
+                                    .filter(|t| !t.is_empty())
+                                    .map(String::from)
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        let Some(v_nom) = volts("v") else {
+                            d.errors.push(format!("{ename}: domain {name} needs v=<voltage>"));
+                            return;
+                        };
+                        if pins.is_empty() {
+                            d.errors.push(format!("{ename}: domain {name} needs pins=\"..\""));
+                            return;
+                        }
+                        d.power_domains.push(bhdl_common::safety::PowerDomain {
+                            name, pins, v_nom,
+                            tol_pct: pct("tol"),
+                            i_nom_a: amps("i_nom"),
+                            i_max_a: amps("i_max"),
+                            zmask,
+                            step_a: amps("step"),
+                            step_rise_s: secs("rise"),
+                            step_dur_s: secs("dur"),
+                            droop_max_pct: pct("droop_max"),
+                            pdn_r_ohm: ohms("pdn_r"),
+                            pdn_l_h: henr("pdn_l"),
+                            source: src,
+                        });
+                    
+}
+
 /// Entity-level safety data (spec §2.7), keyed by entity name.
 #[derive(Debug, Clone, Default)]
 struct EntityData {
@@ -395,6 +487,15 @@ fn collect_entity_data(root: &SyntaxNode) -> HashMap<String, EntityData> {
             .find(|t| t.kind() == SyntaxKind::IDENT)
             .map(|t| t.text().to_string())
         else { continue };
+        // Entity-scope `domain ...;` — the DESIGN-level PDN contract
+        // (§2.10). Lives on the entity, not in safety { }: the board
+        // must meet it whether or not it is a safety product.
+        for item in ent.children().filter(|c| c.kind() == SyntaxKind::DOMAIN_DECL) {
+            let d = out.entry(ename.clone()).or_default();
+            let toks = tokens_of(&item);
+            debug_assert_eq!(toks.first().map(String::as_str), Some("domain"));
+            parse_domain_item(&ename, &toks[1..], d);
+        }
         for blk in ent.children().filter(|c| c.kind() == SyntaxKind::SAFETY_DATA_BLOCK) {
             let d = out.entry(ename.clone()).or_default();
             for item in blk.children().filter(|c| c.kind() == SyntaxKind::SAFETY_DATA_ITEM) {
@@ -411,89 +512,12 @@ fn collect_entity_data(root: &SyntaxNode) -> HashMap<String, EntityData> {
                         d.failure_states.push((name, num(kv.get("fit")), of, src, kv.get("behavior").cloned(), kv.get("detected_internally").cloned()));
                     }
                     "domain" => {
-                        let name = toks.get(1).cloned().unwrap_or_default();
-                        let kv = kv_from_tokens(&toks[2..]);
-                        let src = kv.get("source").cloned().unwrap_or_default();
-                        if src.is_empty() { d.errors.push(format!("{ename}: domain {name} has no source")); }
-                        let unit = |v: Option<&String>, mults: &[(&str, f64)]| -> Option<f64> {
-                            let v = v?.trim().trim_matches('"').trim();
-                            let end = v.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(v.len());
-                            let num: f64 = v[..end].parse().ok()?;
-                            let suf = v[end..].trim();
-                            if suf.is_empty() { return Some(num); }
-                            mults.iter().find(|(s2, _)| suf.eq_ignore_ascii_case(s2)).map(|(_, m)| num * m)
-                        };
-                        let volts = |k: &str| unit(kv.get(k), &[("V", 1.0), ("mV", 1e-3)]);
-                        let amps = |k: &str| unit(kv.get(k), &[("A", 1.0), ("mA", 1e-3)]);
-                        let pct = |k: &str| unit(kv.get(k), &[("%", 1.0)]);
-                        let ohms = |k: &str| unit(kv.get(k), &[("m", 1e-3), ("mΩ", 1e-3), ("Ω", 1.0), ("u", 1e-6), ("uΩ", 1e-6)]);
-                        let henr = |k: &str| unit(kv.get(k), &[("n", 1e-9), ("nH", 1e-9), ("p", 1e-12), ("pH", 1e-12), ("u", 1e-6), ("uH", 1e-6)]);
-                        let secs = |k: &str| unit(kv.get(k), &[("s", 1.0), ("ms", 1e-3), ("us", 1e-6), ("ns", 1e-9)]);
-                        let freq_of = |v: &str| -> Option<f64> {
-                            let v = v.trim();
-                            let end = v.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(v.len());
-                            let num: f64 = v[..end].parse().ok()?;
-                            match v[end..].trim() {
-                                "Hz" | "" => Some(num),
-                                "kHz" => Some(num * 1e3),
-                                "MHz" => Some(num * 1e6),
-                                "GHz" => Some(num * 1e9),
-                                _ => None,
-                            }
-                        };
-                        let zmask: Vec<(f64, f64)> = kv
-                            .get("zmask")
-                            .map(|m| {
-                                m.trim_matches('"')
-                                    .split_whitespace()
-                                    .filter_map(|bp| {
-                                        let (f, z) = bp.split_once(':')?;
-                                        let z = z.trim();
-                                        let zend = z.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(z.len());
-                                        let znum: f64 = z[..zend].parse().ok()?;
-                                        let zval = match z[zend..].trim() {
-                                            "m" | "mΩ" => znum * 1e-3,
-                                            "" | "Ω" => znum,
-                                            "u" | "uΩ" => znum * 1e-6,
-                                            _ => return None,
-                                        };
-                                        Some((freq_of(f)?, zval))
-                                    })
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        let pins: Vec<String> = kv
-                            .get("pins")
-                            .map(|pstr| {
-                                pstr.trim_matches('"')
-                                    .split(|c: char| c == ',' || c.is_whitespace())
-                                    .filter(|t| !t.is_empty())
-                                    .map(String::from)
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        let Some(v_nom) = volts("v") else {
-                            d.errors.push(format!("{ename}: domain {name} needs v=<voltage>"));
-                            continue;
-                        };
-                        if pins.is_empty() {
-                            d.errors.push(format!("{ename}: domain {name} needs pins=\"..\""));
-                            continue;
-                        }
-                        d.power_domains.push(bhdl_common::safety::PowerDomain {
-                            name, pins, v_nom,
-                            tol_pct: pct("tol"),
-                            i_nom_a: amps("i_nom"),
-                            i_max_a: amps("i_max"),
-                            zmask,
-                            step_a: amps("step"),
-                            step_rise_s: secs("rise"),
-                            step_dur_s: secs("dur"),
-                            droop_max_pct: pct("droop_max"),
-                            pdn_r_ohm: ohms("pdn_r"),
-                            pdn_l_h: henr("pdn_l"),
-                            source: src,
-                        });
+                        d.errors.push(format!(
+                            "{ename}: `domain` has MOVED out of the safety block — it is a design \
+                             contract the board must meet whether or not it is a safety product. \
+                             Declare it directly at entity scope (`entity X {{ domain ... }}`); \
+                             the safety case consumes it via `assume pdn(...)`."
+                        ));
                     }
                     "seooc" => {
                         let kv = kv_from_tokens(&toks[1..]);
@@ -1096,6 +1120,35 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
                     let t = st.children().map(|c| text_of(&c)).find(|t| !t.is_empty()).unwrap_or_default();
                     let id = t.split('(').next().unwrap_or("").trim().to_string();
                     let inline = first_string(st);
+                    // `assume pdn(<instance>.<domain>)` — the safety case
+                    // consumes an entity-declared PDN contract (design
+                    // item, §2.10). The machine verifies it in the PDN
+                    // section; here it is recorded as the AoU linking the
+                    // vendor contract into this scope. The reference is
+                    // validated against the parts table after it is built.
+                    if id == "pdn" {
+                        let (pos, _) = split_call_args(&t);
+                        let Some(arg) = pos.first() else {
+                            model.errors.push(format!("safety {}: assume pdn(...) needs a <instance>.<domain> argument", blk.name));
+                            continue;
+                        };
+                        let arg = arg.trim_start_matches('@').to_string();
+                        // design handles are namespace-qualified (dut.soc →
+                        // soc) exactly like other safety references
+                        let arg = if arg.starts_with(&format!("{}.", blk.ns)) {
+                            let rest = arg.splitn(2, '.').nth(1).unwrap_or(&arg);
+                            if prefix.is_empty() { rest.to_string() } else { format!("{prefix}.{rest}") }
+                        } else {
+                            arg
+                        };
+                        scope.assumptions.push(Assumption {
+                            path: qual(&format!("pdn:{arg}")),
+                            id: format!("pdn:{arg}"),
+                            text: format!("the board meets the PDN contract of {arg} — machine-verified in the PDN section (Z(f) mask + droop)"),
+                            status: AssumptionStatus::Open,
+                        });
+                        continue;
+                    }
                     let text = if let Some(def) = asm_defs.get(&id) {
                         // library assumption: substitute call args into the
                         // `{param}` placeholders; design handles are shown
@@ -1291,6 +1344,34 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
             data,
             domains: ed.map(|e| e.power_domains.clone()).unwrap_or_default(),
         });
+    }
+
+    // Validate every `assume pdn(<ref>)` against the parts table: the
+    // reference must name a declared entity domain as
+    // <instance>.<domain>. A domain declared but never assumed is fine
+    // for a plain design — the PDN section states assumption status
+    // either way — but an assume naming a domain that does not exist
+    // is a hard error (the safety case would rest on nothing).
+    {
+        let known: std::collections::HashSet<String> = model
+            .parts
+            .iter()
+            .flat_map(|p| p.domains.iter().map(move |d| format!("{}.{}", p.instance, d.name)))
+            .collect();
+        for s in &scopes {
+            for a in &s.assumptions {
+                if let Some(r) = a.id.strip_prefix("pdn:") {
+                    if !known.contains(r) {
+                        let mut have: Vec<&String> = known.iter().collect();
+                        have.sort();
+                        model.errors.push(format!(
+                            "assume pdn({r}): no entity-declared domain by that name — declared: [{}]",
+                            have.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                        ));
+                    }
+                }
+            }
+        }
     }
 
     // Gaps.

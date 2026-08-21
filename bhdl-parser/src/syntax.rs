@@ -475,6 +475,12 @@ pub enum SyntaxKind {
     OPTIMIZATION_PHASE,     // phase definition in optimization strategy
     KNOWLEDGE_ITEM,         // item in component knowledge
 
+    // Entity-scope power-domain contract (design-level, NOT safety):
+    // `domain NAME pins=".." v=.. zmask=".." ...;` — the vendor's PDN
+    // contract the board must meet whether or not it is a safety
+    // product. The safety case consumes it via `assume pdn(...)`.
+    DOMAIN_DECL,        // domain NAME k=v ...;
+
     // ERROR must be the last variant for the assertion in kind_from_raw
     ERROR = 65534, // Represents a parsing error node
 }

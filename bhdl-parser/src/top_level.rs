@@ -243,6 +243,14 @@ impl<'t> Parser<'t> {
                     // device-simulation IP block (Vendor_Simulation_Blocks.md).
                     if self.peek_text().as_deref() == Some("simulation") {
                         self.parse_sim_block();
+                    } else if self.peek_text().as_deref() == Some("domain")
+                        && self.peek_nth(1) != Some(SyntaxKind::COLON)
+                    {
+                        // Entity-scope power-domain contract (design-level):
+                        // `domain NAME k=v ...;`. Contextual — `domain` is
+                        // not a keyword (an instance may be named domain:
+                        // the COLON lookahead disambiguates).
+                        self.parse_domain_decl();
                     } else {
                         // Entity instantiation: instance_name: EntityType(params) { ... }
                         // Connection: signal -> other_signal;
@@ -3361,6 +3369,27 @@ impl<'t> Parser<'t> {
     /// `handbook`) followed by free tokens up to `;`. Kept as flat token
     /// runs; the semantic pass interprets them (unknown heads are hard
     /// errors there, so the CST stays total).
+    /// Entity-scope `domain NAME k=v ...;` — the vendor PDN contract as a
+    /// DESIGN item (docs/spec/Functional_Safety.md §2.10 moved design-side):
+    /// the board must meet it whether or not it is a safety product; the
+    /// safety case consumes it via `assume pdn(...)`. Token soup up to `;`,
+    /// same shape as SAFETY_DATA_ITEM — the extractor does the kv parsing.
+    fn parse_domain_decl(&mut self) {
+        self.builder.start_node(SyntaxKind::DOMAIN_DECL.into());
+        while self.peek() != Some(SyntaxKind::SEMI)
+            && self.peek() != Some(SyntaxKind::R_BRACE)
+            && self.peek().is_some()
+        {
+            self.bump_any();
+        }
+        if self.peek() == Some(SyntaxKind::SEMI) {
+            self.bump();
+        } else {
+            self.error("Expected ';' after domain declaration".to_string());
+        }
+        self.builder.finish_node();
+    }
+
     fn parse_safety_data_block(&mut self) {
         self.builder.start_node(SyntaxKind::SAFETY_DATA_BLOCK.into());
         self.expect(SyntaxKind::SAFETY_KW);

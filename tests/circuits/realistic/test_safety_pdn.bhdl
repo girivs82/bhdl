@@ -30,13 +30,13 @@ entity Soc() {
     attribute component_class = "resistor";
     attribute resistance = 10MΩ;
     attribute kicad_symbol = "Device:R";
-    safety {
-        domain VDD pins="1" v=12V tol=5% i_nom=1A i_max=12A
-            zmask="100kHz:300m 1MHz:150m 10MHz:150m 50MHz:400m"
-            step=2A rise=1us dur=20us droop_max=4%
-            pdn_r=1m pdn_l=1n
-            source="FIXTURE — stands in for NDA vendor data";
-    }
+    // DESIGN contract (entity scope, not safety): the board must meet
+    // this whether or not it is a safety product.
+    domain VDD pins="1" v=12V tol=5% i_nom=1A i_max=12A
+        zmask="100kHz:300m 1MHz:150m 10MHz:150m 50MHz:400m"
+        step=2A rise=1us dur=20us droop_max=4%
+        pdn_r=1m pdn_l=1n
+        source="FIXTURE — stands in for NDA vendor data";
 }
 
 board PdnDemo {
@@ -54,6 +54,8 @@ board PdnDemo {
 
 safety PdnDemo as brd {
     mission { ambient = 40degC; lifetime = 15000h; }
+    // the safety case CONSUMES the entity's design contract
+    assume pdn(brd.soc.VDD);
     goal SG: ASIL_B "rail stays in window" (id="SG-PDN-1") {
         effect uv = brd.r_load.1 < 10V severity S2;
     }
