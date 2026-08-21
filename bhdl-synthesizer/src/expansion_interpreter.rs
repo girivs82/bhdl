@@ -184,6 +184,37 @@ fn find_expansion_candidates(
             continue;
         }
 
+        // Carried expansion children: an elaborated file re-states
+        // minted children as plain instances, so the expansion_parent
+        // attribute is gone. Infer parenthood structurally — the
+        // instance is named {P}_{child} for another instance P whose
+        // OWN recipe declares a child of that name. Children of
+        // children never expand (same rule as the attribute skip).
+        let is_carried_child = netlist.instances.iter().any(|(pid, p)| {
+            pid != inst_id
+                && inst.name.len() > p.name.len() + 1
+                && inst.name.starts_with(&p.name)
+                && inst.name.as_bytes()[p.name.len()] == b'_'
+                && netlist
+                    .modules
+                    .get(p.definition)
+                    .and_then(|pm| {
+                        recipes
+                            .get(&pm.name)
+                            .or_else(|| p.attributes.get("component_type").and_then(|ct| recipes.get(ct)))
+                    })
+                    .is_some_and(|pr| {
+                        pr.instances.iter().any(|c| inst.name[p.name.len() + 1..] == c.name)
+                    })
+        });
+        if is_carried_child {
+            info!(
+                "Instance '{}' matches a sibling recipe child name — carried expansion child, not re-expanded",
+                inst.name
+            );
+            continue;
+        }
+
         // Skip instances that already had expansion applied
         if inst.attributes.contains_key("expansion_applied") {
             continue;
@@ -205,6 +236,26 @@ fn find_expansion_candidates(
         // Skip instances without pin instances (template/definition instances, not real circuit components)
         if pin_map.is_empty() {
             continue;
+        }
+
+        // Definition stubs — an instance named exactly like its module
+        // with ZERO connected pins — are template artifacts, not parts
+        // (the same rule the elaborate emitter and its round-trip
+        // comparator apply). Expanding one mints floating support
+        // circuitry off a template; boards where the entity is defined
+        // in-file but only instantiated through other paths hit this.
+        if inst.name == mod_def.name {
+            let any_connected = netlist
+                .pin_instances
+                .values()
+                .any(|pi| pi.instance == inst_id && pi.net.is_some());
+            if !any_connected {
+                info!(
+                    "Instance '{}' is an unconnected definition stub — expansion skipped",
+                    inst.name
+                );
+                continue;
+            }
         }
 
         // Resolve a vendor `design { }` recipe (if any) for this candidate.
@@ -416,6 +467,21 @@ fn expand_one_instance(
             continue;
         }
         let child_name = format!("{}_{}", base, exp_inst.name);
+
+        // Per-child idempotency: this exact minted name already exists
+        // on the board (elaborated/hand-carried input where OTHER
+        // children were dropped, so the whole-recipe skip above didn't
+        // fire). The existing instance keeps its explicit wiring;
+        // minting again would duplicate the part and its endpoints.
+        // It is deliberately NOT added to child_instance_map, so the
+        // recipe's connection statements leave it alone.
+        if netlist.instances.iter().any(|(_, i)| i.name == child_name) {
+            info!(
+                "Expansion child '{}' already present on the board — kept as-is, not re-minted",
+                child_name
+            );
+            continue;
+        }
 
         // Determine pin layout from component type. Common-currency
         // types (Res/Cap/Ind/Diode/Triode) have hardcoded layouts
