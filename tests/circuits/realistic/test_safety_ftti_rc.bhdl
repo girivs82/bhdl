@@ -10,11 +10,14 @@
 //   R_th = 10k∥10k = 5k into C = 100nF ⇒ τ = 0.5ms; the 4V detection
 //   threshold is crossed at τ·ln((6−3)/(6−4)) ≈ 0.20ms.
 //
-//   within 500us → declared latency claim (1ms, pessimistic) FAILS the
-//                  budget, but the MEASURED ~0.2ms settle PASSES it —
-//                  the measurement supersedes the claim.
-//   within 100us → the measured ~0.2ms settle really is too slow:
-//                  MEASURED FAIL. Both directions are demonstrated.
+// The verdict COMPOSES the measured board settle with the declared
+// CHIP-INTERNAL latency (the comparator's reaction time — a path the
+// board solve structurally cannot see):
+//   within 500us → measured ~0.22ms board + 50µs chip = ~0.27ms → OK
+//                  (the declared-budget-only argument could not verify
+//                  the 0.22ms board term at all).
+//   within 100us → the board path alone (~0.22ms) already exceeds the
+//                  budget: MEASURED FAIL. Both directions demonstrated.
 
 import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
@@ -37,12 +40,13 @@ safety FttiRc as brd {
         effect overvoltage = brd.r_bot.1 > 8V severity S2;
     }
 
-    // The declared latency (1ms) is a deliberately PESSIMISTIC vendor
-    // claim — the transient measurement supersedes it either way.
+    // latency = the CHIP-INTERNAL reaction time (comparator prop delay
+    // + deglitch) — a path the board solve cannot see; it is COMPOSED
+    // with the measured board settle, never replaced by it.
     mechanism brd.r_m2: psm(SG_MID, detects=[overvoltage],
                             detected_when = brd.r_m2.1 > 4V,
-                            latency=1ms,
-                            dc=0.90, source="FIXTURE claim — measured supersedes");
+                            latency=50us,
+                            dc=0.90, source="FIXTURE claim");
 
     fault short(brd.r_top.1, brd.r_top.2) expect SG_MID.overvoltage detected_by brd.r_m2 within 500us;
     fault open(brd.r_bot)                 expect SG_MID.overvoltage detected_by brd.r_m2 within 100us;

@@ -261,12 +261,16 @@ labelled magnitudes (tolerance edge + 0.5×/2× convention, above).
 `detected_when` TRUE on the faulted point); the TIME argument is,
 strongest first: **MEASURED** — a transient solve of the faulted board
 relaxing from the healthy operating point (the fault is the stimulus;
-initial conditions = the healthy DC solution); the measured settle
-time of `detected_when` plus the mechanism's declared test `interval`
-must fit inside the FTTI, and the declared `latency` claim is
-SUPERSEDED by the measurement (the fault line prints the settle time
-and the integration step — the resolution). A predicate that does not
-settle TRUE within 2×FTTI ⇒ MEASURED FAIL. **DECLARED** — when no
+initial conditions = the healthy DC solution) measures the BOARD-path
+settle time of `detected_when` at the detector's input. The chip
+inside the detector is a black box the solve structurally cannot see
+(comparator propagation, deglitch, ADC + firmware) — the mechanism's
+declared `latency` is exactly the model for that segment, so the
+verdict COMPOSES the terms, never substitutes one for the other:
+measured board settle + declared chip-internal `latency` + declared
+test `interval` ≤ FTTI (the fault line prints each term and the
+integration step — the resolution). A predicate that does not settle
+TRUE within 2×FTTI ⇒ MEASURED FAIL. **DECLARED** — when no
 transient engine is available, the mechanism's `interval` + `latency`
 budget, stated as declared. **UNVERIFIABLE** — neither, stated; an
 undeclared budget is never assumed. Never detected, or the time

@@ -66,11 +66,12 @@ safety FaultDemo as brd {
                              latency=1ms,
                              dc=0.90, source="FIXTURE claim — measured DC supersedes");
 
-    // Under the transient FTTI measurement this R-only board detects in
-    // one integration step — both budgets pass MEASURED, superseding the
-    // 1ms declared claim (which alone would fail 500µs). The measured
-    // FTTI FAIL demonstration lives in test_safety_ftti_rc.bhdl, where
-    // an RC filter makes the settle time real.
+    // Under the transient FTTI measurement this R-only board's BOARD
+    // path settles in one integration step, but the verdict COMPOSES
+    // the declared 1ms CHIP-INTERNAL latency (a path the solve cannot
+    // see): 10ms budget OK, 500µs budget FAILED — the chip latency
+    // dominates. The measured-board-term demo lives in
+    // test_safety_ftti_rc.bhdl, where an RC filter makes it real.
     fault short(brd.r_top.1, brd.r_top.2) expect SG_MID.overvoltage detected_by brd.sense within 10ms;
     fault short(brd.r_bot.1, brd.r_bot.2) expect SG_MID.undervoltage;
     fault open(brd.r_bot)                 expect SG_MID.overvoltage detected_by brd.sense within 500us;

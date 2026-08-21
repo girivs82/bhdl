@@ -298,13 +298,13 @@ async fn fmeda_export_serializes_the_measured_model() {
     assert!(mlines[1].ends_with("false"), "{}", csvs.metrics);
 }
 
-/// Transient FTTI: with a time-domain engine, the timing verdict comes
-/// from the MEASURED settle time of detected_when, superseding the
-/// mechanism's declared latency claim. The mock trace ramps every net
-/// 0→12V over the run: `brd.sense.1 > 4V` settles at ~1/3 of the
-/// duration (= 2/3 of `within`), so BOTH within-budget faults now pass
-/// — including the 500µs one the DECLARED 1ms latency claim failed:
-/// the measured path is faster than the vendor's claim.
+/// Transient FTTI: with a time-domain engine, the timing verdict
+/// COMPOSES the measured BOARD-path settle time of detected_when with
+/// the mechanism's declared CHIP-INTERNAL latency + interval — the
+/// solve sees the board up to the detector's pin; the chip inside is a
+/// black box whose reaction time is exactly what the declared latency
+/// models. The mock trace ramps every net 0→12V over the run:
+/// `brd.sense.1 > 4V` settles at 0.4× the duration (= 0.8× `within`).
 #[tokio::test]
 async fn transient_ftti_measurement_supersedes_declared_latency() {
     let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
@@ -344,18 +344,18 @@ async fn transient_ftti_measurement_supersedes_declared_latency() {
     };
     run_declared_faults(&netlist, &mut model, &solve, Some(&tran));
     let scope = &model.scopes[0];
-    // 10ms budget: measured settle ≈ 8ms (0.4 × 2×within) ≤ 10ms → OK
+    // 10ms budget: measured board settle 8ms (0.4 × 2×within) + 1ms
+    // declared chip latency = 9ms ≤ 10ms → OK
     let t_ok = scope.faults.iter().find(|f| f.within.as_deref() == Some("10ms")).unwrap();
     assert_eq!(t_ok.timing_met, Some(true), "{t_ok:?}");
     assert!(t_ok.note.as_deref().unwrap_or("").contains("FTTI MEASURED"), "{t_ok:?}");
-    // 500µs budget: measured settle ≈ 0.4ms ≤ 0.5ms → the measurement
-    // FLIPS the declared-budget FAIL to a pass, and says so
+    assert!(t_ok.note.as_deref().unwrap_or("").contains("chip-internal"), "{t_ok:?}");
+    // 500µs budget: measured board settle 0.4ms + 1ms chip latency =
+    // 1.4ms > 0.5ms → FAILED — the chip-internal term the solve cannot
+    // see is composed in, never dropped
     let t_500 = scope.faults.iter().find(|f| f.within.as_deref() == Some("500us")).unwrap();
-    assert_eq!(t_500.timing_met, Some(true), "{t_500:?}");
-    assert!(
-        t_500.note.as_deref().unwrap_or("").contains("declared latency claim superseded"),
-        "{t_500:?}"
-    );
+    assert_eq!(t_500.timing_met, Some(false), "{t_500:?}");
+    assert!(t_500.note.as_deref().unwrap_or("").contains("chip-internal"), "{t_500:?}");
     // A refusing engine falls back to the declared budget, stated.
     let mut model2 = build_safety_model(&netlist, &[&sf]);
     let no_tran = |_: &bhdl_netlist::Netlist, _: f64| -> Result<(Vec<f64>, HashMap<String, Vec<f64>>), String> {

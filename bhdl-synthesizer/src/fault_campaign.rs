@@ -680,9 +680,21 @@ pub fn run_declared_faults(
                                             .map(|(name, vs)| (name.clone(), vs.get(k).copied().unwrap_or(f64::NAN)))
                                             .collect()
                                     };
+                                    // The measurement and the declared latency
+                                    // describe DIFFERENT segments of the same
+                                    // chain: the transient sees the BOARD path
+                                    // to the detector's input pin; everything
+                                    // inside the chip (comparator prop delay,
+                                    // deglitch, ADC+firmware) is a black box
+                                    // the solve structurally cannot see — the
+                                    // declared latency IS the model for it.
+                                    // So the terms COMPOSE, never supersede:
+                                    //   t_board(measured) + latency(declared,
+                                    //   chip-internal) + interval(declared).
                                     let mut best: Option<f64> = None;
                                     let mut best_detect = 0.0f64;
-                                    for (_h2, _d2, dw, interval, _lat) in &scopes_mechs[si] {
+                                    let mut best_chip = 0.0f64;
+                                    for (_h2, _d2, dw, interval, latency) in &scopes_mechs[si] {
                                         let Some(pred) = dw else { continue };
                                         let holds = |k: usize| {
                                             eval_effect(pred, prefix, ns, &view, &alias, &sample(k)).unwrap_or(false)
@@ -696,10 +708,12 @@ pub fn run_declared_faults(
                                         }
                                         let t_detect = times[k];
                                         let b_int = interval.as_deref().and_then(parse_duration_s).unwrap_or(0.0);
-                                        let total = t_detect + b_int;
+                                        let b_lat = latency.as_deref().and_then(parse_duration_s).unwrap_or(0.0);
+                                        let total = t_detect + b_lat + b_int;
                                         if best.map(|b| total < b).unwrap_or(true) {
                                             best = Some(total);
                                             best_detect = t_detect;
+                                            best_chip = b_lat + b_int;
                                         }
                                     }
                                     match best {
@@ -707,9 +721,11 @@ pub fn run_declared_faults(
                                             verdict = Some(total <= t);
                                             let dt = times[1] - times[0];
                                             tnote = Some(format!(
-                                                "FTTI MEASURED: detection settles {:.4}ms after the fault (transient from the healthy operating point, step {:.4}ms — resolution = one step) — declared latency claim superseded",
+                                                "FTTI MEASURED: board path settles {:.4}ms after the fault (transient from the healthy operating point, step {:.4}ms — resolution = one step) + {:.4}ms declared chip-internal latency+interval = {:.4}ms total",
                                                 best_detect * 1e3,
-                                                dt * 1e3
+                                                dt * 1e3,
+                                                best_chip * 1e3,
+                                                total * 1e3
                                             ));
                                         }
                                         None => {
