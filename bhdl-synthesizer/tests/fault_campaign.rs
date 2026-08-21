@@ -786,3 +786,41 @@ board BadPdn {
     assert!(msg.contains("INFEASIBLE"), "{msg}");
     assert!(msg.contains("budget alone"), "names the physics: {msg}");
 }
+
+/// Power-tree load harvesting on a FUNCTION-FIRST partial board:
+/// rails declared but undriven, loads from entity domain contracts,
+/// noise targets picked up, phantom stubs filtered.
+#[tokio::test]
+async fn powertree_harvests_loads_from_partial_board() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let src = std::fs::read_to_string(ws.join("tests/circuits/realistic/test_powertree_loads.bhdl")).unwrap();
+    let pr = parse(&src);
+    assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let netlist = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+    let h = bhdl_synthesizer::powertree::harvest_loads(&netlist, &sf);
+
+    // two real loads — the definition stubs must NOT harvest
+    assert_eq!(h.loads.len(), 2, "{:#?}", h.loads);
+    assert!(h.unwired.is_empty(), "{:#?}", h.unwired);
+
+    let rail = |n: &str| h.rails.iter().find(|r| r.net == n).unwrap();
+    assert_eq!(h.rails.len(), 3);
+    let v1 = rail("V1V0");
+    assert!((v1.i_nom_total_a.unwrap() - 2.0).abs() < 1e-9);
+    assert!((v1.i_max_total_a.unwrap() - 4.0).abs() < 1e-9);
+    assert!(v1.noise_uvrms.is_none()); // no target declared — absent stays absent
+    assert!(!v1.driven);
+    let v18 = rail("V1V8");
+    assert!((v18.i_nom_total_a.unwrap() - 0.05).abs() < 1e-9);
+    // noise=100uV parsed to µVrms
+    assert!((v18.noise_uvrms.unwrap() - 100.0).abs() < 1e-9, "{v18:#?}");
+    let vin = rail("VIN");
+    assert_eq!(vin.declared_budget_a, Some(3.0));
+    assert!(vin.loads.is_empty());
+    // every rail undriven — the whole tree is the worklist
+    assert!(h.rails.iter().all(|r| !r.driven));
+}

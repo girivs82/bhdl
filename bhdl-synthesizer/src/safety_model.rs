@@ -331,7 +331,13 @@ fn parse_domain_item(ename: &str, toks: &[String], d: &mut EntityData) {
                         let pct = |k: &str| unit(kv.get(k), &[("%", 1.0)]);
                         let ohms = |k: &str| unit(kv.get(k), &[("m", 1e-3), ("mΩ", 1e-3), ("Ω", 1.0), ("u", 1e-6), ("uΩ", 1e-6)]);
                         let henr = |k: &str| unit(kv.get(k), &[("n", 1e-9), ("nH", 1e-9), ("p", 1e-12), ("pH", 1e-12), ("u", 1e-6), ("uH", 1e-6)]);
-                        let secs = |k: &str| unit(kv.get(k), &[("s", 1.0), ("ms", 1e-3), ("us", 1e-6), ("ns", 1e-9)]);
+                        let noise = |k: &str| {
+        unit(kv.get(k), &[
+            ("uV", 1.0), ("uVrms", 1.0), ("µV", 1.0), ("µVrms", 1.0),
+            ("mV", 1e3), ("mVrms", 1e3), ("V", 1e6), ("Vrms", 1e6),
+        ])
+    };
+    let secs = |k: &str| unit(kv.get(k), &[("s", 1.0), ("ms", 1e-3), ("us", 1e-6), ("ns", 1e-9)]);
                         let freq_of = |v: &str| -> Option<f64> {
                             let v = v.trim();
                             let end = v.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(v.len());
@@ -395,6 +401,7 @@ fn parse_domain_item(ename: &str, toks: &[String], d: &mut EntityData) {
                             droop_max_pct: pct("droop_max"),
                             pdn_r_ohm: ohms("pdn_r"),
                             pdn_l_h: henr("pdn_l"),
+                            noise_uvrms: noise("noise"),
                             source: src,
                         });
                     

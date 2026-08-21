@@ -146,6 +146,7 @@ pub mod manufacturing_optimization;
 pub mod intent_hint_processor;
 pub mod safety_model;
 pub mod decap_synthesis;
+pub mod powertree;
 pub mod reliability;
 pub mod fault_campaign;
 

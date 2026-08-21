@@ -149,6 +149,20 @@ enum Commands {
         output: Option<PathBuf>,
     },
 
+    /// Harvest power-tree LOADS from a (possibly partial) board: every
+    /// instantiated entity's `domain` contract plus every Power-class
+    /// rail's declared budget and driven/undriven status. The board is
+    /// built FUNCTION-FIRST — undriven rails are the power-design
+    /// worklist (the same ones ERC028 flags). A stub board of bare load
+    /// declarations is the degenerate case: useful for architecture /
+    /// thermal planning, never a gate. The option calculator consumes
+    /// this harvest (next increment).
+    Powertree {
+        /// Also dump the harvest as JSON to this path.
+        #[arg(long)]
+        json: Option<PathBuf>,
+    },
+
     /// Emit a frozen structural netlist — the immutable "as-fabbed"
     /// record (resolved components + flat connectivity, stamped with
     /// the toolchain version + library lock). Stable, versioned schema;
@@ -588,6 +602,10 @@ async fn main() -> Result<()> {
 
         Some(Commands::Elaborate { output }) => {
             run_elaborate(&source_file, &input_content, &cli.input, output).await?;
+        }
+
+        Some(Commands::Powertree { json }) => {
+            run_powertree(&source_file, &input_content, &cli.input, cli.no_elaborate, json).await?;
         }
 
         Some(Commands::Freeze { output }) => {
@@ -1688,6 +1706,75 @@ async fn verified_netlist(
     Ok(elaborate_pipeline(source_file, input_content, input_path, input_path, Some(&lut))
         .await?
         .netlist)
+}
+
+/// Harvest and report the power-tree loads from a partial board.
+async fn run_powertree(
+    source_file: &SourceFile,
+    input_content: &str,
+    input_path: &Path,
+    no_elaborate: bool,
+    json_out: Option<PathBuf>,
+) -> Result<()> {
+    let netlist = verified_netlist(source_file, input_content, input_path, no_elaborate).await?;
+    let harvest = bhdl_synthesizer::powertree::harvest_loads(&netlist, source_file);
+
+    println!("{}", "Power-tree loads".bold().cyan());
+    if harvest.rails.is_empty() && harvest.loads.is_empty() {
+        println!("  no Power-class rails and no entity domain contracts — nothing to design a tree from");
+        return Ok(());
+    }
+    println!("
+  {}", "rails".bold());
+    for r in &harvest.rails {
+        let budget = r
+            .declared_budget_a
+            .map(|c| format!("budget {c}A"))
+            .unwrap_or_else(|| "budget —".to_string());
+        let loads = match (r.i_nom_total_a, r.i_max_total_a) {
+            (None, None) if r.loads.is_empty() => "no attached domain loads".to_string(),
+            (n, m) => format!(
+                "loads {} nom / {} max ({})",
+                n.map(|v| format!("{v:.3}A")).unwrap_or_else(|| "—".into()),
+                m.map(|v| format!("{v:.3}A")).unwrap_or_else(|| "—".into()),
+                r.loads.join(", ")
+            ),
+        };
+        let noise = r
+            .noise_uvrms
+            .map(|n| format!("noise ≤ {n:.0}µVrms"))
+            .unwrap_or_else(|| "noise —".to_string());
+        let status = if r.driven {
+            "driven".green().to_string()
+        } else {
+            format!("{} ← powertree worklist", "UNDRIVEN".yellow().bold())
+        };
+        println!(
+            "    {:<10} {:>7.3}V  {:<12} {}  {}  {}",
+            r.net.bold(), r.voltage, budget, loads, noise, status
+        );
+    }
+    if !harvest.unwired.is_empty() {
+        println!(
+            "
+  {} domain load(s) not wired to any net — stated, not counted: {}",
+            "⚠".yellow(),
+            harvest.unwired.join(", ")
+        );
+    }
+    let undriven = harvest.rails.iter().filter(|r| !r.driven).count();
+    println!(
+        "
+  {} rail(s), {} undriven — the tree calculator (next increment) proposes stages for these",
+        harvest.rails.len(),
+        undriven
+    );
+    if let Some(p) = json_out {
+        fs::write(&p, serde_json::to_string_pretty(&harvest)?)
+            .with_context(|| format!("write {}", p.display()))?;
+        println!("  harvest JSON → {}", p.display());
+    }
+    Ok(())
 }
 
 /// Print the decap-synthesis report section — one block per

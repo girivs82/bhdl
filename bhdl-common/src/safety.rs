@@ -312,6 +312,11 @@ pub struct PowerDomain {
     /// board network and the die — added as labelled series terms.
     pub pdn_r_ohm: Option<f64>,
     pub pdn_l_h: Option<f64>,
+    /// Rail noise target (µVrms), from the part's datasheet supply
+    /// requirements (analog/PLL rails state these). Drives the power
+    /// tree's buck-vs-LDO and post-regulation decisions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub noise_uvrms: Option<f64>,
     pub source: String,
 }
 

@@ -1,0 +1,45 @@
+// bhdl-sweep: skip — powertree-harvest fixture, not a layout target.
+// FUNCTION-FIRST partial board: parts instantiated and signal-wired,
+// rails declared but UNDRIVEN — exactly the state the power tree is
+// designed from. `bhdl-cli ... powertree` harvests the loads below;
+// ERC028's undriven-rail findings are the same worklist. All domain
+// numbers are FIXTURE values standing in for datasheet data.
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+entity SocCore() {
+    pin 1: power in;
+    pin 2: signal inout;
+    pin 3: ground;
+    attribute component_class = "ic";
+    attribute kicad_symbol = "Device:U";
+    domain VDD_CORE pins="1" v=1.0V tol=3% i_nom=2A i_max=4A
+        source="FIXTURE — stands in for NDA vendor data";
+}
+
+// Analog part with a rail NOISE target — the input that drives
+// buck-vs-LDO / post-regulation in the tree calculator.
+entity PllBlock() {
+    pin 1: power in;
+    pin 2: ground;
+    attribute component_class = "ic";
+    attribute kicad_symbol = "Device:U";
+    domain VDDA pins="1" v=1.8V tol=2% i_nom=50mA i_max=80mA noise=100uV
+        source="FIXTURE — stands in for NDA vendor data";
+}
+
+board PowertreeDemo {
+    power VIN = 12V @ 3A;
+    power V1V0 = 1.0V;
+    power V1V8 = 1.8V;
+    ground GND;
+
+    @V1V0 -> soc: SocCore().1;
+    soc.3 -> @GND;
+    @V1V8 -> pll: PllBlock().1;
+    pll.2 -> @GND;
+
+    // functional wiring exists — it never waits for the power tree
+    soc.2 -> r_pull: Res(10kΩ).1;
+    r_pull.2 -> @V1V8;
+}
