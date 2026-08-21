@@ -227,9 +227,20 @@ const LDO_NOISE_UVRMS: f64 = 30.0;
 /// dropout 0.3V + 0.2V regulation margin.
 const LDO_HEADROOM_V: f64 = 0.5;
 /// Per-LDO dissipation bound (W) before the calculator inserts an
-/// intermediate rail — small-package (SOT-23/DFN class) thermal
-/// comfort, conservative.
+/// intermediate rail — small-package (SOT-23/DFN class), set BELOW
+/// what the package survives (reliability bound, same doctrine as
+/// every class here). Checked at WORST-CASE current.
 const LDO_DISS_BOUND_W: f64 = 0.5;
+
+/// Current-derating policy, applied to EVERY regulator class: the
+/// part finally chosen must be RATED so the rail's worst-case draw is
+/// at most this fraction of the rating. A regulator running at its
+/// nameplate sits hot, and heat is FIT — the derating argument is not
+/// a multi-phase special case, it goes down the whole chain. Every
+/// stage therefore emits required_rating_a = i_max / CURRENT_DERATE;
+/// the emitted generic placeholder will carry it as its acceptance
+/// contract.
+const CURRENT_DERATE: f64 = 0.8;
 
 // ── integrated buck → controller + external power stages crossover ──
 // Driven by PACKAGE DISSIPATION and thermals, not a folklore current:
@@ -279,12 +290,18 @@ fn ext_phases(i_max_a: f64) -> usize {
 /// Does this buck stage need a controller + external power stages?
 /// True when the rating exceeds integrated FETs, or the in-package
 /// share of the conversion loss exceeds the package bound.
-fn needs_external_stages(vout: f64, i_nom: f64, i_max: f64) -> bool {
-    if i_max > INTEGRATED_I_MAX_A {
+fn needs_external_stages(vout: f64, _i_nom: f64, i_max: f64) -> bool {
+    // rating check under derating: the integrated part would have to
+    // be RATED i_max/derate — beyond the integrated-FET ceiling means
+    // external
+    if i_max / CURRENT_DERATE > INTEGRATED_I_MAX_A {
         return true;
     }
-    let eff = buck_eff_pct(i_nom);
-    let p_diss = vout * i_nom * (100.0 / eff - 1.0);
+    // thermal check at WORST-CASE current, not the operating point —
+    // the reliability bound must hold when the load actually pulls
+    // i_max
+    let eff = buck_eff_pct(i_max);
+    let p_diss = vout * i_max * (100.0 / eff - 1.0);
     p_diss * INTEGRATED_LOSS_IN_PKG > INTEGRATED_PKG_BOUND_W
 }
 
@@ -297,24 +314,29 @@ fn needs_external_stages(vout: f64, i_nom: f64, i_max: f64) -> bool {
 /// requirements — and prices stage-count decisions automatically (a
 /// minted intermediate buck costs 4–9 units, feeding from an existing
 /// rail costs 0).
-fn stage_cost_units(topology: &Topology, i_max_a: f64) -> f64 {
+/// `rating_a` is the DERATED required part rating (i_max / derate) —
+/// the part you must buy — and keys the LDO/integrated bands. The
+/// external class keys on `phases` instead: the 20A/phase design
+/// point ALREADY embeds its derating against the 30A+ stage rating,
+/// so pricing it from the derated rail rating would derate twice.
+fn stage_cost_units(topology: &Topology, rating_a: f64, phases: usize) -> f64 {
     match topology {
-        Topology::Ldo => match i_max_a {
+        Topology::Ldo => match rating_a {
             x if x <= 0.3 => 1.0,
             x if x <= 1.0 => 1.5,
             _ => 2.5,
         },
-        Topology::Buck => match i_max_a {
+        Topology::Buck => match rating_a {
             x if x <= 1.0 => 4.0,
             x if x <= 5.0 => 6.0,
             _ => 9.0,
         },
         // controller (base + per-phase premium) + one power stage,
-        // inductor and phase passives PER PHASE — phases sized at the
-        // derated design current, so cost scales with current the way
-        // the board actually does (a 200A rail is ~10 phases)
+        // inductor and phase passives PER PHASE — cost scales with
+        // current the way the board actually does (a 200A rail is
+        // ~10 phases)
         Topology::BuckExternal => {
-            let p = ext_phases(i_max_a) as f64;
+            let p = phases as f64;
             EXT_CTRL_BASE_UNITS + EXT_CTRL_PER_PHASE_UNITS * p + EXT_PHASE_UNITS * p
         }
     }
@@ -346,8 +368,14 @@ pub struct StagePlan {
     pub vout: f64,
     /// Operating-point current (sum of served loads' i_nom).
     pub i_nom_a: f64,
-    /// Rating current (sum of i_max) the eventual part must supply.
+    /// Worst-case current (sum of served loads' i_max).
     pub i_max_a: f64,
+    /// The rating the eventual part must carry: i_max / derating
+    /// policy (parts never run above that fraction of nameplate —
+    /// reliability/FIT). This is the acceptance figure the generic
+    /// placeholder will declare.
+    #[serde(default)]
+    pub required_rating_a: f64,
     /// Stage efficiency %, with its basis.
     pub eff_pct: f64,
     /// "physics" (LDO Vout/Vin) or "estimate: buck band" — stated.
@@ -436,8 +464,9 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
             p_diss_w: (v_from - r.voltage) * nom,
             noise_assumed_uvrms: LDO_NOISE_UVRMS,
             serves: r.loads.clone(),
-            cost_units: stage_cost_units(&Topology::Ldo, max),
+            cost_units: stage_cost_units(&Topology::Ldo, max / CURRENT_DERATE, 1),
             phases: 1,
+            required_rating_a: max / CURRENT_DERATE,
         }
     };
     let buck_stage = |from: &str, v_from: f64, r: &RailSummary, nom: f64, max: f64| -> StagePlan {
@@ -468,8 +497,9 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
             p_diss_w: p_out * (100.0 / eff - 1.0),
             noise_assumed_uvrms: BUCK_NOISE_FLOOR_UVRMS,
             serves: r.loads.clone(),
-            cost_units: stage_cost_units(&topology, max),
+            cost_units: stage_cost_units(&topology, max / CURRENT_DERATE, phases),
             phases,
+            required_rating_a: max / CURRENT_DERATE,
         }
     };
     // Buck feeding a generated intermediate rail for one or more LDOs.
@@ -489,8 +519,9 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
             p_diss_w: p_out * (100.0 / eff - 1.0),
             noise_assumed_uvrms: BUCK_NOISE_FLOOR_UVRMS,
             serves,
-            cost_units: stage_cost_units(&Topology::Buck, max),
+            cost_units: stage_cost_units(&Topology::Buck, max / CURRENT_DERATE, 1),
             phases: 1,
+            required_rating_a: max / CURRENT_DERATE,
         }
     };
 
@@ -510,7 +541,9 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
                 unplannable.push(format!("{}: no i_nom/i_max on any attached load", r.net));
                 continue;
             };
-            let direct_ldo_diss = (vin - r.voltage) * nom;
+            // thermal decisions at WORST-CASE current (reliability
+            // bound must hold at i_max, not the operating point)
+            let direct_ldo_diss = (vin - r.voltage) * max;
             if needs_ldo(r) {
                 if direct_ldo_diss <= LDO_DISS_BOUND_W && strategy != "efficiency" {
                     // small enough to eat the headroom — one stage, no inductor
@@ -559,7 +592,7 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
                 .enumerate()
                 .filter(|(_, st)| matches!(st.topology, Topology::Buck | Topology::BuckExternal))
                 .filter(|(_, st)| st.vout >= r.voltage + LDO_HEADROOM_V)
-                .filter(|(_, st)| (st.vout - r.voltage) * nom <= LDO_DISS_BOUND_W)
+                .filter(|(_, st)| (st.vout - r.voltage) * max <= LDO_DISS_BOUND_W)
                 .min_by(|(_, a), (_, b)| a.vout.partial_cmp(&b.vout).unwrap())
                 .map(|(i, _)| i);
             match donor {
@@ -585,7 +618,8 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
                         d.eff_basis = format!("estimate: conservative buck band at {:.2}A", d.i_nom_a);
                     }
                     d.p_diss_w = d.vout * d.i_nom_a * (100.0 / d.eff_pct - 1.0);
-                    d.cost_units = stage_cost_units(&d.topology, d.i_max_a);
+                    d.required_rating_a = d.i_max_a / CURRENT_DERATE;
+                    d.cost_units = stage_cost_units(&d.topology, d.required_rating_a, d.phases);
                     d.serves.push(r.net.clone());
                 }
                 None => still_pending.push((r, nom, max)),

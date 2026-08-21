@@ -1819,8 +1819,8 @@ async fn run_powertree(
                         bhdl_synthesizer::powertree::Topology::Ldo => "LDO     ".magenta().to_string(),
                     };
                     println!(
-                        "    {} {:>10} → {:<10} {:>5.2}V→{:<4.2}V  {:.3}A nom (rate ≥ {:.2}A)  eff {:>5.1}% ({})  diss {:>5.0}mW  noise ≤ {:.0}µVrms  [{}]",
-                        topo, st.from, st.to, st.vin, st.vout, st.i_nom_a, st.i_max_a,
+                        "    {} {:>10} → {:<10} {:>5.2}V→{:<4.2}V  {:.3}A nom / {:.2}A max (part rating ≥ {:.2}A — 80% derate)  eff {:>5.1}% ({})  diss {:>5.0}mW  noise ≤ {:.0}µVrms  [{}]",
+                        topo, st.from, st.to, st.vin, st.vout, st.i_nom_a, st.i_max_a, st.required_rating_a,
                         st.eff_pct, st.eff_basis, st.p_diss_w * 1e3, st.noise_assumed_uvrms,
                         st.serves.join(", ")
                     );

@@ -926,7 +926,7 @@ entity BigSoc() {
     attribute component_class = "ic";
     domain VCORE pins="1" v=0.9V i_nom=20A i_max=25A source="FIXTURE";
     domain VIO   pins="2" v=3.3V i_nom=6A  i_max=7A  source="FIXTURE";
-    domain VMEM  pins="3" v=1.0V i_nom=6A  i_max=7A  source="FIXTURE";
+    domain VMEM  pins="3" v=1.0V i_nom=5A  i_max=6A  source="FIXTURE";
 }
 board HighCurrent {
     power VIN = 12V @ 10A;
@@ -957,9 +957,11 @@ board HighCurrent {
         // 3.3V @ 6A: thermal crossover (in-package share over bound)
         let io = by_rail("V3V3");
         assert_eq!(io.topology, Topology::BuckExternal, "same current, higher Vout → more loss → external: {io:#?}");
-        // 1.0V @ 6A: same current, a third of the loss → integrated
+        // 1.0V @ 5A/6A: low loss AND derated rating (6/0.8 = 7.5A)
+        // still within the 8A integrated ceiling → integrated
         let mem = by_rail("V1V0");
         assert_eq!(mem.topology, Topology::Buck, "{mem:#?}");
+        assert!((mem.required_rating_a - 7.5).abs() < 1e-9, "derating down the chain: {mem:#?}");
         // phase-based cost: 25A → 2 phases (20A/phase design point,
         // derated for FIT) → ctrl 4 + 2·1 + 2·5 = 16; 7A ext → 1
         // phase → 10 (a mild premium over the 9-unit integrated buck
@@ -968,7 +970,13 @@ board HighCurrent {
         assert!((core.cost_units - 16.0).abs() < 1e-9);
         assert_eq!(io.phases, 1);
         assert!((io.cost_units - 10.0).abs() < 1e-9);
+        // cost keys on the REQUIRED RATING (7.5A > 5A band → 9 units):
+        // the part you must buy, not the current you draw
         assert!((mem.cost_units - 9.0).abs() < 1e-9);
+        // every stage carries the derated acceptance rating
+        for st in &o.stages {
+            assert!((st.required_rating_a - st.i_max_a / 0.8).abs() < 1e-9, "{st:#?}");
+        }
         assert_eq!(o.ext_buck_count, 2);
     }
 
