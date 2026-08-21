@@ -1435,3 +1435,59 @@ async fn template_stubs_are_marked_at_creation() {
     let (real_id, _) = n.instances.iter().find(|(_, i)| i.name == "sense").unwrap();
     assert!(!bhdl_synthesizer::is_template_stub(&n, real_id));
 }
+
+/// Hierarchical accessors: `div.R_top.2` on the BOARD reaches the
+/// composition child whose flat identity is `div_R_top` — the dotted
+/// form is the language surface, the mangled name stays the netlist
+/// identity. (The safety model's NetView::resolve already walked
+/// dotted paths; connectivity now matches.)
+#[tokio::test]
+async fn hierarchical_accessor_reaches_composition_children() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let src = r#"
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+entity DividerBlock(r_top: resistance = 10kΩ, r_bot: resistance = 10kΩ) as design {
+    pin VIN: power in;
+    pin VOUT: signal out virtual;
+    pin GND: ground;
+    expansion {
+        VIN -> R_top: Res(r_top).1; R_top.2 -> VOUT;
+        VOUT -> R_bot: Res(r_bot).1; R_bot.2 -> GND;
+    }
+}
+
+board AccessorDemo {
+    power V5 = 5V @ 1A;
+    ground GND;
+    @V5 -> div: DividerBlock().VIN;
+    div.GND -> @GND;
+
+    // the accessor: reach INSIDE the composition — probe the divider
+    // midpoint through the child, not through a board-side net name
+    div.R_top.2 -> tp: Res(1MΩ).1;
+    tp.2 -> @GND;
+}
+"#;
+    let pr = parse(src);
+    assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+
+    // net of a named instance pin
+    let pin_net = |inst: &str, pin: &str| -> Option<bhdl_netlist::types::NetId> {
+        n.pin_instances.values().find_map(|pi| {
+            let i = n.instances.get(pi.instance)?;
+            if i.name != inst { return None; }
+            let p = n.pins.get(pi.pin_def)?;
+            if p.name != pin { return None; }
+            pi.net
+        })
+    };
+    let child_net = pin_net("div_R_top", "2").expect("child pin wired");
+    let probe_net = pin_net("tp", "1").expect("probe wired");
+    assert_eq!(child_net, probe_net, "accessor must land the probe on the child's net");
+}

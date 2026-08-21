@@ -19,7 +19,20 @@ use crate::entity_variants::EntityVariantManager;
 use crate::populate_instance_attributes;
 
 /// Context for hierarchical connectivity extraction
+/// A hierarchical-accessor connection whose target child does not
+/// exist yet (expansion children mint at phase 4.5, AFTER board
+/// connectivity) — recorded here and replayed post-expansion.
+#[derive(Debug, Clone)]
+pub struct DeferredAccessor {
+    pub inst: InstanceId,
+    pub pin: String,
+    pub net: NetId,
+    pub desc: String,
+}
+
 pub struct HierarchicalContext {
+    /// Deferred hierarchical-accessor connections (see DeferredAccessor).
+    pub deferred_accessors: std::cell::RefCell<Vec<DeferredAccessor>>,
     /// Stack of module contexts (for nested modules)
     module_stack: Vec<ModuleContext>,
     /// Map from module name to ModuleId
@@ -52,6 +65,7 @@ struct ModuleContext {
 impl HierarchicalContext {
     pub fn new() -> Self {
         Self {
+            deferred_accessors: std::cell::RefCell::new(Vec::new()),
             module_stack: Vec::new(),
             module_name_to_id: HashMap::new(),
             instance_path_to_id: HashMap::new(),
@@ -226,7 +240,7 @@ pub fn extract_hierarchical_connectivity(
     analysis: &AnalysisResult,
     netlist: &mut Netlist,
     import_preprocessor: Option<&crate::import_preprocessor::ImportPreprocessor>,
-) -> Result<()> {
+) -> Result<Vec<DeferredAccessor>> {
     println!("=== STARTING hierarchical connectivity extraction from AST ===");
     info!("=== STARTING hierarchical connectivity extraction from AST ===");
     
@@ -256,7 +270,7 @@ pub fn extract_hierarchical_connectivity(
 
     println!("=== COMPLETED hierarchical connectivity extraction ===");
     info!("=== COMPLETED hierarchical connectivity extraction ===");
-    Ok(())
+    Ok(context.deferred_accessors.into_inner())
 }
 
 /// v0.6: walk the board(s) for connection statements, harvest
@@ -3166,7 +3180,7 @@ fn process_flow_parts(
 
                     if let Some(net_id) = last_net_id {
                         connect_pin_to_net(netlist, inst_id, pin_name, net_id,
-                            &format!("{}.{}", instance_name, pin_name), "previous net")?;
+                            &format!("{}.{}", instance_name, pin_name), "previous net", Some(context))?;
                     } else {
                         log::warn!("No previous net to connect to for {}.{}", instance_name, pin_name);
                     }
@@ -3232,7 +3246,7 @@ fn process_flow_parts(
                 };
 
                 connect_pin_to_net(netlist, inst_id, pin_name, net_id,
-                    &format!("{}.{}", instance_name, pin_name), "net")?;
+                    &format!("{}.{}", instance_name, pin_name), "net", Some(context))?;
 
                 last_net_id = Some(net_id);
                 last_was_component_pin = true;
@@ -3325,7 +3339,7 @@ fn connect_previous_pin_to_net(
         let prev_pin = &prev_part[prev_dot + 1..];
         if let Some(prev_inst_id) = find_instance_by_name_in_context(netlist, context, prev_inst_name) {
             connect_pin_to_net(netlist, prev_inst_id, prev_pin, net_id,
-                &format!("{}.{}", prev_inst_name, prev_pin), "resolved net")?;
+                &format!("{}.{}", prev_inst_name, prev_pin), "resolved net", Some(context))?;
         }
     }
     Ok(())
@@ -3392,7 +3406,7 @@ fn thread_chain_through_instance(
         }
     };
     connect_pin_to_net(netlist, inst_id, &pin_names[0], entry_net,
-        &format!("{}.{}", endpoint, pin_names[0]), "chain entry net")?;
+        &format!("{}.{}", endpoint, pin_names[0]), "chain entry net", None)?;
 
     let exit_name = format!("net_{}_{}", endpoint, pin_names[1]).replace('.', "_");
     let exit_net = netlist.add_net(Some(exit_name.clone()));
@@ -3401,9 +3415,22 @@ fn thread_chain_through_instance(
     info!("  Threaded chain through '{}': {} in, {} out on '{}'",
         endpoint, pin_names[0], pin_names[1], exit_name);
     connect_pin_to_net(netlist, inst_id, &pin_names[1], exit_net,
-        &format!("{}.{}", endpoint, pin_names[1]), "chain exit net")?;
+        &format!("{}.{}", endpoint, pin_names[1]), "chain exit net", None)?;
 
     Ok(Some((entry_net, exit_net)))
+}
+
+/// Replay deferred hierarchical-accessor connections AFTER expansion
+/// has minted the composition children. A child still missing NOW is
+/// the hard error the deferral postponed.
+pub fn replay_deferred_accessors(
+    netlist: &mut Netlist,
+    deferred: Vec<DeferredAccessor>,
+) -> Result<()> {
+    for d in deferred {
+        connect_pin_to_net(netlist, d.inst, &d.pin, d.net, &d.desc, "deferred accessor (post-expansion)", None)?;
+    }
+    Ok(())
 }
 
 /// Helper: connect a pin to a net, trying alternative pin names if needed
@@ -3414,6 +3441,7 @@ fn connect_pin_to_net(
     net_id: NetId,
     desc: &str,
     target_desc: &str,
+    deferred: Option<&HierarchicalContext>,
 ) -> Result<()> {
     // v0.4 interface-field binding alias resolution: if `pin_name`
     // is a dotted form (`spi.MOSI`) that was registered as an alias
@@ -3430,6 +3458,36 @@ fn connect_pin_to_net(
         log::debug!("Connected {} to {}", desc, target_desc);
         info!("  Connected {} to {}", desc, target_desc);
     } else {
+        // HIERARCHICAL ACCESSOR: a dotted "pin" (`R_top.2` on `div`)
+        // reaches a composition CHILD — re-split as child instance
+        // `div_R_top`, pin `2`, and connect there. Any depth: all but
+        // the last segment mangle into the child name.
+        if pin_name.contains('.') {
+            if let Some(inst_name) = netlist.instances.get(inst_id).map(|i| i.name.clone()) {
+                let segs: Vec<&str> = pin_name.split('.').collect();
+                let child = format!("{}_{}", inst_name, segs[..segs.len() - 1].join("_"));
+                let child_pin = segs[segs.len() - 1];
+                if let Some(child_id) = find_instance_by_name(netlist, &child) {
+                    log::debug!("hierarchical accessor: {inst_name}.{pin_name} → {child}.{child_pin}");
+                    return connect_pin_to_net(netlist, child_id, child_pin, net_id, desc, target_desc, deferred);
+                }
+                // children mint at expansion (phase 4.5) — defer and
+                // replay post-expansion; only then is a missing child
+                // an error
+                if let Some(ctx) = deferred {
+                    info!(
+                        "hierarchical accessor {inst_name}.{pin_name}: child '{child}' not minted yet — deferred until after expansion"
+                    );
+                    ctx.deferred_accessors.borrow_mut().push(DeferredAccessor {
+                        inst: inst_id,
+                        pin: pin_name.to_string(),
+                        net: net_id,
+                        desc: desc.to_string(),
+                    });
+                    return Ok(());
+                }
+            }
+        }
         let alt_pins = match pin_name {
             "cathode" | "K" | "-" | "neg" => vec!["K", "2", "-", "neg", "cathode"],
             "anode" | "A" | "+" | "pos" => vec!["A", "1", "+", "pos", "anode"],
@@ -3644,7 +3702,23 @@ fn find_instance_by_name_in_context(
         }
     }
     // Fall back to bare-name lookup.
-    find_instance_by_name(netlist, name)
+    if let Some(id) = find_instance_by_name(netlist, name) {
+        return Some(id);
+    }
+    // HIERARCHICAL ACCESSOR (docs/spec/Expansion_Vs_Hierarchy.md):
+    // `div.R_top` reaches the composition child whose FLAT netlist
+    // identity is the mangled path `div_R_top`. The dotted form is
+    // the language surface; the flat name stays the identity every
+    // flat consumer (refdes, BOM, FMEDA, PnR) sees. Works at any
+    // depth (`a.b.c` → `a_b_c`).
+    if name.contains('.') {
+        let mangled = name.replace('.', "_");
+        if let Some(id) = find_instance_by_name(netlist, &mangled) {
+            log::debug!("hierarchical accessor: '{name}' → '{mangled}'");
+            return Some(id);
+        }
+    }
+    None
 }
 
 /// Extract the ordered flow endpoints of a connection / net-flow statement

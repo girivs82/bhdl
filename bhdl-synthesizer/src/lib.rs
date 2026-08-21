@@ -333,6 +333,9 @@ pub struct NetlistGenerator {
     import_loader: ImportLoader,
     // Import preprocessor for pre-processed imports
     import_preprocessor: Option<ImportPreprocessor>,
+    /// Deferred hierarchical-accessor connections from board
+    /// connectivity, replayed after expansion mints the children.
+    deferred_accessors: Vec<crate::hierarchical_connectivity::DeferredAccessor>,
     /// Decap-synthesis reports from phase 4.7, merged into the
     /// netlist's analysis data in phase 8 (which rebuilds it).
     decap_reports: Vec<bhdl_common::analysis_interface::DecapReport>,
@@ -395,6 +398,7 @@ impl NetlistGenerator {
             type_mapper: ComponentTypeMapper::new(),
             import_loader,
             import_preprocessor: None,
+            deferred_accessors: Vec::new(),
             decap_reports: Vec::new(),
             local_entities: HashMap::new(),
             component_calculator: ComponentCalculator::new(),
@@ -712,6 +716,16 @@ impl NetlistGenerator {
                 "Phase 4.5: expansion produced {} expanded instance(s)",
                 results.len()
             );
+        }
+
+        // Phase 4.52: replay deferred hierarchical-accessor
+        // connections — the composition children they target exist
+        // now; a child still missing is the hard error the deferral
+        // postponed.
+        if !self.deferred_accessors.is_empty() {
+            let deferred = std::mem::take(&mut self.deferred_accessors);
+            info!("Phase 4.52: replaying {} deferred hierarchical accessor(s)", deferred.len());
+            crate::hierarchical_connectivity::replay_deferred_accessors(&mut self.netlist, deferred)?;
         }
 
         // Phase 4.55: Net-class reconciliation. A net's class is
@@ -1645,7 +1659,8 @@ impl NetlistGenerator {
 
         // Use hierarchical connectivity extraction (AST-based)
         info!("Using hierarchical connectivity extraction");
-        hierarchical_connectivity::extract_hierarchical_connectivity(ast, analysis, &mut self.netlist, self.import_preprocessor.as_ref())?;
+        let deferred_accessors = hierarchical_connectivity::extract_hierarchical_connectivity(ast, analysis, &mut self.netlist, self.import_preprocessor.as_ref())?;
+        self.deferred_accessors = deferred_accessors;
 
         Ok(())
     }
