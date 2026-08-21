@@ -35,6 +35,10 @@ pub struct RailLoad {
     pub i_max_a: Option<f64>,
     /// Rail noise target (µVrms) from the domain contract.
     pub noise_uvrms: Option<f64>,
+    /// Always-on load — must live independent of the protected front
+    /// end.
+    #[serde(default)]
+    pub always_on: bool,
     pub net: Option<String>,
 }
 
@@ -56,6 +60,11 @@ pub struct RailSummary {
     /// True when something on the board already generates this rail
     /// (regulator output pin, power-source class, power symbol).
     pub driven: bool,
+    /// Any attached load is always-on ⇒ the whole rail must survive
+    /// the front end being off — it hangs DIRECT under a prereg
+    /// policy, stated.
+    #[serde(default)]
+    pub always_on: bool,
     /// Instance.domain names of the attached loads.
     pub loads: Vec<String>,
 }
@@ -129,6 +138,7 @@ pub fn harvest_loads(netlist: &Netlist, sf: &SourceFile) -> PowerTreeLoads {
                 i_nom_a: dom.i_nom_a,
                 i_max_a: dom.i_max_a,
                 noise_uvrms: dom.noise_uvrms,
+                always_on: dom.always_on,
                 net,
             });
         }
@@ -187,6 +197,7 @@ pub fn harvest_loads(netlist: &Netlist, sf: &SourceFile) -> PowerTreeLoads {
                 .filter_map(|l| l.noise_uvrms)
                 .min_by(|a, b| a.partial_cmp(b).unwrap()),
             driven,
+            always_on: attached.iter().any(|l| l.always_on),
             loads: attached
                 .iter()
                 .map(|l| format!("{}.{}", l.instance, l.domain))
@@ -326,6 +337,8 @@ fn stage_cost_units(topology: &Topology, rating_a: f64, phases: usize) -> f64 {
             x if x <= 1.0 => 1.5,
             _ => 2.5,
         },
+        // controller + protection FETs; grows a little with current
+        Topology::Prereg => if rating_a <= 10.0 { PREREG_COST_UNITS } else { PREREG_COST_UNITS + 2.0 },
         Topology::Buck => match rating_a {
             x if x <= 1.0 => 4.0,
             x if x <= 5.0 => 6.0,
@@ -377,6 +390,12 @@ fn ext_eff_at(vin: f64, vout: f64) -> f64 {
     (EXT_BUCK_EFF_PCT - ratio_penalty_pct(vin, vout)).max(70.0)
 }
 
+/// Series drop across the protected front end (ideal-diode /
+/// back-to-back FET conduction, stated conservative).
+const PREREG_DROP_V: f64 = 0.1;
+/// Protected-front-end cost: OVP/ideal-diode controller + FETs.
+const PREREG_COST_UNITS: f64 = 3.0;
+
 /// Bulk-intermediate sweep granularity (V). The intermediate voltage
 /// is SWEPT over (1.5V .. vin−1.5V), not picked from a menu — the
 /// optimum is wherever the composed ratio penalties say it is, and
@@ -386,6 +405,9 @@ const BULK_SWEEP_STEP_V: f64 = 0.5;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Topology {
+    /// Protected front end: OV/UV + reverse/transient protection
+    /// (ideal-diode / eFuse class). A passthrough, not a converter.
+    Prereg,
     /// Integrated buck (converter with internal FETs).
     Buck,
     /// Controller + external power stages — high current, loss spread
@@ -465,6 +487,18 @@ pub struct TreeOption {
 
 /// Propose tree options for the undriven rails, fed from `input`.
 pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>, String> {
+    propose_trees_with_policy(h, input, None)
+}
+
+/// `prereg`: when Some(reason), EVERY rail feeds from a protected
+/// front end (OV/UV etc. — the reason is recorded) instead of the
+/// input directly; rails whose loads are declared `always_on=true`
+/// are the stated exception and hang direct.
+pub fn propose_trees_with_policy(
+    h: &PowerTreeLoads,
+    input: &str,
+    prereg: Option<&str>,
+) -> Result<Vec<TreeOption>, String> {
     let vin_rail = h
         .rails
         .iter()
@@ -554,8 +588,10 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
         }
     };
     // Buck feeding a generated intermediate rail for one or more LDOs.
-    let buck_intermediate = |name: &str, v_int: f64, nom: f64, max: f64, serves: Vec<String>| -> StagePlan {
-        let eff = buck_eff_at(nom, vin, v_int);
+    // Fed from the (possibly protected) feed — computed against the
+    // outer vin only through feed_v via the caller's arguments.
+    let buck_intermediate = |name: &str, from: &str, v_from: f64, v_int: f64, nom: f64, max: f64, serves: Vec<String>| -> StagePlan {
+        let eff = buck_eff_at(nom, v_from, v_int);
         let p_out = v_int * nom;
         StagePlan {
             topology: Topology::Buck,
@@ -580,6 +616,13 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
         r.noise_uvrms.map(|n| n < BUCK_NOISE_FLOOR_UVRMS).unwrap_or(false)
     };
 
+    // Under a prereg policy the planning feed for non-AO rails is the
+    // protected output, one FET-drop below the input.
+    let (feed_name, feed_v) = match prereg {
+        Some(_) => ("V_PROT".to_string(), vin - PREREG_DROP_V),
+        None => (input.to_string(), vin),
+    };
+
     let mut options: Vec<TreeOption> = Vec::new();
     for strategy in ["efficiency", "cost", "area"] {
         let mut stages: Vec<StagePlan> = Vec::new();
@@ -600,15 +643,18 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
         let mut bulk_rails: Vec<RailSummary> = Vec::new();
         if strategy == "efficiency" {
             let chain_eff_direct = |r: &RailSummary, nom: f64, max: f64| -> f64 {
-                if needs_external_stages(vin, r.voltage, max) {
-                    ext_eff_at(vin, r.voltage)
+                if needs_external_stages(feed_v, r.voltage, max) {
+                    ext_eff_at(feed_v, r.voltage)
                 } else {
-                    buck_eff_at(nom, vin, r.voltage)
+                    buck_eff_at(nom, feed_v, r.voltage)
                 }
             };
+            // AO rails are excluded: they must bypass the front end,
+            // so they can never hang off a (protected) bulk
             let buckable: Vec<(&&RailSummary, f64, f64)> = work
                 .iter()
                 .filter(|r| !needs_ldo(r))
+                .filter(|r| prereg.is_none() || !r.always_on)
                 .filter_map(|r| op_current(r).map(|(n, m)| (r, n, m)))
                 .collect();
 
@@ -637,7 +683,7 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
                     .sum();
                 let mut best: Option<(f64, f64, Vec<String>, f64, f64)> = None;
                 let mut vb = 1.5;
-                while vb <= vin - 1.5 {
+                while vb <= feed_v - 1.5 {
                     let this_vb = vb;
                     vb += BULK_SWEEP_STEP_V;
                     let vb = this_vb;
@@ -646,7 +692,7 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
                     }
                     // two passes: the bulk efficiency band depends on
                     // the bulk current, which depends on the assignment
-                    let mut bulk_eff_est = 90.0 - ratio_penalty_pct(vin, vb);
+                    let mut bulk_eff_est = 90.0 - ratio_penalty_pct(feed_v, vb);
                     let mut assigned: Vec<(&&RailSummary, f64, f64)> = Vec::new();
                     for _pass in 0..2 {
                         assigned = remaining
@@ -680,10 +726,10 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
                                 r.voltage * n / (e_down / 100.0) / vb
                             })
                             .sum();
-                        bulk_eff_est = if needs_external_stages(vin, vb, i_nom_b) {
-                            ext_eff_at(vin, vb)
+                        bulk_eff_est = if needs_external_stages(feed_v, vb, i_nom_b) {
+                            ext_eff_at(feed_v, vb)
                         } else {
-                            buck_eff_at(i_nom_b, vin, vb)
+                            buck_eff_at(i_nom_b, feed_v, vb)
                         };
                     }
                     if assigned.is_empty() {
@@ -727,7 +773,7 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
                         let name = format!("V_BULK_{}", format!("{vb:.1}").replace('.', "V"));
                         notes.push(format!(
                             "bulk round {round} (swept 1.5–{:.1}V in {BULK_SWEEP_STEP_V}V steps): {vb}V CHOSEN feeding [{}] — chain dissipation {:.2}W vs {:.2}W direct for those rails (ratio penalties composed)",
-                            vin - 1.5, rails.join(", "), diss, direct_diss
+                            feed_v - 1.5, rails.join(", "), diss, direct_diss
                         ));
                         for rn in &rails {
                             bulk_assign.insert(rn.clone(), (name.clone(), vb));
@@ -740,20 +786,21 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
                             i_max_total_a: Some(i_max_b),
                             noise_uvrms: None,
                             driven: false,
+                            always_on: false,
                             loads: rails,
                         });
                     }
                     Some((diss, vb, ..)) => {
                         notes.push(format!(
                             "bulk round {round} (swept 1.5–{:.1}V): direct wins for the remaining rails — best candidate {vb}V would dissipate {:.2}W vs {:.2}W (ratio penalties composed)",
-                            vin - 1.5, diss, direct_diss
+                            feed_v - 1.5, diss, direct_diss
                         ));
                         break;
                     }
                     None => {
                         notes.push(format!(
                             "bulk round {round} (swept 1.5–{:.1}V): no voltage improves any remaining rail — direct",
-                            vin - 1.5
+                            feed_v - 1.5
                         ));
                         break;
                     }
@@ -767,11 +814,21 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
             };
             // thermal decisions at WORST-CASE current (reliability
             // bound must hold at i_max, not the operating point)
-            let direct_ldo_diss = (vin - r.voltage) * max;
+            // AO rails bypass the protected front end (stated); all
+            // others plan against the (possibly protected) feed
+            let ao = prereg.is_some() && r.always_on;
+            let (rfeed, rfeed_v) = if ao { (input, vin) } else { (feed_name.as_str(), feed_v) };
+            if ao {
+                notes.push(format!(
+                    "always-on rail {} hangs DIRECT off {} — bypasses the protected front end (stated: it must live when the front end is off/faulted)",
+                    r.net, input
+                ));
+            }
+            let direct_ldo_diss = (rfeed_v - r.voltage) * max;
             if needs_ldo(r) {
                 if direct_ldo_diss <= LDO_DISS_BOUND_W && strategy != "efficiency" {
                     // small enough to eat the headroom — one stage, no inductor
-                    stages.push(ldo_stage(input, vin, r, nom, max));
+                    stages.push(ldo_stage(rfeed, rfeed_v, r, nom, max));
                 } else {
                     // excessive headroom = excessive heat: intermediate rail
                     pending_ldo.push((r, nom, max));
@@ -782,11 +839,11 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
                 // cost: avoid the inductor when the LDO can thermally
                 // afford the headroom
                 "cost" if direct_ldo_diss <= LDO_DISS_BOUND_W => {
-                    stages.push(ldo_stage(input, vin, r, nom, max));
+                    stages.push(ldo_stage(rfeed, rfeed_v, r, nom, max));
                 }
                 _ => match bulk_assign.get(&r.net) {
                     Some((bname, bv)) => stages.push(buck_stage(bname, *bv, r, nom, max)),
-                    None => stages.push(buck_stage(input, vin, r, nom, max)),
+                    None => stages.push(buck_stage(rfeed, rfeed_v, r, nom, max)),
                 },
             }
         }
@@ -794,7 +851,7 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
         // treatment via the same constructor)
         for br in &bulk_rails {
             let (n, m) = (br.i_nom_total_a.unwrap(), br.i_max_total_a.unwrap());
-            stages.push(buck_stage(input, vin, br, n, m));
+            stages.push(buck_stage(&feed_name, feed_v, br, n, m));
         }
 
         // Before minting an intermediate: is there a rail already in
@@ -820,10 +877,14 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
         // stack headroom heat.
         let mut still_pending: Vec<(&RailSummary, f64, f64)> = Vec::new();
         for (r, nom, max) in pending_ldo {
+            let rail_ao = prereg.is_some() && r.always_on;
             let donor = stages
                 .iter()
                 .enumerate()
                 .filter(|(_, st)| matches!(st.topology, Topology::Buck | Topology::BuckExternal))
+                // an always-on rail may only hang off a donor that is
+                // itself on the always-on (direct) path
+                .filter(|(_, st)| !rail_ao || st.from == input)
                 .filter(|(_, st)| st.vout >= r.voltage + LDO_HEADROOM_V)
                 .filter(|(_, st)| (st.vout - r.voltage) * max <= LDO_DISS_BOUND_W)
                 .min_by(|(_, a), (_, b)| a.vout.partial_cmp(&b.vout).unwrap())
@@ -865,6 +926,15 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
         // Vout + headroom (minimal headroom = minimal heat).
         // cost: ONE shared intermediate at max(Vout)+headroom — fewer
         // inductors, the extra headroom dissipation is the stated price.
+        if let Some((r, ..)) = pending_ldo
+            .iter()
+            .find(|(r, ..)| prereg.is_some() && r.always_on)
+        {
+            return Err(format!(
+                "powertree: always-on rail {} needs a noise LDO that no always-on source can feed within the thermal bound — an always-on intermediate is not synthesized (stated gap): declare that chain by hand or relax always_on/noise",
+                r.net
+            ));
+        }
         if !pending_ldo.is_empty() {
             let groups: Vec<Vec<&(&RailSummary, f64, f64)>> = if strategy == "cost" {
                 vec![pending_ldo.iter().collect()]
@@ -885,10 +955,44 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
                     stages.push(ldo_stage(&int_name, v_int, r, *n, *m));
                 }
                 stages.push(buck_intermediate(
-                    &int_name, v_int, nom, max,
+                    &int_name, &feed_name, feed_v, v_int, nom, max,
                     g.iter().map(|(r, _, _)| r.net.clone()).collect(),
                 ));
             }
+        }
+
+        // The protected front end itself: carries everything that
+        // feeds from V_PROT. Passthrough physics: eff = Vout/Vin of a
+        // series FET drop; dissipation = drop × current. Rated and
+        // derated like every other stage.
+        if let Some(reason) = prereg {
+            let i_nom_p: f64 = stages
+                .iter()
+                .filter(|st| st.from == feed_name)
+                .map(|st| st.vout * st.i_nom_a / (st.eff_pct / 100.0) / feed_v)
+                .sum();
+            let i_max_p: f64 = stages
+                .iter()
+                .filter(|st| st.from == feed_name)
+                .map(|st| st.vout * st.i_max_a / (st.eff_pct / 100.0) / feed_v)
+                .sum();
+            stages.push(StagePlan {
+                topology: Topology::Prereg,
+                from: input.to_string(),
+                to: feed_name.clone(),
+                vin,
+                vout: feed_v,
+                i_nom_a: i_nom_p,
+                i_max_a: i_max_p,
+                eff_pct: feed_v / vin * 100.0,
+                eff_basis: format!("physics: series-FET drop {PREREG_DROP_V}V; protection: {reason}"),
+                p_diss_w: PREREG_DROP_V * i_nom_p,
+                noise_assumed_uvrms: 0.0,
+                serves: vec![format!("all non-always-on rails ({reason})")],
+                cost_units: stage_cost_units(&Topology::Prereg, i_max_p / CURRENT_DERATE, 1),
+                phases: 1,
+                required_rating_a: i_max_p / CURRENT_DERATE,
+            });
         }
 
         // Totals: chains compose — an LDO fed by an intermediate buck

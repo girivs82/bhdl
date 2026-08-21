@@ -165,6 +165,13 @@ enum Commands {
         /// with a declared budget and no attached loads.
         #[arg(long)]
         input: Option<String>,
+        /// Require a protected front end (OV/UV, reverse, transient)
+        /// between the input and EVERY rail — the argument states the
+        /// protection reason and is recorded. Rails whose loads declare
+        /// `always_on=true` bypass it (stated) — they must live when
+        /// the front end is off or faulted.
+        #[arg(long, value_name = "REASON")]
+        prereg: Option<String>,
     },
 
     /// Emit a frozen structural netlist — the immutable "as-fabbed"
@@ -608,8 +615,8 @@ async fn main() -> Result<()> {
             run_elaborate(&source_file, &input_content, &cli.input, output).await?;
         }
 
-        Some(Commands::Powertree { json, input }) => {
-            run_powertree(&source_file, &input_content, &cli.input, cli.no_elaborate, json, input).await?;
+        Some(Commands::Powertree { json, input, prereg }) => {
+            run_powertree(&source_file, &input_content, &cli.input, cli.no_elaborate, json, input, prereg).await?;
         }
 
         Some(Commands::Freeze { output }) => {
@@ -1720,6 +1727,7 @@ async fn run_powertree(
     no_elaborate: bool,
     json_out: Option<PathBuf>,
     input_rail: Option<String>,
+    prereg: Option<String>,
 ) -> Result<()> {
     let netlist = verified_netlist(source_file, input_content, input_path, no_elaborate).await?;
     let harvest = bhdl_synthesizer::powertree::harvest_loads(&netlist, source_file);
@@ -1801,7 +1809,7 @@ async fn run_powertree(
 
     // ── options ──
     let vin_v = harvest.rails.iter().find(|r| r.net == input).map(|r| r.voltage).unwrap_or(1.0);
-    match bhdl_synthesizer::powertree::propose_trees(&harvest, &input) {
+    match bhdl_synthesizer::powertree::propose_trees_with_policy(&harvest, &input, prereg.as_deref()) {
         Err(e) => println!("\n  {e}"),
         Ok(options) => {
             println!(
@@ -1814,6 +1822,7 @@ async fn run_powertree(
                 println!("\n  [{}] {} — {}", oi + 1, o.label.bold(), o.strategy);
                 for st in &o.stages {
                     let topo = match st.topology {
+                        bhdl_synthesizer::powertree::Topology::Prereg => "PROT    ".yellow().to_string(),
                         bhdl_synthesizer::powertree::Topology::Buck => "buck    ".cyan().to_string(),
                         bhdl_synthesizer::powertree::Topology::BuckExternal => format!("buck+ext {}φ", st.phases).blue().to_string(),
                         bhdl_synthesizer::powertree::Topology::Ldo => "LDO     ".magenta().to_string(),

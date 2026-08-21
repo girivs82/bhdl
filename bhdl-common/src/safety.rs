@@ -317,6 +317,12 @@ pub struct PowerDomain {
     /// tree's buck-vs-LDO and post-regulation decisions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub noise_uvrms: Option<f64>,
+    /// Always-on load (standby/RTC/management): its rail must live
+    /// independent of the main protected front end — the power tree
+    /// lets it hang DIRECT off the input, stated, when a pre-regulator
+    /// policy is in force.
+    #[serde(default)]
+    pub always_on: bool,
     pub source: String,
 }
 

@@ -402,6 +402,7 @@ fn parse_domain_item(ename: &str, toks: &[String], d: &mut EntityData) {
                             pdn_r_ohm: ohms("pdn_r"),
                             pdn_l_h: henr("pdn_l"),
                             noise_uvrms: noise("noise"),
+                            always_on: kv.get("always_on").map(|v| v == "true" || v == "1").unwrap_or(false),
                             source: src,
                         });
                     

@@ -1093,3 +1093,64 @@ board FortyEight {
     let vio = eff_opt.stages.iter().find(|s| s.to == "V3V3").unwrap();
     assert!(vio.from == "VIN" || vio.from.starts_with("V_BULK"), "{vio:#?}");
 }
+
+/// Prereg policy: every rail sits behind the protected front end —
+/// except always-on loads, which hang DIRECT off the input (stated):
+/// they must live when the front end is off or faulted.
+#[tokio::test]
+async fn powertree_prereg_with_always_on_bypass() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    use bhdl_synthesizer::powertree::{harvest_loads, propose_trees_with_policy, Topology};
+    let src = r#"
+entity Mcu() {
+    pin 1: power in;
+    pin 2: power in;
+    pin 3: ground;
+    attribute component_class = "ic";
+    domain VDD pins="1" v=3.3V i_nom=0.5A i_max=0.8A source="FIXTURE";
+    domain VSTBY pins="2" v=3.3V i_nom=10mA i_max=20mA always_on=true source="FIXTURE";
+}
+board Protected {
+    power VIN = 12V @ 2A;
+    power V3V3 = 3.3V;
+    power VSTBY = 3.3V;
+    ground GND;
+    @V3V3 -> mcu: Mcu().1;
+    @VSTBY -> mcu.2;
+    mcu.3 -> @GND;
+}
+"#;
+    let pr = parse(src);
+    assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.unwrap();
+    let h = harvest_loads(&n, &sf);
+    // the always_on flag survives harvest
+    assert!(h.rails.iter().find(|r| r.net == "VSTBY").unwrap().always_on);
+    assert!(!h.rails.iter().find(|r| r.net == "V3V3").unwrap().always_on);
+
+    let opts = propose_trees_with_policy(&h, "VIN", Some("OV/UV + load dump")).expect("options");
+    for o in &opts {
+        // the front end exists, carries the reason, and is rated+derated
+        let prot = o.stages.iter().find(|s| s.topology == Topology::Prereg).expect("prereg stage");
+        assert_eq!(prot.from, "VIN");
+        assert!(prot.eff_basis.contains("OV/UV + load dump"), "{prot:#?}");
+        assert!((prot.required_rating_a - prot.i_max_a / 0.8).abs() < 1e-9);
+        // the ordinary rail sits BEHIND the protection
+        let v33 = o.stages.iter().find(|s| s.to == "V3V3").unwrap();
+        assert_eq!(v33.from, "V_PROT", "{v33:#?}");
+        assert!((v33.vin - 11.9).abs() < 1e-9);
+        // the always-on rail hangs DIRECT off the input, stated
+        let stby = o.stages.iter().find(|s| s.to == "VSTBY").unwrap();
+        assert_eq!(stby.from, "VIN", "AO bypass: {stby:#?}");
+        assert!(
+            o.notes.iter().any(|nn| nn.contains("always-on") && nn.contains("VSTBY")),
+            "{:#?}", o.notes
+        );
+        // energy books still balance through the protection chain
+        assert!((o.p_in_w - o.p_load_w - o.p_diss_w).abs() < 1e-6, "{o:#?}");
+    }
+}
