@@ -250,6 +250,34 @@ fn expand_one_instance(
 ) -> Result<ExpansionResult, String> {
     let base = &cand.instance_name;
 
+    // Elaborated/hand-carried idempotency: when EVERY child this recipe
+    // would mint already exists on the board under its exact minted name
+    // ({base}_{child}), the expansion has already been run and its output
+    // carried into the source — that is precisely what the `elaborate`
+    // pipeline emits (children as explicit instances with explicit
+    // wiring). Re-running would mint duplicated parts and endpoints.
+    // Partial presence still expands (and collides loudly): a
+    // half-carried circuit is an authoring error, not elaboration.
+    {
+        let pre_live = compute_live_children(netlist, cand);
+        let all_present = !pre_live.is_empty() && pre_live.iter().all(|c| {
+            let nm = format!("{}_{}", base, c);
+            netlist.instances.iter().any(|(_, i)| i.name == nm)
+        });
+        if all_present {
+            info!(
+                "Expansion of '{}' ({}): all {} live children already present by \
+                 name — input is elaborated/hand-carried, expansion skipped",
+                base, cand.recipe.entity_name, pre_live.len(),
+            );
+            return Ok(ExpansionResult {
+                parent_instance: base.clone(),
+                child_instances: Vec::new(),
+                internal_nets: Vec::new(),
+            });
+        }
+    }
+
     // Board-authored application circuit: when the board leaves a virtual
     // output pin unwired but wires that pin's delivery-path pins (the
     // switch node, the feedback pin) into its own hand-authored circuitry,

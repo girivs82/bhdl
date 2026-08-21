@@ -1346,6 +1346,38 @@ fn parse_transitive_imports(root_sf: &SourceFile, root_path: &Path) -> Vec<Sourc
     out
 }
 
+/// Find the stdlib file defining `entity <name>`; returns the path
+/// relative to the stdlib root (forward slashes) or None.
+fn find_stdlib_entity_file(stdlib: &Path, name: &str) -> Option<String> {
+    fn walk(dir: &Path, name: &str, root: &Path) -> Option<String> {
+        let entries = fs::read_dir(dir).ok()?;
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                if let Some(hit) = walk(&p, name, root) {
+                    return Some(hit);
+                }
+            } else if p.extension().is_some_and(|x| x == "bhdl") {
+                let Ok(text) = fs::read_to_string(&p) else { continue };
+                let needle = format!("entity {name}");
+                let hit = text.lines().any(|l| {
+                    let l = l.trim_start();
+                    l.strip_prefix(&needle)
+                        .is_some_and(|rest| rest.starts_with('(') || rest.starts_with(' ') || rest.starts_with('{') || rest.starts_with('<'))
+                });
+                if hit {
+                    return p
+                        .strip_prefix(root)
+                        .ok()
+                        .map(|r| r.to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
+        None
+    }
+    walk(stdlib, name, stdlib)
+}
+
 async fn run_elaborate(
     source_file: &SourceFile,
     input_content: &str,
@@ -1365,7 +1397,57 @@ async fn run_elaborate(
     let mut sources: Vec<&SourceFile> = vec![source_file];
     sources.extend(imported.iter());
     let ctors = elaborate::extract_ctors(&sources);
-    let preamble = elaborate::extract_preamble(input_content, source_file);
+    let mut preamble = elaborate::extract_preamble(input_content, source_file);
+
+    // ── synthesized imports: expansion children instantiate stdlib
+    // entities (Cap, Res, …) the ORIGINAL file never imported — the
+    // expansion machinery loads them internally. The elaborated file
+    // is structural, so it must import every type it names. Types
+    // already covered by the preamble (defined in-file or imported)
+    // are left alone; the rest are resolved by scanning bhdl-stdlib
+    // for their `entity <T>` definition. An unresolvable type is left
+    // uncovered on purpose — re-synthesis will then fail the gate and
+    // name it, which is the honest outcome.
+    {
+        let mut covered: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for item in source_file.items() {
+            if let Some(e) = bhdl_ast::Entity::cast(item.syntax().clone()) {
+                if let Some(n) = e.name() {
+                    covered.insert(n.text().to_string());
+                }
+            } else if let Some(imp) = bhdl_ast::ImportStmt::cast(item.syntax().clone()) {
+                for n in imp.imported_names() {
+                    covered.insert(n);
+                }
+            }
+        }
+        let mut needed: Vec<String> = netlist
+            .instances
+            .iter()
+            .filter_map(|(_, i)| netlist.modules.get(i.definition).map(|m| m.name.clone()))
+            .filter(|t| !covered.contains(t))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        needed.retain(|t| !t.is_empty());
+        if !needed.is_empty() {
+            if let Some(stdlib) = bhdl_common::import_search::locate_dir("bhdl-stdlib") {
+                let mut lines: Vec<String> = Vec::new();
+                for t in &needed {
+                    if let Some(rel) = find_stdlib_entity_file(&stdlib, t) {
+                        lines.push(format!("import {{ {t} }} from \"bhdl-stdlib/{rel}\";"));
+                    }
+                }
+                if !lines.is_empty() {
+                    let block = format!(
+                        "// synthesized imports: expansion children reference these\n{}\n\n",
+                        lines.join("\n")
+                    );
+                    preamble = format!("{block}{preamble}");
+                }
+            }
+        }
+    }
     let file_label = input_path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
