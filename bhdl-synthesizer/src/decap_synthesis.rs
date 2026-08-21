@@ -2,7 +2,7 @@
 //! (arc (c) of the PDN plan; docs/spec/Functional_Safety.md §2.10).
 //!
 //! `decouple <inst>.<domain> from "<lib.bhdl>" [max_parts=N] [margin=1]
-//! [bulk_over=10uF];`
+//! [bulk_over=10uF] [z_margin=20%];`
 //!
 //! The library is a bhdl file of REAL capacitors — entities whose
 //! attributes declare capacitance, esr and esl from the datasheet
@@ -21,6 +21,14 @@
 //! then VERIFIED, not assumed: every non-bulk chosen cap is opened one
 //! at a time and the sweep must still meet the mask; a single-open
 //! that violates is a hard error (the margin failed its purpose).
+//!
+//! Layout headroom (z_margin, default 20%): this sweep does not model
+//! layout parasitics — per-cap mounting inductance (vias, pad
+//! escapes) or plane spreading — which SYSTEMATICALLY worsen every
+//! cap. Extra redundancy (N+2) would not model that; headroom does.
+//! The whole mask is tightened to mask/(1+z_margin) once, up front,
+//! so selection, the budget floor and the single-open verification
+//! all carry the same layout allowance.
 
 use crate::safety_model::entity_domain_map;
 use bhdl_ast::SourceFile;
@@ -41,6 +49,13 @@ pub struct DecoupleStmt {
     pub margin: usize,
     /// values strictly above this (farads) are bulk: exempt from margin
     pub bulk_over_f: f64,
+    /// mask derating headroom in percent (default 20): the whole mask
+    /// is tightened to mask/(1+z_margin) before ANY check — selection,
+    /// budget floor, and single-open verification alike — to absorb
+    /// unmodeled layout parasitics (per-cap mounting inductance, plane
+    /// spreading). Layout effects are SYSTEMATIC, so headroom models
+    /// them where extra redundancy (N+2) would not.
+    pub z_margin_pct: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -82,6 +97,7 @@ pub fn parse_decouple_stmts(sf: &SourceFile) -> Result<Vec<DecoupleStmt>, String
             max_parts: 12,
             margin: 1,
             bulk_over_f: 10e-6,
+            z_margin_pct: 20.0,
         };
         let mut i = 6;
         while i + 2 < toks.len() + 1 {
@@ -91,15 +107,18 @@ pub fn parse_decouple_stmts(sf: &SourceFile) -> Result<Vec<DecoupleStmt>, String
             if toks.get(i + 1).map(String::as_str) != Some("=") {
                 return Err(bad(&format!("expected k=v, found '{}'", toks[i])));
             }
-            // the lexer may split "10uF" into "10" "uF" — rejoin
+            // the lexer may split "10uF" into "10" "uF" — rejoin.
+            // NB: consume via `step`, never by bumping `i` here — the
+            // key match below still reads toks[i].
             let mut v = toks[i + 2].clone();
+            let mut step = 3;
             if i + 3 < toks.len()
                 && toks.get(i + 3).map(String::as_str) != Some("=")
                 && toks[i + 3].chars().all(|c| c.is_alphabetic() || c == 'µ')
                 && toks.get(i + 4).map(String::as_str) != Some("=")
             {
                 v.push_str(&toks[i + 3]);
-                i += 1;
+                step = 4;
             }
             match toks[i].as_str() {
                 "max_parts" => {
@@ -116,9 +135,24 @@ pub fn parse_decouple_stmts(sf: &SourceFile) -> Result<Vec<DecoupleStmt>, String
                     stmt.bulk_over_f = parse_farads(&v)
                         .ok_or_else(|| bad(&format!("bulk_over '{v}' is not a capacitance")))?
                 }
+                "z_margin" => {
+                    stmt.z_margin_pct = v
+                        .trim_end_matches('%')
+                        .parse()
+                        .map_err(|_| bad(&format!("z_margin '{v}' is not a percentage")))?
+                }
                 other => return Err(bad(&format!("unknown parameter '{other}'"))),
             }
-            i += 3;
+            i += step;
+            // a trailing lexer-split unit token ("35" "%") that the
+            // rejoin above didn't fold is consumed by the value parse —
+            // skip it if it is not the next key
+            if i < toks.len()
+                && toks.get(i + 1).map(String::as_str) != Some("=")
+                && toks[i].chars().all(|c| c == '%')
+            {
+                i += 1;
+            }
         }
         out.push(stmt);
     }
@@ -362,6 +396,21 @@ pub fn run_decap_synthesis(
                 stmt.instance, stmt.domain
             ));
         }
+        // Derate the mask ONCE, up front: every check below (selection,
+        // budget floor, single-open verification) sees the tightened
+        // mask, so the synthesized network carries z_margin headroom
+        // against layout parasitics this sweep does not model.
+        let mut dom = dom;
+        if stmt.z_margin_pct > 0.0 {
+            let k = 1.0 + stmt.z_margin_pct / 100.0;
+            for bp in dom.zmask.iter_mut() {
+                bp.1 /= k;
+            }
+            info!(
+                "decouple {}.{}: mask derated by {}% headroom for unmodeled layout parasitics (z_margin) — all checks run against the tightened mask",
+                stmt.instance, stmt.domain, stmt.z_margin_pct
+            );
+        }
 
         // Rail net = the net on the domain's first pin; GND = the
         // board's ground net.
@@ -407,8 +456,8 @@ pub fn run_decap_synthesis(
                 let zb = (r * r + (2.0 * std::f64::consts::PI * f * l).powi(2)).sqrt();
                 if zb > m {
                     return Err(format!(
-                        "decouple {}.{}: INFEASIBLE — the declared PDN budget alone (R={r}Ω, L={l}H → |Z|={:.1}mΩ at {:.2}MHz) exceeds the mask ({:.1}mΩ) before any capacitor is placed; reduce the budget inductance or renegotiate the mask",
-                        stmt.instance, stmt.domain, zb * 1e3, f / 1e6, m * 1e3
+                        "decouple {}.{}: INFEASIBLE — the declared PDN budget alone (R={r}Ω, L={l}H → |Z|={:.1}mΩ at {:.2}MHz) exceeds the mask ({:.1}mΩ incl. {}% z_margin derating) before any capacitor is placed; reduce the budget inductance, renegotiate the mask, or lower z_margin",
+                        stmt.instance, stmt.domain, zb * 1e3, f / 1e6, m * 1e3, stmt.z_margin_pct
                     ));
                 }
             }
@@ -536,9 +585,57 @@ pub fn run_decap_synthesis(
         }
 
         info!(
-            "decouple {}.{}: SYNTHESIZED {} cap(s) + {} margin — final worst |Z|/mask {:.2} at {:.2}MHz; every non-bulk single-open verified against the mask",
-            stmt.instance, stmt.domain, chosen.len(), extra, ratio, wf / 1e6
+            "decouple {}.{}: SYNTHESIZED {} cap(s) + {} margin — final worst |Z|/mask {:.2} at {:.2}MHz against the {}%-derated mask; every non-bulk single-open verified against the same derated mask",
+            stmt.instance, stmt.domain, chosen.len(), extra, ratio, wf / 1e6, stmt.z_margin_pct
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The statement's knobs parse — including z_margin (the layout-
+    /// headroom derating) and lexer-split unit suffixes.
+    #[test]
+    fn decouple_stmt_parses_all_knobs() {
+        let src = r#"
+board B {
+    ground GND;
+    decouple soc.VDD from "lib.bhdl" max_parts=6 margin=2 bulk_over=47uF z_margin=35%;
+}
+"#;
+        let pr = bhdl_parser::parse(src);
+        assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+        let sf = SourceFile::cast(pr.syntax()).unwrap();
+        let stmts = parse_decouple_stmts(&sf).unwrap();
+        assert_eq!(stmts.len(), 1);
+        let s = &stmts[0];
+        assert_eq!((s.instance.as_str(), s.domain.as_str()), ("soc", "VDD"));
+        assert_eq!(s.max_parts, 6);
+        assert_eq!(s.margin, 2);
+        assert!((s.bulk_over_f - 47e-6).abs() < 1e-12);
+        assert!((s.z_margin_pct - 35.0).abs() < 1e-12);
+    }
+
+    /// Defaults: max_parts=12, margin=1 (N+1), bulk_over=10µF,
+    /// z_margin=20% — generous-by-default because layout effects are
+    /// not modeled.
+    #[test]
+    fn decouple_stmt_defaults() {
+        let src = r#"
+board B {
+    ground GND;
+    decouple u.CORE from "lib.bhdl";
+}
+"#;
+        let pr = bhdl_parser::parse(src);
+        let sf = SourceFile::cast(pr.syntax()).unwrap();
+        let s = &parse_decouple_stmts(&sf).unwrap()[0];
+        assert_eq!(s.max_parts, 12);
+        assert_eq!(s.margin, 1);
+        assert!((s.bulk_over_f - 10e-6).abs() < 1e-12);
+        assert!((s.z_margin_pct - 20.0).abs() < 1e-12);
+    }
 }
