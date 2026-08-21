@@ -123,11 +123,16 @@ Accordingly, designer-owned composition is NOT a new construct:
    placeholders all use `entity`. `generate if` (already parsed in
    entity bodies) covers conditional contents. Vendor and designer
    write the same language.
-2. **Hierarchical accessors** are the piece to add when a real board
-   demands composition: `phase1.ctrl.FB` resolves through the
-   instance path; the mangled flat name (`phase1_ctrl`) remains the
-   netlist identity, so refdes allocation, FMEDA fault enumeration,
-   PnR, BOM and every other flat consumer are untouched.
+2. **Hierarchical accessors** (implemented ca7ba78): `div.R_top.2`
+   resolves through the instance path at any depth; the mangled flat
+   name (`div_R_top`) remains the netlist identity, so refdes
+   allocation, FMEDA fault enumeration, PnR, BOM and every other flat
+   consumer are untouched. The ordering subtlety the implementation
+   had to solve: expansion children mint AFTER board connectivity, so
+   accessor connections targeting not-yet-minted children are
+   DEFERRED and replayed post-expansion — only then is a missing
+   child an error. (The safety model's NetView::resolve had walked
+   dotted paths all along; connectivity now matches it.)
 3. **Partness is DECLARED with the existing `as` keyword**
    (implemented 8f2f9f6, VHDL-flavored role declaration):
    `entity X as part { }` mints a physical self-part;
