@@ -389,6 +389,13 @@ pub fn netlist_equiv(a: &Netlist, b: &Netlist) -> Result<(), Vec<String>> {
                 bhdl_netlist::types::NetClass::Ground => "ground".to_string(),
                 _ => "signal".to_string(),
             };
+            // A single-endpoint SIGNAL net is a floating pin's private
+            // net — no connectivity, nothing the emitter can (or
+            // should) express. Rails/grounds keep their single-pin
+            // anchors: those carry class meaning and ARE emitted.
+            if ends.len() == 1 && class == "signal" {
+                continue;
+            }
             m.insert(ends, class);
         }
         m

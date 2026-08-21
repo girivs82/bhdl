@@ -1346,6 +1346,22 @@ fn parse_transitive_imports(root_sf: &SourceFile, root_path: &Path) -> Vec<Sourc
     out
 }
 
+/// Does this source text define `<name>` — as `entity <name>` OR as
+/// `alias <name> = …` (generic specializations: `alias LM7805 =
+/// LinearRegulator<5V>`)? Both make an import of that name valid.
+fn file_defines_entity(text: &str, name: &str) -> bool {
+    let entity_needle = format!("entity {name}");
+    let alias_needle = format!("alias {name}");
+    text.lines().any(|l| {
+        let l = l.trim_start();
+        l.strip_prefix(&entity_needle).is_some_and(|rest| {
+            rest.starts_with('(') || rest.starts_with(' ') || rest.starts_with('{') || rest.starts_with('<')
+        }) || l
+            .strip_prefix(&alias_needle)
+            .is_some_and(|rest| rest.trim_start().starts_with('='))
+    })
+}
+
 /// Find the stdlib file defining `entity <name>`; returns the path
 /// relative to the stdlib root (forward slashes) or None.
 fn find_stdlib_entity_file(stdlib: &Path, name: &str) -> Option<String> {
@@ -1394,9 +1410,6 @@ async fn run_elaborate(
         .context("Failed to synthesize netlist")?;
 
     let imported = parse_transitive_imports(source_file, input_path);
-    let mut sources: Vec<&SourceFile> = vec![source_file];
-    sources.extend(imported.iter());
-    let ctors = elaborate::extract_ctors(&sources);
     let mut preamble = elaborate::extract_preamble(input_content, source_file);
 
     // ── synthesized imports: expansion children instantiate stdlib
@@ -1408,7 +1421,9 @@ async fn run_elaborate(
     // for their `entity <T>` definition. An unresolvable type is left
     // uncovered on purpose — re-synthesis will then fail the gate and
     // name it, which is the honest outcome.
+    let mut extra_sfs: Vec<SourceFile> = Vec::new();
     {
+        let base = input_path.parent().unwrap_or(Path::new(".")).to_path_buf();
         let mut covered: std::collections::HashSet<String> = std::collections::HashSet::new();
         for item in source_file.items() {
             if let Some(e) = bhdl_ast::Entity::cast(item.syntax().clone()) {
@@ -1416,8 +1431,18 @@ async fn run_elaborate(
                     covered.insert(n.text().to_string());
                 }
             } else if let Some(imp) = bhdl_ast::ImportStmt::cast(item.syntax().clone()) {
+                // An import only covers a name the target file actually
+                // DEFINES. Boards exist whose import lines are wrong
+                // (`Res` from capacitor.bhdl) — the internal loader
+                // papered over it with its own stdlib search, but the
+                // structural output must import from the true source.
+                let Some(p) = imp.path() else { continue };
+                let resolved = bhdl_common::import_search::resolve_relative(&p, &base);
+                let text = fs::read_to_string(&resolved).unwrap_or_default();
                 for n in imp.imported_names() {
-                    covered.insert(n);
+                    if file_defines_entity(&text, &n) {
+                        covered.insert(n);
+                    }
                 }
             }
         }
@@ -1445,9 +1470,25 @@ async fn run_elaborate(
                     );
                     preamble = format!("{block}{preamble}");
                 }
+                // The synthesized-import files also carry the ctor
+                // signatures the emitter reconstructs args from.
+                for t in &needed {
+                    if let Some(rel) = find_stdlib_entity_file(&stdlib, t) {
+                        if let Ok(text) = fs::read_to_string(stdlib.join(&rel)) {
+                            let pr = parse(&text);
+                            if let Some(sf2) = SourceFile::cast(pr.syntax()) {
+                                extra_sfs.push(sf2);
+                            }
+                        }
+                    }
+                }
             }
         }
     }
+    let mut sources: Vec<&SourceFile> = vec![source_file];
+    sources.extend(imported.iter());
+    sources.extend(extra_sfs.iter());
+    let ctors = elaborate::extract_ctors(&sources);
     let file_label = input_path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -1478,10 +1519,16 @@ async fn run_elaborate(
     let re_sf = SourceFile::cast(re_pr.syntax()).expect("parsed source file");
     let re_analysis = analyze(&re_sf);
     let mut re_gen = NetlistGenerator::new();
-    let re_netlist = re_gen
-        .generate_from_ast_and_analysis(&re_sf, &re_analysis)
-        .await
-        .context("round-trip: elaborated output failed to re-synthesize")?;
+    let re_netlist = match re_gen.generate_from_ast_and_analysis(&re_sf, &re_analysis).await {
+        Ok(n) => n,
+        Err(e) => {
+            let _ = fs::write(&failed_path, &out_text);
+            return Err(e).context(format!(
+                "round-trip: elaborated output failed to re-synthesize (text at {})",
+                failed_path.display()
+            ));
+        }
+    };
     if let Err(diffs) = elaborate::netlist_equiv(&netlist, &re_netlist) {
         let _ = fs::write(&failed_path, &out_text);
         eprintln!(
