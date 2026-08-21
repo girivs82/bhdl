@@ -140,12 +140,22 @@ pub fn emit_elaborated_with_preamble(
             .get(inst.definition)
             .map(|m| m.name.clone())
             .unwrap_or_default();
-        // Provenance: any expansion_/vpin_ attribute means this
-        // instance was SYNTHESIZED, not typed — say by what.
+        // Provenance: any expansion_/vpin_/decap_ attribute means this
+        // instance was SYNTHESIZED, not typed. Emitted as REAL scoped
+        // attribute statements (`attribute inst.key = "v";`) — synthesis
+        // phase 4.45 applies them back onto the instance, so on
+        // re-synthesis the expansion interpreter's own attribute skips
+        // (expansion_applied on parents, expansion_parent on children)
+        // and the decap idempotency key fire from restored attributes,
+        // not from structural name inference.
         let attrs: BTreeMap<&String, &String> = inst.attributes.iter().collect();
+        let mut provenance: Vec<String> = Vec::new();
         for (k, v) in &attrs {
-            if k.starts_with("expansion_") || k.starts_with("vpin_") {
-                out.push_str(&format!("    // synthesized: {k} = {v}\n"));
+            if k.starts_with("expansion_") || k.starts_with("vpin_") || k.starts_with("decap_") {
+                provenance.push(format!(
+                    "    attribute {}.{} = \"{}\";\n",
+                    inst.name, k, v.replace('"', "\\\"")
+                ));
             }
         }
         // Ctor args: the longest prefix of declared params whose
@@ -188,6 +198,9 @@ pub fn emit_elaborated_with_preamble(
             out.push_str(&format!("    // WARNING: {w}\n"));
         }
         out.push_str(&format!("    {}: {}({});\n", inst.name, ty, args));
+        for l in provenance {
+            out.push_str(&l);
+        }
     }
     // ── connectivity: anchor arrows per net, sorted by net name ──
     let mut nets: Vec<_> = netlist
@@ -274,7 +287,7 @@ mod tests {
         assert!(out.contains("r2: Res(470Ω);"), "{out}");
         assert!(!out.contains("r2: Res(470Ω);\n    // WARNING"), "{out}");
         assert!(out.contains("// WARNING: param 'mystery' has no exported attribute and no default"), "{out}");
-        assert!(out.contains("// synthesized: expansion_origin = vpin V5"), "{out}");
+        assert!(out.contains("attribute o1.expansion_origin = \"vpin V5\";"), "{out}");
         assert!(out.contains("o1: Odd();"), "{out}");
     }
 

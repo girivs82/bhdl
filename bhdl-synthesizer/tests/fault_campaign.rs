@@ -716,6 +716,17 @@ async fn decap_synthesis_double_generate_partitions() {
         "healthy merged ground net expected: {p1:#?}"
     );
     assert_eq!(p1, nets(&n2), "elaborated re-synthesis, same process, SAME partition");
+    // scoped-attribute consumption: the elaborated text carries
+    // provenance as REAL `attribute inst.key = "v";` statements and
+    // phase 4.45 applies them back — the re-synthesized decaps carry
+    // their idempotency key as an attribute, not just a name shape
+    for (_, i) in n2.instances.iter().filter(|(_, i)| i.name.contains("_dec")) {
+        assert_eq!(
+            i.attributes.get("decap_origin").map(String::as_str),
+            Some("decouple soc.VDD"),
+            "restored on {}: {:?}", i.name, i.attributes
+        );
+    }
 }
 
 /// Infeasibility is a HARD error naming the physics: a mask below the

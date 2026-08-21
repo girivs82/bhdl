@@ -440,6 +440,57 @@ impl NetlistGenerator {
         self.generate_from_ast_and_analysis_internal(Some(ast), analysis).await
     }
     
+    /// Apply board-scope scoped attributes (`attribute inst.key = v;`)
+    /// onto their instances. Values are stored with string quotes
+    /// stripped. Only DIRECT children of the board definition count —
+    /// scoped attributes inside port-mapping blocks belong to their
+    /// own machinery.
+    fn apply_board_scoped_attributes(&mut self, ast: &SourceFile) -> Result<()> {
+        use bhdl_parser::SyntaxKind;
+        for board in ast
+            .syntax()
+            .children()
+            .filter(|n| n.kind() == SyntaxKind::BOARD_DEF)
+        {
+            for node in board.children().filter(|n| n.kind() == SyntaxKind::SCOPED_ATTRIBUTE) {
+                let Some(sa) = bhdl_ast::ScopedAttribute::cast(node.clone()) else { continue };
+                let segs: Vec<String> = sa
+                    .attribute_path()
+                    .map(|p| p.segments().iter().map(|t| t.text().to_string()).collect())
+                    .unwrap_or_default();
+                if segs.len() < 2 {
+                    anyhow::bail!(
+                        "scoped attribute `{}` needs <instance>.<key>",
+                        node.text()
+                    );
+                }
+                let inst_name = &segs[0];
+                let key = segs[1..].join(".");
+                let value = sa
+                    .value()
+                    .map(|e| e.syntax().text().to_string())
+                    .unwrap_or_default()
+                    .trim()
+                    .trim_matches('"')
+                    .to_string();
+                let Some((_, inst)) = self
+                    .netlist
+                    .instances
+                    .iter_mut()
+                    .find(|(_, i)| i.name == *inst_name)
+                else {
+                    anyhow::bail!(
+                        "scoped attribute `{}.{}`: no instance '{}' on the board — a provenance statement resting on nothing",
+                        inst_name, key, inst_name
+                    );
+                };
+                debug!("scoped attribute: {inst_name}.{key} = {value}");
+                inst.attributes.insert(key, value);
+            }
+        }
+        Ok(())
+    }
+
     /// Internal implementation that handles both cases
     async fn generate_from_ast_and_analysis_internal(&mut self, ast: Option<&SourceFile>, analysis: &AnalysisResult) -> Result<Netlist> {
         // Capture same-file entity definitions for pin-direction resolution
@@ -577,6 +628,19 @@ impl NetlistGenerator {
         // gets the block's child instances materialised, with parent-
         // pin references resolved to whatever the board wired them to.
         //
+        // Phase 4.45: board-scope SCOPED attributes — `attribute
+        // inst.key = value;` applies to the named instance. This is how
+        // the elaborate pipeline restores synthesis provenance
+        // (expansion_applied, expansion_parent, decap_origin…) as REAL
+        // attributes, so the expansion interpreter's own attribute
+        // skips fire on re-synthesis instead of relying on structural
+        // name inference. Runs BEFORE expansion for exactly that
+        // reason. Naming an instance that does not exist is a HARD
+        // error — a provenance statement resting on nothing.
+        if let Some(ast) = ast {
+            self.apply_board_scoped_attributes(ast)?;
+        }
+
         // This was previously dead code — the interpreter existed but
         // nothing in the synthesis pipeline called it, so stdlib
         // entities like LM317/ATmega328P with `expansion { }` blocks

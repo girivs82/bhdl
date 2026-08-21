@@ -402,6 +402,28 @@ impl<'t> Parser<'t> {
         }
     }
     
+    /// Peek at the nth NON-TRIVIA token from the current position
+    /// (0 = current non-trivia token). Unlike `peek_nth`, whose `n` is
+    /// a RAW index that trivia shifts, this counts real tokens — use
+    /// it for grammar lookahead.
+    pub(crate) fn peek_nth_nontrivia(&self, n: usize) -> Option<SyntaxKind> {
+        let mut remaining = n;
+        let mut pos = self.pos;
+        loop {
+            while pos < self.tokens.len() && self.tokens[pos].0.is_trivia() {
+                pos += 1;
+            }
+            if pos >= self.tokens.len() {
+                return None;
+            }
+            if remaining == 0 {
+                return Some(self.tokens[pos].0);
+            }
+            remaining -= 1;
+            pos += 1;
+        }
+    }
+
     /// Peek at the nth token (0 = current)
     pub(crate) fn peek_nth(&self, n: usize) -> Option<SyntaxKind> {
         let mut pos = self.pos + n;

@@ -138,7 +138,18 @@ impl<'t> Parser<'t> {
                 Some(SyntaxKind::PORT_KW) => self.parse_board_port_decl(),
                 Some(SyntaxKind::POWER_DOMAIN_KW) => self.parse_power_domain_def(),
                 Some(SyntaxKind::GENERATE_KW) => self.parse_generate_block(),
-                Some(SyntaxKind::ATTRIBUTE_KW) => self.parse_attribute_decl(),
+                Some(SyntaxKind::ATTRIBUTE_KW) => {
+                    // Dotted name = SCOPED attribute on an instance
+                    // (`attribute u1.expansion_applied = "true";`) —
+                    // the elaborate pipeline emits synthesis provenance
+                    // this way so re-synthesis restores it as REAL
+                    // attributes. Plain name = board attribute.
+                    if self.peek_nth_nontrivia(2) == Some(SyntaxKind::DOT) {
+                        self.parse_scoped_attribute();
+                    } else {
+                        self.parse_attribute_decl();
+                    }
+                }
                 Some(SyntaxKind::WHEN_KW) => self.parse_when_block(),
                 Some(SyntaxKind::WITH_KW) => self.parse_with_block(),
                 Some(SyntaxKind::SATISFIES_KW) => self.parse_satisfies_block(),
@@ -159,7 +170,7 @@ impl<'t> Parser<'t> {
                     // (same discipline as `supply`): decap-network
                     // synthesis from a domain's Z(f) mask.
                     if self.peek_text().as_deref() == Some("decouple")
-                        && self.peek_nth(1) != Some(SyntaxKind::COLON)
+                        && self.peek_nth_nontrivia(1) != Some(SyntaxKind::COLON)
                     {
                         self.parse_decouple_stmt();
                         continue;
@@ -253,7 +264,7 @@ impl<'t> Parser<'t> {
                     if self.peek_text().as_deref() == Some("simulation") {
                         self.parse_sim_block();
                     } else if self.peek_text().as_deref() == Some("domain")
-                        && self.peek_nth(1) != Some(SyntaxKind::COLON)
+                        && self.peek_nth_nontrivia(1) != Some(SyntaxKind::COLON)
                     {
                         // Entity-scope power-domain contract (design-level):
                         // `domain NAME k=v ...;`. Contextual — `domain` is
