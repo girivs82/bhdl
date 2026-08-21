@@ -1025,3 +1025,55 @@ board Monster {
         }
     }
 }
+
+/// The intermediate voltage is SWEPT, not a menu — and at 48V input
+/// the arithmetic genuinely flips: direct 48→0.85V (56:1) pays the
+/// deep-ratio penalty (75%), while bulk→VRM composes to ~77.4%, so
+/// the two-stage chain WINS and the sweep finds the best bulk voltage
+/// (ties prefer higher V: less bulk current). At 12V input the same
+/// sweep says direct — both answers from the same model.
+#[tokio::test]
+async fn powertree_bulk_sweep_flips_at_48v() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    use bhdl_synthesizer::powertree::{harvest_loads, propose_trees, Topology};
+    let src = r#"
+entity Soc48() {
+    pin 1: power in;
+    pin 2: ground;
+    attribute component_class = "ic";
+    domain VCORE pins="1" v=0.85V i_nom=150A i_max=180A source="FIXTURE";
+}
+board FortyEight {
+    power VIN = 48V @ 8A;
+    power VCORE = 0.85V;
+    ground GND;
+    @VCORE -> soc: Soc48().1;
+    soc.2 -> @GND;
+}
+"#;
+    let pr = parse(src);
+    assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.unwrap();
+    let h = harvest_loads(&n, &sf);
+    let opts = propose_trees(&h, "VIN").expect("options");
+    let eff_opt = opts.iter().find(|o| o.label == "max-efficiency").expect("efficiency option");
+    // bulk chosen, with the sweep note carrying the arithmetic
+    assert!(
+        eff_opt.notes.iter().any(|nn| nn.contains("swept") && nn.contains("chosen")),
+        "{:#?}", eff_opt.notes
+    );
+    let bulk = eff_opt.stages.iter().find(|s| s.to.starts_with("V_BULK")).expect("bulk stage");
+    // the sweep's optimum: both stages inside the ≤10:1 free-ish zone —
+    // bulk ≥ 4.8V (48:10) and downstream ≤ 8.5V (0.85×10); ties prefer
+    // the higher voltage → 8.5V
+    assert!((bulk.vout - 8.5).abs() < 1e-9, "{bulk:#?}");
+    let vrm = eff_opt.stages.iter().find(|s| s.to == "VCORE").unwrap();
+    assert_eq!(vrm.from, bulk.to);
+    assert_eq!(vrm.topology, Topology::BuckExternal);
+    // chain beats direct: composed eff ≈ 88% × 88% = 77.4% > 75%
+    assert!(eff_opt.eff_pct > 75.0, "{eff_opt:#?}");
+}

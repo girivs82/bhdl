@@ -357,7 +357,12 @@ fn ratio_penalty_pct(vin: f64, vout: f64) -> f64 {
         r if r <= 5.0 => 0.0,
         r if r <= 10.0 => 2.0,
         r if r <= 15.0 => 4.0,
-        _ => 6.0,
+        r if r <= 25.0 => 8.0,
+        // beyond ~25:1 a single stage runs a sub-4% duty cycle —
+        // genuinely poor territory needing special parts; the steep
+        // penalty is what lets a two-stage chain win where it really
+        // does (48V systems)
+        _ => 15.0,
     }
 }
 
@@ -372,10 +377,12 @@ fn ext_eff_at(vin: f64, vout: f64) -> f64 {
     (EXT_BUCK_EFF_PCT - ratio_penalty_pct(vin, vout)).max(70.0)
 }
 
-/// Candidate bulk-intermediate voltages the combination search tries
-/// (standard distribution rails, stated). "None" is always a
-/// candidate; the chain arithmetic decides.
-const BULK_CANDIDATES: &[f64] = &[5.0, 3.3];
+/// Bulk-intermediate sweep granularity (V). The intermediate voltage
+/// is SWEPT over (1.5V .. vin−1.5V), not picked from a menu — the
+/// optimum is wherever the composed ratio penalties say it is, and
+/// "would 7V beat 5V?" is answered by arithmetic, not folklore. Ties
+/// prefer the HIGHER voltage (less bulk current, less copper).
+const BULK_SWEEP_STEP_V: f64 = 0.5;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Topology {
@@ -612,10 +619,11 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
                 })
                 .sum();
             let mut best: Option<(f64, f64, Vec<String>, f64, f64)> = None; // (diss, vb, assigned, i_nom_b, i_max_b)
-            for &vb in BULK_CANDIDATES {
-                if vb >= vin - 1.0 {
-                    continue;
-                }
+            let mut vb = 1.5;
+            while vb <= vin - 1.5 {
+                let this_vb = vb;
+                vb += BULK_SWEEP_STEP_V;
+                let vb = this_vb;
                 // two passes: bulk efficiency band depends on the bulk
                 // current, which depends on the assignment
                 let mut bulk_eff_est = 90.0 - ratio_penalty_pct(vin, vb);
@@ -685,7 +693,13 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
                     })
                     .sum();
                 let total = chain_diss + unassigned_diss;
-                if best.as_ref().map(|(b, ..)| total < *b).unwrap_or(true) {
+                let better = match &best {
+                    None => true,
+                    // ties prefer the higher voltage: same watts,
+                    // less bulk current, less copper
+                    Some((b, bvb, ..)) => total < *b - 1e-9 || (total < *b + 1e-9 && vb > *bvb),
+                };
+                if better {
                     best = Some((total, vb, assigned.iter().map(|(r, ..)| r.net.clone()).collect(), i_nom_b, i_max_b));
                 }
             }
@@ -693,8 +707,8 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
                 Some((diss, vb, rails, i_nom_b, i_max_b)) if diss + 1e-9 < direct_diss => {
                     let name = format!("V_BULK_{}", format!("{vb:.1}").replace('.', "V"));
                     notes.push(format!(
-                        "bulk intermediate EVALUATED and chosen: {vb}V feeding [{}] — chain dissipation {:.2}W vs {:.2}W all-direct (ratio penalties composed)",
-                        rails.join(", "), diss, direct_diss
+                        "bulk intermediate EVALUATED (swept 1.5–{:.1}V in {BULK_SWEEP_STEP_V}V steps) and chosen: {vb}V feeding [{}] — chain dissipation {:.2}W vs {:.2}W all-direct (ratio penalties composed)",
+                        vin - 1.5, rails.join(", "), diss, direct_diss
                     ));
                     for rn in &rails {
                         bulk_assign.insert(rn.clone(), (name.clone(), vb));
@@ -711,12 +725,13 @@ pub fn propose_trees(h: &PowerTreeLoads, input: &str) -> Result<Vec<TreeOption>,
                     });
                 }
                 Some((diss, vb, ..)) => notes.push(format!(
-                    "bulk intermediate EVALUATED, direct wins: best candidate {vb}V would dissipate {:.2}W vs {:.2}W all-direct (ratio penalties composed)",
-                    diss, direct_diss
+                    "bulk intermediate EVALUATED (swept 1.5–{:.1}V in {BULK_SWEEP_STEP_V}V steps), direct wins: best candidate {vb}V would dissipate {:.2}W vs {:.2}W all-direct (ratio penalties composed)",
+                    vin - 1.5, diss, direct_diss
                 )),
-                None => notes.push(
-                    "bulk intermediate EVALUATED: no candidate voltage improves any rail's chain efficiency — all-direct".into(),
-                ),
+                None => notes.push(format!(
+                    "bulk intermediate EVALUATED (swept 1.5–{:.1}V in {BULK_SWEEP_STEP_V}V steps): no voltage improves any rail's chain efficiency — all-direct",
+                    vin - 1.5
+                )),
             }
         }
 
