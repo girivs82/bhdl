@@ -155,6 +155,15 @@ impl<'t> Parser<'t> {
                         self.parse_supply_stmt();
                         continue;
                     }
+                    // `decouple` is a contextual keyword at board scope
+                    // (same discipline as `supply`): decap-network
+                    // synthesis from a domain's Z(f) mask.
+                    if self.peek_text().as_deref() == Some("decouple")
+                        && self.peek_nth(1) != Some(SyntaxKind::COLON)
+                    {
+                        self.parse_decouple_stmt();
+                        continue;
+                    }
                     // Check if this is an entity/component instantiation or connection
                     use crate::v2_fixes::NamedDeclarationType;
 
@@ -3386,6 +3395,25 @@ impl<'t> Parser<'t> {
             self.bump();
         } else {
             self.error("Expected ';' after domain declaration".to_string());
+        }
+        self.builder.finish_node();
+    }
+
+    /// Board-scope `decouple <inst>.<domain> from "<lib>" k=v ...;` —
+    /// decap-network synthesis from the domain's Z(f) mask (arc (c) of
+    /// the PDN plan). Token soup up to `;`; the synthesizer parses it.
+    fn parse_decouple_stmt(&mut self) {
+        self.builder.start_node(SyntaxKind::DECOUPLE_STMT.into());
+        while self.peek() != Some(SyntaxKind::SEMI)
+            && self.peek() != Some(SyntaxKind::R_BRACE)
+            && self.peek().is_some()
+        {
+            self.bump_any();
+        }
+        if self.peek() == Some(SyntaxKind::SEMI) {
+            self.bump();
+        } else {
+            self.error("Expected ';' after decouple statement".to_string());
         }
         self.builder.finish_node();
     }

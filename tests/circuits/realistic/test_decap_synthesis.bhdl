@@ -1,0 +1,39 @@
+// bhdl-sweep: skip — decap-synthesis fixture, not a layout target.
+// Arc (c) of the PDN plan: NO decoupling is hand-authored here — the
+// board declares `decouple soc.VDD from "<library>"` and the
+// synthesizer derives the decap network from the entity's Z(f) mask,
+// verified by the same AC impedance sweep the safety PDN check runs.
+//
+// The 1µH feed inductor makes the bare rail VIOLATE the mask across
+// the band (ωL = 0.63Ω already at 100kHz), so capacitors are
+// genuinely required, chosen greedily by trial sweeps, given an N+1
+// margin per non-bulk value, and every non-bulk single-open is
+// re-verified against the mask. All domain numbers are FIXTURE values
+// standing in for NDA'd vendor data.
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Ind } from "bhdl-stdlib/passives/inductor.bhdl";
+
+// SoC stand-in: high-Z electrically; carries the vendor PDN contract.
+entity Soc() {
+    pin 1: signal inout;
+    pin 2: signal inout;
+    attribute component_class = "resistor";
+    attribute resistance = 10MΩ;
+    attribute kicad_symbol = "Device:R";
+    domain VDD pins="1" v=12V tol=5% i_nom=1A i_max=3A
+        zmask="100kHz:300m 1MHz:150m 10MHz:150m 50MHz:400m"
+        pdn_r=1m pdn_l=0.5n
+        source="FIXTURE — stands in for NDA vendor data";
+}
+
+board DecapDemo {
+    power V12 = 12V @ 5A;
+    ground GND;
+
+    @V12 -> l_feed: Ind(1µH).1; l_feed.2 -> r_load: Res(12Ω).1; r_load.2 -> @GND;
+    l_feed.2 -> soc: Soc().1;
+    soc.2 -> @GND;
+
+    decouple soc.VDD from "tests/circuits/realistic/decap_lib_fixture.bhdl" max_parts=8;
+}

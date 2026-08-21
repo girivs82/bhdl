@@ -1478,6 +1478,52 @@ async fn elaborate_pipeline(
             .into_iter()
             .collect();
         needed.retain(|t| !t.is_empty());
+        // Synthesized decaps carry their library path in the decap_lib
+        // attribute — import their types from THAT file, not stdlib.
+        if !needed.is_empty() {
+            let mut decap_libs: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+            for (_, i) in netlist.instances.iter() {
+                if let Some(lib) = i.attributes.get("decap_lib") {
+                    if let Some(t) = netlist.modules.get(i.definition).map(|m| m.name.clone()) {
+                        decap_libs.entry(t).or_insert_with(|| lib.clone());
+                    }
+                }
+            }
+            let mut by_lib: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+            for t in needed.clone() {
+                if let Some(lib) = decap_libs.get(&t) {
+                    by_lib.entry(lib.clone()).or_default().push(t.clone());
+                    needed.retain(|x| x != &t);
+                }
+            }
+            if !by_lib.is_empty() {
+                let mut lines: Vec<String> = Vec::new();
+                for (lib, types) in &by_lib {
+                    // A bare relative path ("tests/x.bhdl") reads as a
+                    // LIBRARY reference to the import loader ("library
+                    // `tests` not in bhdl.toml") — ./-prefix it so it
+                    // resolves as the file path it is.
+                    let lib_ref = if lib.starts_with('/') || lib.starts_with("./") || lib.starts_with("../") || lib.starts_with("bhdl-stdlib") {
+                        lib.clone()
+                    } else {
+                        format!("./{lib}")
+                    };
+                    lines.push(format!("import {{ {} }} from \"{}\";", types.join(", "), lib_ref));
+                    let resolved = bhdl_common::import_search::resolve_relative(lib, Path::new("."));
+                    if let Ok(text) = fs::read_to_string(&resolved) {
+                        let pr = parse(&text);
+                        if let Some(sf2) = SourceFile::cast(pr.syntax()) {
+                            extra_sfs.push(sf2);
+                        }
+                    }
+                }
+                let block = format!(
+                    "// synthesized imports: decap-synthesis parts from their library\n{}\n\n",
+                    lines.join("\n")
+                );
+                preamble = format!("{block}{preamble}");
+            }
+        }
         if !needed.is_empty() {
             if let Some(stdlib) = bhdl_common::import_search::locate_dir("bhdl-stdlib") {
                 let mut lines: Vec<String> = Vec::new();

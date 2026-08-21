@@ -1,0 +1,48 @@
+// bhdl-sweep: skip — decap-synthesis LIBRARY fixture, not a board.
+// Candidate capacitors for `decouple ... from "<this file>"`.
+// Real-Data: every candidate declares capacitance, ESR AND ESL — a
+// cap without declared parasitics cannot place its anti-resonances
+// and is skipped by the synthesizer, stated. All values are FIXTURE
+// data standing in for a real vendor library (e.g. an MLCC series
+// with datasheet ESR/ESL curves).
+
+entity DecapBulk100u() {
+    pin 1: signal inout;
+    pin 2: signal inout;
+    attribute component_class = "capacitor";
+    attribute capacitance = 100µF;
+    attribute esr = 20mΩ;
+    attribute esl = 5nH;
+    attribute kicad_symbol = "Device:C";
+}
+
+entity DecapMid10u() {
+    pin 1: signal inout;
+    pin 2: signal inout;
+    attribute component_class = "capacitor";
+    attribute capacitance = 10µF;
+    attribute esr = 5mΩ;
+    attribute esl = 1nH;
+    attribute kicad_symbol = "Device:C";
+}
+
+entity DecapHf100n() {
+    pin 1: signal inout;
+    pin 2: signal inout;
+    attribute component_class = "capacitor";
+    attribute capacitance = 100nF;
+    attribute esr = 10mΩ;
+    attribute esl = 0.5nH;
+    attribute kicad_symbol = "Device:C";
+}
+
+// Deliberately unusable: no ESL declared — the synthesizer must skip
+// it with a stated note, never treat the parasite as zero.
+entity DecapNoEsl() {
+    pin 1: signal inout;
+    pin 2: signal inout;
+    attribute component_class = "capacitor";
+    attribute capacitance = 1µF;
+    attribute esr = 8mΩ;
+    attribute kicad_symbol = "Device:C";
+}

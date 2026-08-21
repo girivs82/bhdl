@@ -145,6 +145,7 @@ pub mod manufacturing_optimization;
 // Intent hint processor - applies synthesis hints to guide component selection
 pub mod intent_hint_processor;
 pub mod safety_model;
+pub mod decap_synthesis;
 pub mod reliability;
 pub mod fault_campaign;
 
@@ -648,6 +649,22 @@ impl NetlistGenerator {
         // model unable to recover the operating point. This pass runs after
         // all instances exist; an attribute already present is not overwritten.
         self.stamp_entity_attributes_on_instances();
+
+        // Phase 4.7: decap-network synthesis from domain Z(f) masks
+        // (`decouple <inst>.<domain> from "<lib>" ...;`). Runs after
+        // attribute stamping so the SPICE conversion inside the
+        // selection loop sees a complete board. Infeasibility or a
+        // failed margin verification is a HARD synthesis error.
+        if let Some(ast) = ast {
+            let overrides = crate::model_evaluator::evaluate_model_overrides(
+                &self.netlist,
+                &analysis.model_recipes,
+                &analysis.entity_attribute_index,
+            );
+            if let Err(e) = crate::decap_synthesis::run_decap_synthesis(&mut self.netlist, ast, &overrides) {
+                return Err(anyhow::anyhow!("{e}"));
+            }
+        }
 
         // Phase 5: Apply semantic annotations for visualization
         if self.config.preserve_semantic_context {
@@ -1832,15 +1849,22 @@ impl NetlistGenerator {
         }
 
         // Create capacitor module definition with proper pins if not exists
-        let cap_module_id = if let Some(&module_id) = self.ast_to_module.get("Capacitor") {
+        // Decoupling caps are REAL parts: use the stdlib `Cap` entity
+        // type (importable, so the elaborated structural output can
+        // re-synthesize them) — "Capacitor" was a synthesizer-internal
+        // name no import could ever satisfy, which made every board
+        // with a decoupling{} block fail its elaboration round-trip.
+        let cap_module_id = if let Some(&module_id) = self.ast_to_module.get("Cap") {
+            module_id
+        } else if let Some(&module_id) = self.ast_to_module.get("Capacitor") {
             module_id
         } else {
             let module_id = self.netlist.add_module(
-                "Capacitor".to_string(),
+                "Cap".to_string(),
                 bhdl_netlist::types::ModuleKind::Component
             );
-            self.ast_to_module.insert("Capacitor".to_string(), module_id);
-            debug!("Created Capacitor module");
+            self.ast_to_module.insert("Cap".to_string(), module_id);
+            debug!("Created Cap module for decoupling caps");
             module_id
         };
 

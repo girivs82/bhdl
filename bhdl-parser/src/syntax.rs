@@ -481,6 +481,12 @@ pub enum SyntaxKind {
     // product. The safety case consumes it via `assume pdn(...)`.
     DOMAIN_DECL,        // domain NAME k=v ...;
 
+    // Board-scope decap synthesis from a domain's Z(f) mask:
+    // `decouple <inst>.<domain> from "<lib.bhdl>" [max_parts=N];`
+    // Real-part library, verified by AC impedance sweep vs the mask;
+    // infeasibility is a hard error naming the physics.
+    DECOUPLE_STMT,      // decouple x.D from "lib" k=v ...;
+
     // ERROR must be the last variant for the assertion in kind_from_raw
     ERROR = 65534, // Represents a parsing error node
 }

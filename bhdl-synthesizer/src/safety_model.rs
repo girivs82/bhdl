@@ -478,6 +478,18 @@ fn num(s: Option<&String>) -> Option<f64> {
     s.and_then(|v| v.trim_end_matches(|c: char| c.is_alphabetic()).parse::<f64>().ok())
 }
 
+/// Entity-scope `domain` declarations only, keyed by entity name — the
+/// DESIGN-level view for consumers outside the safety model (decap
+/// synthesis). Parse errors ride along per entity.
+pub fn entity_domain_map(
+    root: &SyntaxNode,
+) -> HashMap<String, (Vec<bhdl_common::safety::PowerDomain>, Vec<String>)> {
+    collect_entity_data(root)
+        .into_iter()
+        .map(|(k, d)| (k, (d.power_domains, d.errors)))
+        .collect()
+}
+
 fn collect_entity_data(root: &SyntaxNode) -> HashMap<String, EntityData> {
     let mut out: HashMap<String, EntityData> = HashMap::new();
     for ent in root.descendants().filter(|n| n.kind() == SyntaxKind::ENTITY_DEF) {

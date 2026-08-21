@@ -58,6 +58,7 @@ impl ImportLoader {
     /// Process imports from a source file
     pub fn process_imports(&mut self, source_file: &SourceFile) -> Result<()> {
         info!("Processing imports from source file with base path: {}", self.base_path);
+        let mut errors: Vec<String> = Vec::new();
         
         // Iterate through all imports in the file
         for import in source_file.imports() {
@@ -70,14 +71,26 @@ impl ImportLoader {
                     info!("  Simple import (no destructuring)");
                 } else {
                     info!("  Importing: {:?}", imported_names);
-                    
-                    // Load the file and extract the requested modules
-                    self.load_from_path(&path, &imported_names)?;
+
+                    // Load the file and extract the requested modules.
+                    // One failed import must NOT abort the loop — the
+                    // old `?` here meant a single bad path silently
+                    // killed every LATER import too, leaving their
+                    // entities pinless and the board's nets fragmented
+                    // (found by the elaborate round-trip gate). Collect
+                    // and report every failure instead.
+                    if let Err(e) = self.load_from_path(&path, &imported_names) {
+                        errors.push(format!("{path}: {e}"));
+                    }
                 }
             }
         }
-        
-        Ok(())
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("{}", errors.join("; ")))
+        }
     }
     
     /// Load entities from a file path

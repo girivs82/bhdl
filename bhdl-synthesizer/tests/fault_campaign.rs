@@ -653,3 +653,112 @@ async fn elaborate_emits_reconstructed_ctors_for_fixture() {
     let reparse = parse(&out);
     assert!(reparse.errors().is_empty(), "elaborated output must parse: {:?}\n{out}", reparse.errors());
 }
+
+/// Decap synthesis (arc c): the board declares NO decoupling — the
+/// synthesizer derives it from the entity's Z(f) mask, with N+1
+/// margin and verified single-open robustness. Reproduces the full
+/// in-process double-generate the elaborate pipeline runs.
+#[tokio::test]
+async fn decap_synthesis_double_generate_partitions() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let src = std::fs::read_to_string(ws.join("tests/circuits/realistic/test_decap_synthesis.bhdl")).unwrap();
+    let pr = parse(&src);
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let n1 = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synth 1");
+    let decs1: Vec<_> = n1.instances.iter().filter(|(_, i)| i.name.contains("_dec")).map(|(_, i)| i.name.clone()).collect();
+    // ≥2 chosen by the greedy loop + ≥1 N+1 margin (10µF is non-bulk
+    // under the default bulk_over=10µF strict-greater rule)
+    assert!(decs1.len() >= 3, "decaps minted incl. margin: {decs1:?}");
+    // every minted decap carries its provenance + the library path
+    for (_, i) in n1.instances.iter().filter(|(_, i)| i.name.contains("_dec")) {
+        assert_eq!(i.attributes.get("decap_origin").map(String::as_str), Some("decouple soc.VDD"));
+        assert!(i.attributes.get("decap_lib").is_some());
+        // solver contract: numeric esr/esl (a pretty "5nH" would stamp IDEAL)
+        assert!(i.attributes.get("esr").unwrap().parse::<f64>().is_ok());
+        assert!(i.attributes.get("esl").unwrap().parse::<f64>().is_ok());
+    }
+    // second generate IN-PROCESS on the ELABORATED text (what the
+    // round-trip gate actually re-synthesizes)
+    let ctors = bhdl_synthesizer::elaborate::extract_ctors(&[&sf]);
+    let src2 = bhdl_synthesizer::elaborate::emit_elaborated_with_preamble(
+        &n1, "test_decap_synthesis.bhdl", &ctors,
+        &bhdl_synthesizer::elaborate::extract_preamble(&src, &sf),
+    );
+    // the CLI injects the decap library import (decap_lib attribute) —
+    // replicate it
+    let src2 = format!(
+        "import {{ DecapMid10u, DecapBulk100u, DecapHf100n }} from \"./tests/circuits/realistic/decap_lib_fixture.bhdl\";\n\n{src2}"
+    );
+
+    let pr2 = parse(&src2);
+    assert!(pr2.errors().is_empty(), "elaborated parses: {:?}", pr2.errors());
+    let sf2 = SourceFile::cast(pr2.syntax()).unwrap();
+    let analysis2 = analyze(&sf2);
+    let mut gen2 = NetlistGenerator::new();
+    let n2 = gen2.generate_from_ast_and_analysis(&sf2, &analysis2).await.expect("synth 2");
+    let nets = |n: &bhdl_netlist::Netlist| -> Vec<Vec<String>> {
+        let mut v: Vec<Vec<String>> = n.nets.iter().map(|(id, _)| {
+            let mut e: Vec<String> = n.pin_instances.values().filter(|pi| pi.net == Some(id))
+                .filter_map(|pi| Some(format!("{}.{}", n.instances.get(pi.instance)?.name, n.pins.get(pi.pin_def)?.name)))
+                .collect();
+            e.sort(); e
+        }).filter(|e| !e.is_empty()).collect();
+        v.sort(); v
+    };
+    // non-vacuous: the ground net must be a real merged net (load,
+    // soc and all decaps), not per-pin fragments
+    let p1 = nets(&n1);
+    assert!(
+        p1.iter().any(|e| e.len() >= 5 && e.iter().any(|x| x == "soc.2")),
+        "healthy merged ground net expected: {p1:#?}"
+    );
+    assert_eq!(p1, nets(&n2), "elaborated re-synthesis, same process, SAME partition");
+}
+
+/// Infeasibility is a HARD error naming the physics: a mask below the
+/// declared PDN-budget floor cannot be met by ANY capacitor.
+#[tokio::test]
+async fn decap_synthesis_infeasible_budget_floor_is_hard_error() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    // budget L=10nH → ωL at 50MHz ≈ 3.1Ω, far above the 100mΩ mask.
+    let src = r#"
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+entity Soc2() {
+    pin 1: signal inout;
+    pin 2: signal inout;
+    attribute component_class = "resistor";
+    attribute resistance = 10MΩ;
+    attribute kicad_symbol = "Device:R";
+    domain VDD pins="1" v=12V
+        zmask="100kHz:100m 50MHz:100m"
+        pdn_r=1m pdn_l=10n
+        source="FIXTURE";
+}
+
+board BadPdn {
+    power V12 = 12V @ 5A;
+    ground GND;
+    @V12 -> r_load: Res(12Ω).1; r_load.2 -> @GND;
+    @V12 -> soc: Soc2().1;
+    soc.2 -> @GND;
+    decouple soc.VDD from "tests/circuits/realistic/decap_lib_fixture.bhdl";
+}
+"#;
+    let pr = parse(src);
+    assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let err = gen
+        .generate_from_ast_and_analysis(&sf, &analysis)
+        .await
+        .expect_err("must be a hard synthesis error");
+    let msg = format!("{err:#}");
+    assert!(msg.contains("INFEASIBLE"), "{msg}");
+    assert!(msg.contains("budget alone"), "names the physics: {msg}");
+}

@@ -1,0 +1,544 @@
+//! Decap-network synthesis from a domain's Z(f) target-impedance mask
+//! (arc (c) of the PDN plan; docs/spec/Functional_Safety.md §2.10).
+//!
+//! `decouple <inst>.<domain> from "<lib.bhdl>" [max_parts=N] [margin=1]
+//! [bulk_over=10uF];`
+//!
+//! The library is a bhdl file of REAL capacitors — entities whose
+//! attributes declare capacitance, esr and esl from the datasheet
+//! (Real-Data: a cap without declared ESR/ESL cannot place its
+//! anti-resonances and is skipped, stated). Selection is greedy and
+//! physics-driven: each round, every candidate is TRIALLED by actually
+//! adding it and re-running the AC impedance sweep of the whole tree;
+//! the one that most reduces the worst |Z|/mask ratio is committed.
+//! Infeasibility is a HARD ERROR naming the physics (worst frequency,
+//! achieved |Z|, mask, and whether the declared PDN budget alone
+//! already exceeds the mask — no cap can fix that).
+//!
+//! Margin policy (design margin + safety open-fault robustness): after
+//! the mask is met, ONE extra cap per distinct chosen value is added —
+//! except bulk caps (value > bulk_over, default 10µF). The margin is
+//! then VERIFIED, not assumed: every non-bulk chosen cap is opened one
+//! at a time and the sweep must still meet the mask; a single-open
+//! that violates is a hard error (the margin failed its purpose).
+
+use crate::safety_model::entity_domain_map;
+use bhdl_ast::SourceFile;
+use bhdl_netlist::types::{ModuleKind, NetClass, NetId, PinDirection, PinType};
+use bhdl_netlist::Netlist;
+use bhdl_parser::SyntaxKind;
+use log::info;
+use rowan::ast::AstNode;
+use std::collections::HashMap;
+
+#[derive(Debug, Clone)]
+pub struct DecoupleStmt {
+    pub instance: String,
+    pub domain: String,
+    pub lib: String,
+    pub max_parts: usize,
+    /// extra caps per distinct chosen value (0 disables)
+    pub margin: usize,
+    /// values strictly above this (farads) are bulk: exempt from margin
+    pub bulk_over_f: f64,
+}
+
+#[derive(Debug, Clone)]
+struct Candidate {
+    entity: String,
+    c_f: f64,
+    esr_ohm: f64,
+    esl_h: f64,
+    c_text: String,
+}
+
+/// Walk the board for `decouple` statements. Token soup:
+/// decouple <inst> . <dom> from "<lib>" [k=v ...] ;
+pub fn parse_decouple_stmts(sf: &SourceFile) -> Result<Vec<DecoupleStmt>, String> {
+    let mut out = Vec::new();
+    for node in sf
+        .syntax()
+        .descendants()
+        .filter(|n| n.kind() == SyntaxKind::DECOUPLE_STMT)
+    {
+        let toks: Vec<String> = node
+            .descendants_with_tokens()
+            .filter_map(|e| e.into_token())
+            .filter(|t| {
+                !matches!(t.kind(), SyntaxKind::WHITESPACE | SyntaxKind::COMMENT | SyntaxKind::SEMI)
+            })
+            .map(|t| t.text().to_string())
+            .collect();
+        // ["decouple", inst, ".", dom, "from", "\"lib\"", k, "=", v, ...]
+        let bad = |why: &str| format!("decouple statement `{}`: {}", toks.join(" "), why);
+        if toks.len() < 6 || toks[0] != "decouple" || toks[2] != "." || toks[4] != "from" {
+            return Err(bad("expected `decouple <inst>.<domain> from \"<lib>\" ...;`"));
+        }
+        let lib = toks[5].trim_matches('"').to_string();
+        let mut stmt = DecoupleStmt {
+            instance: toks[1].clone(),
+            domain: toks[3].clone(),
+            lib,
+            max_parts: 12,
+            margin: 1,
+            bulk_over_f: 10e-6,
+        };
+        let mut i = 6;
+        while i + 2 < toks.len() + 1 {
+            if i + 2 > toks.len() {
+                break;
+            }
+            if toks.get(i + 1).map(String::as_str) != Some("=") {
+                return Err(bad(&format!("expected k=v, found '{}'", toks[i])));
+            }
+            // the lexer may split "10uF" into "10" "uF" — rejoin
+            let mut v = toks[i + 2].clone();
+            if i + 3 < toks.len()
+                && toks.get(i + 3).map(String::as_str) != Some("=")
+                && toks[i + 3].chars().all(|c| c.is_alphabetic() || c == 'µ')
+                && toks.get(i + 4).map(String::as_str) != Some("=")
+            {
+                v.push_str(&toks[i + 3]);
+                i += 1;
+            }
+            match toks[i].as_str() {
+                "max_parts" => {
+                    stmt.max_parts = v
+                        .parse()
+                        .map_err(|_| bad(&format!("max_parts '{v}' is not a number")))?
+                }
+                "margin" => {
+                    stmt.margin = v
+                        .parse()
+                        .map_err(|_| bad(&format!("margin '{v}' is not a number")))?
+                }
+                "bulk_over" => {
+                    stmt.bulk_over_f = parse_farads(&v)
+                        .ok_or_else(|| bad(&format!("bulk_over '{v}' is not a capacitance")))?
+                }
+                other => return Err(bad(&format!("unknown parameter '{other}'"))),
+            }
+            i += 3;
+        }
+        out.push(stmt);
+    }
+    Ok(out)
+}
+
+fn parse_farads(v: &str) -> Option<f64> {
+    parse_unit(v, &[("pF", 1e-12), ("nF", 1e-9), ("uF", 1e-6), ("µF", 1e-6), ("mF", 1e-3), ("F", 1.0)])
+}
+
+fn parse_unit(v: &str, mults: &[(&str, f64)]) -> Option<f64> {
+    let v = v.trim();
+    let end = v
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(v.len());
+    let num: f64 = v[..end].parse().ok()?;
+    let suf = v[end..].trim();
+    if suf.is_empty() {
+        return Some(num);
+    }
+    mults
+        .iter()
+        .find(|(s, _)| suf.eq_ignore_ascii_case(s) || suf == *s)
+        .map(|(_, m)| num * m)
+}
+
+/// Load the candidate library: entities with declared capacitance, esr
+/// and esl attributes. Entities missing any of the three are skipped
+/// with a stated note (Real-Data: an undeclared parasite is not zero).
+fn load_library(lib_path: &str) -> Result<Vec<Candidate>, String> {
+    let resolved = bhdl_common::import_search::resolve_relative(lib_path, std::path::Path::new("."));
+    let text = std::fs::read_to_string(&resolved)
+        .map_err(|e| format!("decouple: cannot read library '{}': {e}", resolved.display()))?;
+    let pr = bhdl_parser::parse(&text);
+    if !pr.errors().is_empty() {
+        return Err(format!("decouple: library '{lib_path}' has parse errors: {:?}", pr.errors()));
+    }
+    let sf = SourceFile::cast(pr.syntax()).ok_or("decouple: library is not a source file")?;
+    let mut out = Vec::new();
+    for item in sf.items() {
+        let Some(ent) = bhdl_ast::Entity::cast(item.syntax().clone()) else { continue };
+        use bhdl_ast::HasName;
+        let Some(name) = ent.name().map(|t| t.text().to_string()) else { continue };
+        let mut attrs: HashMap<String, String> = HashMap::new();
+        for a in ent.attributes() {
+            if let (Some(k), Some(v)) = (a.name(), a.value()) {
+                attrs.insert(k.text().to_string(), v.syntax().text().to_string().trim().trim_matches('"').to_string());
+            }
+        }
+        let (Some(c_text), Some(esr_text), Some(esl_text)) = (
+            attrs.get("capacitance").cloned(),
+            attrs.get("esr").cloned(),
+            attrs.get("esl").cloned(),
+        ) else {
+            info!("decouple: library entity '{name}' skipped — needs declared capacitance, esr AND esl (Real-Data: an undeclared parasite is not zero)");
+            continue;
+        };
+        let Some(c_f) = parse_farads(&c_text) else {
+            info!("decouple: library entity '{name}' skipped — capacitance '{c_text}' unparseable");
+            continue;
+        };
+        let Some(esr_ohm) = parse_unit(&esr_text, &[("uΩ", 1e-6), ("mΩ", 1e-3), ("Ω", 1.0), ("mohm", 1e-3), ("ohm", 1.0)]) else {
+            info!("decouple: library entity '{name}' skipped — esr '{esr_text}' unparseable");
+            continue;
+        };
+        let Some(esl_h) = parse_unit(&esl_text, &[("pH", 1e-12), ("nH", 1e-9), ("uH", 1e-6), ("µH", 1e-6), ("H", 1.0)]) else {
+            info!("decouple: library entity '{name}' skipped — esl '{esl_text}' unparseable");
+            continue;
+        };
+        out.push(Candidate { entity: name, c_f, esr_ohm, esl_h, c_text });
+    }
+    if out.is_empty() {
+        return Err(format!("decouple: library '{lib_path}' has no usable candidates (capacitance+esr+esl declared)"));
+    }
+    Ok(out)
+}
+
+/// Piecewise log-log interpolation of the mask; None outside its span.
+fn mask_at(mask: &[(f64, f64)], f: f64) -> Option<f64> {
+    if mask.len() < 2 || f < mask[0].0 || f > mask[mask.len() - 1].0 {
+        return None;
+    }
+    let w = mask.windows(2).find(|w| f >= w[0].0 && f <= w[1].0)?;
+    let t = (f.ln() - w[0].0.ln()) / (w[1].0.ln() - w[0].0.ln());
+    Some((w[0].1.ln() + t * (w[1].1.ln() - w[0].1.ln())).exp())
+}
+
+/// Sweep the netlist's rail impedance and return the worst |Z|/mask
+/// ratio (plus its frequency and achieved |Z| incl. the PDN budget).
+fn worst_ratio(
+    netlist: &Netlist,
+    rail_net: &str,
+    dom: &bhdl_common::safety::PowerDomain,
+    overrides: &std::collections::HashMap<String, bhdl_common::model::EvaluatedModel>,
+) -> Result<(f64, f64, f64), String> {
+    let mut conv = bhdl_spice::NetlistToSpiceConverter::new();
+    conv.set_model_overrides(overrides.clone());
+    let circ = conv
+        .convert(netlist)
+        .map_err(|e| format!("decouple: SPICE conversion failed: {e}"))?;
+    let (freqs, z) = bhdl_spice::ac::run_ac_impedance(&circ, rail_net, 100e3, 50e6, 20)
+        .map_err(|e| format!("decouple: impedance sweep failed: {e}"))?;
+    let budget = |f: f64| -> f64 {
+        let r = dom.pdn_r_ohm.unwrap_or(0.0);
+        let l = dom.pdn_l_h.unwrap_or(0.0);
+        (r * r + (2.0 * std::f64::consts::PI * f * l).powi(2)).sqrt()
+    };
+    let mut worst = (0.0f64, 0.0f64, 0.0f64);
+    for (i, &f) in freqs.iter().enumerate() {
+        let zt = z[i].norm() + budget(f);
+        if let Some(mk) = mask_at(&dom.zmask, f) {
+            let r = zt / mk;
+            if r > worst.0 {
+                worst = (r, f, zt);
+            }
+        }
+    }
+    Ok(worst)
+}
+
+/// Mint one decap instance of `cand` wired rail→GND. Returns its name.
+fn mint_decap(
+    netlist: &mut Netlist,
+    cand: &Candidate,
+    name: &str,
+    rail: NetId,
+    gnd: NetId,
+    stmt: &DecoupleStmt,
+) -> Result<(), String> {
+    let mod_id = netlist
+        .modules
+        .iter()
+        .find(|(_, m)| m.name == cand.entity)
+        .map(|(id, _)| id)
+        .unwrap_or_else(|| {
+            let id = netlist.add_module(cand.entity.clone(), ModuleKind::PhysicalComponent);
+            netlist.add_pin(id, "1".into(), PinDirection::Passive, PinType::Passive);
+            netlist.add_pin(id, "2".into(), PinDirection::Passive, PinType::Passive);
+            id
+        });
+    let inst_id = netlist
+        .add_instance(name.to_string(), mod_id)
+        .ok_or("decouple: instance creation failed")?;
+    {
+        let inst = netlist.instances.get_mut(inst_id).unwrap();
+        inst.attributes.insert("component_class".into(), "capacitor".into());
+        // Solver contract: the converter honors `value` (unit-aware via
+        // spice_model) and NUMERIC esr/esl attribute strings; a pretty
+        // "5nH" would silently parse to NOTHING and the cap would stamp
+        // ideal — a silent-drop path. Numbers for the solver, the
+        // library entity keeps the pretty datasheet text.
+        inst.attributes.insert("spice_model".into(), "capacitor".into());
+        inst.attributes.insert("value".into(), cand.c_text.clone());
+        inst.attributes.insert("capacitance".into(), cand.c_text.clone());
+        inst.attributes.insert("esr".into(), format!("{}", cand.esr_ohm));
+        inst.attributes.insert("esl".into(), format!("{}", cand.esl_h));
+        inst.attributes.insert("kicad_symbol".into(), "Device:C".into());
+        inst.attributes
+            .insert("decap_origin".into(), format!("decouple {}.{}", stmt.instance, stmt.domain));
+        inst.attributes.insert("decap_lib".into(), stmt.lib.clone());
+    }
+    let pis = netlist
+        .create_pin_instances(inst_id)
+        .map_err(|e| format!("decouple: pin instances: {e}"))?;
+    crate::virtual_pin_expander::connect_pin_instance_by_name(netlist, inst_id, &pis, "1", rail)?;
+    crate::virtual_pin_expander::connect_pin_instance_by_name(netlist, inst_id, &pis, "2", gnd)?;
+    Ok(())
+}
+
+fn remove_instance(netlist: &mut Netlist, name: &str) {
+    let Some((id, _)) = netlist.instances.iter().find(|(_, i)| i.name == name) else { return };
+    let pis: Vec<_> = netlist
+        .pin_instances
+        .iter()
+        .filter(|(_, pi)| pi.instance == id)
+        .map(|(pid, _)| pid)
+        .collect();
+    for pid in pis {
+        if let Some(pi) = netlist.pin_instances.get(pid) {
+            if let Some(net) = pi.net {
+                crate::virtual_pin_expander::disconnect_pin_from_net(netlist, pid, net);
+            }
+        }
+        netlist.pin_instances.remove(pid);
+    }
+    netlist.instances.remove(id);
+}
+
+/// Run every `decouple` statement against the synthesized netlist.
+/// Hard error on infeasibility or a failed margin verification.
+pub fn run_decap_synthesis(
+    netlist: &mut Netlist,
+    sf: &SourceFile,
+    overrides: &std::collections::HashMap<String, bhdl_common::model::EvaluatedModel>,
+) -> Result<(), String> {
+    let stmts = parse_decouple_stmts(sf)?;
+    if stmts.is_empty() {
+        return Ok(());
+    }
+    let domains = entity_domain_map(&sf.syntax().clone());
+
+    for stmt in &stmts {
+        // Idempotency: instances from a previous run of THIS statement
+        // (an elaborated file re-states them; the statement itself is
+        // not re-emitted, but belt-and-braces for hand-carried boards).
+        let already: usize = netlist
+            .instances
+            .iter()
+            .filter(|(_, i)| {
+                i.attributes.get("decap_origin").map(String::as_str)
+                    == Some(&format!("decouple {}.{}", stmt.instance, stmt.domain))
+            })
+            .count();
+        if already > 0 {
+            info!("decouple {}.{}: {already} synthesized decap(s) already present — skipped", stmt.instance, stmt.domain);
+            continue;
+        }
+
+        // Resolve the instance → entity → declared domain.
+        let Some((_, inst)) = netlist.instances.iter().find(|(_, i)| i.name == stmt.instance) else {
+            return Err(format!("decouple: no instance '{}' on the board", stmt.instance));
+        };
+        let ety = netlist
+            .modules
+            .get(inst.definition)
+            .map(|m| m.name.clone())
+            .unwrap_or_default();
+        let dom = domains
+            .get(&ety)
+            .and_then(|(ds, _)| ds.iter().find(|d| d.name == stmt.domain))
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "decouple: entity '{ety}' (instance '{}') declares no domain '{}' — the Z(f) mask must come from the entity's `domain` contract",
+                    stmt.instance, stmt.domain
+                )
+            })?;
+        if dom.zmask.len() < 2 {
+            return Err(format!(
+                "decouple {}.{}: the domain declares no usable zmask (need ≥2 breakpoints) — nothing to synthesize against",
+                stmt.instance, stmt.domain
+            ));
+        }
+
+        // Rail net = the net on the domain's first pin; GND = the
+        // board's ground net.
+        let rail_name = dom
+            .pins
+            .first()
+            .and_then(|p0| {
+                netlist.pin_instances.values().find_map(|pi| {
+                    let i = netlist.instances.get(pi.instance)?;
+                    if i.name != stmt.instance {
+                        return None;
+                    }
+                    let p = netlist.pins.get(pi.pin_def)?;
+                    if p.name != *p0 {
+                        return None;
+                    }
+                    netlist.nets.get(pi.net?)?.name.clone()
+                })
+            })
+            .ok_or_else(|| {
+                format!("decouple {}.{}: domain pins not connected — no rail net to decouple", stmt.instance, stmt.domain)
+            })?;
+        let rail_id = netlist
+            .nets
+            .iter()
+            .find(|(_, n)| n.name.as_deref() == Some(rail_name.as_str()))
+            .map(|(id, _)| id)
+            .ok_or("decouple: rail net vanished")?;
+        let gnd_id = netlist
+            .nets
+            .iter()
+            .filter(|(_, n)| matches!(n.net_class, NetClass::Ground))
+            .max_by_key(|(_, n)| (n.name.as_deref() == Some("GND")) as u8)
+            .map(|(id, _)| id)
+            .ok_or_else(|| format!("decouple {}.{}: the board has no ground net", stmt.instance, stmt.domain))?;
+
+        // Physics floor: if the declared PDN budget ALONE exceeds the
+        // mask anywhere, no capacitor can fix it — say so first.
+        {
+            let l = dom.pdn_l_h.unwrap_or(0.0);
+            let r = dom.pdn_r_ohm.unwrap_or(0.0);
+            for &(f, m) in &dom.zmask {
+                let zb = (r * r + (2.0 * std::f64::consts::PI * f * l).powi(2)).sqrt();
+                if zb > m {
+                    return Err(format!(
+                        "decouple {}.{}: INFEASIBLE — the declared PDN budget alone (R={r}Ω, L={l}H → |Z|={:.1}mΩ at {:.2}MHz) exceeds the mask ({:.1}mΩ) before any capacitor is placed; reduce the budget inductance or renegotiate the mask",
+                        stmt.instance, stmt.domain, zb * 1e3, f / 1e6, m * 1e3
+                    ));
+                }
+            }
+        }
+
+        let cands = load_library(&stmt.lib)?;
+        info!(
+            "decouple {}.{} @ net {}: {} candidate(s) from {}, mask {} breakpoints, max_parts {}",
+            stmt.instance, stmt.domain, rail_name, cands.len(), stmt.lib, dom.zmask.len(), stmt.max_parts
+        );
+
+        // Greedy: trial every candidate, commit the argmin of the worst
+        // ratio, until the mask is met or max_parts exhausted.
+        let mut chosen: Vec<Candidate> = Vec::new();
+        let (mut ratio, mut wf, mut wz) = worst_ratio(netlist, &rail_name, &dom, overrides)?;
+        let mut n = 0usize;
+        while ratio > 1.0 && n < stmt.max_parts {
+            let mut best: Option<(f64, usize)> = None;
+            for (ci, cand) in cands.iter().enumerate() {
+                let trial_name = format!("__decap_trial__");
+                mint_decap(netlist, cand, &trial_name, rail_id, gnd_id, stmt)?;
+                let r = worst_ratio(netlist, &rail_name, &dom, overrides)?.0;
+                remove_instance(netlist, &trial_name);
+                if best.map(|(br, _)| r < br).unwrap_or(true) {
+                    best = Some((r, ci));
+                }
+            }
+            let (best_r, best_ci) = best.expect("candidates nonempty");
+            if best_r >= ratio - 1e-9 {
+                return Err(format!(
+                    "decouple {}.{}: INFEASIBLE — no library capacitor improves the worst violation (|Z|={:.1}mΩ vs mask {:.1}mΩ at {:.2}MHz, ratio {:.2}); the library lacks a part effective at that frequency",
+                    stmt.instance, stmt.domain, wz * 1e3, (wz / ratio) * 1e3, wf / 1e6, ratio
+                ));
+            }
+            n += 1;
+            let name = format!("{}_{}_dec{}", stmt.instance, stmt.domain, n);
+            mint_decap(netlist, &cands[best_ci], &name, rail_id, gnd_id, stmt)?;
+            chosen.push(cands[best_ci].clone());
+            let w = worst_ratio(netlist, &rail_name, &dom, overrides)?;
+            info!(
+                "decouple {}.{}: +{} ({}) → worst |Z|/mask {:.2} at {:.2}MHz",
+                stmt.instance, stmt.domain, name, cands[best_ci].entity, w.0, w.1 / 1e6
+            );
+            (ratio, wf, wz) = w;
+        }
+        if ratio > 1.0 {
+            return Err(format!(
+                "decouple {}.{}: INFEASIBLE within max_parts={} — worst |Z|={:.1}mΩ vs mask {:.1}mΩ at {:.2}MHz (ratio {:.2}); raise max_parts, extend the library, or renegotiate the mask",
+                stmt.instance, stmt.domain, stmt.max_parts, wz * 1e3, (wz / ratio) * 1e3, wf / 1e6, ratio
+            ));
+        }
+
+        // Margin: one extra per distinct non-bulk value (design margin +
+        // open-fault robustness). Bulk caps (> bulk_over) are exempt —
+        // area/cost — and their exemption is stated.
+        let mut extra = 0usize;
+        if stmt.margin > 0 {
+            let mut seen: Vec<&Candidate> = Vec::new();
+            for c in &chosen {
+                if seen.iter().any(|s| (s.c_f - c.c_f).abs() < 1e-15) {
+                    continue;
+                }
+                seen.push(c);
+                if c.c_f > stmt.bulk_over_f {
+                    info!(
+                        "decouple {}.{}: margin — {} ({}) is bulk (> {}F), exempt (stated)",
+                        stmt.instance, stmt.domain, c.entity, c.c_text, stmt.bulk_over_f
+                    );
+                    continue;
+                }
+                for _ in 0..stmt.margin {
+                    n += 1;
+                    extra += 1;
+                    let name = format!("{}_{}_dec{}", stmt.instance, stmt.domain, n);
+                    mint_decap(netlist, c, &name, rail_id, gnd_id, stmt)?;
+                    info!("decouple {}.{}: margin +{} ({})", stmt.instance, stmt.domain, name, c.entity);
+                }
+            }
+        }
+
+        // VERIFY the margin: open each non-bulk synthesized cap one at a
+        // time — the mask must still hold (safety: a single decap open
+        // fault must not break the contract). Bulk opens are exempt and
+        // stated.
+        let all: Vec<(String, f64)> = netlist
+            .instances
+            .iter()
+            .filter(|(_, i)| {
+                i.attributes.get("decap_origin").map(String::as_str)
+                    == Some(&format!("decouple {}.{}", stmt.instance, stmt.domain))
+            })
+            .map(|(_, i)| {
+                let c = i.attributes.get("capacitance").and_then(|v| parse_farads(v)).unwrap_or(0.0);
+                (i.name.clone(), c)
+            })
+            .collect();
+        if stmt.margin > 0 {
+            for (name, c_f) in &all {
+                if *c_f > stmt.bulk_over_f {
+                    info!("decouple {}.{}: open({name}) not verified — bulk, margin-exempt (stated)", stmt.instance, stmt.domain);
+                    continue;
+                }
+                // open = detach pin 1 from the rail
+                let pi_id = netlist
+                    .pin_instances
+                    .iter()
+                    .find(|(_, pi)| {
+                        netlist.instances.get(pi.instance).map(|i| i.name.as_str()) == Some(name.as_str())
+                            && pi.net == Some(rail_id)
+                    })
+                    .map(|(id, _)| id);
+                let Some(pi_id) = pi_id else { continue };
+                crate::virtual_pin_expander::disconnect_pin_from_net(netlist, pi_id, rail_id);
+                let (r_open, f_open, z_open) = worst_ratio(netlist, &rail_name, &dom, overrides)?;
+                netlist
+                    .connect(rail_id, bhdl_netlist::types::ConnectionPoint::PinInstance(pi_id))
+                    .map_err(|e| format!("decouple: reconnect failed: {e}"))?;
+                if r_open > 1.0 {
+                    return Err(format!(
+                        "decouple {}.{}: margin verification FAILED — with {name} open, |Z|={:.1}mΩ vs mask at {:.2}MHz (ratio {:.2}); the N+1 margin does not cover this open fault (add margin or a different value mix)",
+                        stmt.instance, stmt.domain, z_open * 1e3, f_open / 1e6, r_open
+                    ));
+                }
+            }
+        }
+
+        info!(
+            "decouple {}.{}: SYNTHESIZED {} cap(s) + {} margin — final worst |Z|/mask {:.2} at {:.2}MHz; every non-bulk single-open verified against the mask",
+            stmt.instance, stmt.domain, chosen.len(), extra, ratio, wf / 1e6
+        );
+    }
+    Ok(())
+}
