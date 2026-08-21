@@ -73,8 +73,8 @@ board UnoMeasured {
 
     // ── 5V regulator: NCP1117-5.0 with the R3's bulk caps ──
     U1: NCP1117();
-    VIN -> U1.VI;
-    U1.VO -> @VCC_5V;
+    VIN -> U1.VIN;
+    U1.VOUT -> @VCC_5V;
     U1.GND -> @GND;
     VIN -> PC1: Cap(47µF, voltage=25V).1;   // input bulk
     PC1.2 -> @GND;

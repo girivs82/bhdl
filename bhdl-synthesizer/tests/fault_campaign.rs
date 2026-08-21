@@ -1206,3 +1206,112 @@ async fn powertree_emit_closes_the_loop() {
     assert!(!stripped.contains("BEGIN GENERATED"));
     assert!(stripped.contains("@V1V0 -> soc: SocCore().1;"));
 }
+
+/// THE REGULATOR PIN CONTRACT, machine-enforced: every entity in
+/// bhdl-stdlib/power that regulates (has a VOUT) must expose
+/// VIN / VOUT / GND — the same 3-pin logical surface as the Generic*
+/// placeholders — so a power-tree swap is a rename, wiring untouched.
+/// Physical pins beyond these are the entity's internal business,
+/// served by its virtual-pin expansion (the datasheet application
+/// circuit), never by board wiring the generic couldn't have known.
+#[test]
+fn stdlib_regulators_honor_the_pin_contract() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let mut checked = 0;
+    for entry in std::fs::read_dir(ws.join("bhdl-stdlib/power")).unwrap().flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|x| x.to_str()) != Some("bhdl") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        let pr = parse(&text);
+        assert!(pr.errors().is_empty(), "{}: {:?}", path.display(), pr.errors());
+        let sf = SourceFile::cast(pr.syntax()).unwrap();
+        for ent in sf.entities() {
+            use bhdl_ast::HasName;
+            let Some(name) = ent.name().map(|t| t.text().to_string()) else { continue };
+            let pins: Vec<String> = ent
+                .syntax()
+                .descendants()
+                .filter(|n| n.kind() == bhdl_parser::SyntaxKind::PIN_DECL)
+                .filter_map(|n| {
+                    n.children_with_tokens()
+                        .filter_map(|e| e.into_token())
+                        .find(|t| t.kind() == bhdl_parser::SyntaxKind::IDENT)
+                        .map(|t| t.text().to_string())
+                })
+                .collect();
+            if !pins.iter().any(|p| p == "VOUT") {
+                continue; // not a regulator surface (Ground etc.)
+            }
+            checked += 1;
+            assert!(
+                pins.iter().any(|p| p == "VIN"),
+                "{name} ({}): regulator contract requires pin VIN (has {pins:?})",
+                path.display()
+            );
+            assert!(
+                pins.iter().any(|p| p == "GND"),
+                "{name} ({}): regulator contract requires pin GND (has {pins:?})",
+                path.display()
+            );
+        }
+    }
+    assert!(checked >= 10, "expected the stdlib regulator population, checked {checked}");
+}
+
+/// Swap-by-rename, END TO END: emit the power tree with generics,
+/// then rename the LDO placeholder to a REAL part (XC6206P182 —
+/// contract pins, virtual VOUT, datasheet expansion) and
+/// re-synthesize. The wiring survives untouched, the real part's
+/// expansion mints its application circuit, and the rails stay
+/// driven.
+#[tokio::test]
+async fn powertree_swap_by_rename_to_real_part() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    use bhdl_synthesizer::powertree::{emit_power_region, harvest_loads, propose_trees, splice_power_region};
+    let src = std::fs::read_to_string(ws.join("tests/circuits/realistic/test_powertree_loads.bhdl")).unwrap();
+    let pr = parse(&src);
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let netlist = gen.generate_from_ast_and_analysis(&sf, &analysis).await.unwrap();
+    let h = harvest_loads(&netlist, &sf);
+    let opts = propose_trees(&h, "VIN").unwrap();
+    let emitted = splice_power_region(&src, &emit_power_region(&opts[0], "GND")).unwrap();
+
+    // THE SWAP: one line — rename the generic to the real part (the
+    // 1.8V fixed XC6206 SKU). Ctor args change with it (the real
+    // part's voltage is its SKU); the WIRING lines are untouched.
+    let swapped = emitted
+        .replace(
+            "u_v1v8: GenericLdo(vin=3.3V, vout=1.8V, rated=0.1A);",
+            "u_v1v8: XC6206P182();",
+        )
+        .replace(
+            "import { GenericBuck, GenericBuckExt, GenericLdo, GenericPrereg } from \"bhdl-stdlib/power/generic_regulators.bhdl\";",
+            "import { GenericBuck, GenericBuckExt, GenericLdo, GenericPrereg } from \"bhdl-stdlib/power/generic_regulators.bhdl\";\nimport { XC6206P182 } from \"bhdl-stdlib/power/xc6206.bhdl\";",
+        );
+    assert_ne!(swapped, emitted, "the rename must have applied");
+
+    let pr2 = parse(&swapped);
+    assert!(pr2.errors().is_empty(), "{:?}", pr2.errors());
+    let sf2 = SourceFile::cast(pr2.syntax()).unwrap();
+    let analysis2 = analyze(&sf2);
+    let mut gen2 = NetlistGenerator::new();
+    let n2 = gen2.generate_from_ast_and_analysis(&sf2, &analysis2).await.expect("swapped board synthesizes");
+
+    // the real part's datasheet expansion minted its application
+    // circuit onto the SAME wiring the generic used
+    assert!(
+        n2.instances.iter().any(|(_, i)| i.name == "u_v1v8_C_out"),
+        "XC6206 expansion mints C_out: {:?}",
+        n2.instances.iter().map(|(_, i)| i.name.clone()).collect::<Vec<_>>()
+    );
+    // rails stay driven — the tree is intact after the swap
+    let h2 = harvest_loads(&n2, &sf2);
+    for r in h2.rails.iter().filter(|r| !r.loads.is_empty()) {
+        assert!(r.driven, "swap must not undrive {}: {r:#?}", r.net);
+    }
+}

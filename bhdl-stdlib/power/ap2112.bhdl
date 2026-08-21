@@ -9,7 +9,7 @@ entity AP2112K<V_OUT: voltage>(
     c_out: capacitance = 1µF
 ) {
     pin VIN:  power in;
-    pin VOUT: power out;
+    pin VOUT: power out virtual;
     pin EN:   signal in;
     pin GND:  ground;
 

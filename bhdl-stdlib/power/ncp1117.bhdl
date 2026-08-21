@@ -12,10 +12,16 @@
 //
 // Grammar discipline: parser-compatible v2.0 subset.
 
-entity NCP1117(part_no: string = "NCP1117-5.0_SOT223") {
-    pin GND: ground;         // (pin 1)
-    pin VO:  power out;      // regulated output (pin 2)
-    pin VI:  power in;       // unregulated input (pin 3)
+// Pin contract (power-tree swap-by-rename): every regulator exposes
+// VIN / VOUT / GND, VOUT virtual where the expansion mints the
+// datasheet application circuit — so a Generic* placeholder swaps to
+// this part by renaming the instantiation, wiring untouched.
+entity NCP1117(part_no: string = "NCP1117-5.0_SOT223",
+               c_in: capacitance = 10µF,
+               c_out: capacitance = 10µF) {
+    pin GND:  ground;               // (pin 1)
+    pin VOUT: power out virtual;    // regulated output (pin 2; tab)
+    pin VIN:  power in;             // unregulated input (pin 3)
 
     attribute component_class = "ldo";
     attribute output_voltage  = 5V;     // NCP1117-5.0 fixed variant
@@ -28,6 +34,14 @@ entity NCP1117(part_no: string = "NCP1117-5.0_SOT223") {
     attribute power_rating    = 1.5W;  // SOT-223 with ~1in² copper pad ((125−25)°C / ~67°C/W)
     attribute pkg             = "SOT-223";
     attribute part_number     = part_no;
+
+    // Datasheet application circuit (ON Semi NCP1117: 10µF input,
+    // 10µF tantalum output minimum for regulator stability).
+    expansion {
+        VIN -> C_in: Cap(c_in).1; C_in.2 -> GND;
+        VOUT -> C_out: Cap(c_out).1; C_out.2 -> GND;
+    }
+
     // §4 device-stress IP: linear pass-element dissipation at the solved
     // operating point — P = (V_IN − V_OUT)·I_out + V_IN·I_q. `self.p_diss`
     // targets THIS device's own sign-off row, gated against the package

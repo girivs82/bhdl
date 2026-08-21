@@ -8,7 +8,7 @@ When multiple components connect to the same power rail, the layout engine has n
 VIN -> tvs: TVSDiode(15V).K;
 VIN -> c_in: Cap(100µF).1;
 VIN -> buck: LM2596_5V().VIN;
-VIN -> reg5aux: LM7805().VI;
+VIN -> reg5aux: LM7805().VIN;
 ```
 
 All four are independent connections to VIN. The layout engine treats them as equal peers, placing them in arbitrary order. But the designer's intent is clear: protection and filtering are *upstream* of regulation. The schematic should convey this — TVS and caps before regulators.
@@ -43,7 +43,7 @@ VIN -> c_in: Cap(100µF).1 for input_filtering(bulk: true, max_esr: 50mΩ);
 c_in.2 -> GND;
 
 VIN -> buck: LM2596_5V().VIN for regulation(soft_start: 5ms);
-VIN -> reg5aux: LM7805().VI for regulation();
+VIN -> reg5aux: LM7805().VIN for regulation();
 ```
 
 The stage name in `for` references the stage declared on the power rail. The parameters are intent-specific — they inform the synthesizer, simulator, and safety tools about *how* this component fulfills its role.
@@ -64,7 +64,7 @@ led5b.K -> GND;
 V5_BUCK -> r_load5b: Res(10).1 -> r_load5b.2 -> GND
     for loading(purpose: "test_load");
 
-V5_BUCK -> reg33: LM1117_33().VI for regulation();
+V5_BUCK -> reg33: LM1117_33().VIN for regulation();
 ```
 
 Note: `regulation` appears on V5_BUCK even though it wasn't declared in V5_BUCK's stage list. This is valid — the stage name refers to a well-known role from stdlib, and the tool infers its position (regulation is always downstream of filtering). Alternatively, the designer can be explicit:
@@ -104,8 +104,8 @@ board ComplexPowerTree {
     buck.VOUT -> V5_BUCK;
     buck.GND -> GND;
 
-    VIN -> reg5aux: LM7805().VI for regulation();
-    reg5aux.VO -> V5_AUX;
+    VIN -> reg5aux: LM7805().VIN for regulation();
+    reg5aux.VOUT -> V5_AUX;
     reg5aux.GND -> GND;
 
     // === V5_BUCK Rail ===
@@ -120,8 +120,8 @@ board ComplexPowerTree {
     V5_BUCK -> r_load5b: Res(10).1 -> r_load5b.2 -> GND
         for loading(purpose: "test_load");
 
-    V5_BUCK -> reg33: LM1117_33().VI for regulation();
-    reg33.VO -> V3_3;
+    V5_BUCK -> reg33: LM1117_33().VIN for regulation();
+    reg33.VOUT -> V3_3;
     reg33.GND -> GND;
 
     // === V5_AUX Rail ===
@@ -133,8 +133,8 @@ board ComplexPowerTree {
         for loading(purpose: "indicator");
     led5a.K -> GND;
 
-    V5_AUX -> reg18: LM1117_18().VI for regulation();
-    reg18.VO -> V1_8;
+    V5_AUX -> reg18: LM1117_18().VIN for regulation();
+    reg18.VOUT -> V1_8;
     reg18.GND -> GND;
 
     // === V3_3 Rail ===

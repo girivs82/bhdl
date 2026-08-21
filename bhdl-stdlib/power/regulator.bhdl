@@ -2,12 +2,18 @@
 // Generic entity with alias specializations for common regulators
 // Supports conditional enable pin via HAS_EN bool parameter
 
+// Pin contract (power-tree swap-by-rename): VIN / VOUT / GND, VOUT
+// virtual — the expansion mints the 78xx-class bypass caps, so a
+// Generic* placeholder swaps to this part by renaming.
 entity LinearRegulator<V_OUT: voltage, HAS_EN: bool = false>(
     dropout: voltage = 2V,
-    i_quiescent: current = 5mA
+    i_quiescent: current = 5mA,
+    // TI UA7805-class datasheet bypass: 0.33µF input, 0.1µF output.
+    c_in: capacitance = 0.33µF,
+    c_out: capacitance = 0.1µF
 ) {
-    pin VI: power in;
-    pin VO: power out;
+    pin VIN: power in;
+    pin VOUT: power out virtual;
     pin GND: ground;
     pin EN: signal in when HAS_EN;
 
@@ -15,6 +21,11 @@ entity LinearRegulator<V_OUT: voltage, HAS_EN: bool = false>(
     attribute output_voltage = V_OUT;
     attribute dropout_voltage = dropout;
     attribute i_quiescent = i_quiescent;
+
+    expansion {
+        VIN -> C_in: Cap(c_in).1; C_in.2 -> GND;
+        VOUT -> C_out: Cap(c_out).1; C_out.2 -> GND;
+    }
 }
 
 // Alias data honesty (campaign fill): the generic's defaults
@@ -48,7 +59,7 @@ entity BuckRegulator<V_OUT: voltage>(
     has_diode: bool = true
 ) {
     pin VIN: power in;
-    pin VOUT: power out;
+    pin VOUT: power out virtual;
     pin GND: ground;
 
     attribute component_class = "switching_regulator";

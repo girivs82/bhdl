@@ -1,0 +1,169 @@
+{
+  "schema_version": 1,
+  "provenance": {
+    "tool_version": "0.1.0",
+    "source": "tests/circuits/realistic/lm317_5v.bhdl",
+    "generated_at": "2026-08-21T11:52:38Z",
+    "libraries": [
+      {
+        "name": "corpus-support",
+        "version": "0.1.0",
+        "hash": "sha256:cce393ddd179e36cb49df3835bc9f564754cd8223d848c986192e538031e0aee",
+        "source": "path:corpus-support"
+      }
+    ]
+  },
+  "components": [
+    {
+      "refdes": "C1",
+      "name": "U1_C_in",
+      "component_type": "Cap",
+      "value": "10µF",
+      "attributes": {
+        "capacitance": "10µF",
+        "component_class": "capacitor",
+        "data_source": "class-point: Murata GRM18 X7R (esr)",
+        "dielectric": "X7R",
+        "esr": "0.01Ω",
+        "kicad_symbol": "Device:C",
+        "schematic_placement": "input_shunt",
+        "tolerance": "0.10",
+        "voltage_rating": "50V"
+      }
+    },
+    {
+      "refdes": "C2",
+      "name": "U1_C_out",
+      "component_type": "Cap",
+      "value": "22µF",
+      "attributes": {
+        "capacitance": "22µF",
+        "component_class": "capacitor",
+        "data_source": "class-point: Murata GRM18 X7R (esr)",
+        "dielectric": "X7R",
+        "esr": "0.01Ω",
+        "kicad_symbol": "Device:C",
+        "schematic_placement": "output_shunt",
+        "tolerance": "0.10",
+        "voltage_rating": "50V"
+      }
+    },
+    {
+      "refdes": "R1",
+      "name": "U1_R1",
+      "component_type": "Res",
+      "value": "720.000",
+      "attributes": {
+        "component_class": "resistor",
+        "kicad_symbol": "Device:R",
+        "power_rating": "0.25W",
+        "schematic_placement": "bootstrap",
+        "tolerance": "5%"
+      }
+    },
+    {
+      "refdes": "R2",
+      "name": "U1_R2",
+      "component_type": "Res",
+      "value": "240.000",
+      "attributes": {
+        "component_class": "resistor",
+        "kicad_symbol": "Device:R",
+        "power_rating": "0.25W",
+        "schematic_placement": "shunt",
+        "tolerance": "5%"
+      }
+    },
+    {
+      "refdes": "U1",
+      "name": "U1",
+      "component_type": "LM317",
+      "attributes": {
+        "component_class": "ldo",
+        "dropout_voltage": "2V",
+        "family": "LM317",
+        "feedback_voltage": "1.25V",
+        "i_quiescent": "50uA",
+        "output_current": "1.5A",
+        "output_voltage": "5V",
+        "power_rating": "2W",
+        "role": "adjustable-ldo",
+        "v_out": "5V"
+      }
+    }
+  ],
+  "nets": [
+    {
+      "name": "GND",
+      "net_class": "Ground",
+      "connections": [
+        {
+          "refdes": "C1",
+          "pin": "2"
+        },
+        {
+          "refdes": "C2",
+          "pin": "2"
+        },
+        {
+          "refdes": "R2",
+          "pin": "2"
+        },
+        {
+          "refdes": "U1",
+          "pin": "GND"
+        }
+      ]
+    },
+    {
+      "name": "U1_ADJ",
+      "net_class": "Signal",
+      "connections": [
+        {
+          "refdes": "R1",
+          "pin": "2"
+        },
+        {
+          "refdes": "R2",
+          "pin": "1"
+        },
+        {
+          "refdes": "U1",
+          "pin": "ADJ"
+        }
+      ]
+    },
+    {
+      "name": "VIN",
+      "net_class": "Power { voltage: 12.0, current: Some(0.5) }",
+      "connections": [
+        {
+          "refdes": "C1",
+          "pin": "1"
+        },
+        {
+          "refdes": "U1",
+          "pin": "VIN"
+        }
+      ]
+    },
+    {
+      "name": "VOUT",
+      "net_class": "Power { voltage: 5.0, current: Some(0.5) }",
+      "connections": [
+        {
+          "refdes": "C2",
+          "pin": "1"
+        },
+        {
+          "refdes": "R1",
+          "pin": "1"
+        },
+        {
+          "refdes": "U1",
+          "pin": "VOUT"
+        }
+      ]
+    }
+  ]
+}

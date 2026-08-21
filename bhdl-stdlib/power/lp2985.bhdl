@@ -7,12 +7,15 @@
 //
 // Grammar discipline: parser-compatible v2.0 subset.
 
-entity LP2985(part_no: string = "LP2985-3.3") {
+entity LP2985(part_no: string = "LP2985-3.3",
+              c_in: capacitance = 1µF,
+              c_out: capacitance = 2.2µF,
+              c_bp: capacitance = 0.01µF) {
     pin VIN:  power in;       // unregulated input              (pin 1)
     pin GND:  ground;         //                                (pin 2)
     pin EN:   signal in;      // active-low enable (ON/OFF)     (pin 3)
     pin BP:   signal inout;   // internal-reference bypass cap  (pin 4)
-    pin VOUT: power out;      // regulated output               (pin 5)
+    pin VOUT: power out virtual;  // regulated output           (pin 5)
 
     attribute component_class = "ldo";
     attribute family          = "LP2985";
@@ -46,4 +49,12 @@ entity LP2985(part_no: string = "LP2985-3.3") {
             require connected(EN) else "EN (ON/OFF) must not float — tie it to VIN to enable, or drive it";
         }
     }
+    // Datasheet typical application (TI LP2985: 1µF input, 2.2µF
+    // ceramic output minimum, 0.01µF reference-bypass on BP).
+    expansion {
+        VIN -> C_in: Cap(c_in).1; C_in.2 -> GND;
+        VOUT -> C_out: Cap(c_out).1; C_out.2 -> GND;
+        BP -> C_bp: Cap(c_bp).1; C_bp.2 -> GND;
+    }
+
 }

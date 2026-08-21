@@ -8,7 +8,7 @@ entity XC6206<V_OUT: voltage>(
     c_out: capacitance = 1µF
 ) {
     pin VIN:  power in;
-    pin VOUT: power out;
+    pin VOUT: power out virtual;
     pin GND:  ground;
 
     attribute component_class = "voltage_regulator";
