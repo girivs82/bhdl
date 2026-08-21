@@ -120,6 +120,21 @@ enum Commands {
         format: String,
     },
 
+    /// Elaborate: desugar every higher-abstraction construct (virtual
+    /// pins, expansions, defaults) into plain structural bhdl. The
+    /// output re-synthesizes standalone, and this command PROVES it:
+    /// the elaborated file is re-synthesized in-process and the two
+    /// netlists must be structurally identical (instances by name +
+    /// module, connectivity as the net partition over inst.pin
+    /// endpoints with net classes). Any difference is a hard error
+    /// listing every mismatch. This is the front half of the default
+    /// pipeline: bhdl → elaborate → synthesize.
+    Elaborate {
+        /// Output file. Defaults to `<input stem>.elab.bhdl`.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
     /// Emit a frozen structural netlist — the immutable "as-fabbed"
     /// record (resolved components + flat connectivity, stamped with
     /// the toolchain version + library lock). Stable, versioned schema;
@@ -555,6 +570,10 @@ async fn main() -> Result<()> {
         
         Some(Commands::Synthesize { output, format }) => {
             run_synthesis(&source_file, output, &format).await?;
+        }
+
+        Some(Commands::Elaborate { output }) => {
+            run_elaborate(&source_file, &input_content, &cli.input, output).await?;
         }
 
         Some(Commands::Freeze { output }) => {
@@ -1297,6 +1316,112 @@ fn gate_constructor_args(analysis: &bhdl_analyzer::AnalysisResult) -> Result<()>
         eprintln!("  {} {} [{}]", "•".red(), d.message, d.code);
     }
     anyhow::bail!("constructor argument errors (E0402/E0403/E0404)");
+}
+
+/// Parse every transitively imported file so ctor signatures resolve
+/// for stdlib and nested entities alike. Cycles and unreadable paths
+/// are skipped (an unreadable import already fails analysis; here it
+/// only costs ctor reconstruction, which degrades to a WARNING line).
+fn parse_transitive_imports(root_sf: &SourceFile, root_path: &Path) -> Vec<SourceFile> {
+    let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    let mut queue: Vec<(SourceFile, PathBuf)> = vec![(root_sf.clone(), root_path.to_path_buf())];
+    let mut out: Vec<SourceFile> = Vec::new();
+    while let Some((sf, path)) = queue.pop() {
+        let base = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+        for item in sf.items() {
+            let Some(imp) = bhdl_ast::ImportStmt::cast(item.syntax().clone()) else { continue };
+            let Some(p) = imp.path() else { continue };
+            let resolved = bhdl_common::import_search::resolve_relative(&p, &base);
+            let canon = resolved.canonicalize().unwrap_or(resolved.clone());
+            if !seen.insert(canon) {
+                continue;
+            }
+            let Ok(text) = fs::read_to_string(&resolved) else { continue };
+            let pr = parse(&text);
+            let Some(isf) = SourceFile::cast(pr.syntax()) else { continue };
+            queue.push((isf.clone(), resolved));
+            out.push(isf);
+        }
+    }
+    out
+}
+
+async fn run_elaborate(
+    source_file: &SourceFile,
+    input_content: &str,
+    input_path: &Path,
+    output: Option<PathBuf>,
+) -> Result<()> {
+    use bhdl_synthesizer::elaborate;
+    let analysis = analyze(source_file);
+    gate_constructor_args(&analysis)?;
+    let mut generator = NetlistGenerator::new();
+    let netlist = generator
+        .generate_from_ast_and_analysis(source_file, &analysis)
+        .await
+        .context("Failed to synthesize netlist")?;
+
+    let imported = parse_transitive_imports(source_file, input_path);
+    let mut sources: Vec<&SourceFile> = vec![source_file];
+    sources.extend(imported.iter());
+    let ctors = elaborate::extract_ctors(&sources);
+    let preamble = elaborate::extract_preamble(input_content, source_file);
+    let file_label = input_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| input_path.display().to_string());
+    let out_text =
+        elaborate::emit_elaborated_with_preamble(&netlist, &file_label, &ctors, &preamble);
+
+    // ── ROUND-TRIP GATE: the elaborated file must re-synthesize to a
+    // structurally IDENTICAL board. This is the pipeline's contract —
+    // a mismatch means the emitter (or an abstraction it desugars)
+    // lied, and the output must not be trusted or written silently.
+    // On any round-trip failure the rejected text is still written —
+    // to `<output>.failed.bhdl` — because the failure IS the bug
+    // report and the operator needs the evidence.
+    let out_path = output.unwrap_or_else(|| input_path.with_extension("elab.bhdl"));
+    let failed_path = out_path.with_extension("failed.bhdl");
+    let re_pr = parse(&out_text);
+    if !re_pr.errors().is_empty() {
+        for e in re_pr.errors() {
+            eprintln!("  {} {}", "•".red(), e.message);
+        }
+        let _ = fs::write(&failed_path, &out_text);
+        anyhow::bail!(
+            "round-trip: elaborated output does not parse (text at {})",
+            failed_path.display()
+        );
+    }
+    let re_sf = SourceFile::cast(re_pr.syntax()).expect("parsed source file");
+    let re_analysis = analyze(&re_sf);
+    let mut re_gen = NetlistGenerator::new();
+    let re_netlist = re_gen
+        .generate_from_ast_and_analysis(&re_sf, &re_analysis)
+        .await
+        .context("round-trip: elaborated output failed to re-synthesize")?;
+    if let Err(diffs) = elaborate::netlist_equiv(&netlist, &re_netlist) {
+        let _ = fs::write(&failed_path, &out_text);
+        eprintln!(
+            "{}",
+            format!("Round-trip FAILED: {} difference(s)", diffs.len()).red().bold()
+        );
+        for d in &diffs {
+            eprintln!("  {} {d}", "•".red());
+        }
+        anyhow::bail!("elaborated netlist differs from the original");
+    }
+
+    fs::write(&out_path, &out_text)
+        .with_context(|| format!("write {}", out_path.display()))?;
+    println!("{}", "✓ Elaboration round-trip verified".green().bold());
+    println!(
+        "  Instances: {}   Nets: {}   → {}",
+        netlist.instances.len(),
+        netlist.nets.len(),
+        out_path.display()
+    );
+    Ok(())
 }
 
 async fn run_synthesis(source_file: &SourceFile, output: Option<PathBuf>, format: &str) -> Result<()> {

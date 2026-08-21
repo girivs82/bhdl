@@ -83,8 +83,17 @@ pub fn emit_elaborated_with_preamble(
     out.push_str(&format!("board {board_name} {{\n"));
     let mut rails: Vec<String> = Vec::new();
     let mut grounds: Vec<String> = Vec::new();
-    for (_, n) in netlist.nets.iter() {
+    for (net_id, n) in netlist.nets.iter() {
         let Some(nm) = n.name.clone() else { continue };
+        // Pin-derived internal rails ("u1.VCC" — synthesis mints one
+        // per power-in pin) are not board declarations and their name
+        // is not a legal identifier. They carry no members the rail
+        // anchors don't already cover; emitting them would not parse.
+        if nm.contains('.') {
+            let members = netlist.pin_instances.values().any(|pi| pi.net == Some(net_id));
+            debug_assert!(!members, "pin-derived rail {nm} unexpectedly has members");
+            continue;
+        }
         match n.net_class {
             bhdl_netlist::types::NetClass::Power { voltage, current } => {
                 let amp = current.map(|c| format!(" @ {c}A")).unwrap_or_default();
@@ -292,6 +301,96 @@ mod tests {
         assert!(!out.contains("Res(,"), "{out}");
         assert!(!out.contains("WARNING"), "{out}");
     }
+}
+
+/// Round-trip equivalence: does re-synthesizing the elaborated file
+/// yield THE SAME board? Compared structurally, not positionally —
+/// instance identity is (name, module name), connectivity is the net
+/// PARTITION over "inst.pin" endpoints plus each net's class
+/// (auto-net NAMES legitimately differ between runs and never count).
+/// Returns every difference, not just the first — a round-trip
+/// failure is a bug report and should name all of it.
+pub fn netlist_equiv(a: &Netlist, b: &Netlist) -> Result<(), Vec<String>> {
+    use std::collections::BTreeMap;
+    let mut diffs: Vec<String> = Vec::new();
+
+    fn instance_set(n: &Netlist) -> std::collections::BTreeSet<(String, String)> {
+        // Phantom definition-stubs (name == module name, zero connected
+        // pins) are template artifacts the emitter filters — exclude
+        // them here by the SAME rule, else every board with an in-file
+        // entity definition fails its own round-trip.
+        let connected: std::collections::HashSet<_> = n
+            .pin_instances
+            .values()
+            .filter(|pi| pi.net.is_some())
+            .map(|pi| pi.instance)
+            .collect();
+        n.instances
+            .iter()
+            .filter_map(|(id, i)| {
+                let m = n.modules.get(i.definition).map(|m| m.name.clone()).unwrap_or_default();
+                if i.name == m && !connected.contains(&id) {
+                    return None;
+                }
+                Some((i.name.clone(), m))
+            })
+            .collect()
+    }
+    let (ia, ib) = (instance_set(a), instance_set(b));
+    for (n, m) in ia.difference(&ib) {
+        diffs.push(format!("instance only in ORIGINAL: {n}: {m}"));
+    }
+    for (n, m) in ib.difference(&ia) {
+        diffs.push(format!("instance only in ELABORATED: {n}: {m}"));
+    }
+
+    // Net partition: each net → sorted endpoint list "inst.pin",
+    // keyed by that list; value = a class tag that must also match.
+    fn net_partition(n: &Netlist) -> BTreeMap<Vec<String>, String> {
+        let mut m: BTreeMap<Vec<String>, String> = BTreeMap::new();
+        for (net_id, net) in n.nets.iter() {
+            let mut ends: Vec<String> = n
+                .pin_instances
+                .values()
+                .filter(|pi| pi.net == Some(net_id))
+                .filter_map(|pi| {
+                    let inst = n.instances.get(pi.instance)?;
+                    let pin = n.pins.get(pi.pin_def)?;
+                    Some(format!("{}.{}", inst.name, pin.name))
+                })
+                .collect();
+            ends.sort();
+            if ends.is_empty() {
+                continue; // memberless nets carry no connectivity
+            }
+            let class = match &net.net_class {
+                bhdl_netlist::types::NetClass::Power { voltage, current } => {
+                    format!("power {voltage}V {current:?}")
+                }
+                bhdl_netlist::types::NetClass::Ground => "ground".to_string(),
+                _ => "signal".to_string(),
+            };
+            m.insert(ends, class);
+        }
+        m
+    }
+    let (na, nb) = (net_partition(a), net_partition(b));
+    for (ends, class) in &na {
+        match nb.get(ends) {
+            None => diffs.push(format!("net only in ORIGINAL ({class}): {}", ends.join(", "))),
+            Some(c2) if c2 != class => {
+                diffs.push(format!("net class differs for {}: {class} vs {c2}", ends.join(", ")))
+            }
+            _ => {}
+        }
+    }
+    for (ends, class) in &nb {
+        if !na.contains_key(ends) {
+            diffs.push(format!("net only in ELABORATED ({class}): {}", ends.join(", ")));
+        }
+    }
+
+    if diffs.is_empty() { Ok(()) } else { Err(diffs) }
 }
 
 /// The original file's non-board content, verbatim: imports, entity
