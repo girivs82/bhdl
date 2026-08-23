@@ -1611,3 +1611,66 @@ board Cyc {
     let err = gen2.generate_from_ast_and_analysis(&sf2, &analysis2).await.expect_err("cycle must error");
     assert!(format!("{err:#}").contains("cycle"), "{err:#}");
 }
+
+/// Drift check — the spreadsheet's silent-rot problem as a gate: the
+/// emitted stages carry their sizing; when the board's loads evolve
+/// past them (current growth, or a new noise-sensitive load on a buck
+/// rail), the drift check names the stage and the arithmetic.
+#[tokio::test]
+async fn powertree_drift_check_catches_evolved_loads() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    use bhdl_synthesizer::powertree::{check_drift, emit_power_region, harvest_loads, propose_trees, splice_power_region};
+    let src = std::fs::read_to_string(ws.join("tests/circuits/realistic/test_powertree_loads.bhdl")).unwrap();
+    let pr = parse(&src);
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let netlist = gen.generate_from_ast_and_analysis(&sf, &analysis).await.unwrap();
+    let h = harvest_loads(&netlist, &sf);
+    let opts = propose_trees(&h, "VIN").unwrap();
+    let emitted = splice_power_region(&src, &emit_power_region(&opts[0], "GND")).unwrap();
+
+    let build = |text: &str| {
+        let pr = parse(text);
+        assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+        SourceFile::cast(pr.syntax()).unwrap()
+    };
+
+    // fresh emit: the plan covers the board — NO drift
+    let sf2 = build(&emitted);
+    let analysis2 = analyze(&sf2);
+    let mut gen2 = NetlistGenerator::new();
+    let n2 = gen2.generate_from_ast_and_analysis(&sf2, &analysis2).await.unwrap();
+    assert!(check_drift(&n2, &sf2).is_empty(), "{:#?}", check_drift(&n2, &sf2));
+
+    // current growth: core i_max 4A → 9A outgrows the 5A-sized stage
+    let grown = emitted.replace("i_nom=2A i_max=4A", "i_nom=6A i_max=9A");
+    assert_ne!(grown, emitted);
+    let sf3 = build(&grown);
+    let analysis3 = analyze(&sf3);
+    let mut gen3 = NetlistGenerator::new();
+    let n3 = gen3.generate_from_ast_and_analysis(&sf3, &analysis3).await.unwrap();
+    let d3 = check_drift(&n3, &sf3);
+    assert!(
+        d3.iter().any(|f| f.stage == "u_v1v0" && f.kind == "rating" && f.detail.contains("OUTGREW")),
+        "{d3:#?}"
+    );
+
+    // noise drift: the core load grows a 50µVrms requirement — a buck
+    // rail assuming 500µVrms output can no longer serve it
+    let quieter = emitted.replace(
+        "domain VDD_CORE pins=\"1\" v=1.0V tol=3% i_nom=2A i_max=4A",
+        "domain VDD_CORE pins=\"1\" v=1.0V tol=3% i_nom=2A i_max=4A noise=50uV",
+    );
+    assert_ne!(quieter, emitted);
+    let sf4 = build(&quieter);
+    let analysis4 = analyze(&sf4);
+    let mut gen4 = NetlistGenerator::new();
+    let n4 = gen4.generate_from_ast_and_analysis(&sf4, &analysis4).await.unwrap();
+    let d4 = check_drift(&n4, &sf4);
+    assert!(
+        d4.iter().any(|f| f.stage == "u_v1v0" && f.kind == "noise" && f.detail.contains("post-regulation")),
+        "{d4:#?}"
+    );
+}

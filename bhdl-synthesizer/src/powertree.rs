@@ -1214,3 +1214,96 @@ pub fn splice_power_region(source: &str, region: &str) -> Result<String, String>
         Ok(text)
     }
 }
+
+// ─── Drift check ────────────────────────────────────────────────────
+//
+// The spreadsheet's silent-rot problem, turned into a gate: loads
+// evolve after the tree is emitted (a peripheral is added, a domain's
+// i_max grows, a sensitive load lands on a buck rail) and the sheet
+// never gets updated. Every emitted stage carries the assumptions it
+// was sized with; this check re-derives the requirement from the
+// CURRENT loads and compares.
+
+/// One stage whose recorded sizing no longer covers the current loads.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DriftFinding {
+    pub stage: String,
+    pub rail: String,
+    /// "rating" | "noise"
+    pub kind: String,
+    pub detail: String,
+}
+
+/// Compare every powertree-emitted stage against the CURRENT loads on
+/// its output rail. Empty = the plan still covers the board.
+pub fn check_drift(netlist: &Netlist, sf: &SourceFile) -> Vec<DriftFinding> {
+    let h = harvest_loads(netlist, sf);
+    let mut out = Vec::new();
+    for (inst_id, inst) in netlist.instances.iter() {
+        let Some(recorded_req) = inst
+            .attributes
+            .get("powertree_rating_required_a")
+            .and_then(|v| v.parse::<f64>().ok())
+        else {
+            continue;
+        };
+        // output rail = the net on the stage's VOUT pin
+        let Some(rail_name) = netlist.pin_instances.values().find_map(|pi| {
+            if pi.instance != inst_id {
+                return None;
+            }
+            let p = netlist.pins.get(pi.pin_def)?;
+            if p.name != "VOUT" {
+                return None;
+            }
+            netlist.nets.get(pi.net?)?.name.clone()
+        }) else {
+            out.push(DriftFinding {
+                stage: inst.name.clone(),
+                rail: "<unwired>".into(),
+                kind: "rating".into(),
+                detail: "stage carries powertree sizing but its VOUT is not wired to any rail — the emitted region was hand-altered".into(),
+            });
+            continue;
+        };
+        let Some(rail) = h.rails.iter().find(|r| r.net == rail_name) else { continue };
+
+        // rating drift: the CURRENT worst-case draw, derated the same
+        // way the tree derates (i_max / 0.8), vs what the stage was
+        // sized for. Loads that declare no i_max cannot drift-check —
+        // absent data stays absent, and the rail simply has no figure.
+        if let Some(i_max_now) = rail.i_max_total_a {
+            let req_now = i_max_now / 0.8;
+            if req_now > recorded_req + 1e-9 {
+                out.push(DriftFinding {
+                    stage: inst.name.clone(),
+                    rail: rail_name.clone(),
+                    kind: "rating".into(),
+                    detail: format!(
+                        "loads on {rail_name} now need ≥ {req_now:.3}A (i_max {i_max_now:.3}A / 0.8 derating) but the stage was sized for {recorded_req:.3}A — the loads OUTGREW the plan; re-run powertree"
+                    ),
+                });
+            }
+        }
+        // noise drift: a load now demands a quieter rail than the
+        // stage assumes it produces
+        if let (Some(assumed), Some(target)) = (
+            inst.attributes
+                .get("powertree_noise_assumed_uvrms")
+                .and_then(|v| v.parse::<f64>().ok()),
+            rail.noise_uvrms,
+        ) {
+            if target + 1e-9 < assumed {
+                out.push(DriftFinding {
+                    stage: inst.name.clone(),
+                    rail: rail_name.clone(),
+                    kind: "noise".into(),
+                    detail: format!(
+                        "a load on {rail_name} now requires ≤ {target:.0}µVrms but the stage assumes {assumed:.0}µVrms output — the rail needs post-regulation or a different topology; re-run powertree"
+                    ),
+                });
+            }
+        }
+    }
+    out
+}

@@ -1811,6 +1811,7 @@ async fn run_powertree(
     }
     let undriven = harvest.rails.iter().filter(|r| !r.driven).count();
     println!("\n  {} rail(s), {} undriven", harvest.rails.len(), undriven);
+    print_drift_report(&netlist, source_file);
 
     // ── input rail: explicit, or the single undriven budgeted rail
     // with no attached loads ──
@@ -1943,6 +1944,23 @@ async fn run_powertree(
     Ok(())
 }
 
+/// Print powertree drift findings — the anti-silent-rot gate: loads
+/// evolved past what the emitted stages were sized for.
+fn print_drift_report(netlist: &Netlist, source_file: &SourceFile) {
+    let findings = bhdl_synthesizer::powertree::check_drift(netlist, source_file);
+    if findings.is_empty() {
+        return;
+    }
+    println!(
+        "\n  {} {} power-tree DRIFT finding(s) — the loads no longer match the plan:",
+        "⚠".yellow().bold(),
+        findings.len()
+    );
+    for f in &findings {
+        println!("    {} [{}] {}", f.stage.bold(), f.kind, f.detail);
+    }
+}
+
 /// Print the decap-synthesis report section — one block per
 /// `decouple` statement, from the reports the synthesizer archived in
 /// the netlist's analysis data.
@@ -2036,6 +2054,7 @@ async fn run_synthesis(
 
     println!("{}", "✓ Synthesis successful".green().bold());
     print_decap_report(&netlist);
+    print_drift_report(&netlist, source_file);
     println!("  Instances: {}", netlist.instances.len());
     println!("  Nets: {}", netlist.nets.len());
     
