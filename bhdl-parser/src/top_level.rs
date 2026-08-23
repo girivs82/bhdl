@@ -193,6 +193,15 @@ impl<'t> Parser<'t> {
                         self.parse_supply_stmt();
                         continue;
                     }
+                    // `requirements { key: value; … }` — project-wide
+                    // requirement filters merged into every stage
+                    // requirement on this board (same entry grammar as hsi).
+                    if self.peek_text().as_deref() == Some("requirements")
+                        && self.peek_nth_nontrivia(1) == Some(SyntaxKind::L_BRACE)
+                    {
+                        self.parse_kv_block(SyntaxKind::REQUIREMENTS_BLOCK, SyntaxKind::REQUIREMENTS_ENTRY, false);
+                        continue;
+                    }
                     // `hsi NAME { key: value; … }` — a hardware–software
                     // interface contract (contextual keyword, same
                     // discipline as `supply`).
@@ -2328,11 +2337,20 @@ impl<'t> Parser<'t> {
     // the desugar pass interprets them.
     /// `hsi NAME { key: value; … }` — entries are `IDENT : <tokens> ;`.
     fn parse_hsi_stmt(&mut self) {
-        self.builder.start_node(SyntaxKind::HSI_STMT.into());
-        self.bump(); // hsi
+        self.parse_kv_block(SyntaxKind::HSI_STMT, SyntaxKind::HSI_ENTRY, true);
+    }
+
+    /// `<kw> [NAME] { key: value; … }` — a keyed contract block; keys may
+    /// be keywords (`signal`, `source`, `level`): any token followed by
+    /// `:` opens an entry whose value runs to the `;`.
+    fn parse_kv_block(&mut self, block: SyntaxKind, entry: SyntaxKind, named: bool) {
+        self.builder.start_node(block.into());
+        self.bump(); // the contextual keyword
         self.skip_trivia();
-        self.expect(SyntaxKind::IDENT); // the contract id
-        self.skip_trivia();
+        if named {
+            self.expect(SyntaxKind::IDENT); // the contract id
+            self.skip_trivia();
+        }
         self.expect(SyntaxKind::L_BRACE);
         loop {
             self.skip_trivia();
@@ -2341,7 +2359,7 @@ impl<'t> Parser<'t> {
                 // keys may be keywords (`signal`, `source`, `level`): any
                 // token followed by `:` opens an entry
                 Some(_) if self.peek_nth_nontrivia(1) == Some(SyntaxKind::COLON) => {
-                    self.builder.start_node(SyntaxKind::HSI_ENTRY.into());
+                    self.builder.start_node(entry.into());
                     self.bump_any(); // key
                     self.skip_trivia();
                     self.expect(SyntaxKind::COLON);
@@ -2356,11 +2374,11 @@ impl<'t> Parser<'t> {
                     self.builder.finish_node();
                 }
                 Some(_) => {
-                    self.error("Expected `key: value;` entry in hsi block".to_string());
+                    self.error("Expected `key: value;` entry in block".to_string());
                     self.bump_any();
                 }
                 None => {
-                    self.error("Unexpected end of file in hsi block".to_string());
+                    self.error("Unexpected end of file in block".to_string());
                     break;
                 }
             }

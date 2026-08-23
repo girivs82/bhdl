@@ -68,6 +68,11 @@ pub struct StageImpl {
     pub trait_name: String,
     pub block: String,
     pub file: PathBuf,
+    /// The file's text (library file, or the board's own source for a
+    /// block defined locally).
+    pub text: String,
+    /// Defined in the board's own source — no import needed.
+    pub local: bool,
     /// requirement const → block constructor parameter.
     pub bindings: Vec<(String, String)>,
 }
@@ -88,6 +93,8 @@ pub struct StageRequirement {
 pub struct StageCandidate {
     pub block: String,
     pub file: PathBuf,
+    /// Defined in the board's own source (no import needed).
+    pub local: bool,
     pub gates: Vec<(String, String, bool)>,
     /// Gates that failed because a promise is UNDECLARED (UNCHECKED):
     /// a rejection for automatic binding, but a designer's explicit
@@ -191,7 +198,21 @@ pub fn resolve_stages(
 
     let masked = mask_comments(source);
     let board_name = scan_board_name(&masked).unwrap_or_default();
-    let reqs = scan_requirements(&masked, &traits);
+    let project = scan_project_requirements(&masked);
+    let mut reqs = scan_requirements(&masked, &traits);
+    // PROJECT-WIDE FILTERS: `requirements { qual: …; asil: …; temp_*: … }`
+    // apply to every stage on the board; a key the stage states itself
+    // wins. Merged BEFORE evaluation so the stamped text, the lock and
+    // ERC032 all see one requirement.
+    if !project.is_empty() {
+        for r in reqs.iter_mut() {
+            for (k, v) in &project {
+                if !r.params.iter().any(|(rk, _)| rk == k) {
+                    r.params.push((k.clone(), v.clone()));
+                }
+            }
+        }
+    }
     let overrides = scan_overrides(&masked);
     if reqs.is_empty() && overrides.is_empty() {
         return Ok(None);
@@ -204,8 +225,11 @@ pub fn resolve_stages(
 
     let mut impls: Vec<StageImpl> = Vec::new();
     for (path, text) in &lib {
-        impls.extend(scan_impls(text, path));
+        impls.extend(scan_impls(text, path, false));
     }
+    // blocks + impls defined in the board's own file (a designer's local
+    // block is a legitimate candidate / override target)
+    impls.extend(scan_impls(source, Path::new("<source>"), true));
 
     let mut resolutions = Vec::new();
     let mut edits: Vec<(usize, usize, String)> = Vec::new(); // (start, end, replacement)
@@ -379,8 +403,10 @@ pub fn resolve_stages(
                     " attribute {}.stage_bound = \"{b}\"; attribute {}.stage_binding = \"{basis}\";",
                     req.instance, req.instance
                 ));
-                let rel = rel_stdlib_path(&c.file, stdlib_root);
-                imports_needed.insert(b.clone(), rel);
+                if !c.local {
+                    let rel = rel_stdlib_path(&c.file, stdlib_root);
+                    imports_needed.insert(b.clone(), rel);
+                }
                 // requirement-mapped args, then the override's own args
                 // (the designer's power stage / datasheet axes) — the
                 // override wins on a clash
@@ -537,7 +563,7 @@ pub fn trial_envelope(entity_text: &str, block: &str, params: &[(String, String)
 
 /// Trial-instantiate one block against the requirement.
 fn evaluate_candidate(imp: &StageImpl, req: &StageRequirement, trait_def: &StageTrait, extra_args: &[(String, String)]) -> StageCandidate {
-    let text = std::fs::read_to_string(&imp.file).unwrap_or_default();
+    let text = imp.text.clone();
     let mut gates: Vec<(String, String, bool)> = Vec::new();
     let mut unchecked: Vec<String> = Vec::new();
     fn push_gate(gates: &mut Vec<(String, String, bool)>, g: &str, d: String, ok: bool) {
@@ -636,6 +662,22 @@ fn evaluate_candidate(imp: &StageImpl, req: &StageRequirement, trait_def: &Stage
             sreq.phases = Some(1.0); // a controller stage must state its phase support
         }
         let promises = promises_from_attrs(|k| attrs.get(k).map(|v| params.get(v.trim()).cloned().unwrap_or_else(|| v.clone())));
+        // the stage's dissipation at the requirement's operating point —
+        // what an ambient temperature requirement is checked THERMALLY
+        // against when the part is junction-rated (θ_JA + T_J,max)
+        {
+            let class = attrs.get("component_class").map(|c| c.trim_matches('"').to_string()).unwrap_or_default();
+            let si = |k: &str| attr_si(k);
+            sreq.p_diss_w = crate::stage_acceptance::estimate_dissipation_w(
+                &class,
+                req_value(req, "vin").and_then(|v| parse_si_txt(&v)),
+                req_value(req, "vout").and_then(|v| parse_si_txt(&v)),
+                sreq.i_max_a,
+                si("i_quiescent"),
+                promises.efficiency,
+                si("rds_on"),
+            );
+        }
         for g in check(&sreq, &promises) {
             let name: &'static str = g.name;
             match g.verdict {
@@ -664,6 +706,7 @@ fn evaluate_candidate(imp: &StageImpl, req: &StageRequirement, trait_def: &Stage
     StageCandidate {
         block: imp.block.clone(),
         file: imp.file.clone(),
+        local: imp.local,
         gates,
         unchecked,
         template,
@@ -804,7 +847,7 @@ fn scan_traits(text: &str) -> Vec<StageTrait> {
     out
 }
 
-fn scan_impls(text: &str, file: &Path) -> Vec<StageImpl> {
+fn scan_impls(text: &str, file: &Path, local: bool) -> Vec<StageImpl> {
     let masked = mask_comments(text);
     let mut out = Vec::new();
     let mut off = 0usize;
@@ -829,7 +872,7 @@ fn scan_impls(text: &str, file: &Path) -> Vec<StageImpl> {
                             })
                             .collect();
                         if !trait_name.is_empty() && !block.is_empty() {
-                            out.push(StageImpl { trait_name, block, file: file.to_path_buf(), bindings });
+                            out.push(StageImpl { trait_name, block, file: file.to_path_buf(), text: text.to_string(), local, bindings });
                         }
                     }
                 }
@@ -918,6 +961,34 @@ fn scan_override_spans(masked: &str) -> Vec<(usize, usize, String, String, Vec<(
     out
 }
 
+/// `requirements { key: value; … }` at board scope (comment-masked text).
+fn scan_project_requirements(masked: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut off = 0usize;
+    while let Some(p) = masked[off..].find("requirements") {
+        let at = off + p;
+        off = at + 12;
+        let before = masked[..at].chars().last();
+        if before.map(|c| c.is_alphanumeric() || c == '_').unwrap_or(false) {
+            continue;
+        }
+        let rest = masked[at + 12..].trim_start();
+        if !rest.starts_with('{') {
+            continue;
+        }
+        let Some(close) = rest.find('}') else { continue };
+        for entry in rest[1..close].split(';') {
+            if let Some((k, v)) = entry.split_once(':') {
+                let (k, v) = (k.trim(), v.trim());
+                if !k.is_empty() && !v.is_empty() {
+                    out.push((k.to_string(), v.to_string()));
+                }
+            }
+        }
+    }
+    out
+}
+
 fn scan_board_name(masked: &str) -> Option<String> {
     masked.lines().find_map(|l| {
         let r = l.trim_start().strip_prefix("board ")?;
@@ -984,7 +1055,7 @@ mod tests {
         let o = scan_overrides(&m2);
         assert_eq!(o[0].1, "BuckController");
         assert_eq!(o[0].2, vec![("hs_fet".to_string(), "\"BSC0902NS\"".to_string()), ("fet_rds_on".to_string(), "2.3mΩ".to_string())]);
-        let imp = scan_impls("impl BuckStage for Buck_X {\n    const vout = v_out; const i_max = i_out_max;\n}\n", Path::new("x.bhdl"));
+        let imp = scan_impls("impl BuckStage for Buck_X {\n    const vout = v_out; const i_max = i_out_max;\n}\n", Path::new("x.bhdl"), false);
         assert_eq!(imp.len(), 1);
         assert_eq!(imp[0].bindings.len(), 2);
     }

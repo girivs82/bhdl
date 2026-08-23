@@ -2998,6 +2998,22 @@ pub fn check_powertree_acceptance(
         if req.efficiency_min.is_none() {
             req.efficiency_min = inst.attributes.get("powertree_eff_assumed_pct").and_then(|v| v.parse::<f64>().ok()).map(|p| p / 100.0);
         }
+        // the stage's dissipation at its operating point (the same
+        // estimator the resolver used) — the thermal path for an ambient
+        // temperature requirement on a junction-rated part
+        {
+            let a = |k: &str| inst.attributes.get(k).and_then(|v| crate::stage_acceptance::parse_si(v));
+            let class = inst.attributes.get("component_class").map(|c| c.trim_matches('"').to_string()).unwrap_or_default();
+            req.p_diss_w = crate::stage_acceptance::estimate_dissipation_w(
+                &class,
+                req.vin_v.or_else(|| a("v_in")),
+                a("output_voltage"),
+                req.i_max_a,
+                a("i_quiescent"),
+                inst.attributes.get("efficiency").and_then(|v| crate::stage_acceptance::parse_efficiency(v)),
+                a("rds_on"),
+            );
+        }
         // vin is the TREE's business (it chose the source rail) — not
         // re-checked here unless the requirement states a range.
         req.vin_v = None;

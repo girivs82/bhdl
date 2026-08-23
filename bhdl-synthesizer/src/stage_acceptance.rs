@@ -38,6 +38,47 @@ pub struct StageRequirement {
     pub ov_trip_v: Option<f64>,
     pub uv_trip_v: Option<f64>,
     pub reverse_polarity: Option<bool>,
+    /// Required ASIL capability of the part (from the safety analysis or
+    /// a project-wide requirement): QM < A < B < C < D.
+    pub asil: Option<Asil>,
+    /// Dissipation the stage will run at (W) — supplied by the caller
+    /// when it can compute it (resolver: from the operating point;
+    /// ERC032: from the sign-off's p_diss) so an AMBIENT temperature
+    /// requirement can be met THERMALLY by a junction-rated part:
+    /// T_J = T_A,max + P·θ_JA ≤ T_J,max.
+    pub p_diss_w: Option<f64>,
+}
+
+/// ASIL ordering for capability gating.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Asil {
+    Qm,
+    A,
+    B,
+    C,
+    D,
+}
+
+impl Asil {
+    pub fn parse(s: &str) -> Option<Asil> {
+        match s.trim().trim_matches('"').to_ascii_uppercase().trim_start_matches("ASIL_").trim_start_matches("ASIL") {
+            "QM" => Some(Asil::Qm),
+            "A" => Some(Asil::A),
+            "B" => Some(Asil::B),
+            "C" => Some(Asil::C),
+            "D" => Some(Asil::D),
+            _ => None,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Asil::Qm => "QM",
+            Asil::A => "A",
+            Asil::B => "B",
+            Asil::C => "C",
+            Asil::D => "D",
+        }
+    }
 }
 
 /// What the stage declares (SI units; efficiency as a fraction). `None`
@@ -57,6 +98,13 @@ pub struct StagePromises {
     pub ov_trip_v: Option<f64>,
     pub uv_trip_v: Option<f64>,
     pub reverse_polarity: Option<bool>,
+    /// Vendor functional-safety capability claim (SEooC / FS-compliant
+    /// documentation) — `attribute asil_capable = "B";`.
+    pub asil_capable: Option<Asil>,
+    /// Junction-to-ambient thermal resistance (°C/W) and the junction
+    /// rating — the thermal path to an ambient requirement.
+    pub theta_ja_c_per_w: Option<f64>,
+    pub tj_max_c: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,7 +202,38 @@ pub fn check(req: &StageRequirement, p: &StagePromises) -> Vec<Gate> {
     if let Some(hi) = req.temp_max_c {
         match p.temp_max_c {
             Some(b) => push(&mut g, "temp_max", format!("temp_max {b:.0}°C ≥ required {hi:.0}°C"), b + 1e-9 >= hi),
-            None => unchecked(&mut g, "temp_max", "declares no temp_max — UNCHECKED, not a pass".into(), "attribute temp_max = <datasheet>degC;"),
+            // no ambient rating: a junction-rated part meets the ambient
+            // requirement THERMALLY when θ_JA, T_J,max and the dissipation
+            // are all known — T_J = T_A,max + P·θ_JA ≤ T_J,max
+            None => match (p.theta_ja_c_per_w, p.tj_max_c, req.p_diss_w) {
+                (Some(theta), Some(tj_max), Some(pw)) => {
+                    let tj = hi + pw * theta;
+                    push(
+                        &mut g,
+                        "temp_max",
+                        format!("no ambient rating — thermal: T_J = {hi:.0}°C + {pw:.3}W × {theta:.1}°C/W = {tj:.1}°C ≤ T_J,max {tj_max:.0}°C"),
+                        tj <= tj_max + 1e-9,
+                    );
+                }
+                (theta, tj, pw) => {
+                    let mut missing = Vec::new();
+                    if theta.is_none() { missing.push("theta_ja"); }
+                    if tj.is_none() { missing.push("tj_max"); }
+                    if pw.is_none() { missing.push("the stage's dissipation"); }
+                    unchecked(
+                        &mut g,
+                        "temp_max",
+                        format!("declares no ambient temp_max; thermal derivation (T_A + P·θ_JA ≤ T_J,max) needs {} — UNCHECKED, not a pass", missing.join(", ")),
+                        "attribute temp_max = <datasheet ambient>degC; or attribute theta_ja = <°C/W>; + tj_max",
+                    );
+                }
+            },
+        }
+    }
+    if let Some(req_asil) = req.asil {
+        match p.asil_capable {
+            Some(b) => push(&mut g, "asil", format!("asil_capable {} ≥ required ASIL {}", b.as_str(), req_asil.as_str()), b >= req_asil),
+            None => unchecked(&mut g, "asil", format!("declares no asil_capable (required ASIL {}) — UNCHECKED, not a pass", req_asil.as_str()), "attribute asil_capable = \"<vendor SEooC / FS-compliant claim>\";"),
         }
     }
     // protection functions: a clamp must clamp at or below the asked
@@ -193,6 +272,36 @@ pub fn check(req: &StageRequirement, p: &StagePromises) -> Vec<Gate> {
     g
 }
 
+/// The stage's dissipation at an operating point, from the block's
+/// class and promises: linear → (Vin − Vout)·I + Vin·Iq; switching →
+/// (1 − η)/η · Vout · I (η = the declared efficiency, else none);
+/// pass-through (prereg) → I²·R_on when rds_on is declared, else none.
+/// `None` when the figures to compute it are not declared.
+pub fn estimate_dissipation_w(
+    class: &str,
+    vin_v: Option<f64>,
+    vout_v: Option<f64>,
+    i_a: Option<f64>,
+    i_q_a: Option<f64>,
+    efficiency: Option<f64>,
+    rds_on_ohm: Option<f64>,
+) -> Option<f64> {
+    let i = i_a?;
+    match class {
+        "ldo" | "voltage_regulator" => {
+            let (vin, vout) = (vin_v?, vout_v?);
+            Some((vin - vout).max(0.0) * i + vin * i_q_a.unwrap_or(0.0))
+        }
+        "switching_regulator" => {
+            let (vout, eta) = (vout_v?, efficiency?);
+            if eta <= 0.0 { return None; }
+            Some((1.0 - eta) / eta * vout * i)
+        }
+        "protection" => Some(i * i * rds_on_ohm?),
+        _ => None,
+    }
+}
+
 // ── shared text parsers (both callers read attribute / requirement text) ──
 
 /// SI value text → base unit (`2.4A`, `150mA`, `30uV`, `3.5V`, `85%` → 0.85).
@@ -207,6 +316,9 @@ pub fn parse_si(v: &str) -> Option<f64> {
     let unit = t[end..].trim();
     if unit == "%" {
         return Some(num / 100.0);
+    }
+    if matches!(unit, "°C/W" | "C/W" | "K/W" | "degC/W") {
+        return Some(num);
     }
     let prefix = unit
         .trim_end_matches("Hz")
@@ -272,6 +384,7 @@ pub fn requirement_from_pairs<'a>(pairs: impl Iterator<Item = (&'a str, &'a str)
             "ov_trip" => r.ov_trip_v = parse_si(v),
             "uv_trip" => r.uv_trip_v = parse_si(v),
             "reverse_polarity" => r.reverse_polarity = Some(v.trim().trim_matches('"').eq_ignore_ascii_case("true")),
+            "asil" => r.asil = Asil::parse(v),
             _ => {}
         }
     }
@@ -300,6 +413,9 @@ pub fn promises_from_attrs<'a>(get: impl Fn(&str) -> Option<String>) -> StagePro
         ov_trip_v: get("ov_trip").and_then(|v| parse_si(&v)),
         uv_trip_v: get("uv_trip").and_then(|v| parse_si(&v)),
         reverse_polarity: get("reverse_polarity").map(|v| v.trim().trim_matches('"').eq_ignore_ascii_case("true")),
+        asil_capable: get("asil_capable").and_then(|v| Asil::parse(&v)),
+        theta_ja_c_per_w: get("theta_ja").and_then(|v| parse_si(&v)),
+        tj_max_c: get("tj_max").and_then(|v| parse_temp_c(&v)),
     }
 }
 

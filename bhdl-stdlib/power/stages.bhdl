@@ -29,6 +29,23 @@
 // (smallest output_current that covers the load), ties by library
 // order — the basis is stated in the survey note, never silent.
 //
+// PROJECT-WIDE FILTERS: a board may state requirements that apply to
+// every stage on it — once, where they originate:
+//   requirements { qual: "AEC-Q100"; asil: B; temp_min: -40degC; temp_max: 125degC; }
+// The resolver merges them into each stage requirement (a stage's own
+// value wins for a key it states) and stamps the MERGED text, so ERC032
+// and the trace matrix see the same requirement. `asil` is also DERIVED
+// per stage by the trace matrix from the safety goals whose effects
+// reference the rail the stage drives — the matrix reports a stage
+// serving an ASIL-B goal without an ASIL requirement / capable part.
+//
+// THERMAL: an ambient `temp_max` requirement is met by an ambient-rated
+// part directly, or THERMALLY by a junction-rated part that declares
+// `theta_ja` and `tj_max` — T_J = T_A,max + P·θ_JA ≤ T_J,max with P the
+// stage's dissipation at the requirement's operating point (the resolver
+// computes it from the block's class and promises; ERC032 from the
+// sign-off). The same θ_JA feeds the FIT model (T_J for the handbook).
+//
 // The consts are the requirement PARAMETERS. The ones a block must
 // accept are those its `impl` binds; `vin_min`/`vin_max` default to `vin`
 // when the requirement gives only a nominal input; `noise` and
@@ -52,6 +69,7 @@ trait BuckStage {
     const temp_min: temperature;    // operating ambient minimum required
     const temp_max: temperature;    // operating ambient maximum required
     const qual: string;             // e.g. "AEC-Q100" — must appear in the part's `qualification`
+    const asil: string;             // required ASIL capability (QM/A/B/C/D) vs the part's `asil_capable`
 }
 
 trait LdoStage {
@@ -69,6 +87,7 @@ trait LdoStage {
     const temp_min: temperature;    // operating ambient minimum required
     const temp_max: temperature;    // operating ambient maximum required
     const qual: string;             // e.g. "AEC-Q100" — must appear in the part's `qualification`
+    const asil: string;             // required ASIL capability (QM/A/B/C/D) vs the part's `asil_capable`
 }
 
 // A buck CONTROLLER + external power stage (the tree's `BuckExternal`
@@ -98,6 +117,7 @@ trait BuckExtStage {
     const temp_min: temperature;    // operating ambient minimum required
     const temp_max: temperature;    // operating ambient maximum required
     const qual: string;             // e.g. "AEC-Q100" — must appear in the part's `qualification`
+    const asil: string;             // required ASIL capability (QM/A/B/C/D) vs the part's `asil_capable`
 }
 
 // The protected FRONT END the tree puts between the input and every
@@ -127,4 +147,5 @@ trait PreregStage {
     const temp_min: temperature;
     const temp_max: temperature;
     const qual: string;
+    const asil: string;
 }

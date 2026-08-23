@@ -2493,3 +2493,96 @@ board PreDemo {{
     let c = r.resolutions[0].candidates.iter().find(|c| c.block == "IdealDiode_LM74700").unwrap();
     assert!(c.unchecked.contains(&"ov_trip".to_string()), "{c:#?}");
 }
+
+/// Project-wide filters, ASIL capability, and the thermal path
+/// (Requirements_And_Resolution §3): a board-level `requirements { … }`
+/// merges into every stage requirement (stage's own key wins); `asil`
+/// gates against `asil_capable`; an ambient temp_max requirement is met
+/// THERMALLY by a junction-rated block declaring theta_ja + tj_max at the
+/// requirement's dissipation, and refused when the junction would exceed
+/// its rating; the trace matrix derives the ASIL a stage must meet from
+/// the safety goal on the rail it drives and flags an unstated one.
+#[tokio::test]
+async fn project_requirements_asil_and_thermal_path() {
+    use bhdl_synthesizer::stage_resolution::resolve_stages;
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let stdlib = ws.join("bhdl-stdlib");
+    // a junction-rated FIXTURE block with θJA (one attribute per statement, several per line)
+    let lib = r#"
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+entity HotLdoIc(v_out: voltage = 3.3V) as part {
+    pin VIN: power in; pin VOUT: power out; pin GND: ground;
+    attribute component_class = "regulator_ic"; attribute part_number = "FIXTURE-LDO";
+    attribute output_current = 0.5A; attribute vin_min = 2.5V; attribute vin_max = 16V;
+    attribute i_quiescent = 1mA; attribute tj_max = 125degC; attribute theta_ja = 60degC/W;
+    attribute asil_capable = "B";
+}
+entity Ldo_Hot(v_out: voltage = 3.3V, i_out_max: current = 100mA, v_in: voltage = 5V) as design {
+    pin VIN: power in; pin VOUT: power out virtual; pin GND: ground;
+    attribute component_class = "ldo"; attribute output_voltage = v_out; attribute v_in = v_in; attribute i_out_max = i_out_max;
+    attribute output_current = 0.5A; attribute vin_min = 2.5V; attribute vin_max = 16V; attribute i_quiescent = 1mA;
+    attribute tj_max = 125degC; attribute theta_ja = 60degC/W; attribute asil_capable = "B";
+    design { const need = self.v_out + 0.3; require self.v_in >= need else "dropout"; }
+    u: HotLdoIc(v_out); VIN -> u.VIN; u.GND -> GND; u.VOUT -> VOUT;
+    VOUT -> C_out: Cap(1uF).1; C_out.2 -> GND;
+}
+impl LdoStage for Ldo_Hot { const vout = v_out; const i_max = i_out_max; const vin = v_in; }
+"#;
+    let board = |project: &str, args: &str, extra: &str| format!(r#"
+import {{ LdoStage }} from "bhdl-stdlib/power/stages.bhdl";
+import {{ Res }} from "bhdl-stdlib/passives/resistor.bhdl";
+{lib}
+board Proj {{
+    {project}
+    power V12 = 12V @ 1A;
+    port V3V3: power out = 3.3V @ 400mA;
+    ground GND;
+    @V12 -> u2: LdoStage({args}).VIN;
+    u2.GND -> @GND; u2.VOUT -> @V3V3;
+    {extra}
+    @V3V3 -> R_LOAD: Res(8.25Ω, wattage=2W).1; R_LOAD.2 -> @GND;
+}}
+"#);
+    // 1. project-wide filters land on the stage; the stage's own key wins
+    let r = resolve_stages(&board("requirements { asil: B; temp_max: 85degC; qual: \"AEC-Q100\"; }", "vout=3.3V, i_max=100mA, vin=5V, temp_max=70degC", ""), &stdlib, &[]).unwrap().unwrap();
+    assert_eq!(r.resolutions[0].requirement, "vout=3.3V, i_max=100mA, vin=5V, temp_max=70degC, asil=B, qual=AEC-Q100", "{}", r.resolutions[0].requirement);
+    assert!(r.resolutions[0].bound.is_none(), "no stdlib LDO is AEC-Q100: {}", bhdl_synthesizer::stage_resolution::render_report(&r.resolutions[0]));
+    let hot = r.resolutions[0].candidates.iter().find(|c| c.block == "Ldo_Hot").unwrap();
+    assert!(hot.gates.iter().any(|g| g.0 == "asil" && g.2), "{hot:#?}");
+    assert!(hot.unchecked.contains(&"qual".to_string()), "{hot:#?}");
+    // 2. thermal path: 5V/100mA → T_J 95.5°C ≤ 125 passes; 12V/400mA → 294°C refused
+    let r = resolve_stages(&board("requirements { asil: B; temp_max: 85degC; }", "vout=3.3V, i_max=100mA, vin=5V", ""), &stdlib, &[]).unwrap().unwrap();
+    assert_eq!(r.resolutions[0].bound.as_deref(), Some("Ldo_Hot"), "{}", bhdl_synthesizer::stage_resolution::render_report(&r.resolutions[0]));
+    let hot = r.resolutions[0].candidates.iter().find(|c| c.block == "Ldo_Hot").unwrap();
+    let tg = hot.gates.iter().find(|g| g.0 == "temp_max").unwrap();
+    assert!(tg.2 && tg.1.contains("thermal: T_J = 85°C + 0.175W × 60.0°C/W = 95.5°C"), "{tg:?}");
+    let e = resolve_stages(&board("requirements { temp_max: 85degC; }", "vout=3.3V, i_max=400mA, vin=12V", "resolve u2 = Ldo_Hot;"), &stdlib, &[]).unwrap_err();
+    assert!(format!("{e:#}").contains("294.5°C ≤ T_J,max 125°C"), "{e:#}");
+    // 3. ASIL capability ordering: a C requirement fails a B-capable part
+    let r = resolve_stages(&board("requirements { asil: C; }", "vout=3.3V, i_max=100mA, vin=5V", ""), &stdlib, &[]).unwrap().unwrap();
+    let hot = r.resolutions[0].candidates.iter().find(|c| c.block == "Ldo_Hot").unwrap();
+    assert!(hot.gates.iter().any(|g| g.0 == "asil" && !g.2 && g.1.contains("asil_capable B ≥ required ASIL C")), "{hot:#?}");
+    // 4. trace matrix derives the ASIL from the goal on the driven rail
+    let src = board("", "vout=3.3V, i_max=100mA, vin=5V", "").to_string() + r#"
+safety Proj as brd {
+    goal SG_RAIL: ASIL_B "V3V3 must not overvolt undetected" (id="SG-RAIL-1", ftti=10ms) {
+        effect ov = brd.V3V3 > 3.6V   severity S2;
+    }
+}
+"#;
+    let r = resolve_stages(&src, &stdlib, &[]).unwrap().unwrap();
+    let pr = parse(&r.source);
+    assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+    let mut checker = bhdl_synthesizer::design_rule_checker::DesignRuleChecker::new(bhdl_synthesizer::design_rule_checker::IndustryStandard::IPC2221);
+    let drc = checker.run_checks(&n, &analysis);
+    let safety = bhdl_synthesizer::safety_model::build_safety_model(&n, &[&sf]);
+    let m = bhdl_synthesizer::trace_matrix::build_trace_matrix(&n, &analysis, &sf, &drc.violations, Some(&safety), false);
+    let row = m.rows.iter().find(|r| r.id == "Proj.u2").expect("stage row");
+    assert_eq!(row.status, bhdl_synthesizer::trace_matrix::TraceStatus::Unverified, "{row:#?}");
+    assert!(row.evidence.contains("derived ASIL B (serves goal SG_RAIL)") && row.evidence.contains("requirement states NONE — add `asil=B`"), "{row:#?}");
+}

@@ -393,6 +393,30 @@ Principles that fall out:
    UNCHECKED = not a pass. Today only TPS54331 declares its ambient
    range (SLVSA86 −40…85 °C); no stdlib part declares a qualification —
    an `AEC-Q100` requirement resolves to nothing, honestly.
+   PROJECT-WIDE FILTERS (landed): a board states once, where they
+   originate, the requirements that apply to every stage on it —
+   `requirements { qual: "AEC-Q100"; asil: B; temp_min: -40degC;
+   temp_max: 125degC; }`. The resolver merges them into each stage
+   requirement before evaluation (a key the stage states itself wins)
+   and stamps the MERGED text, so the lock, ERC032 and the trace matrix
+   see one requirement. `asil` (QM < A < B < C < D) gates against a
+   part's `asil_capable` — the vendor's SEooC / functional-safety-
+   compliant claim, never inferred. The trace matrix also DERIVES the
+   ASIL a stage must meet from the safety goals whose effects reference
+   the rail it drives, and flags a stage that serves an ASIL goal
+   without stating `asil=` (the resolver never saw the filter) or whose
+   block declares no capability.
+   THERMAL PATH (landed): the interface's `temp_min/max` is the
+   operating AMBIENT range. A junction-rated part meets an ambient
+   requirement THERMALLY when it declares `theta_ja` and `tj_max`:
+   T_J = T_A,max + P·θ_JA ≤ T_J,max, with P the stage's dissipation at
+   the requirement's operating point — computed by one estimator from
+   the block's class and promises (linear: (Vin−Vout)·I + Vin·Iq;
+   switcher: (1−η)/η·Vout·I; pass-through: I²·R_on), used by both the
+   resolver and ERC032. What is missing for the derivation is named in
+   the UNCHECKED text. The same θ_JA feeds the handbook FIT model (T_J).
+   A local block defined in the board's own file is a candidate and an
+   override target like a library block.
    ONE PREDICATE (landed): `bhdl_synthesizer::stage_acceptance::check`
    is the acceptance function. The resolver calls it with promises read
    from the block's entity text (attributes resolved through params);

@@ -414,6 +414,10 @@ pub enum SyntaxKind {
     // hsi NAME { signal: u3.PB0; direction: input; level: 3.3V; source: mon.nOUT; … }
     HSI_STMT,
     HSI_ENTRY,             // one `key: value;` entry
+    // Project-wide requirement filters (Requirements_And_Resolution.md §3):
+    // requirements { qual: "AEC-Q100"; asil: B; temp_min: -40degC; … }
+    REQUIREMENTS_BLOCK,
+    REQUIREMENTS_ENTRY,
 
     // Requirement resolution (docs/spec/Requirements_And_Resolution.md §3):
     // resolve <instance> = <Block>;   — designer override of the resolver

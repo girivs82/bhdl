@@ -173,6 +173,35 @@ pub fn build_trace_matrix(
             .iter()
             .filter(|v| v.rule_id == "ERC032" && inst_name(netlist, &v.location).as_deref() == Some(inst.name.as_str()))
             .collect();
+        // DERIVED ASIL: the safety goals whose effects reference the rail
+        // this stage drives set the ASIL the part must be capable of —
+        // machine-derived, compared with what the requirement states and
+        // what the block declares
+        let driven_rails: Vec<String> = netlist
+            .pin_instances
+            .values()
+            .filter(|pi| pi.instance == *netlist.instances.iter().find(|(_, i)| i.name == inst.name).map(|(id, _)| id).as_ref().unwrap())
+            .filter(|pi| netlist.pins.get(pi.pin_def).map(|p| p.name == "VOUT").unwrap_or(false))
+            .filter_map(|pi| pi.net.and_then(|n| netlist.nets.get(n)).and_then(|n| n.name.clone()))
+            .collect();
+        let derived_asil: Option<(bhdl_common::safety::Level, String)> = safety.and_then(|sm| {
+            sm.scopes
+                .iter()
+                .flat_map(|sc| sc.goals.iter())
+                .filter(|g| g.effects.iter().any(|e| driven_rails.iter().any(|r| e.expr.contains(r.as_str()) || e.refs.iter().any(|x| x.ends_with(r.as_str())))))
+                .map(|g| (g.level, g.path.clone()))
+                .max_by_key(|(l, _)| *l)
+        });
+        let asil_note = derived_asil.as_ref().map(|(lvl, goal)| {
+            let stated = req.split(',').filter_map(|kv| kv.split_once('=')).find(|(k, _)| k.trim() == "asil").map(|(_, v)| v.trim().to_string());
+            let capable = inst.attributes.get("asil_capable").cloned();
+            let short = lvl.as_str().trim_start_matches("ASIL_").to_string();
+            format!(
+                "derived ASIL {short} (serves goal {goal}); requirement states {}; block declares asil_capable {}",
+                stated.unwrap_or_else(|| format!("NONE — add `asil={short}` to the requirement (or a board-level `requirements {{ asil: {short}; }}`) so the resolver filters on it")),
+                capable.unwrap_or_else(|| "NONE".into())
+            )
+        });
         let (status, evidence) = if bound.is_empty() {
             (TraceStatus::Unresolved, "no library block covers the requirement (see the ⚙ survey near-misses); Generic* placeholder emitted".to_string())
         } else if let Some(v) = erc032.iter().find(|v| matches!(v.severity, ViolationSeverity::Error | ViolationSeverity::Critical)) {
@@ -181,6 +210,14 @@ pub fn build_trace_matrix(
             (TraceStatus::Unverified, format!("ERC032: {}", v.description))
         } else {
             (TraceStatus::Verified, format!("bound by {basis}; block envelope + promises accepted at resolution; ERC032 clean on the flattened circuit"))
+        };
+        // a derived ASIL the requirement does not state is a FINDING: the
+        // safety analysis put a requirement on this stage that the
+        // resolver never saw
+        let (status, evidence) = match &asil_note {
+            Some(n) if !req.contains("asil=") && status == TraceStatus::Verified => (TraceStatus::Unverified, format!("{evidence}; {n}")),
+            Some(n) => (status, format!("{evidence}; {n}")),
+            None => (status, evidence),
         };
         m.rows.push(TraceRow {
             id,

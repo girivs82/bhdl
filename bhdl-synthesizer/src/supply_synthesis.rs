@@ -893,12 +893,15 @@ pub(crate) fn entity_attrs_txt(src: &str, name: &str) -> HashMap<String, String>
             break;
         }
         let l = line.split("//").next().unwrap_or("").trim();
-        let Some(rest) = l.strip_prefix("attribute ") else { continue };
-        if let Some((k, v)) = rest.split_once('=') {
-            out.insert(
-                k.trim().to_string(),
-                v.trim().trim_end_matches(';').trim().trim_matches('"').to_string(),
-            );
+        // several `attribute k = v;` may share a line
+        for stmt in l.split(';') {
+            let Some(rest) = stmt.trim().strip_prefix("attribute ") else { continue };
+            if let Some((k, v)) = rest.split_once('=') {
+                out.insert(
+                    k.trim().to_string(),
+                    v.trim().trim_end_matches(';').trim().trim_matches('"').to_string(),
+                );
+            }
         }
     }
     out
