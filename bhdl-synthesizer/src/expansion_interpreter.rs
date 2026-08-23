@@ -450,8 +450,54 @@ fn expand_one_instance(
     //       instance shares a net with at least one other pin).
     // Otherwise the child is dropped, along with all connections
     // referring to it.
+    // Explicit wiring gates (`generate if (wired(PIN))` in a design
+    // block's plain body): a parent pin is WIRED when the board gave it
+    // a net — the same criterion the heuristic live-pin rule uses, but
+    // declared by the block's author instead of inferred.
+    let wired_pins: HashSet<String> = cand
+        .pin_instances
+        .iter()
+        .filter(|(_, id)| netlist.pin_instances.get(**id).map(|pi| pi.net.is_some()).unwrap_or(false))
+        .map(|(p, _)| p.clone())
+        .collect();
+    let gate_holds = move |gate: &Option<(String, bool)>| -> bool {
+        let Some((pin, expect_wired)) = gate else { return true };
+        wired_pins.contains(pin) == *expect_wired
+    };
+    // Record the block's gate-optional contract pins on the parent
+    // instance (`gated_pins`) so ERC006 does not flag an unwired one.
+    {
+        let mut gated: Vec<String> = cand
+            .recipe
+            .instances
+            .iter()
+            .filter_map(|i| i.gate.as_ref().map(|g| g.0.clone()))
+            .chain(cand.recipe.connections.iter().filter_map(|c| c.gate.as_ref().map(|g| g.0.clone())))
+            .collect();
+        gated.sort();
+        gated.dedup();
+        if !gated.is_empty() {
+            if let Some(inst) = netlist.instances.get_mut(cand.instance_id) {
+                inst.attributes.insert("gated_pins".into(), gated.join(","));
+            }
+        }
+    }
     let live_children: HashSet<String> = if cand.recipe.firm {
-        cand.recipe.instances.iter().map(|i| i.name.clone()).collect()
+        let live: HashSet<String> = cand
+            .recipe
+            .instances
+            .iter()
+            .filter(|i| gate_holds(&i.gate))
+            .map(|i| i.name.clone())
+            .collect();
+        for i in cand.recipe.instances.iter().filter(|i| !gate_holds(&i.gate)) {
+            let (pin, w) = i.gate.as_ref().unwrap();
+            info!(
+                "Expansion of '{}': child '{}' gated out — generate if ({}wired({pin})) and the board {} it",
+                cand.instance_name, i.name, if *w { "" } else { "!" }, if *w { "did not wire" } else { "wired" }
+            );
+        }
+        live
     } else {
         compute_live_children(netlist, cand)
             .difference(&takeover_skipped)
@@ -879,6 +925,9 @@ fn expand_one_instance(
             _ => false,
         };
         if touches_dead_child(&conn.from) || touches_dead_child(&conn.to) {
+            continue;
+        }
+        if !gate_holds(&conn.gate) {
             continue;
         }
         conn_idx_counter += 1;
@@ -1961,6 +2010,7 @@ mod tests {
         recipe.internal_nets = vec!["sw".to_string()];
         recipe.instances = vec![
             bhdl_common::ExpansionInstance {
+                gate: None,
                 name: "L".to_string(),
                 component_type: "Ind".to_string(),
                 params: vec!["l_value".to_string()],
@@ -1968,6 +2018,7 @@ mod tests {
                 layout_intents: Vec::new(),
             },
             bhdl_common::ExpansionInstance {
+                gate: None,
                 name: "D".to_string(),
                 component_type: "Diode".to_string(),
                 params: vec!["diode_vf".to_string()],
@@ -1975,6 +2026,7 @@ mod tests {
                 layout_intents: Vec::new(),
             },
             bhdl_common::ExpansionInstance {
+                gate: None,
                 name: "C_out".to_string(),
                 component_type: "Cap".to_string(),
                 params: vec!["c_out".to_string()],
@@ -1985,28 +2037,34 @@ mod tests {
         recipe.connections = vec![
             // VOUT -> L.1; L.2 -> sw
             ExpansionConnection {
+                gate: None,
                 from: ExpansionEndpoint::ParentPin("VOUT".to_string()),
                 to: ExpansionEndpoint::InstancePin("L".to_string(), "1".to_string()),
             },
             ExpansionConnection {
+                gate: None,
                 from: ExpansionEndpoint::InstancePin("L".to_string(), "2".to_string()),
                 to: ExpansionEndpoint::InternalNet("sw".to_string()),
             },
             // sw -> D.K, D.A -> GND
             ExpansionConnection {
+                gate: None,
                 from: ExpansionEndpoint::InternalNet("sw".to_string()),
                 to: ExpansionEndpoint::InstancePin("D".to_string(), "K".to_string()),
             },
             ExpansionConnection {
+                gate: None,
                 from: ExpansionEndpoint::InstancePin("D".to_string(), "A".to_string()),
                 to: ExpansionEndpoint::ParentPin("GND".to_string()),
             },
             // VOUT -> C_out.1, C_out.2 -> GND
             ExpansionConnection {
+                gate: None,
                 from: ExpansionEndpoint::ParentPin("VOUT".to_string()),
                 to: ExpansionEndpoint::InstancePin("C_out".to_string(), "1".to_string()),
             },
             ExpansionConnection {
+                gate: None,
                 from: ExpansionEndpoint::InstancePin("C_out".to_string(), "2".to_string()),
                 to: ExpansionEndpoint::ParentPin("GND".to_string()),
             },
@@ -2116,6 +2174,7 @@ mod tests {
         let mut recipe = ExpansionRecipe::new("BuckRegulator".to_string());
         recipe.instances = vec![
             bhdl_common::ExpansionInstance {
+                gate: None,
                 name: "L".to_string(),
                 component_type: "Ind".to_string(),
                 params: vec!["33µH".to_string()],
@@ -2123,6 +2182,7 @@ mod tests {
                 layout_intents: Vec::new(),
             },
             bhdl_common::ExpansionInstance {
+                gate: None,
                 name: "C".to_string(),
                 component_type: "Cap".to_string(),
                 params: vec!["220µF".to_string()],
@@ -2130,6 +2190,7 @@ mod tests {
                 layout_intents: Vec::new(),
             },
             bhdl_common::ExpansionInstance {
+                gate: None,
                 name: "C_dec".to_string(),
                 component_type: "Cap".to_string(),
                 params: vec!["100nF".to_string()],
@@ -2139,26 +2200,32 @@ mod tests {
         ];
         recipe.connections = vec![
             ExpansionConnection {
+                gate: None,
                 from: ExpansionEndpoint::ParentPin("SW".to_string()),
                 to: ExpansionEndpoint::InstancePin("L".to_string(), "1".to_string()),
             },
             ExpansionConnection {
+                gate: None,
                 from: ExpansionEndpoint::InstancePin("L".to_string(), "2".to_string()),
                 to: ExpansionEndpoint::ParentPin("VOUT".to_string()),
             },
             ExpansionConnection {
+                gate: None,
                 from: ExpansionEndpoint::ParentPin("VOUT".to_string()),
                 to: ExpansionEndpoint::InstancePin("C".to_string(), "1".to_string()),
             },
             ExpansionConnection {
+                gate: None,
                 from: ExpansionEndpoint::InstancePin("C".to_string(), "2".to_string()),
                 to: ExpansionEndpoint::ParentPin("GND".to_string()),
             },
             ExpansionConnection {
+                gate: None,
                 from: ExpansionEndpoint::ParentPin("VIN".to_string()),
                 to: ExpansionEndpoint::InstancePin("C_dec".to_string(), "1".to_string()),
             },
             ExpansionConnection {
+                gate: None,
                 from: ExpansionEndpoint::InstancePin("C_dec".to_string(), "2".to_string()),
                 to: ExpansionEndpoint::ParentPin("GND".to_string()),
             },

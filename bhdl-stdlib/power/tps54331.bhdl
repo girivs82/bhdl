@@ -125,7 +125,14 @@ entity Buck_TPS54331(
     rds_on:       resistance  = 90mΩ,
     t_sw:         time        = 20ns,
     i_quiescent:  current     = 3.4mA
-) as design {
+) as design
+  // VALIDITY ENVELOPE (docs/spec/Requirements_And_Resolution.md §2.4):
+  // the block's generality, enforced — lowered to `require`s at the
+  // front of design { } so the resolver's trial-instantiation and
+  // synthesis evaluate the same predicate. 3A rating × 0.8 derating
+  // policy; SLVSA86 input range.
+  where i_out_max <= 2.4A, v_in >= 3.5V, v_in <= 28V
+{
     // Contract pins (the regulator pin contract): the board wires
     // these and nothing else. VOUT is virtual — the block's children
     // (L_out, C_out, the divider) ARE its copper.
@@ -172,11 +179,7 @@ entity Buck_TPS54331(
         const vout  = self.v_out;                // regulated output target
         require vout < self.v_in
             else "buck V_OUT must be below V_IN";
-        // VALIDITY ENVELOPE (the block's generality, enforced): the part
-        // is rated 3A; the power-tree derating policy runs parts at
-        // ≤80% of nameplate. Outside this envelope is a different block.
-        require self.i_out_max <= 2.4
-            else "Buck_TPS54331 envelope: i_out_max exceeds 2.4A (3A rating × 0.8 derating)";
+        // (rating / input-range envelope: the `where` clause above)
 
         const duty  = vout / self.v_in;          // D = V_OUT / V_IN
         const vdiff = self.v_in - vout;          // V_IN − V_OUT
@@ -223,7 +226,14 @@ entity Buck_TPS54331(
     u: TPS54331();
     VIN -> u.VIN;
     u.GND -> GND;
-    EN -> u.EN;
+    // EN is an OPTIONAL contract pin: wired → the board drives it;
+    // left unwired → the stage is always enabled (EN tied to VIN, the
+    // datasheet's default). The board's wiring is the configuration.
+    generate if (wired(EN)) {
+        EN -> u.EN;
+    } else {
+        VIN -> u.EN;
+    }
 
     // The input cap carries the switching_input_filter intent so the
     // placer keeps the hot V_IN→C_in→GND loop tight (the EMC-critical

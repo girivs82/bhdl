@@ -98,7 +98,12 @@ entity Buck_AP63205(
     u: AP63205();
     VIN -> u.VIN;
     u.GND -> GND;
-    EN -> u.EN;
+    // EN is OPTIONAL: unwired → tied to VIN (enabled); wired → board-driven.
+    generate if (wired(EN)) {
+        EN -> u.EN;
+    } else {
+        VIN -> u.EN;
+    }
     u.SW -> L_out: Ind(l_value).1; L_out.2 -> VOUT;
     VOUT -> C_out: Cap(c_out).1; C_out.2 -> GND;
     VIN -> C_in: Cap(c_in).1; C_in.2 -> GND;

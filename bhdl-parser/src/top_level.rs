@@ -94,6 +94,13 @@ impl<'t> Parser<'t> {
             }
             self.builder.finish_node();
             self.skip_trivia();
+            // The VALIDITY ENVELOPE may follow the partness tag — the
+            // natural reading for a block (`as design where v_in <=
+            // 16V, i_out_max <= 120mA { … }`); the pre-`as` position
+            // stays accepted.
+            if self.peek() == Some(SyntaxKind::WHERE_KW) {
+                self.parse_where_clause();
+            }
         }
 
         self.expect(SyntaxKind::L_BRACE);
@@ -2934,7 +2941,7 @@ impl<'t> Parser<'t> {
             self.skip_trivia();
 
             match self.peek() {
-                Some(SyntaxKind::L_BRACE) | None => break,
+                Some(SyntaxKind::L_BRACE) | Some(SyntaxKind::AS_KW) | None => break,
                 // Value-set membership: `channel in ("nmos", "pmos")`. A
                 // parameter's allowed-value set; scoped to the where clause
                 // so `in` never enters the general expression grammar.

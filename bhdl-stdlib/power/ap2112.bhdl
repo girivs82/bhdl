@@ -106,7 +106,12 @@ entity Ldo_AP2112K(
     u: AP2112K(v_out);
     VIN -> u.VIN;
     u.GND -> GND;
-    EN -> u.EN;
+    // EN is OPTIONAL: unwired → tied to VIN (enabled); wired → board-driven.
+    generate if (wired(EN)) {
+        EN -> u.EN;
+    } else {
+        VIN -> u.EN;
+    }
     VIN -> C_in: Cap(c_in).1; C_in.2 -> GND;
     u.VOUT -> VOUT;
     VOUT -> C_out: Cap(c_out).1; C_out.2 -> GND;

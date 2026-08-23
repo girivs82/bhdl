@@ -57,6 +57,11 @@ pub struct ExpansionInstance {
     /// analyzer lowers the parsed `INTENT_CALL` to these; the Phase 4.5
     /// interpreter copies them onto the materialized netlist instance.
     pub layout_intents: Vec<crate::intent::vocabulary::LayoutIntent>,
+    /// Wiring gate from `generate if (wired(PIN)) { … } else { … }` in a
+    /// design block's plain body: `Some((pin, true))` fires only when
+    /// the board wired the parent pin, `Some((pin, false))` only when it
+    /// did not. `None` = unconditional.
+    pub gate: Option<(String, bool)>,
 }
 
 /// A connection to wire up during expansion.
@@ -66,6 +71,8 @@ pub struct ExpansionConnection {
     pub from: ExpansionEndpoint,
     /// Destination endpoint
     pub to: ExpansionEndpoint,
+    /// Same wiring gate as [`ExpansionInstance::gate`].
+    pub gate: Option<(String, bool)>,
 }
 
 /// An endpoint in an expansion connection.

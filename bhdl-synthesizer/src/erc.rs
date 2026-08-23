@@ -622,11 +622,24 @@ pub fn check_unconnected_pins_real(
             .get("component_class")
             .map(|c| matches!(c.as_str(), "resistor" | "capacitor" | "inductor"))
             .unwrap_or(false);
+        // Contract pins a design block declared OPTIONAL via
+        // `generate if (wired(PIN))` — the block itself handles the
+        // unwired case (ties EN to VIN, …); stamped by the expansion as
+        // `gated_pins`. Leaving one unwired is the configuration, not a
+        // floating input.
+        let gated_pins: Vec<String> = inst
+            .attributes
+            .get("gated_pins")
+            .map(|g| g.split(',').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect())
+            .unwrap_or_default();
         for (pin_id, pin) in &netlist.pins {
             if pin.module != inst.definition || pin.is_virtual {
                 continue;
             }
             if conn.contains(&pin_id) {
+                continue;
+            }
+            if gated_pins.contains(&pin.name) {
                 continue;
             }
             match (&pin.direction, is_passive_inst) {

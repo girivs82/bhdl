@@ -173,7 +173,12 @@ entity Buck_TPS54302(
     u: TPS54302();
     VIN -> u.VIN;
     u.GND -> GND;
-    EN -> u.EN;
+    // EN is OPTIONAL: unwired → tied to VIN (enabled); wired → board-driven.
+    generate if (wired(EN)) {
+        EN -> u.EN;
+    } else {
+        VIN -> u.EN;
+    }
     C_in: Cap(c_in_value) for switching_input_filter(rail: VIN, return: GND, loop_area_max: 2.0mm2, switch_node_keepaway: 1.0mm);
     VIN -> C_in.1; C_in.2 -> GND;
     u.SW -> L_out: Ind(l_value, rated_current = l_rated_current).1; L_out.2 -> VOUT;

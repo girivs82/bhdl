@@ -137,7 +137,7 @@ pub fn emit_elaborated_with_preamble(
         let attrs: BTreeMap<&String, &String> = inst.attributes.iter().collect();
         let mut provenance: Vec<String> = Vec::new();
         for (k, v) in &attrs {
-            if k.starts_with("expansion_") || k.starts_with("vpin_") || k.starts_with("decap_") || k.starts_with("powertree_") || k.starts_with("composed_") || k.starts_with("stage_") {
+            if k.starts_with("expansion_") || k.starts_with("vpin_") || k.starts_with("decap_") || k.starts_with("powertree_") || k.starts_with("composed_") || k.starts_with("stage_") || k.as_str() == "gated_pins" {
                 provenance.push(format!(
                     "    attribute {}.{} = \"{}\";\n",
                     inst.name, k, v.replace('"', "\\\"")

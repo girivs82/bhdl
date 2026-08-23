@@ -2137,3 +2137,69 @@ async fn trace_matrix_derives_rows_with_evidence_and_links() {
     let md = bhdl_synthesizer::trace_matrix::render_markdown(&m);
     assert!(md.contains("| PWR_3V3 |") && md.contains("### Findings"), "{md}");
 }
+
+/// `where` envelope spelling + `generate if (wired(PIN))` gating
+/// (Requirements_And_Resolution §2.2 / §2.4): the where clause lowers to
+/// `require`s that BOTH the resolver's trial-instantiation and synthesis
+/// evaluate; an optional contract pin's then/else branches fire by the
+/// board's wiring, the unwired case is not a floating input, and the
+/// elaborated board round-trips either way.
+#[tokio::test]
+async fn where_envelope_and_wired_gating() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let board = |i_max: &str, en: &str| format!(r#"
+import {{ Cap }} from "bhdl-stdlib/passives/capacitor.bhdl";
+entity Blk(v_in: voltage = 5V, i_out_max: current = 100mA) as design where v_in <= 16V, i_out_max <= 120mA {{
+    pin VIN: power in;
+    pin VOUT: power out virtual;
+    pin EN: signal in;
+    pin GND: ground;
+    VIN -> C_in: Cap(1uF).1; C_in.2 -> GND;
+    VIN -> VOUT;
+    generate if (wired(EN)) {{
+        EN -> C_en: Cap(10nF).1; C_en.2 -> GND;
+    }} else {{
+        VIN -> C_tie: Cap(1nF).1; C_tie.2 -> GND;
+    }}
+}}
+board GateDemo {{
+    power V5 = 5V @ 1A;
+    ground GND;
+    @V5 -> b: Blk(i_out_max={i_max}).VIN; b.GND -> @GND;
+    {en}
+}}
+"#);
+    let synth = |src: String| async move {
+        let pr = parse(&src);
+        assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+        let sf = SourceFile::cast(pr.syntax()).unwrap();
+        let analysis = analyze(&sf);
+        let mut gen = NetlistGenerator::new();
+        (gen.generate_from_ast_and_analysis(&sf, &analysis).await, analysis)
+    };
+    // where → design recipe requires (front of the plain recipe)
+    let (n, analysis) = synth(board("100mA", "")).await;
+    let n = n.expect("inside the envelope synthesizes");
+    let recipe = &analysis.design_recipes["Blk"]["<plain>"];
+    assert!(matches!(&recipe.statements[0], bhdl_common::design::DesignStatement::Require { condition, message } if condition == "self.v_in <= 16V" && message.contains("where v_in <= 16V")), "{:#?}", recipe.statements);
+    // unwired EN → else-branch child, then-branch child absent; no ERC006 on the gated pin
+    let names: Vec<String> = n.instances.values().map(|i| i.name.clone()).collect();
+    assert!(names.contains(&"b_C_tie".to_string()) && !names.contains(&"b_C_en".to_string()), "{names:?}");
+    let b = n.instances.values().find(|i| i.name == "b").unwrap();
+    assert_eq!(b.attributes.get("gated_pins").map(String::as_str), Some("EN"));
+    let v = bhdl_synthesizer::erc::check_unconnected_pins_real(&n, &analysis);
+    assert!(!v.iter().any(|x| x.rule_id == "ERC006" && x.description.contains("b.EN")), "{v:#?}");
+    // wired EN → then-branch
+    let (n, _) = synth(board("100mA", "@V5 -> b.EN;")).await;
+    let names: Vec<String> = n.unwrap().instances.values().map(|i| i.name.clone()).collect();
+    assert!(names.contains(&"b_C_en".to_string()) && !names.contains(&"b_C_tie".to_string()), "{names:?}");
+    // outside the envelope = hard synthesis error quoting the clause
+    let (r, _) = synth(board("200mA", "")).await;
+    let e = format!("{:#}", r.err().expect("envelope must refuse"));
+    assert!(e.contains("Blk envelope: where i_out_max <= 120mA"), "{e}");
+    // the resolver sees the same envelope (trial-instantiation)
+    let text = board("100mA", "");
+    let v = bhdl_synthesizer::stage_resolution::trial_envelope(&text, "Blk", &[("i_out_max".into(), "200mA".into())]).expect("has a design recipe");
+    assert!(v.unwrap_err().contains("where i_out_max <= 120mA"));
+}

@@ -824,27 +824,27 @@ mod tests {
         ].into_iter().collect();
 
         recipe.instances = vec![
-            ExpansionInstance { layout_intents: Vec::new(), name: "L_out".to_string(), component_type: "Ind".to_string(), params: vec!["10µH".to_string()], attributes: HashMap::new() },
-            ExpansionInstance { layout_intents: Vec::new(), name: "D_catch".to_string(), component_type: "Diode".to_string(), params: vec!["0.45V".to_string()], attributes: HashMap::new() },
-            ExpansionInstance { layout_intents: Vec::new(), name: "C_out".to_string(), component_type: "Cap".to_string(), params: vec!["22µF".to_string()], attributes: HashMap::new() },
-            ExpansionInstance { layout_intents: Vec::new(), name: "R_top".to_string(), component_type: "Res".to_string(), params: vec!["31.6kΩ".to_string()], attributes: HashMap::new() },
-            ExpansionInstance { layout_intents: Vec::new(), name: "R_bot".to_string(), component_type: "Res".to_string(), params: vec!["10kΩ".to_string()], attributes: HashMap::new() },
-            ExpansionInstance { layout_intents: Vec::new(), name: "C_boot".to_string(), component_type: "Cap".to_string(), params: vec!["100nF".to_string()], attributes: HashMap::new() },
+            ExpansionInstance { gate: None, layout_intents: Vec::new(), name: "L_out".to_string(), component_type: "Ind".to_string(), params: vec!["10µH".to_string()], attributes: HashMap::new() },
+            ExpansionInstance { gate: None, layout_intents: Vec::new(), name: "D_catch".to_string(), component_type: "Diode".to_string(), params: vec!["0.45V".to_string()], attributes: HashMap::new() },
+            ExpansionInstance { gate: None, layout_intents: Vec::new(), name: "C_out".to_string(), component_type: "Cap".to_string(), params: vec!["22µF".to_string()], attributes: HashMap::new() },
+            ExpansionInstance { gate: None, layout_intents: Vec::new(), name: "R_top".to_string(), component_type: "Res".to_string(), params: vec!["31.6kΩ".to_string()], attributes: HashMap::new() },
+            ExpansionInstance { gate: None, layout_intents: Vec::new(), name: "R_bot".to_string(), component_type: "Res".to_string(), params: vec!["10kΩ".to_string()], attributes: HashMap::new() },
+            ExpansionInstance { gate: None, layout_intents: Vec::new(), name: "C_boot".to_string(), component_type: "Cap".to_string(), params: vec!["100nF".to_string()], attributes: HashMap::new() },
         ];
 
         recipe.connections = vec![
-            ExpansionConnection { from: ExpansionEndpoint::ParentPin("SW".to_string()), to: ExpansionEndpoint::InstancePin("L_out".to_string(), "1".to_string()) },
-            ExpansionConnection { from: ExpansionEndpoint::InstancePin("L_out".to_string(), "2".to_string()), to: ExpansionEndpoint::ParentPin("VOUT".to_string()) },
-            ExpansionConnection { from: ExpansionEndpoint::ParentPin("GND".to_string()), to: ExpansionEndpoint::InstancePin("D_catch".to_string(), "A".to_string()) },
-            ExpansionConnection { from: ExpansionEndpoint::InstancePin("D_catch".to_string(), "K".to_string()), to: ExpansionEndpoint::ParentPin("SW".to_string()) },
-            ExpansionConnection { from: ExpansionEndpoint::ParentPin("VOUT".to_string()), to: ExpansionEndpoint::InstancePin("C_out".to_string(), "1".to_string()) },
-            ExpansionConnection { from: ExpansionEndpoint::InstancePin("C_out".to_string(), "2".to_string()), to: ExpansionEndpoint::ParentPin("GND".to_string()) },
-            ExpansionConnection { from: ExpansionEndpoint::ParentPin("VOUT".to_string()), to: ExpansionEndpoint::InstancePin("R_top".to_string(), "1".to_string()) },
-            ExpansionConnection { from: ExpansionEndpoint::InstancePin("R_top".to_string(), "2".to_string()), to: ExpansionEndpoint::ParentPin("FB".to_string()) },
-            ExpansionConnection { from: ExpansionEndpoint::ParentPin("FB".to_string()), to: ExpansionEndpoint::InstancePin("R_bot".to_string(), "1".to_string()) },
-            ExpansionConnection { from: ExpansionEndpoint::InstancePin("R_bot".to_string(), "2".to_string()), to: ExpansionEndpoint::ParentPin("GND".to_string()) },
-            ExpansionConnection { from: ExpansionEndpoint::ParentPin("BOOT".to_string()), to: ExpansionEndpoint::InstancePin("C_boot".to_string(), "1".to_string()) },
-            ExpansionConnection { from: ExpansionEndpoint::InstancePin("C_boot".to_string(), "2".to_string()), to: ExpansionEndpoint::ParentPin("SW".to_string()) },
+            ExpansionConnection { gate: None, from: ExpansionEndpoint::ParentPin("SW".to_string()), to: ExpansionEndpoint::InstancePin("L_out".to_string(), "1".to_string()) },
+            ExpansionConnection { gate: None, from: ExpansionEndpoint::InstancePin("L_out".to_string(), "2".to_string()), to: ExpansionEndpoint::ParentPin("VOUT".to_string()) },
+            ExpansionConnection { gate: None, from: ExpansionEndpoint::ParentPin("GND".to_string()), to: ExpansionEndpoint::InstancePin("D_catch".to_string(), "A".to_string()) },
+            ExpansionConnection { gate: None, from: ExpansionEndpoint::InstancePin("D_catch".to_string(), "K".to_string()), to: ExpansionEndpoint::ParentPin("SW".to_string()) },
+            ExpansionConnection { gate: None, from: ExpansionEndpoint::ParentPin("VOUT".to_string()), to: ExpansionEndpoint::InstancePin("C_out".to_string(), "1".to_string()) },
+            ExpansionConnection { gate: None, from: ExpansionEndpoint::InstancePin("C_out".to_string(), "2".to_string()), to: ExpansionEndpoint::ParentPin("GND".to_string()) },
+            ExpansionConnection { gate: None, from: ExpansionEndpoint::ParentPin("VOUT".to_string()), to: ExpansionEndpoint::InstancePin("R_top".to_string(), "1".to_string()) },
+            ExpansionConnection { gate: None, from: ExpansionEndpoint::InstancePin("R_top".to_string(), "2".to_string()), to: ExpansionEndpoint::ParentPin("FB".to_string()) },
+            ExpansionConnection { gate: None, from: ExpansionEndpoint::ParentPin("FB".to_string()), to: ExpansionEndpoint::InstancePin("R_bot".to_string(), "1".to_string()) },
+            ExpansionConnection { gate: None, from: ExpansionEndpoint::InstancePin("R_bot".to_string(), "2".to_string()), to: ExpansionEndpoint::ParentPin("GND".to_string()) },
+            ExpansionConnection { gate: None, from: ExpansionEndpoint::ParentPin("BOOT".to_string()), to: ExpansionEndpoint::InstancePin("C_boot".to_string(), "1".to_string()) },
+            ExpansionConnection { gate: None, from: ExpansionEndpoint::InstancePin("C_boot".to_string(), "2".to_string()), to: ExpansionEndpoint::ParentPin("SW".to_string()) },
         ];
 
         recipe

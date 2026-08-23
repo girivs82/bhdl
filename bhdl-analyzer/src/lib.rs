@@ -2188,6 +2188,7 @@ pub fn extract_expansion_recipes_with_overlay(
                                 bhdl_ast::SyntaxKind::CONNECTION_STMT
                                     | bhdl_ast::SyntaxKind::COMPONENT_INST
                                     | bhdl_ast::SyntaxKind::ENTITY_INST
+                                    | bhdl_ast::SyntaxKind::GENERATE_BLOCK
                             ) && expansion_span.map(|r| !r.contains_range(n.text_range())).unwrap_or(true)
                         })
                         .collect();
@@ -2223,19 +2224,78 @@ pub fn extract_expansion_recipes_with_overlay(
                         } else {
                             recipe.firm = true;
                         }
-                        for stmt in &body_stmts {
+                        // Lower one statement under an optional wiring gate
+                        // (`generate if (wired(PIN)) { … } else { … }`):
+                        // everything the statement pushes gets the gate.
+                        fn lower_stmt(
+                            stmt: &bhdl_ast::SyntaxNode<bhdl_ast::BhdlLanguage>,
+                            gate: Option<(String, bool)>,
+                            recipe: &mut ExpansionRecipe,
+                            entity: &bhdl_ast::Entity,
+                            local_entity_attrs: &std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+                            entity_name: &str,
+                        ) {
                             match stmt.kind() {
+                                bhdl_ast::SyntaxKind::GENERATE_BLOCK => {
+                                    let Some(ifg) = stmt.children().find(|n| n.kind() == bhdl_ast::SyntaxKind::IF_GENERATE) else {
+                                        log::warn!("entity {entity_name}: only `generate if (wired(PIN)) {{ }} else {{ }}` is supported in a design block body — block ignored");
+                                        return;
+                                    };
+                                    // condition: [!] wired(PIN)
+                                    let cond = ifg.children().find(|n| n.kind() == bhdl_ast::SyntaxKind::FUNCTION_CALL_EXPR
+                                        || n.kind() == bhdl_ast::SyntaxKind::PREFIX_EXPR
+                                        || n.kind() == bhdl_ast::SyntaxKind::BINARY_EXPR);
+                                    let cond_text = cond.as_ref().map(|c| c.text().to_string().split_whitespace().collect::<String>()).unwrap_or_default();
+                                    let (neg, inner) = match cond_text.strip_prefix('!') {
+                                        Some(r) => (true, r.to_string()),
+                                        None => (false, cond_text.clone()),
+                                    };
+                                    let pin = inner.strip_prefix("wired(").and_then(|r| r.strip_suffix(')')).map(|p| p.trim().to_string());
+                                    let Some(pin) = pin.filter(|p| !p.is_empty()) else {
+                                        log::warn!("entity {entity_name}: generate-if condition `{cond_text}` is not `wired(PIN)` / `!wired(PIN)` — the only wiring predicate a design block body supports; block ignored");
+                                        return;
+                                    };
+                                    if let Some(g) = &gate {
+                                        log::warn!("entity {entity_name}: nested generate-if (inside a gate on {}) is not supported — inner gate on {pin} applied alone", g.0);
+                                    }
+                                    // then-branch statements precede ELSE_KW, else-branch follow it
+                                    let mut in_else = false;
+                                    for el in ifg.children_with_tokens() {
+                                        match el {
+                                            rowan::NodeOrToken::Token(t) if t.kind() == bhdl_ast::SyntaxKind::ELSE_KW => in_else = true,
+                                            rowan::NodeOrToken::Node(n) if matches!(
+                                                n.kind(),
+                                                bhdl_ast::SyntaxKind::CONNECTION_STMT
+                                                    | bhdl_ast::SyntaxKind::COMPONENT_INST
+                                                    | bhdl_ast::SyntaxKind::ENTITY_INST
+                                            ) => {
+                                                let wired_expected = if in_else { neg } else { !neg };
+                                                lower_stmt(&n, Some((pin.clone(), wired_expected)), recipe, entity, local_entity_attrs, entity_name);
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
                                 bhdl_ast::SyntaxKind::CONNECTION_STMT => {
-                                    parse_expansion_connection_stmt(stmt, &mut recipe, &entity, &local_entity_attrs);
+                                    let (ni, nc) = (recipe.instances.len(), recipe.connections.len());
+                                    parse_expansion_connection_stmt(stmt, recipe, entity, local_entity_attrs);
+                                    if gate.is_some() {
+                                        for i in recipe.instances.iter_mut().skip(ni) { i.gate = gate.clone(); }
+                                        for c in recipe.connections.iter_mut().skip(nc) { c.gate = gate.clone(); }
+                                    }
                                 }
                                 _ => {
-                                    if let Some(inst) = parse_expansion_component_inst(stmt, &local_entity_attrs) {
+                                    if let Some(mut inst) = parse_expansion_component_inst(stmt, local_entity_attrs) {
+                                        inst.gate = gate.clone();
                                         if !recipe.instances.iter().any(|i| i.name == inst.name) {
                                             recipe.instances.push(inst);
                                         }
                                     }
                                 }
                             }
+                        }
+                        for stmt in &body_stmts {
+                            lower_stmt(stmt, None, &mut recipe, &entity, &local_entity_attrs, &entity_name);
                         }
                         if !recipe.instances.is_empty() {
                             log::info!(
@@ -2450,6 +2510,54 @@ pub fn extract_design_recipes(
                 }
                 all.entry(entity_name.clone()).or_default()
                     .insert(intent_name, recipe);
+            }
+        }
+
+        // ── VALIDITY ENVELOPE `where …` (docs/spec/Requirements_And_
+        // Resolution.md §2.4): each comparison on the entity header is
+        // lowered to a `require` at the FRONT of the plain `design { }`
+        // recipe (created if the entity has none). One predicate, one
+        // place: the resolver's trial-instantiation and synthesis both
+        // evaluate the same statements. Bare parameter names become
+        // `self.<param>`; the message quotes the clause as written.
+        // Membership constraints (`x in (…)`) are value domains, handled
+        // by the constructor-arg validator, and are skipped here.
+        if let Some(wc) = entity.syntax().children().find(|n| n.kind() == SyntaxKind::WHERE_CLAUSE) {
+            let params: std::collections::HashSet<String> = entity
+                .param_list()
+                .map(|pl| pl.param_defs().filter_map(|p| p.name().map(|n| n.text().to_string())).collect())
+                .unwrap_or_default();
+            let mut reqs: Vec<DesignStatement> = Vec::new();
+            for c in wc.children().filter(|n| n.kind() != SyntaxKind::MEMBERSHIP_CONSTRAINT) {
+                let as_written = c.text().to_string().split_whitespace().collect::<Vec<_>>().join(" ");
+                // rebuild the text, prefixing param identifiers with `self.`
+                let mut cond = String::new();
+                for el in c.descendants_with_tokens() {
+                    if let rowan::NodeOrToken::Token(t) = el {
+                        let txt = t.text();
+                        if t.kind() == SyntaxKind::IDENT && params.contains(txt) {
+                            cond.push_str("self.");
+                        }
+                        cond.push_str(txt);
+                    }
+                }
+                let cond = cond.split_whitespace().collect::<Vec<_>>().join(" ");
+                if cond.is_empty() { continue; }
+                reqs.push(DesignStatement::Require {
+                    condition: cond,
+                    message: format!("{entity_name} envelope: where {as_written}"),
+                });
+            }
+            if !reqs.is_empty() {
+                let by_intent = all.entry(entity_name.clone()).or_default();
+                let recipe = by_intent
+                    .entry("<plain>".to_string())
+                    .or_insert_with(|| DesignRecipe::new(entity_name.clone(), "<plain>".to_string()));
+                let n = reqs.len();
+                let mut merged = reqs;
+                merged.append(&mut recipe.statements);
+                recipe.statements = merged;
+                println!("  Lowered {n} `where` envelope clause(s) of '{entity_name}' into its design recipe");
             }
         }
     }
@@ -2911,6 +3019,7 @@ fn parse_expansion_connection_stmt(
         // Create connection from previous endpoint to this one
         if let (Some(from), Some(ref to)) = (&prev_endpoint, &endpoint) {
             recipe.connections.push(ExpansionConnection {
+                gate: None,
                 from: from.clone(),
                 to: to.clone(),
             });
@@ -2957,6 +3066,7 @@ fn parse_expansion_element(
                 };
 
                 let instance = ExpansionInstance {
+                gate: None,
                     name: handle.to_string(),
                     component_type: comp_type.to_string(),
                     params,
@@ -3078,6 +3188,7 @@ fn parse_expansion_component_inst(
     }
 
     Some(bhdl_common::ExpansionInstance {
+                gate: None,
         name,
         component_type,
         params,
