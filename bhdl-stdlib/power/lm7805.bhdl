@@ -29,6 +29,12 @@ entity LM7805(v_out: voltage = 5V) as part {
     attribute dropout_voltage = 2V;      // V_IN − V_OUT required for regulation
     attribute i_quiescent     = 6mA;     // ground-pin (quiescent) current, typ
     attribute power_rating    = 2W;      // TO-220 free-air dissipation (no heatsink), datasheet class
+    // Operating JUNCTION range per the datasheet — recorded for thermal
+    // sign-off. The datasheet states no ambient range, so the stage
+    // interface's temp_min/temp_max (ambient) stay UNDECLARED here:
+    // a temperature requirement is UNCHECKED against this block, stated.
+    attribute tj_min          = 0degC;   // TI µA7805C: operating virtual junction temperature 0 °C to 125 °C
+    attribute tj_max          = 125degC;
 
     // §4 device-stress IP: linear pass-element dissipation at the solved
     // operating point — P = (V_IN − V_OUT)·I_out + V_IN·I_q, gated against

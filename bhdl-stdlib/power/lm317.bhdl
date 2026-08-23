@@ -38,6 +38,12 @@ entity LM317() as part {
     attribute vout_max         = 37V;
     attribute vin_max          = 40V;    // TI LM317: V_IN − V_OUT differential up to 40 V; 40 V abs input here (V_OUT ≥ 1.25 V)
     attribute power_rating     = 2W;     // TO-220 free-air dissipation (no heatsink), datasheet class
+    // Operating JUNCTION range per the datasheet — recorded for thermal
+    // sign-off. The datasheet states no ambient range, so the stage
+    // interface's temp_min/temp_max (ambient) stay UNDECLARED here:
+    // a temperature requirement is UNCHECKED against this block, stated.
+    attribute tj_min           = 0degC;   // TI LM317 (commercial grade): operating junction 0 °C to 125 °C (LM317A: −40 °C)
+    attribute tj_max           = 125degC;
     // §4 device-stress IP: pass-element dissipation at the solved
     // operating point (the block's stress rows map onto this part).
     simulation {

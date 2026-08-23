@@ -50,6 +50,12 @@ entity LP2985(v_out: voltage = 3.3V) as part {
     attribute i_quiescent     = 850uA;  // ground-pin current at rated 150mA load (typ)
     attribute power_rating    = 400mW;  // SOT-23-5 free-air ((125−25)°C / ~250°C/W)
     attribute pkg             = "SOT-23-5";
+    // Operating JUNCTION range per the datasheet — recorded for thermal
+    // sign-off. The datasheet states no ambient range, so the stage
+    // interface's temp_min/temp_max (ambient) stay UNDECLARED here:
+    // a temperature requirement is UNCHECKED against this block, stated.
+    attribute tj_min          = -40degC; // SNVS065: operating junction temperature −40 °C to 125 °C
+    attribute tj_max          = 125degC;
     // §4 device-stress IP: linear pass-element dissipation at the solved
     // operating point — P = (V_IN − V_OUT)·I_out + V_IN·I_q. `self.p_diss`
     // targets THIS device's own sign-off row, gated against the package

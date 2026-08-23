@@ -47,6 +47,12 @@ entity TPS54302() as part {
     attribute vin_max         = 28V;
     attribute input_voltage_min = 4.5V;
     attribute input_voltage_max = 28V;
+    // Operating JUNCTION range per the datasheet — recorded for thermal
+    // sign-off. The datasheet states no ambient range, so the stage
+    // interface's temp_min/temp_max (ambient) stay UNDECLARED here:
+    // a temperature requirement is UNCHECKED against this block, stated.
+    attribute tj_min          = -40degC; // SLVSC73: operating junction temperature −40 °C to 150 °C
+    attribute tj_max          = 150degC;
     attribute switching_frequency = 500kHz;
     attribute f_sw            = 500kHz;
     attribute efficiency      = 92%;      // SLVSC73 typical-application curves, mid-load

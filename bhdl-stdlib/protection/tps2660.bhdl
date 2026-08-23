@@ -50,6 +50,12 @@ entity TPS2660() as part {
     attribute output_current  = 2A;      // SLVSDT6: 2 A (maximum programmable current limit)
     attribute reverse_polarity = true;   // SLVSDT6: reverse input polarity protection (to −60 V)
     attribute threshold_v     = 1.2V;    // SLVSDT6: OVP / UVLO pin thresholds, 1.2 V typ — re-verify at sign-off
+    // Operating JUNCTION range per the datasheet — recorded for thermal
+    // sign-off. The datasheet states no ambient range, so the stage
+    // interface's temp_min/temp_max (ambient) stay UNDECLARED here:
+    // a temperature requirement is UNCHECKED against this block, stated.
+    attribute tj_min          = -40degC; // SLVSDT6: operating junction temperature −40 °C to 125 °C
+    attribute tj_max          = 125degC;
 }
 
 symbol TPS2660 {

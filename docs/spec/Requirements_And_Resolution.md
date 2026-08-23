@@ -445,8 +445,8 @@ UNCHECKED against a requirement that states it — never a pass.
 | `BuckStage` | `Buck_AP63205` | auto (5 V SKU only) | 2 A, 3.8–32 V | noise, temp, qual, efficiency | — |
 | `BuckStage` | `BuckRegulator` (LM2596 class) | template | headroom envelope only | i_max, vin range, noise, temp, qual | class numbers |
 | `LdoStage` | `Ldo_LP2985` | auto | 150 mA, 2.5–16 V, 30 µV | temp, qual | — |
-| `LdoStage` | `Ldo_XC6206` | auto | 200 mA, 1.8–6 V | noise, temp, qual | — |
-| `LdoStage` | `Ldo_AP2112K` | auto (1.8/2.5/3.3 V SKUs) | 600 mA, 2.5–6 V | noise, temp, qual | — |
+| `LdoStage` | `Ldo_XC6206` | auto | 200 mA, 1.8–6 V, −40…85 °C | noise, qual | — |
+| `LdoStage` | `Ldo_AP2112K` | auto (1.8/2.5/3.3 V SKUs) | 600 mA, 2.5–6 V, −40…85 °C | noise, qual | — |
 | `LdoStage` | `Ldo_LM7805` | auto (5 V) | 1.5 A, 7–35 V, 40 µV | temp, qual | — |
 | `LdoStage` | `Ldo_LM317` | auto (1.35–37 V) | 1.5 A, ≤ 40 V in | vin_min, noise, temp, qual | — |
 | `LdoStage` | `Ldo_NCP1117` | auto (5 V) | 1 A | vin range, noise, temp, qual | — |
@@ -454,7 +454,7 @@ UNCHECKED against a requirement that states it — never a pass.
 | `BuckExtStage` | `BuckController` | template | 1 phase; rating = the FETs' | vin range, noise, temp, qual | FETs + axes |
 | `PreregStage` | `PassiveFrontEnd` (fuse + TVS) | auto | fuse rating, `ov_clamp`, 0 V … clamp point | ov_trip, uv_trip, reverse_polarity, temp, qual | — |
 | `PreregStage` | `Efuse_TPS2660` | template | 2 A, 4.2–55 V, `ov_trip`, `uv_trip`, `reverse_polarity` | ov_clamp, temp, qual | `r_ilim` (ILIM law not in the library) |
-| `PreregStage` | `IdealDiode_LM74700` | template | rating = the FET's, 3.2–65 V, `reverse_polarity`, AEC-Q100 | ov_clamp, ov_trip, uv_trip, temp | pass FET + axes |
+| `PreregStage` | `IdealDiode_LM74700` | template | rating = the FET's, 3.2–65 V, `reverse_polarity`, AEC-Q100 grade 1 (−40…125 °C) | ov_clamp, ov_trip, uv_trip | pass FET + axes |
 
 Reading the table is the point: a `PreregStage` requirement that states
 `reverse_polarity` has no auto-bindable block — the designer must choose
@@ -463,5 +463,11 @@ the eFuse (and supply its current-limit resistor) or the ideal diode
 front end on its own. No block in the library declares output noise for
 a switcher (ripple is not noise) or a qualification other than the
 LM74700-Q1's — an `AEC-Q100` buck or LDO requirement resolves to
-nothing, honestly. The "Promises" column is what ERC032 re-checks on the
-flattened circuit every build.
+nothing, honestly. Temperature: the interface's `temp_min/max` is the
+operating AMBIENT range; only datasheets that rate ambient feed it
+(TPS54331, XC6206, AP2112K, LM74700-Q1 grade 1). Parts whose datasheets
+rate the JUNCTION (LP2985, NCP1117, LM317, LM7805, TPS54302, TPS2660)
+carry that as `tj_min/tj_max` for thermal sign-off and stay UNCHECKED
+for an ambient requirement — a junction figure is not an ambient one.
+The "Promises" column is what ERC032 re-checks on the flattened circuit
+every build.

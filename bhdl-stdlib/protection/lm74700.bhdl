@@ -45,6 +45,8 @@ entity LM74700() as part {
     attribute vin_max          = 65V;
     attribute reverse_polarity = true;    // SNOSD59: reverse input protection to −65 V
     attribute qualification    = "AEC-Q100";   // the -Q1 suffix: automotive grade (SNOSD59)
+    attribute temp_min         = -40degC; // SNOSD59: AEC-Q100 temperature grade 1, ambient −40 °C to +125 °C
+    attribute temp_max         = 125degC;
 }
 
 symbol LM74700 {
@@ -93,6 +95,8 @@ entity IdealDiode_LM74700(
     attribute vin_max          = 65V;
     attribute reverse_polarity = true;        // SNOSD59
     attribute qualification    = "AEC-Q100";  // the controller; the FET's grade is the designer's
+    attribute temp_min         = -40degC; // SNOSD59 grade 1 (ambient) — the controller; the FET's range is the designer's
+    attribute temp_max         = 125degC;
 
     u: LM74700();
     VIN -> u.ANODE;

@@ -33,6 +33,12 @@ entity NCP1117(v_out: voltage = 5V) as part {
     attribute i_quiescent     = 5.2mA;   // ground-pin current, typ class at load
     attribute power_rating    = 1.5W;    // SOT-223 with ~1in² copper pad ((125−25)°C / ~67°C/W)
     attribute pkg             = "SOT-223";
+    // Operating JUNCTION range per the datasheet — recorded for thermal
+    // sign-off. The datasheet states no ambient range, so the stage
+    // interface's temp_min/temp_max (ambient) stay UNDECLARED here:
+    // a temperature requirement is UNCHECKED against this block, stated.
+    attribute tj_min          = -40degC; // onsemi NCP1117: operating junction temperature −40 °C to 125 °C
+    attribute tj_max          = 125degC;
 
     // §4 device-stress IP: linear pass-element dissipation at the solved
     // operating point — P = (V_IN − V_OUT)·I_out + V_IN·I_q, gated against
