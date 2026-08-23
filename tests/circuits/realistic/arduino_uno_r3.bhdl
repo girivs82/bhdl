@@ -12,7 +12,7 @@
 // the LMV358's second half, and all seven headers.
 
 import { NCP1117 } from "bhdl-stdlib/power/ncp1117.bhdl";
-import { LP2985 } from "bhdl-stdlib/power/lp2985.bhdl";
+import { Ldo_LP2985 } from "bhdl-stdlib/power/lp2985.bhdl";
 import { LMV358 } from "bhdl-stdlib/actives/lmv358.bhdl";
 import { ATmega328P_DIP28 } from "bhdl-stdlib/actives/atmega328p.bhdl";
 import { ATmega16U2_QFN32 } from "bhdl-stdlib/actives/atmega16u2.bhdl";
@@ -60,13 +60,15 @@ board ArduinoUnoR3 {
     C7.2 -> @GND;
 
     // ── 3.3V LDO: LP2985-3.3 fed from the 5V rail ──
-    U2: LP2985();
+    // Two-layer library model: U2 is the Ldo_LP2985 DESIGN BLOCK (the
+    // part + its §8.2.2 application circuit incl. the 10nF reference
+    // bypass on BP, which is internal to the block — the former board-
+    // side C8 duplicated it). Its silicon is U2.u.
+    U2: Ldo_LP2985(v_out=3.3V, i_out_max=100mA, v_in=5V);
     @VCC_5V -> U2.VIN;
     U2.VOUT -> @VCC_3V3;
     U2.GND -> @GND;
     @VCC_5V -> U2.EN;                  // enabled whenever 5V is up
-    U2.BP -> C8: Cap(10nF).1;          // reference bypass
-    C8.2 -> @GND;
     @VCC_3V3 -> C9: Cap(1µF).1;
     C9.2 -> @GND;
 

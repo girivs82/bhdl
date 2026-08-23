@@ -1,38 +1,50 @@
-// LP2985 — 150 mA low-noise LDO, SOT-23-5.
+// LP2985 — TI 150 mA low-noise LDO, SOT-23-5 (SNVS065).
+//
+// Two-layer library model (docs/spec/Requirements_And_Resolution.md §1),
+// the LDO template:
+//
+//   LP2985      as part    — VENDOR TRUTH: pins, package, datasheet
+//                            attributes, the part-carried stress model
+//                            and T2 check rule. No application circuit.
+//   Ldo_LP2985  as design  — THE DESIGNER'S SUBCIRCUIT: the part plus
+//                            the datasheet §8.2.2 application circuit,
+//                            contract pins VIN / VOUT (virtual) / EN /
+//                            GND, a validity envelope and boundary
+//                            promises. `impl LdoStage` below makes it a
+//                            resolution candidate for `LdoStage(...)`
+//                            requirements.
 //
 // Used as the on-board 3.3 V LDO on Arduino Leonardo and UNO
-// (`LP2985-3.3`). The 5-pin SOT-23 layout adds an active-low
-// enable (ON/OFF, called EN here) and a bypass cap pin (BP) for
-// the internal reference, both standard for this family.
+// (`LP2985-3.3`). The family is fixed-voltage by SKU: 1.8 / 2.5 / 3.0 /
+// 3.3 / 5.0 V (the `-xx` ordering suffix). The PART carries the family
+// number and `output_voltage`; the orderable suffix is the BOM/MPN
+// resolution path's job, derived from output_voltage — not restated
+// here as a second, drift-prone string.
 //
 // Grammar discipline: parser-compatible v2.0 subset.
 
-entity LP2985(part_no: string = "LP2985-3.3",
-              c_in: capacitance = 1µF,
-              c_out: capacitance = 2.2µF,
-              c_bp: capacitance = 0.01µF) {
+// ── Vendor truth ────────────────────────────────────────────────────
+entity LP2985(v_out: voltage = 3.3V) as part {
     pin VIN:  power in;       // unregulated input              (pin 1)
     pin GND:  ground;         //                                (pin 2)
     pin EN:   signal in;      // active-low enable (ON/OFF)     (pin 3)
     pin BP:   signal inout;   // internal-reference bypass cap  (pin 4)
-    pin VOUT: power out virtual;  // regulated output           (pin 5)
+    pin VOUT: power out;      // regulated output               (pin 5)
 
-    attribute component_class = "ldo";
+    attribute component_class = "regulator_ic";   // the silicon, not "a regulator the board sees"
+    attribute manufacturer    = "Texas Instruments";
     attribute family          = "LP2985";
-    attribute output_voltage  = 3.3V;
-    attribute output_current  = 0.15;
-    attribute output_noise    = 30uV;   // TI datasheet RMS output noise, 10Hz–100kHz, C_BP = 10nF
+    attribute part_number     = "LP2985";
+    attribute output_voltage  = v_out;
+    attribute output_current  = 0.15A;  // SNVS065: 150 mA rated output
+    attribute vin_min         = 2.5V;   // SNVS065: input voltage range 2.5 V to 16 V
+    attribute vin_max         = 16V;
+    attribute output_noise    = 30uV;   // SNVS065 RMS output noise, 10Hz–100kHz, C_BP = 10nF
     attribute dropout_v       = 0.28;
     attribute dropout_voltage = 280mV;  // datasheet typ at 150mA
     attribute i_quiescent     = 850uA;  // ground-pin current at rated 150mA load (typ)
     attribute power_rating    = 400mW;  // SOT-23-5 free-air ((125−25)°C / ~250°C/W)
     attribute pkg             = "SOT-23-5";
-    attribute part_number     = part_no;
-    // Datasheet §8.2.2 application circuit: 1µF input cap, 1µF low-ESR
-    // ceramic output cap (stability requires ≥1µF). Read by the S4 supply
-    // application-circuit emitter.
-    attribute input_capacitor_rec  = 1uF;
-    attribute output_capacitor_rec = 1uF;
     // §4 device-stress IP: linear pass-element dissipation at the solved
     // operating point — P = (V_IN − V_OUT)·I_out + V_IN·I_q. `self.p_diss`
     // targets THIS device's own sign-off row, gated against the package
@@ -50,12 +62,99 @@ entity LP2985(part_no: string = "LP2985-3.3",
             require connected(EN) else "EN (ON/OFF) must not float — tie it to VIN to enable, or drive it";
         }
     }
-    // Datasheet typical application (TI LP2985: 1µF input, 2.2µF
-    // ceramic output minimum, 0.01µF reference-bypass on BP).
-    expansion {
-        VIN -> C_in: Cap(c_in).1; C_in.2 -> GND;
-        VOUT -> C_out: Cap(c_out).1; C_out.2 -> GND;
-        BP -> C_bp: Cap(c_bp).1; C_bp.2 -> GND;
+}
+
+symbol LP2985 {
+    left   { VIN, EN }
+    right  { VOUT, BP }
+    bottom { GND }
+}
+
+layout LP2985 {
+    package SOT-23-5;
+}
+
+// ── The designer's subcircuit ───────────────────────────────────────
+entity Ldo_LP2985(
+    v_out:     voltage     = 3.3V,    // SKU voltage: 1.8 / 2.5 / 3.0 / 3.3 / 5.0
+    i_out_max: current     = 100mA,   // max load current (envelope: ≤ 120 mA = 150 mA × 0.8)
+    v_in:      voltage     = 5V,      // input rail
+    c_in:      capacitance = 1µF,     // SNVS065 §8.2.2: 1µF input
+    c_out:     capacitance = 2.2µF,   // ceramic, ≥1µF low-ESR for stability
+    c_bp:      capacitance = 0.01µF   // reference bypass (the 30µV figure is at C_BP = 10nF)
+) as design {
+    // Contract pins (the regulator pin contract). VOUT is virtual — the
+    // output cap IS the block's copper; BP is internal.
+    pin VIN:  power in;
+    pin VOUT: power out virtual;
+    pin EN:   signal in;       // active-low ON/OFF — tie to VIN to enable
+    pin GND:  ground;
+
+    // What the board sees: an LDO. The block's PROMISES — mirrored from
+    // the part's datasheet attributes — are what the resolver and ERC032
+    // check a requirement against. The operating point (v_in, i_out_max)
+    // is exported so the elaboration emitter can reconstruct the ctor.
+    attribute component_class = "ldo";
+    attribute output_voltage  = v_out;
+    attribute v_in            = v_in;
+    attribute i_out_max       = i_out_max;
+    attribute output_current  = 0.15A;  // SNVS065
+    attribute vin_min         = 2.5V;   // SNVS065
+    attribute vin_max         = 16V;
+    attribute output_noise    = 30uV;   // SNVS065, 10Hz–100kHz, C_BP = 10nF (the default here)
+    attribute dropout_voltage = 280mV;  // SNVS065 typ at 150mA
+    attribute i_quiescent     = 850uA;
+
+    // VALIDITY ENVELOPE. One binary op per `const` (same discipline as
+    // tps54331.bhdl / lm317.bhdl). All quantities in SI base units.
+    design {
+        const vout = self.v_out;
+        // SKU membership — the family is fixed-voltage; no `||` in the
+        // expression engine, so membership is the sum of equalities.
+        const m18 = vout == 1.8;
+        const m25 = vout == 2.5;
+        const m30 = vout == 3.0;
+        const m33 = vout == 3.3;
+        const m50 = vout == 5.0;
+        const s1 = m18 + m25;
+        const s2 = s1 + m30;
+        const s3 = s2 + m33;
+        const any_sku = s3 + m50;
+        require any_sku > 0
+            else "Ldo_LP2985 envelope: v_out must be an LP2985 SKU voltage (1.8, 2.5, 3.0, 3.3 or 5.0 V)";
+        // Current: 150 mA rating × 0.8 derating policy.
+        require self.i_out_max <= 0.12
+            else "Ldo_LP2985 envelope: i_out_max exceeds 120mA (150mA rating × 0.8 derating)";
+        // Input: within the part's range and above dropout at full load.
+        require self.v_in <= 16.0
+            else "Ldo_LP2985 envelope: v_in exceeds the 16V input rating";
+        const v_need = vout + 0.28;
+        require self.v_in >= v_need
+            else "Ldo_LP2985 envelope: v_in below v_out + 280mV dropout";
     }
 
+    // The application circuit (SNVS065 §8.2.2) — FIRM children.
+    u: LP2985(v_out);
+    VIN -> u.VIN;
+    u.GND -> GND;
+    EN -> u.EN;
+    VIN -> C_in: Cap(c_in).1; C_in.2 -> GND;
+    u.VOUT -> VOUT;
+    VOUT -> C_out: Cap(c_out).1; C_out.2 -> GND;
+    u.BP -> C_bp: Cap(c_bp).1; C_bp.2 -> GND;
 }
+
+// The block SATISFIES the LdoStage requirement interface
+// (bhdl-stdlib/power/stages.bhdl): each const names the block parameter
+// that receives the requirement value. The envelope and promises above
+// are the acceptance predicate; nothing is restated here.
+impl LdoStage for Ldo_LP2985 {
+    const vout  = v_out;
+    const i_max = i_out_max;
+    const vin   = v_in;
+}
+
+// SKU aliases name the BLOCK (the reviewed application circuit).
+alias LP2985_3V3 = Ldo_LP2985(3.3V);
+alias LP2985_5V  = Ldo_LP2985(5V);
+alias LP2985_1V8 = Ldo_LP2985(1.8V);

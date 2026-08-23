@@ -235,9 +235,13 @@ Principles that fall out:
    `LdoStage(...)` requirements (controller+external stages and the
    prereg have no interface yet and stay `Generic*`). Synthesis refuses
    an unresolved trait instantiation (it used to build an empty stub).
-   Library coverage today: `BuckStage` ← `Buck_TPS54331` only;
-   `LdoStage` has NO implementing block (stated by the survey, never
-   faked) — the LDO `as design` split is the next library increment.
+   Library coverage today: `BuckStage` ← `Buck_TPS54331`; `LdoStage` ←
+   `Ldo_LP2985` (`bhdl-stdlib/power/lp2985.bhdl`, the LDO template:
+   `LP2985(v_out) as part` carries the family MPN — the `-xx` SKU suffix
+   is the BOM/MPN path's to derive from `output_voltage`; the block's
+   envelope is SKU membership (summed equalities — the expression engine
+   has no `||`), ≤120 mA, 2.5–16 V in, v_in ≥ v_out + dropout). Every
+   other regulator is still a migration-era conflated entity.
    Not yet: the cost function / provider pricing / qualification
    attributes in the ranking; ERC032 and the resolver share the derate
    policy and the promise vocabulary but are still two code paths.

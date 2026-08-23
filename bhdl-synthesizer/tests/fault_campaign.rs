@@ -1213,11 +1213,18 @@ async fn powertree_emit_closes_the_loop() {
     // the assumption attributes landed on the placeholder instances
     // (scoped-attribute consumption) — the acceptance contract is ON
     // the netlist, not just in text
-    let (_, u) = n2.instances.iter().find(|(_, i)| i.name == "u_v1v8").expect("LDO placeholder");
+    let (_, u) = n2.instances.iter().find(|(_, i)| i.name == "u_v1v8").expect("LDO stage");
     assert_eq!(u.attributes.get("powertree_eff_assumed_pct").map(String::as_str), Some("54.5"), "{:#?}", u.attributes);
     assert!(u.attributes.contains_key("powertree_noise_assumed_uvrms"));
-    // uniform contract: ctor args resolved onto attributes (rename-ready)
-    assert!(u.attributes.contains_key("i_rating"), "{:#?}", u.attributes);
+    // the LDO requirement RESOLVED (Ldo_LP2985 covers 1.8V / 80mA /
+    // 3.3V in / 30µV): the block is bound and its silicon materialised;
+    // the requirement stays live on the instance
+    assert_eq!(u.attributes.get("stage_bound").map(String::as_str), Some("Ldo_LP2985"), "{:#?}", u.attributes);
+    assert!(n2.instances.iter().any(|(_, i)| i.name == "u_v1v8_u"), "LP2985 silicon inside the block");
+    // the 4A buck has no covering block yet → placeholder, contract attrs present
+    let (_, b) = n2.instances.iter().find(|(_, i)| i.name == "u_v1v0").expect("buck placeholder");
+    assert_eq!(b.attributes.get("stage_binding").map(String::as_str), Some("unresolved"), "{:#?}", b.attributes);
+    assert!(b.attributes.contains_key("i_rating"), "{:#?}", b.attributes);
 
     // strip → byte-identical replanning source
     let stripped = strip_power_region(&emitted).expect("region present");
@@ -1389,7 +1396,7 @@ async fn powertree_swap_by_rename_to_real_part() {
     // ── noise convention: the 1.8V stage assumed the low-noise LDO
     // class (30µVrms). Committing LP2985 (datasheet 30µVrms) passes;
     // committing a 78xx-class part (40µVrms) is the noise Error. ──
-    let quiet = swap_stage(&emitted, "u_v1v8", "LP2985();", "import { LP2985 } from \"bhdl-stdlib/power/lp2985.bhdl\";");
+    let quiet = swap_stage(&emitted, "u_v1v8", "Ldo_LP2985(v_out=1.8V, i_out_max=80mA, v_in=3.3V);", "import { Ldo_LP2985 } from \"bhdl-stdlib/power/lp2985.bhdl\";");
     let sfq = SourceFile::cast(parse(&quiet).syntax()).unwrap();
     let aq = analyze(&sfq);
     let mut gq = NetlistGenerator::new();
@@ -1916,12 +1923,21 @@ board ReqDemo {{
     assert!(r.source.contains("u1: GenericBuck(vin=12V, vout=5V, rated=2.6A)"), "{}", r.source);
     assert!(r.source.contains("attribute u1.powertree_rating_required_a = \"3.2500\";"), "{}", r.source);
 
-    // 3. LDO: no implementing block — stated
-    let ldo = board("vout=5V, i_max=2A, vin=12V", "@V5 -> u2: LdoStage(vout=3.3V, i_max=100mA, vin=5V).VIN; u2.GND -> @GND;");
+    // 3. LDO: Ldo_LP2985 resolves inside its envelope (SKU voltage,
+    //    ≤120mA, 30µV noise); outside it the near-miss is stated and the
+    //    placeholder is emitted
+    let ldo = board("vout=5V, i_max=2A, vin=12V", "@V5 -> u2: LdoStage(vout=3.3V, i_max=100mA, vin=5V, noise=30uV).VIN; u2.GND -> @GND;");
     let r = resolve_stages(&ldo, &stdlib, &[]).unwrap().unwrap();
     let u2 = r.resolutions.iter().find(|x| x.instance == "u2").unwrap();
-    assert!(u2.bound.is_none() && u2.candidates.is_empty());
-    assert!(r.source.contains("u2: GenericLdo(vin=5V, vout=3.3V, rated=100mA)"), "{}", r.source);
+    assert_eq!(u2.bound.as_deref(), Some("Ldo_LP2985"), "{}", bhdl_synthesizer::stage_resolution::render_report(u2));
+    assert!(r.source.contains("u2: Ldo_LP2985(v_out=3.3V, i_out_max=100mA, v_in=5V)"), "{}", r.source);
+    let ldo = board("vout=5V, i_max=2A, vin=12V", "@V5 -> u2: LdoStage(vout=3.6V, i_max=200mA, vin=5V).VIN; u2.GND -> @GND;");
+    let r = resolve_stages(&ldo, &stdlib, &[]).unwrap().unwrap();
+    let u2 = r.resolutions.iter().find(|x| x.instance == "u2").unwrap();
+    assert!(u2.bound.is_none());
+    let fails = u2.candidates.iter().find(|c| c.block == "Ldo_LP2985").unwrap().failures().join("\n");
+    assert!(fails.contains("SKU voltage") || fails.contains("120mA"), "{fails}");
+    assert!(r.source.contains("u2: GenericLdo(vin=5V, vout=3.6V, rated=200mA)"), "{}", r.source);
 
     // 4. override: accepted when it passes; hard error when it fails / is unknown
     let r = resolve_stages(&board("vout=5V, i_max=2A, vin=12V", "resolve u1 = Buck_TPS54331;"), &stdlib, &[]).unwrap().unwrap();
