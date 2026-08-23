@@ -918,36 +918,49 @@ pub fn propose_trees_with_policy(
         // Vout + headroom (minimal headroom = minimal heat).
         // cost: ONE shared intermediate at max(Vout)+headroom — fewer
         // inductors, the extra headroom dissipation is the stated price.
-        if let Some((r, ..)) = pending_ldo
-            .iter()
-            .find(|(r, ..)| prereg.is_some() && r.always_on)
-        {
-            return Err(format!(
-                "powertree: always-on rail {} needs a noise LDO that no always-on source can feed within the thermal bound — an always-on intermediate is not synthesized (stated gap): declare that chain by hand or relax always_on/noise",
-                r.net
-            ));
-        }
-        if !pending_ldo.is_empty() {
+        // Intermediates come in TWO populations under a prereg policy:
+        // always-on noise rails get an ALWAYS-ON intermediate fed
+        // DIRECT from the input (it must live when the front end is
+        // off), never shared with protected rails; everything else
+        // hangs off the protected feed. Without a prereg policy the
+        // two feeds coincide and one population remains.
+        let (ao_pending, prot_pending): (Vec<_>, Vec<_>) = pending_ldo
+            .into_iter()
+            .partition(|(r, ..)| prereg.is_some() && r.always_on);
+        let populations: Vec<(Vec<(&RailSummary, f64, f64)>, &str, f64, &str)> = vec![
+            (prot_pending, feed_name.as_str(), feed_v, "V_INT_"),
+            (ao_pending, input, vin, "V_INT_AO_"),
+        ];
+        for (pending, src_name, src_v, prefix) in populations {
+            if pending.is_empty() {
+                continue;
+            }
             let groups: Vec<Vec<&(&RailSummary, f64, f64)>> = if strategy == "cost" {
-                vec![pending_ldo.iter().collect()]
+                vec![pending.iter().collect()]
             } else {
-                let mut vs: Vec<f64> = pending_ldo.iter().map(|(r, _, _)| r.voltage).collect();
+                let mut vs: Vec<f64> = pending.iter().map(|(r, _, _)| r.voltage).collect();
                 vs.sort_by(|a, b| a.partial_cmp(b).unwrap());
                 vs.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
                 vs.iter()
-                    .map(|v| pending_ldo.iter().filter(|(r, _, _)| (r.voltage - v).abs() < 1e-9).collect())
+                    .map(|v| pending.iter().filter(|(r, _, _)| (r.voltage - v).abs() < 1e-9).collect())
                     .collect()
             };
             for g in groups {
                 let v_int = g.iter().map(|(r, _, _)| r.voltage).fold(0.0, f64::max) + LDO_HEADROOM_V;
                 let nom: f64 = g.iter().map(|(_, n, _)| n).sum();
                 let max: f64 = g.iter().map(|(_, _, m)| m).sum();
-                let int_name = format!("V_INT_{}", format!("{v_int:.1}").replace('.', "V"));
+                let int_name = format!("{prefix}{}", format!("{v_int:.1}").replace('.', "V"));
+                if prefix == "V_INT_AO_" {
+                    notes.push(format!(
+                        "always-on intermediate {int_name} hangs DIRECT off {input} (bypasses the protected front end) feeding [{}] — the always-on noise rail(s) could not be served by any always-on donor within the thermal bound",
+                        g.iter().map(|(r, _, _)| r.net.as_str()).collect::<Vec<_>>().join(", ")
+                    ));
+                }
                 for (r, n, m) in &g {
                     stages.push(ldo_stage(&int_name, v_int, r, *n, *m));
                 }
                 stages.push(buck_intermediate(
-                    &int_name, &feed_name, feed_v, v_int, nom, max,
+                    &int_name, src_name, src_v, v_int, nom, max,
                     g.iter().map(|(r, _, _)| r.net.clone()).collect(),
                 ));
             }

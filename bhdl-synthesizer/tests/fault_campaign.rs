@@ -1730,3 +1730,65 @@ async fn powertree_drift_check_catches_evolved_loads() {
     );
 }
 
+
+/// Always-on noise rail under a prereg policy with no always-on donor
+/// in reach: the tree mints an ALWAYS-ON intermediate fed direct from
+/// the input (never behind the protected front end), at minimal
+/// headroom, feeding the AO LDO — what used to be the stated hard gap.
+#[tokio::test]
+async fn powertree_always_on_noise_rail_gets_ao_intermediate() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    use bhdl_synthesizer::powertree::{harvest_loads, propose_trees_with_policy, Topology};
+    // RTC rail: always-on, noise-sensitive, and at 60mA a direct 12V LDO
+    // dissipates (12-1.8)·0.06 = 0.61W > the 0.5W bound → needs an
+    // intermediate; the only other rail (3.3V core) sits behind the
+    // front end, so it can NOT be the donor.
+    let src = r#"
+entity Mcu() {
+    pin 1: power in;
+    pin 2: power in;
+    pin 3: ground;
+    attribute component_class = "ic";
+    domain VDD pins="1" v=3.3V i_nom=0.5A i_max=0.8A source="FIXTURE";
+    domain VRTC pins="2" v=1.8V i_nom=50mA i_max=60mA noise=100uV always_on=true source="FIXTURE";
+}
+board AoNoise {
+    power VIN = 12V @ 2A;
+    power V3V3 = 3.3V;
+    power VRTC = 1.8V;
+    ground GND;
+    @V3V3 -> mcu: Mcu().1;
+    @VRTC -> mcu.2;
+    mcu.3 -> @GND;
+}
+"#;
+    let pr = parse(src);
+    assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.unwrap();
+    let h = harvest_loads(&n, &sf);
+    let opts = propose_trees_with_policy(&h, "VIN", Some("OV/UV")).expect("no longer a stated gap");
+    for o in &opts {
+        // the AO intermediate exists, fed DIRECT from VIN at minimal headroom
+        let ao_int = o.stages.iter().find(|s| s.to.starts_with("V_INT_AO_")).expect("AO intermediate: {o:#?}");
+        assert_eq!(ao_int.from, "VIN", "AO intermediate must bypass the front end: {ao_int:#?}");
+        assert!((ao_int.vout - 2.3).abs() < 1e-9, "{ao_int:#?}");
+        // the AO LDO hangs off it
+        let rtc = o.stages.iter().find(|s| s.to == "VRTC").unwrap();
+        assert_eq!(rtc.topology, Topology::Ldo);
+        assert_eq!(rtc.from, ao_int.to);
+        // the ordinary rail is still behind the protection
+        let v33 = o.stages.iter().find(|s| s.to == "V3V3").unwrap();
+        assert_eq!(v33.from, "V_PROT");
+        // the protection stage does NOT carry the AO path's current
+        let prot = o.stages.iter().find(|s| s.topology == Topology::Prereg).unwrap();
+        assert!(!prot.serves.iter().any(|x| x.contains("VRTC")));
+        // stated in the notes
+        assert!(o.notes.iter().any(|nn| nn.contains("always-on intermediate") && nn.contains("DIRECT")), "{:#?}", o.notes);
+        // books balance through both paths
+        assert!((o.p_in_w - o.p_load_w - o.p_diss_w).abs() < 1e-6, "{o:#?}");
+    }
+}
