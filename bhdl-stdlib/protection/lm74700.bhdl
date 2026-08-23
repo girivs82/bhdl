@@ -1,0 +1,119 @@
+// LM74700-Q1 — TI ideal-diode controller, 3.2 V to 65 V, drives an
+// external N-channel MOSFET in the positive rail; reverse-input
+// (reverse-polarity) protection to −65 V (SNOSD59).
+//
+// Two-layer library model (docs/spec/Requirements_And_Resolution.md §1):
+//   LM74700              as part    — vendor truth: pins, package, the
+//                                     figures this library has.
+//   IdealDiode_LM74700   as design  — the designer's subcircuit, `impl
+//                                     PreregStage`: the controller, the
+//                                     pass FET and the charge-pump cap.
+//
+// REAL-DATA PROVENANCE, stated:
+//   - input 3.2 V … 65 V operating, reverse input to −65 V: SNOSD59
+//     features / recommended operating conditions.
+//   - charge-pump capacitor on VCAP: the datasheet's typical application
+//     value (1 µF ceramic) — the one application figure carried here.
+// What the stage can CARRY is the external FET's rating (the controller
+// only drives a gate): exactly the BuckController idiom — the FET's
+// datasheet axes travel with the designer's choice, and the defaults
+// are a placeholder pair (GENERIC-NFET), so the block is a TEMPLATE
+// (`supply_choosable = false`): the survey lists it, and the designer
+// commits it with its FET:
+//   resolve fe = IdealDiode_LM74700(fet="BSC0902NS", fet_vds_max=30V,
+//                                   fet_id_max=30A, fet_rds_on=2.3mΩ);
+// It promises reverse-polarity protection and the input range, and NO
+// ov_trip / uv_trip (an ideal diode is not a cutoff) — a requirement
+// stating those is UNCHECKED against it, stated.
+
+import { MOSFET } from "bhdl-stdlib/actives/mosfet.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+
+// ── Vendor truth ────────────────────────────────────────────────────
+entity LM74700() as part {
+    pin ANODE:   power in;     // input-side sense (FET source side)
+    pin CATHODE: power out;    // output-side sense (FET drain side)
+    pin GATE:    signal out;   // gate drive for the external N-FET
+    pin VCAP:    signal inout; // charge-pump capacitor to GND
+    pin EN:      signal in;    // enable (active high)
+    pin GND:     ground;
+
+    attribute component_class  = "protection_ic";
+    attribute manufacturer     = "Texas Instruments";
+    attribute part_number      = "LM74700-Q1";
+    attribute vin_min          = 3.2V;    // SNOSD59: operating input 3.2 V to 65 V
+    attribute vin_max          = 65V;
+    attribute reverse_polarity = true;    // SNOSD59: reverse input protection to −65 V
+    attribute qualification    = "AEC-Q100";   // the -Q1 suffix: automotive grade (SNOSD59)
+}
+
+symbol LM74700 {
+    left   { ANODE, EN, VCAP }
+    right  { CATHODE, GATE }
+    bottom { GND }
+}
+
+layout LM74700 {
+    package SOT-23-6;
+}
+
+// ── The designer's subcircuit ───────────────────────────────────────
+entity IdealDiode_LM74700(
+    v_in:         voltage     = 12V,
+    i_out_max:    current     = 2A,
+    // ── the pass FET (tier B): part number + the axes the loss/stress
+    //    models consume. Defaults are a PLACEHOLDER pair; a real design
+    //    supplies its chosen FET's datasheet values in the override.
+    fet:          string      = "GENERIC-NFET",
+    fet_vds_max:  voltage     = 60V,
+    fet_id_max:   current     = 20A,
+    fet_rds_on:   resistance  = 10mΩ,
+    fet_vgs_th:   voltage     = 3V,
+    fet_p_rating: power       = 2W,
+    c_vcap:       capacitance = 1µF      // SNOSD59 typical application
+) as design
+  // ENVELOPE: SNOSD59 input range; the load runs at ≤ 80 % of the FET's
+  // continuous rating (the power-tree derating policy); the FET must
+  // block the input (reverse) voltage.
+  where v_in >= 3.2V, v_in <= 65V, i_out_max <= 0.8 * fet_id_max, fet_vds_max >= v_in
+{
+    pin VIN:  power in;
+    pin VOUT: power out virtual;
+    pin EN:   signal in;      // optional: unwired → enabled (tied to VIN)
+    pin GND:  ground;
+
+    attribute component_class  = "protection";
+    attribute topology         = "prereg";
+    attribute supply_choosable = false;       // TEMPLATE: the FET is the designer's
+    attribute output_voltage   = v_in;        // pass-through (ideal diode: ~mV drop)
+    attribute v_in             = v_in;
+    attribute i_out_max        = i_out_max;
+    attribute output_current   = fet_id_max;  // the stage carries what its FET carries
+    attribute vin_min          = 3.2V;        // SNOSD59
+    attribute vin_max          = 65V;
+    attribute reverse_polarity = true;        // SNOSD59
+    attribute qualification    = "AEC-Q100";  // the controller; the FET's grade is the designer's
+
+    u: LM74700();
+    VIN -> u.ANODE;
+    u.GND -> GND;
+    generate if (wired(EN)) {
+        EN -> u.EN;
+    } else {
+        VIN -> u.EN;
+    }
+    // the pass FET in the positive rail: source on the input (anode)
+    // side, drain on the output (cathode) side — its body diode conducts
+    // input → output before the controller enhances it
+    u.GATE -> M: MOSFET(fet, "nmos", fet_vds_max, fet_id_max, fet_rds_on, fet_vgs_th, fet_p_rating).G;
+    VIN -> M.S;
+    M.D -> VOUT;
+    VOUT -> u.CATHODE;
+    u.VCAP -> C_vcap: Cap(c_vcap).1; C_vcap.2 -> GND;
+}
+
+impl PreregStage for IdealDiode_LM74700 {
+    const vout  = v_in;
+    const i_max = i_out_max;
+    const vin   = v_in;
+}

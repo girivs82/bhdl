@@ -2470,4 +2470,26 @@ board PreDemo {{
     let v = bhdl_synthesizer::erc::check_powertree_acceptance(&n, &analysis);
     assert!(!v.iter().any(|x| x.description.contains("'fe'") && x.severity != bhdl_synthesizer::design_rule_checker::ViolationSeverity::Info), "{v:#?}");
     assert!(!v.iter().any(|x| x.description.contains("'fe'") && x.description.contains("UNCHECKED")), "{v:#?}");
+
+    // the ideal-diode controller TEMPLATE: reverse polarity + AEC-Q100
+    // promised by the controller; the current capability is the FET the
+    // override supplies (BuckController idiom); no ov/uv trip
+    let src = board("vout=12V, i_max=8A, vin=12V, reverse_polarity=\"true\", qual=\"AEC-Q100\"")
+        .replacen("fe.GND -> @GND;", "fe.GND -> @GND; resolve fe = IdealDiode_LM74700(fet=\"BSC0902NS\", fet_vds_max=30V, fet_id_max=30A, fet_rds_on=2.3mΩ, fet_vgs_th=2.4V, fet_p_rating=42W);", 1);
+    let r = resolve_stages(&src, &stdlib, &[]).unwrap().unwrap();
+    assert_eq!(r.resolutions[0].bound.as_deref(), Some("IdealDiode_LM74700"), "{}", bhdl_synthesizer::stage_resolution::render_report(&r.resolutions[0]));
+    let c = r.resolutions[0].candidates.iter().find(|c| c.block == "IdealDiode_LM74700").unwrap();
+    assert!(c.template && c.gates.iter().any(|g| g.0 == "i_max" && g.2 && g.1.contains("30.000A")), "{c:#?}");
+    assert!(c.gates.iter().any(|g| g.0 == "qual" && g.2), "{c:#?}");
+    let pr = parse(&r.source);
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+    let fet = n.instances.values().find(|i| i.name == "fe_M").expect("pass FET");
+    assert_eq!(fet.attributes.get("part_number").map(String::as_str), Some("BSC0902NS"), "{:#?}", fet.attributes);
+    // a requirement asking for an active cutoff: UNCHECKED against the ideal diode
+    let r = resolve_stages(&board("vout=12V, i_max=1A, vin=12V, ov_trip=30V"), &stdlib, &[]).unwrap().unwrap();
+    let c = r.resolutions[0].candidates.iter().find(|c| c.block == "IdealDiode_LM74700").unwrap();
+    assert!(c.unchecked.contains(&"ov_trip".to_string()), "{c:#?}");
 }

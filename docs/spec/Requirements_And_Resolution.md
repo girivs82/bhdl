@@ -321,7 +321,15 @@ Principles that fall out:
    Efuse_TPS2660(r_ilim=…)`); an instantiation without it is refused by
    the constructor-arg validator (E0404). That is the Real-Data rule
    applied to a block: a missing datasheet axis becomes a designer
-   argument, never a default.
+   argument, never a default. `IdealDiode_LM74700`
+   (`bhdl-stdlib/protection/lm74700.bhdl`, TI ideal-diode controller,
+   3.2–65 V, reverse input to −65 V, AEC-Q100) drives an external
+   N-FET in the positive rail: it promises `reverse_polarity`, the
+   input range and the qualification, no cutoff/lockout; the stage
+   carries what its FET carries, so — the `BuckController` idiom — the
+   FET's axes travel with the override and the block is a TEMPLATE
+   (`resolve fe = IdealDiode_LM74700(fet="…", fet_id_max=…, …)`), with
+   `where … i_out_max <= 0.8 * fet_id_max, fet_vds_max >= v_in`.
    `BuckExtStage` (controller + external power stage; `phases` is part
    of the requirement) is the third interface; the power tree emits it
    for `BuckExternal` stages. Its only implementer is the generic
