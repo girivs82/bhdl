@@ -415,6 +415,16 @@ Principles that fall out:
    switcher: (1−η)/η·Vout·I; pass-through: I²·R_on), used by both the
    resolver and ERC032. What is missing for the derivation is named in
    the UNCHECKED text. The same θ_JA feeds the handbook FIT model (T_J).
+   The SIGN-OFF closes the loop with measured numbers: a part whose
+   stress model yields `self.p_diss` and that declares `theta_ja` +
+   `tj_max` gets a JUNCTION-TEMPERATURE row — thermal rise P·θ_JA
+   against the rise budget T_J,max − T_A, with T_A from the stage
+   requirement's `temp_max` (via the block) or 25 °C ASSUMED and said
+   so; the 1.2× sign-off margin applies to the rise. And ERC032 checks
+   the requirement against the AS-BUILT board: an `i_max` that
+   understates the rail budget the board declares (`@ I` on the driven
+   rail) is an Error naming both numbers — the block was resolved
+   (envelope, derating, thermal) for a load the board does not have.
    A local block defined in the board's own file is a candidate and an
    override target like a library block.
    ONE PREDICATE (landed): `bhdl_synthesizer::stage_acceptance::check`
