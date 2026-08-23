@@ -61,6 +61,14 @@
 // structural parameters (bus width, lane count). The SKU aliases below
 // bind it as a positional arg.
 
+// The block's children are the block's business: the library file
+// imports what its application circuit instantiates (a board that
+// states only a requirement imports nothing else).
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Ind } from "bhdl-stdlib/passives/inductor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Diode } from "bhdl-stdlib/passives/diode.bhdl";
+
 // ── Vendor truth ────────────────────────────────────────────────────
 entity TPS54331 as part {
     pin VIN:  power in;

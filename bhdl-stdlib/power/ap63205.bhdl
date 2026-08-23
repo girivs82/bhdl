@@ -11,6 +11,12 @@
 // The declared f_sw / rds_on / t_sw / Iq figures are carried over from
 // the previous entity definition unchanged.
 
+// The block's children are the block's business: the library file
+// imports what its application circuit instantiates (a board that
+// states only a requirement imports nothing else).
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Ind } from "bhdl-stdlib/passives/inductor.bhdl";
+
 // ── Vendor truth ────────────────────────────────────────────────────
 entity AP63205(
     f_sw: frequency = 500kHz,

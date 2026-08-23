@@ -14,6 +14,12 @@
 // neglected; R2 = 240 Ω (the datasheet's programming resistor, keeps the
 // 10 mA minimum load), R1 = R2·(V_OUT − V_REF)/V_REF.
 
+// The block's children are the block's business: the library file
+// imports what its application circuit instantiates (a board that
+// states only a requirement imports nothing else).
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
 // ── Vendor truth ────────────────────────────────────────────────────
 entity LM317() as part {
     pin VIN:  power in;

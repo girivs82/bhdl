@@ -54,3 +54,27 @@ trait LdoStage {
     const vin_max: voltage;         // optional; defaults to vin
     const noise: voltage;           // optional; output-noise ceiling (RMS)
 }
+
+// A buck CONTROLLER + external power stage (the tree's `BuckExternal`
+// topology: chosen when an integrated converter would run hotter than
+// the thermal crossover, or the load needs phases). `phases` is part of
+// the requirement: a single-phase block cannot cover a 3-phase stage.
+// Today's only implementer is the generic `BuckController` TEMPLATE: it
+// is listed by the survey but never auto-bound (it names no orderable
+// controller and its FETs are placeholders) — commit it with an
+// override that carries YOUR power stage:
+//   resolve u1 = BuckController(hs_fet="BSC0902NS", ls_fet="BSC0902NS",
+//                               fet_rds_on=2.3mΩ, fet_vds_max=30V);
+trait BuckExtStage {
+    pin VIN: power in;
+    pin VOUT: power out;
+    pin GND: ground;
+    const vout: voltage;
+    const i_max: current;
+    const vin: voltage;
+    const vin_min: voltage;         // optional; defaults to vin
+    const vin_max: voltage;         // optional; defaults to vin
+    const phases: integer;          // optional; defaults to 1
+    const noise: voltage;           // optional
+    const efficiency_min: float;    // optional
+}

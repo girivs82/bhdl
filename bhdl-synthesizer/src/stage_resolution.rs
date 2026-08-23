@@ -89,6 +89,14 @@ pub struct StageCandidate {
     pub block: String,
     pub file: PathBuf,
     pub gates: Vec<(String, String, bool)>,
+    /// Gates that failed because a promise is UNDECLARED (UNCHECKED):
+    /// a rejection for automatic binding, but a designer's explicit
+    /// `resolve` override may accept them (stated).
+    pub unchecked: Vec<String>,
+    /// `supply_choosable = false`: a TEMPLATE (no orderable part) — listed,
+    /// never auto-bound; only an override with the designer's numbers
+    /// commits it.
+    pub template: bool,
     pub cost_rel: Option<f64>,
     /// Declared output_current rating (A) — the no-cost-data tie-break.
     pub rating_a: Option<f64>,
@@ -98,7 +106,12 @@ pub struct StageCandidate {
 
 impl StageCandidate {
     pub fn passes(&self) -> bool {
-        self.gates.iter().all(|g| g.2)
+        self.gates.iter().all(|g| g.2) && !self.template
+    }
+    /// Passes for an explicit override: every DECLARED gate holds;
+    /// UNCHECKED promises are tolerated (and stated); templates allowed.
+    pub fn passes_override(&self) -> bool {
+        self.gates.iter().all(|g| g.2 || g.0 == "template" || self.unchecked.contains(&g.0))
     }
     pub fn failures(&self) -> Vec<String> {
         self.gates
@@ -177,7 +190,7 @@ pub fn resolve_stages(
     if reqs.is_empty() && overrides.is_empty() {
         return Ok(None);
     }
-    for (inst, _) in &overrides {
+    for (inst, _, _) in &overrides {
         if !reqs.iter().any(|r| &r.instance == inst) {
             bail!("`resolve {inst} = …;` names no requirement instantiation '{inst}' in this file");
         }
@@ -202,17 +215,28 @@ pub fn resolve_stages(
             .join(", ");
         let override_block = overrides
             .iter()
-            .find(|(i, _)| i == &req.instance)
-            .map(|(_, b)| b.clone());
+            .find(|(i, _, _)| i == &req.instance)
+            .map(|(_, b, _)| b.clone());
+        let override_args: Vec<(String, String)> = overrides
+            .iter()
+            .find(|(i, _, _)| i == &req.instance)
+            .map(|(_, _, a)| a.clone())
+            .unwrap_or_default();
         let lock_block = locked
             .iter()
             .find(|l| l.board == board_name && l.instance == req.instance && l.trait_name == req.trait_name)
             .map(|l| (l.block.clone(), l.requirement.clone()));
 
+        // the override's own args (the designer's power stage / datasheet
+        // axes) feed THAT candidate's evaluation — its promises are read
+        // through them (`output_current = fet_id_max`)
         let mut candidates: Vec<StageCandidate> = impls
             .iter()
             .filter(|i| i.trait_name == req.trait_name)
-            .map(|i| evaluate_candidate(i, req, trait_def))
+            .map(|i| {
+                let extra: &[(String, String)] = if override_block.as_deref() == Some(i.block.as_str()) { &override_args } else { &[] };
+                evaluate_candidate(i, req, trait_def, extra)
+            })
             .collect();
         // Library order is deterministic (sorted paths, then impl order).
         let mut notes = Vec::new();
@@ -224,12 +248,23 @@ pub fn resolve_stages(
                     "resolve {} = {ob}: no `impl {} for {ob}` in the library",
                     req.instance, req.trait_name
                 ),
-                Some(c) if !c.passes() => bail!(
+                Some(c) if !c.passes_override() => bail!(
                     "resolve {} = {ob}: the block does not meet the requirement ({req_text}):\n  {}",
                     req.instance,
                     c.failures().join("\n  ")
                 ),
-                Some(_) => (Some(ob), "override".to_string()),
+                Some(c) => {
+                    if c.template {
+                        notes.push(format!("{ob} is a TEMPLATE (supply_choosable = false): committed by designer override; the override's args are its power stage"));
+                    }
+                    if !c.unchecked.is_empty() {
+                        notes.push(format!(
+                            "override accepted with UNCHECKED promise(s) — {} — the designer's decision, stated",
+                            c.gates.iter().filter(|g| c.unchecked.contains(&g.0)).map(|g| format!("{}: {}", g.0, g.1)).collect::<Vec<_>>().join("; ")
+                        ));
+                    }
+                    (Some(ob), "override".to_string())
+                }
             }
         } else if let Some((lb, lreq)) = lock_block.clone().filter(|(lb, _)| {
             candidates.iter().any(|c| &c.block == lb && c.passes())
@@ -314,8 +349,18 @@ pub fn resolve_stages(
                 ));
                 let rel = rel_stdlib_path(&c.file, stdlib_root);
                 imports_needed.insert(b.clone(), rel);
-                let args = c
-                    .ctor_args
+                // requirement-mapped args, then the override's own args
+                // (the designer's power stage / datasheet axes) — the
+                // override wins on a clash
+                let mut merged: Vec<(String, String)> = c.ctor_args.clone();
+                for (k, v) in &override_args {
+                    if let Some(slot) = merged.iter_mut().find(|(mk, _)| mk == k) {
+                        slot.1 = v.clone();
+                    } else {
+                        merged.push((k.clone(), v.clone()));
+                    }
+                }
+                let args = merged
                     .iter()
                     .map(|(k, v)| format!("{k}={v}"))
                     .collect::<Vec<_>>()
@@ -326,6 +371,7 @@ pub fn resolve_stages(
                 // Placeholder: honest Generic* so ERC032 keeps saying so.
                 let generic = match req.trait_name.as_str() {
                     "LdoStage" => "GenericLdo",
+                    "BuckExtStage" => "GenericBuckExt",
                     _ => "GenericBuck",
                 };
                 imports_needed.insert(generic.to_string(), "bhdl-stdlib/power/generic_regulators.bhdl".into());
@@ -364,8 +410,10 @@ pub fn resolve_stages(
 
     // Consume the override statements (they are resolver input, not board
     // structure) — replaced by a comment so line numbers hold.
-    for (start, end, inst, block) in scan_override_spans(&masked) {
-        edits.push((start, end, format!("// resolve {inst} = {block}; (consumed by the resolver)")));
+    // Removed outright — NOT replaced by a `//` comment, which would
+    // swallow any statement sharing the line (`resolve …; u1.VOUT -> @V5;`).
+    for (start, end, _, _, _) in scan_override_spans(&masked) {
+        edits.push((start, end, String::new()));
     }
 
     // Apply edits back-to-front.
@@ -409,15 +457,12 @@ fn rel_stdlib_path(file: &Path, stdlib_root: &Path) -> String {
     format!("bhdl-stdlib/{}", rel.display()).replace('\\', "/")
 }
 
-/// Trial-evaluate a block's validity envelope (its plain `design { }`)
-/// at an operating point: `params` override the block's constructor
-/// defaults. `None` = the entity declares no design block (nothing to
-/// check — the caller states UNCHECKED); `Some(Err(msg))` = the envelope
-/// rejected it (a failed `require`, or a recipe error). Shared by the
-/// requirement resolver and the `supply` chooser so both apply ONE
-/// predicate.
-pub fn trial_envelope(entity_text: &str, block: &str, params: &[(String, String)]) -> Option<Result<(), String>> {
-    let recipe = design_recipe_for(entity_text, block)?;
+/// The `self.*` namespace a block's `design { }` sees: constructor
+/// params (defaults overridden by `params`) PLUS the entity's attributes
+/// resolved through them (`attribute feedback_voltage = v_ref` → the
+/// v_ref value; literals as written) — what synthesis stamps on an
+/// instance.
+fn self_namespace(entity_text: &str, block: &str, params: &[(String, String)]) -> HashMap<String, String> {
     let mut all: HashMap<String, String> = entity_params_txt(entity_text, block)
         .into_iter()
         .filter_map(|(n, d)| d.map(|d| (n, d)))
@@ -427,6 +472,26 @@ pub fn trial_envelope(entity_text: &str, block: &str, params: &[(String, String)
             all.insert(k.clone(), v.clone());
         }
     }
+    for (k, v) in entity_attrs_txt(entity_text, block) {
+        if all.contains_key(&k) {
+            continue; // a param of the same name wins
+        }
+        let resolved = all.get(v.trim()).cloned().unwrap_or(v);
+        all.insert(k, resolved);
+    }
+    all
+}
+
+/// Trial-evaluate a block's validity envelope (its plain `design { }`)
+/// at an operating point: `params` override the block's constructor
+/// defaults. `None` = the entity declares no design block (nothing to
+/// check — the caller states UNCHECKED); `Some(Err(msg))` = the envelope
+/// rejected it (a failed `require`, or a recipe error). Shared by the
+/// requirement resolver and the `supply` chooser so both apply ONE
+/// predicate.
+pub fn trial_envelope(entity_text: &str, block: &str, params: &[(String, String)]) -> Option<Result<(), String>> {
+    let recipe = design_recipe_for(entity_text, block)?;
+    let all = self_namespace(entity_text, block, params);
     Some(
         crate::design_evaluator::evaluate_recipe(&recipe, &all, HashMap::new(), String::new(), HashMap::new())
             .map(|_| ())
@@ -438,20 +503,41 @@ pub fn trial_envelope(entity_text: &str, block: &str, params: &[(String, String)
 }
 
 /// Trial-instantiate one block against the requirement.
-fn evaluate_candidate(imp: &StageImpl, req: &StageRequirement, trait_def: &StageTrait) -> StageCandidate {
+fn evaluate_candidate(imp: &StageImpl, req: &StageRequirement, trait_def: &StageTrait, extra_args: &[(String, String)]) -> StageCandidate {
     let text = std::fs::read_to_string(&imp.file).unwrap_or_default();
     let mut gates: Vec<(String, String, bool)> = Vec::new();
-    let mut push = |g: &str, d: String, ok: bool| gates.push((g.to_string(), d, ok));
+    let mut unchecked: Vec<String> = Vec::new();
+    fn push_gate(gates: &mut Vec<(String, String, bool)>, g: &str, d: String, ok: bool) {
+        gates.push((g.to_string(), d, ok));
+    }
+    // an UNDECLARED promise: recorded as a failed gate AND as unchecked
+    fn push_unchecked(gates: &mut Vec<(String, String, bool)>, unchecked: &mut Vec<String>, g: &str, d: String) {
+        gates.push((g.to_string(), d, false));
+        unchecked.push(g.to_string());
+    }
 
     let kind = entity_declared_kind(&text, &imp.block);
-    push(
+    // An `as design` block, or a migration-era conflated entity that
+    // still carries its application circuit as `expansion { }` (the
+    // generic BuckController template): both materialise the stage.
+    let migration_era = kind.is_none() && {
+        find_entity_decl(&text, &imp.block)
+            .map(|at| {
+                let tail = &text[at..];
+                let end = tail[1..].find("\nentity ").map(|p| p + 1).unwrap_or(tail.len());
+                tail[..end].contains("expansion {")
+            })
+            .unwrap_or(false)
+    };
+    push_gate(&mut gates, 
         "block",
         match &kind {
             Some(k) if k == "design" => "`as design` block".into(),
             Some(k) => format!("declared `as {k}` — only `as design` blocks satisfy a stage interface"),
-            None => "no partness declared — only `as design` blocks satisfy a stage interface".into(),
+            None if migration_era => "migration-era entity with its own `expansion { }` (materialises the stage)".into(),
+            None => "no partness declared and no expansion — cannot materialise a stage".into(),
         },
-        kind.as_deref() == Some("design"),
+        kind.as_deref() == Some("design") || migration_era,
     );
 
     // requirement → ctor args through the impl bindings
@@ -463,21 +549,25 @@ fn evaluate_candidate(imp: &StageImpl, req: &StageRequirement, trait_def: &Stage
                 // vin_min/vin_max/noise/efficiency_min are promise-checked,
                 // not conveyed; vout/i_max/vin MUST be conveyed.
                 if matches!(k.as_str(), "vout" | "i_max" | "vin") {
-                    push("impl", format!("impl binds no block parameter for requirement `{k}`"), false);
+                    push_gate(&mut gates, "impl", format!("impl binds no block parameter for requirement `{k}`"), false);
                 }
             }
         }
     }
     let _ = trait_def;
 
-    // Block parameters: defaults, overridden by the conveyed requirement.
-    let mut params: HashMap<String, String> = entity_params_txt(&text, &imp.block)
-        .into_iter()
-        .filter_map(|(n, d)| d.map(|d| (n, d)))
-        .collect();
-    for (p, v) in &ctor_args {
-        params.insert(p.clone(), v.clone());
+    // Block parameters: defaults, overridden by the conveyed requirement
+    // and the override's extra args, plus the entity's attributes (the
+    // `self.*` namespace).
+    let mut eval_args = ctor_args.clone();
+    for (k, v) in extra_args {
+        if let Some(slot) = eval_args.iter_mut().find(|(mk, _)| mk == k) {
+            slot.1 = v.clone();
+        } else {
+            eval_args.push((k.clone(), v.clone()));
+        }
     }
+    let params: HashMap<String, String> = self_namespace(&text, &imp.block, &eval_args);
 
     // Envelope: evaluate the block's design { } with these params.
     match design_recipe_for(&text, &imp.block) {
@@ -485,18 +575,14 @@ fn evaluate_candidate(imp: &StageImpl, req: &StageRequirement, trait_def: &Stage
             match crate::design_evaluator::evaluate_recipe(
                 &recipe, &params, HashMap::new(), String::new(), HashMap::new(),
             ) {
-                Ok(_) => push("envelope", "design { } accepts the operating point".into(), true),
+                Ok(_) => push_gate(&mut gates, "envelope", "design { } accepts the operating point".into(), true),
                 Err(crate::design_evaluator::DesignEvalError::RequireFailed(m)) => {
-                    push("envelope", m, false)
+                    push_gate(&mut gates, "envelope", m, false)
                 }
-                Err(e) => push("envelope", format!("design recipe error: {e}"), false),
+                Err(e) => push_gate(&mut gates, "envelope", format!("design recipe error: {e}"), false),
             }
         }
-        None => push(
-            "envelope",
-            "block declares no design { } — no envelope to check (UNCHECKED, not a pass)".into(),
-            false,
-        ),
+        None => push_unchecked(&mut gates, &mut unchecked, "envelope", "block declares no design { } — no envelope to check (UNCHECKED, not a pass)".into()),
     }
 
     // Promises. Attribute values may be param refs (`attribute f_sw = f_sw`).
@@ -510,12 +596,12 @@ fn evaluate_candidate(imp: &StageImpl, req: &StageRequirement, trait_def: &Stage
     if let Some(i_max) = req_si("i_max") {
         let need = i_max / CURRENT_DERATE;
         match attr_si("output_current") {
-            Some(r) => push(
+            Some(r) => push_gate(&mut gates, 
                 "i_max",
                 format!("output_current {r:.3}A ≥ required rating {need:.3}A (i_max {i_max:.3}A / {CURRENT_DERATE} derate)"),
                 r + 1e-12 >= need,
             ),
-            None => push("i_max", "block declares no output_current — UNCHECKED, not a pass".into(), false),
+            None => push_unchecked(&mut gates, &mut unchecked, "i_max", "block declares no output_current — UNCHECKED, not a pass".into()),
         }
     }
     let vin = req_si("vin");
@@ -523,32 +609,51 @@ fn evaluate_candidate(imp: &StageImpl, req: &StageRequirement, trait_def: &Stage
     let vin_max = req_si("vin_max").or(vin);
     if let Some(lo) = vin_min {
         match attr_si("vin_min") {
-            Some(b) => push("vin_min", format!("block vin_min {b:.2}V ≤ requirement {lo:.2}V"), b <= lo + 1e-9),
-            None => push("vin_min", "block declares no vin_min — UNCHECKED, not a pass".into(), false),
+            Some(b) => push_gate(&mut gates, "vin_min", format!("block vin_min {b:.2}V ≤ requirement {lo:.2}V"), b <= lo + 1e-9),
+            None => push_unchecked(&mut gates, &mut unchecked, "vin_min", "block declares no vin_min — UNCHECKED, not a pass".into()),
         }
     }
     if let Some(hi) = vin_max {
         match attr_si("vin_max") {
-            Some(b) => push("vin_max", format!("block vin_max {b:.2}V ≥ requirement {hi:.2}V"), b + 1e-9 >= hi),
-            None => push("vin_max", "block declares no vin_max — UNCHECKED, not a pass".into(), false),
+            Some(b) => push_gate(&mut gates, "vin_max", format!("block vin_max {b:.2}V ≥ requirement {hi:.2}V"), b + 1e-9 >= hi),
+            None => push_unchecked(&mut gates, &mut unchecked, "vin_max", "block declares no vin_max — UNCHECKED, not a pass".into()),
         }
     }
     if let Some(n) = req_si("noise") {
         match attr_si("output_noise") {
-            Some(b) => push("noise", format!("output_noise {:.1}µV ≤ requirement {:.1}µV", b * 1e6, n * 1e6), b <= n + 1e-15),
-            None => push("noise", "block declares no output_noise — UNCHECKED, not a pass".into(), false),
+            Some(b) => push_gate(&mut gates, "noise", format!("output_noise {:.1}µV ≤ requirement {:.1}µV", b * 1e6, n * 1e6), b <= n + 1e-15),
+            None => push_unchecked(&mut gates, &mut unchecked, "noise", "block declares no output_noise — UNCHECKED, not a pass".into()),
         }
     }
     if let Some(e) = req_value(req, "efficiency_min").and_then(|v| parse_pct_or_si(&v)) {
         match attrs.get("efficiency").and_then(|v| parse_pct_or_si(v)) {
-            Some(b) => push("efficiency", format!("efficiency {:.1}% ≥ requirement {:.1}%", b * 100.0, e * 100.0), b + 1e-9 >= e),
-            None => push("efficiency", "block declares no efficiency — UNCHECKED, not a pass".into(), false),
+            Some(b) => push_gate(&mut gates, "efficiency", format!("efficiency {:.1}% ≥ requirement {:.1}%", b * 100.0, e * 100.0), b + 1e-9 >= e),
+            None => push_unchecked(&mut gates, &mut unchecked, "efficiency", "block declares no efficiency — UNCHECKED, not a pass".into()),
         }
+    }
+
+    // phases (BuckExtStage): the block must support at least the
+    // requirement's phase count (default 1)
+    let req_phases = req_value(req, "phases").and_then(|v| v.trim().parse::<f64>().ok()).unwrap_or(1.0);
+    if req.trait_name == "BuckExtStage" || req_value(req, "phases").is_some() {
+        match attrs.get("phases").and_then(|v| v.trim().parse::<f64>().ok()) {
+            Some(b) => push_gate(&mut gates, "phases", format!("block supports {b:.0} phase(s) ≥ required {req_phases:.0}"), b + 1e-9 >= req_phases),
+            None => push_unchecked(&mut gates, &mut unchecked, "phases", "block declares no phases — UNCHECKED, not a pass".into()),
+        }
+    }
+
+    let template = attrs.get("supply_choosable").map(|v| v.trim() == "false").unwrap_or(false);
+    if template {
+        push_gate(&mut gates, 
+            "template",
+            "supply_choosable = false: a TEMPLATE with no orderable part — never auto-bound; commit it with `resolve <inst> = Block(<your datasheet/power-stage args>);`".into(),
+            false,
+        );
     }
 
     let cost_rel = attrs.get("cost_rel").and_then(|v| v.trim().parse::<f64>().ok());
     let rating_a = attr_si("output_current");
-    StageCandidate { block: imp.block.clone(), file: imp.file.clone(), gates, cost_rel, rating_a, ctor_args }
+    StageCandidate { block: imp.block.clone(), file: imp.file.clone(), gates, unchecked, template, cost_rel, rating_a, ctor_args }
 }
 
 fn parse_pct_or_si(v: &str) -> Option<f64> {
@@ -739,9 +844,11 @@ fn scan_requirements(masked: &str, traits: &HashMap<String, StageTrait>) -> Vec<
     out
 }
 
-fn scan_override_spans(masked: &str) -> Vec<(usize, usize, String, String)> {
-    // `resolve <inst> = <Block>;` — statement-based (several statements
-    // may share a line), anchored at a statement boundary.
+fn scan_override_spans(masked: &str) -> Vec<(usize, usize, String, String, Vec<(String, String)>)> {
+    // `resolve <inst> = <Block>;` or `resolve <inst> = <Block>(k=v, …);` —
+    // statement-based (several statements may share a line), anchored at
+    // a statement boundary. The args are the designer's own constructor
+    // args for the committed block (tier B power stage, datasheet axes).
     let mut out = Vec::new();
     let mut off = 0usize;
     while let Some(p) = masked[off..].find("resolve ") {
@@ -753,12 +860,23 @@ fn scan_override_spans(masked: &str) -> Vec<(usize, usize, String, String)> {
         }
         let Some(semi) = masked[at..].find(';') else { continue };
         let body = &masked[at + 8..at + semi];
-        let Some((inst, block)) = body.split_once('=') else { continue };
-        let (inst, block) = (inst.trim(), block.trim());
+        let Some((inst, rhs)) = body.split_once('=') else { continue };
+        let (inst, rhs) = (inst.trim(), rhs.trim());
+        let (block, args_txt) = match rhs.split_once('(') {
+            Some((b, rest)) => (b.trim(), rest.trim_end().strip_suffix(')').unwrap_or(rest).to_string()),
+            None => (rhs, String::new()),
+        };
         let ok = |t: &str| !t.is_empty() && t.chars().all(|c| c.is_alphanumeric() || c == '_');
-        if ok(inst) && ok(block) {
-            out.push((at, at + semi + 1, inst.to_string(), block.to_string()));
+        if !(ok(inst) && ok(block)) {
+            continue;
         }
+        let args: Vec<(String, String)> = args_txt
+            .split(',')
+            .map(str::trim)
+            .filter(|a| !a.is_empty())
+            .filter_map(|a| a.split_once('=').map(|(k, v)| (k.trim().to_string(), v.trim().to_string())))
+            .collect();
+        out.push((at, at + semi + 1, inst.to_string(), block.to_string(), args));
     }
     out
 }
@@ -771,8 +889,8 @@ fn scan_board_name(masked: &str) -> Option<String> {
     })
 }
 
-fn scan_overrides(masked: &str) -> Vec<(String, String)> {
-    scan_override_spans(masked).into_iter().map(|(_, _, i, b)| (i, b)).collect()
+fn scan_overrides(masked: &str) -> Vec<(String, String, Vec<(String, String)>)> {
+    scan_override_spans(masked).into_iter().map(|(_, _, i, b, a)| (i, b, a)).collect()
 }
 
 /// Render the resolution report (CLI + tests).
@@ -789,7 +907,8 @@ pub fn render_report(r: &StageResolution) -> String {
         s.push_str(&format!("    no block in the library implements {}\n", r.trait_name));
     }
     for c in &r.candidates {
-        s.push_str(&format!("    {} {}\n", if c.passes() { "✓" } else { "✗" }, c.block));
+        let mark = if c.passes() { "✓" } else if c.template { "⧖" } else { "✗" };
+        s.push_str(&format!("    {} {}{}\n", mark, c.block, if c.template { " (template)" } else { "" }));
         for g in &c.gates {
             s.push_str(&format!("        {} {}: {}\n", if g.2 { "ok " } else { "NOK" }, g.0, g.1));
         }
@@ -819,7 +938,11 @@ mod tests {
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].instance, "u1");
         assert_eq!(r[0].params, vec![("vout".to_string(), "5V".to_string()), ("i_max".into(), "2A".into()), ("vin".into(), "12V".into())]);
-        assert_eq!(scan_overrides(&m), vec![("u1".to_string(), "Buck_TPS54331".to_string())]);
+        assert_eq!(scan_overrides(&m), vec![("u1".to_string(), "Buck_TPS54331".to_string(), vec![])]);
+        let m2 = mask_comments("board B {\n    resolve u2 = BuckController(hs_fet=\"BSC0902NS\", fet_rds_on=2.3mΩ);\n}");
+        let o = scan_overrides(&m2);
+        assert_eq!(o[0].1, "BuckController");
+        assert_eq!(o[0].2, vec![("hs_fet".to_string(), "\"BSC0902NS\"".to_string()), ("fet_rds_on".to_string(), "2.3mΩ".to_string())]);
         let imp = scan_impls("impl BuckStage for Buck_X {\n    const vout = v_out; const i_max = i_out_max;\n}\n", Path::new("x.bhdl"));
         assert_eq!(imp.len(), 1);
         assert_eq!(imp[0].bindings.len(), 2);

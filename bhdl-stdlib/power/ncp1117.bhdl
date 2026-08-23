@@ -11,6 +11,11 @@
 // this block (stated by the resolver, never a pass).
 
 
+// The block's children are the block's business: the library file
+// imports what its application circuit instantiates (a board that
+// states only a requirement imports nothing else).
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+
 // ── Vendor truth ────────────────────────────────────────────────────
 entity NCP1117(v_out: voltage = 5V) as part {
     pin GND:  ground;               // (pin 1)

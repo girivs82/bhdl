@@ -1111,6 +1111,21 @@ board FortyEight {
     // fed from ONE of: VIN direct or a bulk, never dangling
     let vio = eff_opt.stages.iter().find(|s| s.to == "V3V3").unwrap();
     assert!(vio.from == "VIN" || vio.from.starts_with("V_BULK"), "{vio:#?}");
+
+    // ── the controller+external stage EMITS a BuckExtStage requirement
+    //    with its phase count; the resolver lists the BuckController
+    //    TEMPLATE (never auto-bound) and leaves the stage a placeholder ──
+    let region = bhdl_synthesizer::powertree::emit_power_region(eff_opt, "GND");
+    let line = region.lines().find(|l| l.contains("u_vcore:")).expect("vcore stage emitted").to_string();
+    assert!(line.contains("BuckExtStage(") && line.contains(&format!("phases={}", vrm.phases)), "{line}");
+    let emitted = bhdl_synthesizer::powertree::splice_power_region(&src, &region).unwrap();
+    let r = bhdl_synthesizer::stage_resolution::resolve_stages(&emitted, ws.join("bhdl-stdlib").as_path(), &[]).unwrap().unwrap();
+    let vcore = r.resolutions.iter().find(|x| x.instance == "u_vcore").unwrap();
+    assert!(vcore.bound.is_none(), "{}", bhdl_synthesizer::stage_resolution::render_report(vcore));
+    let tmpl = vcore.candidates.iter().find(|c| c.block == "BuckController").expect("template listed");
+    assert!(tmpl.template && !tmpl.passes());
+    assert!(tmpl.gates.iter().any(|g| g.0 == "phases" && !g.2), "{tmpl:#?}");
+    assert!(r.source.contains("u_vcore: GenericBuckExt("), "{}", r.source);
 }
 
 /// Prereg policy: every rail sits behind the protected front end —
@@ -1956,6 +1971,48 @@ board ReqDemo {{
     assert!(format!("{e:#}").contains("does not meet the requirement"), "{e:#}");
     let e = resolve_stages(&board("vout=5V, i_max=2A, vin=12V", "resolve u1 = Buck_NoSuch;"), &stdlib, &[]).unwrap_err();
     assert!(format!("{e:#}").contains("no `impl BuckStage for Buck_NoSuch`"), "{e:#}");
+
+    // 4b. BuckExtStage: the BuckController TEMPLATE is listed, never
+    //     auto-bound; an override WITH the designer's power-stage args
+    //     commits it (UNCHECKED vin range stated, not blocking), the args
+    //     reach the FET children, and the board round-trips
+    let ext = |args: &str, extra: &str| format!(r#"
+import {{ BuckExtStage }} from "bhdl-stdlib/power/stages.bhdl";
+import {{ Res }} from "bhdl-stdlib/passives/resistor.bhdl";
+board ExtDemo {{
+    power VIN = 24V @ 10A;
+    port V5: power out = 5V @ 8A;
+    ground GND;
+    @VIN -> u1: BuckExtStage({args}).VIN;
+    u1.GND -> @GND; u1.VOUT -> @V5;
+    @V5 -> R_LOAD: Res(0.625Ω, wattage=50W).1; R_LOAD.2 -> @GND;
+    {extra}
+}}
+"#);
+    let r = resolve_stages(&ext("vout=5V, i_max=8A, vin=24V", ""), &stdlib, &[]).unwrap().unwrap();
+    assert!(r.resolutions[0].bound.is_none());
+    assert!(r.resolutions[0].candidates.iter().any(|c| c.block == "BuckController" && c.template));
+    let ovr = "resolve u1 = BuckController(hs_fet=\"BSC0902NS\", ls_fet=\"BSC0902NS\", fet_rds_on=2.3mΩ, fet_vds_max=30V, fet_id_max=30A, fet_vgs_th=2.4V, fet_p_rating=42W); u1.EN -> @VIN;";
+    let r = resolve_stages(&ext("vout=5V, i_max=8A, vin=24V", ovr), &stdlib, &[]).unwrap().unwrap();
+    assert_eq!(r.resolutions[0].basis, "override");
+    assert!(r.resolutions[0].notes.iter().any(|n| n.contains("TEMPLATE")), "{:?}", r.resolutions[0].notes);
+    assert!(r.resolutions[0].notes.iter().any(|n| n.contains("UNCHECKED promise")), "{:?}", r.resolutions[0].notes);
+    assert!(r.source.contains("hs_fet=\"BSC0902NS\""), "{}", r.source);
+    assert!(r.source.contains("u1.EN -> @VIN;"), "the statement sharing the override's line survives: {}", r.source);
+    {
+        let pr = parse(&r.source);
+        assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+        let sf = SourceFile::cast(pr.syntax()).unwrap();
+        let analysis = analyze(&sf);
+        let mut gen = NetlistGenerator::new();
+        let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+        let fet = n.instances.values().find(|i| i.name == "u1_M_hs").expect("high-side FET minted");
+        assert_eq!(fet.attributes.get("part_number").map(String::as_str), Some("BSC0902NS"), "{:#?}", fet.attributes);
+        assert_eq!(fet.attributes.get("rds_on").map(String::as_str), Some("2.3mΩ"), "{:#?}", fet.attributes);
+    }
+    // a multi-phase requirement cannot be committed to the single-phase template
+    let e = resolve_stages(&ext("vout=5V, i_max=60A, vin=24V, phases=3", ovr), &stdlib, &[]).unwrap_err();
+    assert!(format!("{e:#}").contains("phases: block supports 1"), "{e:#}");
 
     // 5. lock: tried first; stale lock re-resolved loudly
     let lock = vec![bhdl_common::library::LockedStage {

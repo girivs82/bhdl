@@ -7,6 +7,11 @@
 //                            `impl LdoStage`.
 
 
+// The block's children are the block's business: the library file
+// imports what its application circuit instantiates (a board that
+// states only a requirement imports nothing else).
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+
 // ── Vendor truth ────────────────────────────────────────────────────
 entity LM7805(v_out: voltage = 5V) as part {
     pin VIN:  power in;

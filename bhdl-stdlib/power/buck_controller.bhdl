@@ -28,6 +28,14 @@
 // controller SKU wraps it in an alias binding real numbers, or ships its own
 // entity when its application circuit diverges.
 
+// The block's children are the block's business: the library file
+// imports what its application circuit instantiates (a board that
+// states only a requirement imports nothing else).
+import { MOSFET } from "bhdl-stdlib/actives/mosfet.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Ind } from "bhdl-stdlib/passives/inductor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
 entity BuckController(
     v_out:        voltage    = 5V,       // regulated output target
     v_in:         voltage    = 24V,      // nominal input for sizing
@@ -68,6 +76,11 @@ entity BuckController(
 
     attribute component_class = "switching_regulator";
     attribute topology        = "buck_controller";
+    attribute phases          = 1;          // single-phase controller
+    // The stage's current capability is the CHOSEN FETs' rating (the
+    // controller drives gates; it carries no current of its own) — the
+    // promise the resolver checks i_max against travels with tier B.
+    attribute output_current  = fet_id_max;
     // Generic tier: instantiate directly with your FETs' numbers; never a
     // candidate in automatic `supply` part selection (no orderable MPN).
     attribute supply_choosable = false;
@@ -151,4 +164,16 @@ symbol BuckController {
     left   { VIN, EN, VCC }
     right  { HB, HO, SW, LO, FB, COMP }
     bottom { GND }
+}
+
+// The template SATISFIES BuckExtStage (bhdl-stdlib/power/stages.bhdl) —
+// but as a TEMPLATE: `supply_choosable = false` keeps it out of automatic
+// binding; a designer commits it with `resolve <inst> = BuckController(
+// hs_fet=…, fet_rds_on=…, …);` and the override's args are the power
+// stage. Input range is deliberately UNDECLARED (it is the real
+// controller SKU's datasheet axis) — stated as UNCHECKED on the override.
+impl BuckExtStage for BuckController {
+    const vout  = v_out;
+    const i_max = i_out_max;
+    const vin   = v_in;
 }

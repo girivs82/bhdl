@@ -1072,7 +1072,7 @@ pub const EMIT_BEGIN: &str =
 pub const EMIT_END: &str = "// ── END GENERATED POWER TREE ──";
 
 /// The import the emitted region needs at file level.
-pub const EMIT_IMPORT: &str = "import { BuckStage, LdoStage } from \"bhdl-stdlib/power/stages.bhdl\";\nimport { GenericBuckExt, GenericPrereg } from \"bhdl-stdlib/power/generic_regulators.bhdl\";";
+pub const EMIT_IMPORT: &str = "import { BuckStage, LdoStage, BuckExtStage } from \"bhdl-stdlib/power/stages.bhdl\";\nimport { GenericPrereg } from \"bhdl-stdlib/power/generic_regulators.bhdl\";";
 
 fn fmt_v(v: f64) -> String {
     format!("{v}V")
@@ -1130,22 +1130,33 @@ pub fn emit_power_region(option: &TreeOption, gnd: &str) -> String {
         // assumption where it is a real ceiling. Controller+external
         // stages and the prereg have no interface yet and stay generic.
         match st.topology {
-            Topology::Buck | Topology::Ldo => {
-                let iface = if st.topology == Topology::Buck { "BuckStage" } else { "LdoStage" };
+            Topology::Buck | Topology::Ldo | Topology::BuckExternal => {
+                let iface = match st.topology {
+                    Topology::Buck => "BuckStage",
+                    Topology::Ldo => "LdoStage",
+                    _ => "BuckExtStage",
+                };
                 let noise = if st.topology == Topology::Ldo && st.noise_assumed_uvrms > 0.0 {
                     format!(", noise={:.0}uV", st.noise_assumed_uvrms)
                 } else {
                     String::new()
                 };
+                // controller + external stage: the phase count is part
+                // of the requirement (a single-phase block cannot cover it)
+                let phases = if st.topology == Topology::BuckExternal && st.phases > 1 {
+                    format!(", phases={}", st.phases)
+                } else {
+                    String::new()
+                };
                 out.push_str(&format!(
-                    "\n    {inst}: {iface}(vout={}, i_max={}, vin={}{noise});\n",
+                    "\n    {inst}: {iface}(vout={}, i_max={}, vin={}{noise}{phases});\n",
                     fmt_v(st.vout),
                     fmt_a_ceil(st.i_max_a),
                     fmt_v(st.vin),
                 ));
             }
-            Topology::Prereg | Topology::BuckExternal => {
-                let entity = if st.topology == Topology::Prereg { "GenericPrereg" } else { "GenericBuckExt" };
+            Topology::Prereg => {
+                let entity = "GenericPrereg";
                 // NAMED ctor args (vin/vout/rated) = the uniform contract
                 // a real entity must share for the rename-swap.
                 out.push_str(&format!(

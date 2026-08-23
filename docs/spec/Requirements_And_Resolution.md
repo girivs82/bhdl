@@ -255,11 +255,27 @@ Principles that fall out:
    5 V AP63205 for 1.2 V / 3.3 V rails because the old entity silently
    took any `v_out`. With no cost data the resolver breaks ties by LEAST
    OVER-RATING (smallest `output_current` that covers the load), then
-   library order — stated in the survey note. Still conflated:
-   `BuckController` (controller + external stages with the yieldable
-   board-takeover recipe — needs its own `BuckExtStage` interface) and
-   the `regulator.bhdl` generic templates (`LinearRegulator<V_OUT,
-   HAS_EN>` / `BuckRegulator<V_OUT>`, class templates rather than parts).
+   library order — stated in the survey note.
+   `BuckExtStage` (controller + external power stage; `phases` is part
+   of the requirement) is the third interface; the power tree emits it
+   for `BuckExternal` stages. Its only implementer is the generic
+   `BuckController` TEMPLATE (`supply_choosable = false`, no orderable
+   controller, placeholder FETs): the survey LISTS a template (`⧖`) but
+   never auto-binds it; the designer commits it with an override that
+   carries the power stage — `resolve u1 = BuckController(hs_fet=
+   "BSC0902NS", fet_rds_on=2.3mΩ, fet_id_max=30A, …);` — whose args feed
+   the candidate's evaluation (`output_current = fet_id_max`) and the
+   splice. UNCHECKED promises (the template declares no input range —
+   the real controller SKU's axis) are stated on an override, not
+   blocking; declared-gate failures (i_max, phases) still refuse it.
+   Migration-era entities that keep an `expansion { }` may `impl` a stage
+   interface (stated as such in the survey). Library files now import
+   the entities their application circuits instantiate — a requirement-
+   first board imports nothing but the trait (the controller's FET
+   children had been silently taking MOSFET defaults when the board did
+   not import `MOSFET`). Still class templates, not parts:
+   `regulator.bhdl` (`LinearRegulator<V_OUT, HAS_EN>` /
+   `BuckRegulator<V_OUT>`).
    Not yet: the cost function / provider pricing / qualification
    attributes in the ranking; ERC032 and the resolver share the derate
    policy and the promise vocabulary but are still two code paths.

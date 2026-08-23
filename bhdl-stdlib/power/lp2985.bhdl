@@ -23,6 +23,11 @@
 //
 // Grammar discipline: parser-compatible v2.0 subset.
 
+// The block's children are the block's business: the library file
+// imports what its application circuit instantiates (a board that
+// states only a requirement imports nothing else).
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+
 // ── Vendor truth ────────────────────────────────────────────────────
 entity LP2985(v_out: voltage = 3.3V) as part {
     pin VIN:  power in;       // unregulated input              (pin 1)

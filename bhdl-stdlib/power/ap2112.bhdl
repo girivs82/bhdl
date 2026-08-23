@@ -9,6 +9,11 @@
 // orderable suffix is the BOM/MPN path's to derive from output_voltage.
 
 
+// The block's children are the block's business: the library file
+// imports what its application circuit instantiates (a board that
+// states only a requirement imports nothing else).
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+
 // ── Vendor truth ────────────────────────────────────────────────────
 entity AP2112K(v_out: voltage = 3.3V, dropout: voltage = 250mV, i_quiescent: current = 55µA) as part {
     pin VIN:  power in;
