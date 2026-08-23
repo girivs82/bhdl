@@ -305,9 +305,21 @@ Principles that fall out:
    the entities their application circuits instantiate — a requirement-
    first board imports nothing but the trait (the controller's FET
    children had been silently taking MOSFET defaults when the board did
-   not import `MOSFET`). Still class templates, not parts:
-   `regulator.bhdl` (`LinearRegulator<V_OUT, HAS_EN>` /
-   `BuckRegulator<V_OUT>`).
+   not import `MOSFET`).
+   `regulator.bhdl` (landed): the class templates took the same shape
+   as TEMPLATES — `LinearRegulatorIc` / `BuckRegulatorIc as part`
+   (placeholder silicon carrying the class axes, NO part_number) +
+   `LinearRegulator` / `BuckRegulator as design` with
+   `supply_choosable = false`, `impl LdoStage` / `impl BuckStage`: the
+   survey lists them (⧖) and only an override with the designer's
+   numbers commits one (`resolve u = LinearRegulator(dropout=1.2V, …);`).
+   No current rating is promised (a class cannot) — `i_max` is UNCHECKED
+   against them. The `HAS_EN` generic became `wired(EN)` gating; the
+   `V_OUT` generic became the `v_out` parameter. `LM7805` / `LM1117_*` /
+   `LM2596_*` stay as class stand-in aliases with that status stated
+   (the TI µA7805 itself is `Ldo_LM7805`). Nothing in the regulator
+   library is a migration-era conflated entity any more except
+   `BuckController`'s yieldable takeover recipe, kept by design.
    Envelope spelling (landed): `entity X(…) as design where i_out_max <=
    2.4A, v_in >= 3.5V, v_in <= 28V { … }` — each comparison is lowered
    to a `require` at the front of the block's plain `design { }` (created
