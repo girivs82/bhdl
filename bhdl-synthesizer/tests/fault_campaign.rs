@@ -1919,7 +1919,14 @@ board ReqDemo {{
     let b = u1.bound.clone().expect("bound");
     assert!(b == "Buck_TPS54302" || b == "Buck_TPS54331", "{}", bhdl_synthesizer::stage_resolution::render_report(u1));
     assert_eq!(u1.basis, "survey");
-    assert!(u1.notes.iter().any(|n| n.contains("least over-rated")), "{:?}", u1.notes);
+    // ranking basis is ALWAYS stated: real catalogue price when the
+    // supplier provider priced every survivor, else least over-rating
+    assert!(u1.notes.iter().any(|n| n.contains("ranked by catalogue price") || n.contains("least over-rated")), "{:?}", u1.notes);
+    if u1.notes.iter().any(|n| n.contains("ranked by catalogue price")) {
+        let b = u1.bound.as_deref().unwrap();
+        let chosen = u1.candidates.iter().find(|c| c.block == b).unwrap();
+        assert!(u1.candidates.iter().filter(|c| c.passes()).all(|c| c.ic_price.unwrap() >= chosen.ic_price.unwrap()), "cheapest silicon wins");
+    }
     assert!(r.source.contains(&format!("u1: {b}(v_out=5V, i_out_max=2A, v_in=12V)")), "{}", r.source);
     assert!(r.source.contains(&format!("import {{ {b} }} from \"bhdl-stdlib/power/")), "{}", r.source);
     assert!(r.source.contains("attribute u1.stage_requirement = \"vout=5V, i_max=2A, vin=12V\";"), "{}", r.source);
@@ -2013,6 +2020,19 @@ board ExtDemo {{
     // a multi-phase requirement cannot be committed to the single-phase template
     let e = resolve_stages(&ext("vout=5V, i_max=60A, vin=24V, phases=3", ovr), &stdlib, &[]).unwrap_err();
     assert!(format!("{e:#}").contains("phases: block supports 1"), "{e:#}");
+
+    // 4c. qualification: temperature range / named qualification gate
+    //     against DECLARED promises only — TPS54331 declares −40…85 °C
+    //     (SLVSA86); the others are UNCHECKED, never a pass
+    let r = resolve_stages(&board("vout=5V, i_max=2A, vin=12V, temp_min=-40degC, temp_max=85degC", ""), &stdlib, &[]).unwrap().unwrap();
+    assert_eq!(r.resolutions[0].bound.as_deref(), Some("Buck_TPS54331"), "{}", bhdl_synthesizer::stage_resolution::render_report(&r.resolutions[0]));
+    let c302 = r.resolutions[0].candidates.iter().find(|c| c.block == "Buck_TPS54302").unwrap();
+    assert!(c302.unchecked.contains(&"temp_min".to_string()), "{c302:#?}");
+    let r = resolve_stages(&board("vout=5V, i_max=2A, vin=12V, temp_max=105degC", ""), &stdlib, &[]).unwrap().unwrap();
+    assert!(r.resolutions[0].bound.is_none(), "85 °C part must not cover a 105 °C requirement");
+    let r = resolve_stages(&board("vout=5V, i_max=2A, vin=12V, qual=\"AEC-Q100\"", ""), &stdlib, &[]).unwrap().unwrap();
+    assert!(r.resolutions[0].bound.is_none());
+    assert!(r.resolutions[0].candidates.iter().all(|c| c.unchecked.contains(&"qual".to_string())), "no stdlib part declares a qualification");
 
     // 5. lock: tried first; stale lock re-resolved loudly
     let lock = vec![bhdl_common::library::LockedStage {

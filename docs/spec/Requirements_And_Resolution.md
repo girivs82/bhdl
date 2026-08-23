@@ -276,9 +276,20 @@ Principles that fall out:
    not import `MOSFET`). Still class templates, not parts:
    `regulator.bhdl` (`LinearRegulator<V_OUT, HAS_EN>` /
    `BuckRegulator<V_OUT>`).
-   Not yet: the cost function / provider pricing / qualification
-   attributes in the ranking; ERC032 and the resolver share the derate
-   policy and the promise vocabulary but are still two code paths.
+   Ranking (landed): survivors' silicon is priced through the supplier
+   provider (cheapest in-stock MPN with the part-number prefix — the
+   `supply` chooser's path); when EVERY survivor priced, cheapest wins
+   and the prices are printed; otherwise least over-rating, ties by
+   library order — the basis is always in the survey note. Support
+   parts are sized per instantiation and priced at BOM time, not here
+   (stated). Qualification (landed): requirement consts `temp_min`,
+   `temp_max`, `qual` gate against DECLARED part promises
+   (`temp_min/temp_max` in degC, `qualification` string); undeclared =
+   UNCHECKED = not a pass. Today only TPS54331 declares its ambient
+   range (SLVSA86 −40…85 °C); no stdlib part declares a qualification —
+   an `AEC-Q100` requirement resolves to nothing, honestly. Not yet:
+   ERC032 and the resolver share the derate policy and the promise
+   vocabulary but are still two code paths.
 3. DONE — `bhdl <board> trace [--json]`
    (`bhdl_synthesizer::trace_matrix`). The matrix is DERIVED from this
    build's evidence, never transcribed: one row per contract construct

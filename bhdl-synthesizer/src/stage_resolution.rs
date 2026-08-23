@@ -97,9 +97,15 @@ pub struct StageCandidate {
     /// never auto-bound; only an override with the designer's numbers
     /// commits it.
     pub template: bool,
-    pub cost_rel: Option<f64>,
-    /// Declared output_current rating (A) — the no-cost-data tie-break.
+    /// Declared output_current rating (A) — the no-price tie-break.
     pub rating_a: Option<f64>,
+    /// Real catalogue price of the block's silicon (cheapest in-stock MPN
+    /// with the part-number prefix, via the supplier provider); None when
+    /// the provider/DB is absent or nothing matched — stated, never 0.
+    pub ic_price: Option<f64>,
+    pub ic_mpn: Option<String>,
+    /// The `part_number` of the silicon the block instantiates.
+    pub part_number: Option<String>,
     /// Named ctor args the block would be instantiated with.
     pub ctor_args: Vec<(String, String)>,
 }
@@ -284,29 +290,53 @@ pub fn resolve_stages(
                     .unwrap_or_else(|| "no longer implements the interface".into());
                 notes.push(format!("locked binding {lb} no longer meets the requirement ({why}) — re-resolved"));
             }
+            // Price the survivors' silicon through the supplier provider
+            // (real catalogue money, the same path the `supply` chooser
+            // uses). Only survivors are priced — a rejected block's price
+            // is irrelevant and the provider call is not free.
+            for c in candidates.iter_mut().filter(|c| c.passes()) {
+                if let Some(part) = &c.part_number {
+                    if let Some((price, mpn, _sku)) = crate::supply_synthesis::price_via_provider(part, &format!("{}V", req_value(req, "vout").unwrap_or_default().trim_end_matches('V'))) {
+                        c.ic_price = price;
+                        c.ic_mpn = mpn;
+                    }
+                }
+            }
             let passing: Vec<&StageCandidate> = candidates.iter().filter(|c| c.passes()).collect();
             if passing.is_empty() {
                 (None, "unresolved".to_string())
-            } else if passing.iter().all(|c| c.cost_rel.is_some()) {
+            } else if passing.iter().all(|c| c.ic_price.is_some()) {
+                // Every survivor priced → cheapest silicon wins. Support
+                // parts are NOT priced here (stated) — the block's children
+                // are sized per instantiation and priced at BOM time.
                 let best = passing
                     .iter()
-                    .min_by(|a, b| a.cost_rel.partial_cmp(&b.cost_rel).unwrap())
+                    .min_by(|a, b| a.ic_price.partial_cmp(&b.ic_price).unwrap())
                     .unwrap();
-                notes.push(format!("ranked by declared cost_rel over {} survivor(s)", passing.len()));
+                notes.push(format!(
+                    "ranked by catalogue price of the silicon over {} survivor(s): {}; support parts not priced here (BOM-time)",
+                    passing.len(),
+                    passing
+                        .iter()
+                        .map(|c| format!("{} {} ${:.4}", c.block, c.ic_mpn.clone().unwrap_or_default(), c.ic_price.unwrap()))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
                 (Some(best.block.clone()), "survey".to_string())
             } else {
-                // No cost data: rank by LEAST OVER-RATING — the smallest
-                // declared output_current that still covers the load
-                // (an engineering tie-break, stated; not a cost judgment).
+                // Not every survivor priced (provider/DB absent or no
+                // catalogue match): NO price ranking — rank by LEAST
+                // OVER-RATING (smallest declared output_current that still
+                // covers the load; an engineering tie-break, stated).
                 // Ties fall to library order.
-                let missing = passing.iter().filter(|c| c.cost_rel.is_none()).count();
+                let missing = passing.iter().filter(|c| c.ic_price.is_none()).count();
                 let rating = |c: &StageCandidate| c.rating_a.unwrap_or(f64::INFINITY);
                 let best = passing
                     .iter()
                     .min_by(|a, b| rating(a).partial_cmp(&rating(b)).unwrap())
                     .unwrap();
                 notes.push(format!(
-                    "{} survivor(s); {missing} declare no cost_rel — NO cost ranking; chose the least over-rated block ({} = {}), ties by library order",
+                    "{} survivor(s); {missing} unpriced (provider/DB absent or no catalogue match) — NO price ranking; chose the least over-rated block ({} = {}), ties by library order",
                     passing.len(),
                     best.block,
                     best.rating_a.map(|r| format!("{r:.2}A")).unwrap_or_else(|| "rating undeclared".into())
@@ -632,6 +662,34 @@ fn evaluate_candidate(imp: &StageImpl, req: &StageRequirement, trait_def: &Stage
         }
     }
 
+    // qualification: temperature range and named qualification, against
+    // DECLARED promises only (UNCHECKED otherwise — never a pass)
+    let temp = |k: &str, src: &dyn Fn(&str) -> Option<String>| -> Option<f64> { src(k).and_then(|v| parse_temp_c(&v)) };
+    let req_get = |k: &str| req_value(req, k);
+    let attr_get = |k: &str| attrs.get(k).cloned().or_else(|| None).map(|v| params.get(v.trim()).cloned().unwrap_or(v));
+    if let Some(lo) = temp("temp_min", &req_get) {
+        match temp("temp_min", &attr_get) {
+            Some(b) => push_gate(&mut gates, "temp_min", format!("block temp_min {b:.0}°C ≤ required {lo:.0}°C"), b <= lo + 1e-9),
+            None => push_unchecked(&mut gates, &mut unchecked, "temp_min", "block declares no temp_min — UNCHECKED, not a pass".into()),
+        }
+    }
+    if let Some(hi) = temp("temp_max", &req_get) {
+        match temp("temp_max", &attr_get) {
+            Some(b) => push_gate(&mut gates, "temp_max", format!("block temp_max {b:.0}°C ≥ required {hi:.0}°C"), b + 1e-9 >= hi),
+            None => push_unchecked(&mut gates, &mut unchecked, "temp_max", "block declares no temp_max — UNCHECKED, not a pass".into()),
+        }
+    }
+    if let Some(q) = req_value(req, "qual") {
+        let q = q.trim().trim_matches('"').to_string();
+        match attrs.get("qualification") {
+            Some(have) => {
+                let ok = have.to_ascii_lowercase().contains(&q.to_ascii_lowercase());
+                push_gate(&mut gates, "qual", format!("block qualification \"{have}\" covers required \"{q}\""), ok);
+            }
+            None => push_unchecked(&mut gates, &mut unchecked, "qual", format!("block declares no qualification (required \"{q}\") — UNCHECKED, not a pass")),
+        }
+    }
+
     // phases (BuckExtStage): the block must support at least the
     // requirement's phase count (default 1)
     let req_phases = req_value(req, "phases").and_then(|v| v.trim().parse::<f64>().ok()).unwrap_or(1.0);
@@ -651,9 +709,63 @@ fn evaluate_candidate(imp: &StageImpl, req: &StageRequirement, trait_def: &Stage
         );
     }
 
-    let cost_rel = attrs.get("cost_rel").and_then(|v| v.trim().parse::<f64>().ok());
     let rating_a = attr_si("output_current");
-    StageCandidate { block: imp.block.clone(), file: imp.file.clone(), gates, unchecked, template, cost_rel, rating_a, ctor_args }
+    // The silicon the block instantiates (`u: <Part>(…)` in its body) and
+    // that part's `part_number` — what the provider prices.
+    let part_number = block_part_instance(&text, &imp.block)
+        .and_then(|part| entity_attrs_txt(&text, &part).get("part_number").cloned())
+        .filter(|p| !p.is_empty());
+    StageCandidate {
+        block: imp.block.clone(),
+        file: imp.file.clone(),
+        gates,
+        unchecked,
+        template,
+        rating_a,
+        ic_price: None,
+        ic_mpn: None,
+        part_number,
+        ctor_args,
+    }
+}
+
+/// `-40degC` / `85°C` / `125C` / bare number → °C.
+fn parse_temp_c(v: &str) -> Option<f64> {
+    let t = v.trim().trim_matches('"');
+    let end = t
+        .char_indices()
+        .take_while(|(_, c)| c.is_ascii_digit() || *c == '.' || *c == '-' || *c == '+')
+        .map(|(i, c)| i + c.len_utf8())
+        .last()?;
+    let num: f64 = t[..end].parse().ok()?;
+    match t[end..].trim() {
+        "" | "C" | "°C" | "degC" => Some(num),
+        _ => None,
+    }
+}
+
+/// The part a block instantiates: the first `<name>: <Entity>(` body
+/// statement whose entity is declared `as part` in the same file (or
+/// the conventional `u:` child).
+fn block_part_instance(text: &str, block: &str) -> Option<String> {
+    let at = find_entity_decl(text, block)?;
+    let tail = &text[at..];
+    let end = tail[1..].find("\nentity ").map(|p| p + 1).unwrap_or(tail.len());
+    let body = mask_comments(&tail[..end]);
+    let mut fallback = None;
+    for line in body.lines() {
+        let l = line.trim();
+        let Some((name, rest)) = l.split_once(':') else { continue };
+        let name = name.trim();
+        if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') { continue; }
+        let ent: String = rest.trim().chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+        if ent.is_empty() || !rest.trim()[ent.len()..].starts_with('(') { continue; }
+        if entity_declared_kind(text, &ent).as_deref() == Some("part") {
+            return Some(ent);
+        }
+        if name == "u" { fallback = Some(ent); }
+    }
+    fallback
 }
 
 fn parse_pct_or_si(v: &str) -> Option<f64> {
@@ -908,7 +1020,11 @@ pub fn render_report(r: &StageResolution) -> String {
     }
     for c in &r.candidates {
         let mark = if c.passes() { "✓" } else if c.template { "⧖" } else { "✗" };
-        s.push_str(&format!("    {} {}{}\n", mark, c.block, if c.template { " (template)" } else { "" }));
+        let price = match (&c.ic_price, &c.ic_mpn) {
+            (Some(p), Some(m)) => format!("  [{m} ${p:.4}]"),
+            _ => String::new(),
+        };
+        s.push_str(&format!("    {} {}{}{price}\n", mark, c.block, if c.template { " (template)" } else { "" }));
         for g in &c.gates {
             s.push_str(&format!("        {} {}: {}\n", if g.2 { "ok " } else { "NOK" }, g.0, g.1));
         }

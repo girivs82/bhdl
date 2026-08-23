@@ -1536,7 +1536,7 @@ fn price_supports(reqs: &[(String, f64)]) -> (Option<f64>, usize) {
 /// mode. Provider binary resolved next to the current executable (the
 /// normal target-dir layout), else on PATH; the provider finds the in-tree
 /// DB itself (its own walk-up). Returns (unit_price, mpn, lcsc_sku).
-fn price_via_provider(
+pub(crate) fn price_via_provider(
     part: &str,
     prefer: &str,
 ) -> Option<(Option<f64>, Option<String>, Option<String>)> {

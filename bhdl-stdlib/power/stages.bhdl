@@ -23,6 +23,12 @@
 // the near-misses are printed ("Buck_TPS54331 fails i_max: 3A rating ×
 // 0.8 = 2.4A < 4A"). Library coverage is visible, not assumed.
 //
+// RANKING (survivors only): real catalogue price of each block's silicon
+// through the supplier provider (cheapest in-stock MPN with the part
+// prefix) when EVERY survivor priced; otherwise least over-rating
+// (smallest output_current that covers the load), ties by library
+// order — the basis is stated in the survey note, never silent.
+//
 // The consts are the requirement PARAMETERS. The ones a block must
 // accept are those its `impl` binds; `vin_min`/`vin_max` default to `vin`
 // when the requirement gives only a nominal input; `noise` and
@@ -41,6 +47,11 @@ trait BuckStage {
     const vin_max: voltage;         // optional; defaults to vin
     const noise: voltage;           // optional; output noise/ripple ceiling (RMS)
     const efficiency_min: float;    // optional; minimum declared efficiency
+    // ── qualification (optional): a block that does not DECLARE the
+    //    matching promise is UNCHECKED against it (never a pass)
+    const temp_min: temperature;    // operating ambient minimum required
+    const temp_max: temperature;    // operating ambient maximum required
+    const qual: string;             // e.g. "AEC-Q100" — must appear in the part's `qualification`
 }
 
 trait LdoStage {
@@ -53,6 +64,11 @@ trait LdoStage {
     const vin_min: voltage;         // optional; defaults to vin
     const vin_max: voltage;         // optional; defaults to vin
     const noise: voltage;           // optional; output-noise ceiling (RMS)
+    // ── qualification (optional): a block that does not DECLARE the
+    //    matching promise is UNCHECKED against it (never a pass)
+    const temp_min: temperature;    // operating ambient minimum required
+    const temp_max: temperature;    // operating ambient maximum required
+    const qual: string;             // e.g. "AEC-Q100" — must appear in the part's `qualification`
 }
 
 // A buck CONTROLLER + external power stage (the tree's `BuckExternal`
@@ -77,4 +93,9 @@ trait BuckExtStage {
     const phases: integer;          // optional; defaults to 1
     const noise: voltage;           // optional
     const efficiency_min: float;    // optional
+    // ── qualification (optional): a block that does not DECLARE the
+    //    matching promise is UNCHECKED against it (never a pass)
+    const temp_min: temperature;    // operating ambient minimum required
+    const temp_max: temperature;    // operating ambient maximum required
+    const qual: string;             // e.g. "AEC-Q100" — must appear in the part's `qualification`
 }

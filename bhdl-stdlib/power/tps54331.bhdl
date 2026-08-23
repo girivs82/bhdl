@@ -84,6 +84,8 @@ entity TPS54331 as part {
     attribute output_current    = 3A;       // SLVSA86: 3A continuous output current
     attribute vin_min           = 3.5V;     // SLVSA86: operating input voltage range 3.5 V to 28 V
     attribute vin_max           = 28V;
+    attribute temp_min          = -40degC;    // SLVSA86: operating ambient −40 °C to 85 °C
+    attribute temp_max          = 85degC;
     attribute f_sw              = 570kHz;   // internal fixed-frequency oscillator
     attribute rds_on            = 90mΩ;     // high-side MOSFET, typ
     attribute t_sw              = 20ns;     // switching transition class
@@ -149,6 +151,8 @@ entity Buck_TPS54331(
     attribute output_current = 3A;        // promise = the part's rating (SLVSA86)
     attribute vin_min = 3.5V;             // promise = the part's input range (SLVSA86)
     attribute vin_max = 28V;
+    attribute temp_min = -40degC;           // promise = the part's ambient range (SLVSA86)
+    attribute temp_max = 85degC;
     attribute f_sw = f_sw;
     attribute rds_on = rds_on;
     attribute t_sw = t_sw;
