@@ -2346,3 +2346,42 @@ async fn trace_hsr_evidence_and_hsi_contracts() {
     assert!(uv.evidence.contains("FaultUnrun") || uv.evidence.contains("campaign evidence incomplete"), "{uv:#?}");
     assert!(m.findings.iter().any(|f| f.starts_with("safety gap (no goal row)")), "{:#?}", m.findings);
 }
+
+/// ERC032's fix text names the right path per placeholder: a Buck / LDO
+/// / BuckExt placeholder is an unresolved REQUIREMENT (survey, impl,
+/// `resolve`); the prereg has no interface yet and is committed by
+/// renaming onto a real protection entity.
+#[tokio::test]
+async fn erc032_fix_text_per_placeholder() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let src = r#"
+import { GenericBuck, GenericPrereg } from "bhdl-stdlib/power/generic_regulators.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+board Fix {
+    power VIN = 24V @ 3A;
+    power V_PROT = 24V @ 3A;
+    port V5: power out = 5V @ 2A;
+    ground GND;
+    @VIN -> pre: GenericPrereg(vin=24V, vout=24V, rated=3A).VIN; pre.VOUT -> @V_PROT; pre.GND -> @GND;
+    attribute pre.powertree_rating_required_a = "3.750";
+    @V_PROT -> u1: GenericBuck(vin=24V, vout=5V, rated=2.5A).VIN; u1.VOUT -> @V5; u1.GND -> @GND;
+    attribute u1.stage_trait = "BuckStage"; attribute u1.stage_requirement = "vout=5V, i_max=2A, vin=24V";
+    attribute u1.stage_bound = ""; attribute u1.stage_binding = "unresolved";
+    attribute u1.powertree_rating_required_a = "2.500";
+    @V5 -> r: Res(2.5Ω, wattage=10W).1; r.2 -> @GND;
+}
+"#;
+    let pr = parse(src);
+    assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+    let v = bhdl_synthesizer::erc::check_powertree_acceptance(&n, &analysis);
+    let pre = v.iter().find(|x| x.description.contains("'pre'")).expect("prereg placeholder finding");
+    assert!(pre.fix_suggestion.contains("no `PreregStage` interface exists yet") && pre.fix_suggestion.contains("renaming"), "{}", pre.fix_suggestion);
+    let u1 = v.iter().find(|x| x.description.contains("'u1'")).expect("buck placeholder finding");
+    assert!(u1.fix_suggestion.contains("`impl`s BuckStage") && u1.fix_suggestion.contains("resolve u1 = <Block>"), "{}", u1.fix_suggestion);
+    assert!(!u1.fix_suggestion.contains("renam"), "a requirement is not committed by renaming: {}", u1.fix_suggestion);
+}

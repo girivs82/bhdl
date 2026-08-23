@@ -2966,7 +2966,19 @@ pub fn check_powertree_acceptance(
                     inst.name, module_name
                 ),
                 location: ViolationLocation::Component(inst_id),
-                fix_suggestion: "no library block resolves this requirement (see the ⚙ survey's near-misses): add or extend an `as design` block that `impl`s the stage interface, pin one with `resolve <inst> = <Block>;`, or — for a stage with no interface yet — rename the Generic* instantiation to a real regulator honoring the pin contract".into(),
+                fix_suggestion: match module_name.as_str() {
+                    // the prereg has no requirement interface yet: the
+                    // commit is still a rename onto a real protection
+                    // entity honoring the pin contract
+                    "GenericPrereg" => "no `PreregStage` interface exists yet: commit the stage by renaming the GenericPrereg instantiation to a real pre-regulator / protection entity honoring the VIN / VOUT / GND pin contract (the powertree_* assumption attributes stay as its acceptance test)".to_string(),
+                    // Buck / LDO / BuckExt stages are requirements: the
+                    // resolver's survey says exactly why nothing bound
+                    _ => format!(
+                        "no library block resolves this requirement (the ⚙ survey lists every candidate's near-miss): add or extend an `as design` block that `impl`s {}, or commit one by hand with `resolve {} = <Block>(…);` — a template block needs your datasheet / power-stage args there",
+                        match module_name.as_str() { "GenericLdo" => "LdoStage", "GenericBuckExt" => "BuckExtStage", _ => "BuckStage" },
+                        inst.name
+                    ),
+                },
                 standard_reference: None,
             });
             continue;
