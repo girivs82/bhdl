@@ -1314,6 +1314,49 @@ async fn powertree_swap_by_rename_to_real_part() {
     for r in h2.rails.iter().filter(|r| !r.loads.is_empty()) {
         assert!(r.driven, "swap must not undrive {}: {r:#?}", r.net);
     }
+
+    // ── ERC032: the acceptance CONTRACT is enforced ──
+    let v = bhdl_synthesizer::erc::check_powertree_acceptance(&n2, &analysis2);
+    // the committed XC6206 (0.2A rated) meets the 0.125A derated
+    // requirement — no Error against u_v1v8
+    assert!(
+        !v.iter().any(|x| x.severity == bhdl_synthesizer::design_rule_checker::ViolationSeverity::Error
+            && x.description.contains("u_v1v8")),
+        "{v:#?}"
+    );
+    // the still-generic bucks report as placeholders (Info) — a
+    // planned tree is visible, never silent
+    assert!(
+        v.iter().any(|x| x.severity == bhdl_synthesizer::design_rule_checker::ViolationSeverity::Info
+            && x.description.contains("placeholder")),
+        "{v:#?}"
+    );
+
+    // under-rated rename = Error: fake the same swap onto a 0.2A LDO
+    // with a 5A requirement
+    let shrunk = emitted
+        .replace(
+            "u_v1v0: GenericBuck(vin=12V, vout=1V, rated=5A);",
+            "u_v1v0: XC6206P332();",
+        )
+        .replace(
+            "import { GenericBuck, GenericBuckExt, GenericLdo, GenericPrereg } from \"bhdl-stdlib/power/generic_regulators.bhdl\";",
+            "import { GenericBuck, GenericBuckExt, GenericLdo, GenericPrereg } from \"bhdl-stdlib/power/generic_regulators.bhdl\";\nimport { XC6206P332 } from \"bhdl-stdlib/power/xc6206.bhdl\";",
+        );
+    assert_ne!(shrunk, emitted);
+    let pr3 = parse(&shrunk);
+    assert!(pr3.errors().is_empty(), "{:?}", pr3.errors());
+    let sf3 = SourceFile::cast(pr3.syntax()).unwrap();
+    let analysis3 = analyze(&sf3);
+    let mut gen3 = NetlistGenerator::new();
+    let n3 = gen3.generate_from_ast_and_analysis(&sf3, &analysis3).await.expect("shrunk board synthesizes");
+    let v3 = bhdl_synthesizer::erc::check_powertree_acceptance(&n3, &analysis3);
+    assert!(
+        v3.iter().any(|x| x.severity == bhdl_synthesizer::design_rule_checker::ViolationSeverity::Error
+            && x.description.contains("u_v1v0")
+            && x.description.contains("silently shrank")),
+        "under-rated rename must be an Error: {v3:#?}"
+    );
 }
 
 /// Partness (`entity X as part|design`): the declared bit — a design

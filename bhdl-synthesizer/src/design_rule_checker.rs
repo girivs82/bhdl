@@ -269,6 +269,12 @@ impl DesignRuleChecker {
                 crate::erc::check_expansion_shadow_parts,
             ),
             (
+                "ERC032",
+                "Power-tree acceptance",
+                "Committed parts vs the powertree_* sizing assumptions: under-rated or under-efficient renames (Error), undeclared acceptance figures (Warning/Info, stated), placeholders still present (Info)",
+                crate::erc::check_powertree_acceptance,
+            ),
+            (
                 "ERC031",
                 "Feedback divider contradicts declared rail",
                 "Closed-loop output the placed FB divider programs (VREF·(1+Rtop/Rbot)) vs the rail's declared voltage — >10% apart is a shipped overvolt/undervolt (Error)",

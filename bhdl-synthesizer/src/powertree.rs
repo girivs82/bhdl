@@ -1135,6 +1135,10 @@ pub fn emit_power_region(option: &TreeOption, gnd: &str) -> String {
             "    attribute {inst}.powertree_noise_assumed_uvrms = \"{:.0}\";\n",
             st.noise_assumed_uvrms
         ));
+        out.push_str(&format!(
+            "    attribute {inst}.powertree_rating_required_a = \"{:.3}\";\n",
+            st.required_rating_a
+        ));
         if st.phases > 1 {
             out.push_str(&format!(
                 "    attribute {inst}.powertree_phases = \"{}\";\n",

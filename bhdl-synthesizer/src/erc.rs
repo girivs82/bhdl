@@ -2893,3 +2893,144 @@ pub fn check_rail_anchoring(
     }
     out
 }
+
+// ──────────────── ERC032 — power-tree acceptance at part commit ────────────────
+
+/// The power tree's emitted stages carry their sizing ASSUMPTIONS as
+/// `powertree_*` attributes — the acceptance contract for the real
+/// part that replaces the Generic* placeholder by rename. This check
+/// enforces it at every synthesis:
+///
+/// - a Generic* placeholder still present → Info (planned tree, not a
+///   committed design — visible, never silent);
+/// - a committed real part with a declared rated output current BELOW
+///   the tree's derated requirement → Error (the swap silently
+///   shrank the stage);
+/// - a committed real part with a declared efficiency below the
+///   tree's assumed efficiency → Error (thermal/efficiency budgets
+///   were sized on the assumption);
+/// - acceptance figures the part does not declare are UNCHECKED and
+///   SAY SO (Real-Data: absent data is a named gap, never a pass).
+pub fn check_powertree_acceptance(
+    netlist: &Netlist,
+    _analysis: &AnalysisResult,
+) -> Vec<DRCViolation> {
+    let mut out = Vec::new();
+    let parse_amps = |v: &str| -> Option<f64> {
+        let v = v.trim();
+        let end = v.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(v.len());
+        let num: f64 = v[..end].parse().ok()?;
+        match v[end..].trim() {
+            "" | "A" => Some(num),
+            "mA" => Some(num * 1e-3),
+            _ => None,
+        }
+    };
+    for (inst_id, inst) in &netlist.instances {
+        let Some(required) = inst
+            .attributes
+            .get("powertree_rating_required_a")
+            .and_then(|v| v.parse::<f64>().ok())
+        else {
+            continue;
+        };
+        let module_name = netlist
+            .instances
+            .get(inst_id)
+            .and_then(|i| netlist.modules.get(i.definition))
+            .map(|m| m.name.clone())
+            .unwrap_or_default();
+        if module_name.starts_with("Generic") {
+            out.push(DRCViolation {
+                rule_id: "ERC032".into(),
+                rule_name: "Power-tree acceptance".into(),
+                category: RuleCategory::Electrical,
+                severity: ViolationSeverity::Info,
+                description: format!(
+                    "'{}' is still the {} placeholder — a planned power tree, not a committed part",
+                    inst.name, module_name
+                ),
+                location: ViolationLocation::Component(inst_id),
+                fix_suggestion: "commit the stage by renaming the Generic* instantiation to a real regulator honoring the pin contract".into(),
+                standard_reference: None,
+            });
+            continue;
+        }
+        // rated output current: the part must be RATED at least the
+        // tree's derated requirement
+        match inst
+            .attributes
+            .get("output_current")
+            .or_else(|| inst.attributes.get("max_current"))
+            .or_else(|| inst.attributes.get("i_rating"))
+            .and_then(|v| parse_amps(v))
+        {
+            Some(rated) if rated + 1e-9 < required => out.push(DRCViolation {
+                rule_id: "ERC032".into(),
+                rule_name: "Power-tree acceptance".into(),
+                category: RuleCategory::Electrical,
+                severity: ViolationSeverity::Error,
+                description: format!(
+                    "'{}' ({}) is rated {rated}A but the power tree requires ≥ {required:.3}A (worst-case load / 0.8 derating) — the rename silently shrank the stage",
+                    inst.name, module_name
+                ),
+                location: ViolationLocation::Component(inst_id),
+                fix_suggestion: "pick a part rated for the stage's derated requirement, or re-run powertree if the loads changed".into(),
+                standard_reference: None,
+            }),
+            Some(_) => {}
+            None => out.push(DRCViolation {
+                rule_id: "ERC032".into(),
+                rule_name: "Power-tree acceptance".into(),
+                category: RuleCategory::Electrical,
+                severity: ViolationSeverity::Warning,
+                description: format!(
+                    "'{}' ({}) declares no rated output current — the power tree's ≥ {required:.3}A acceptance is UNVERIFIABLE",
+                    inst.name, module_name
+                ),
+                location: ViolationLocation::Component(inst_id),
+                fix_suggestion: "declare `attribute output_current = <datasheet rating>;` on the entity (Real-Data: the datasheet states it)".into(),
+                standard_reference: None,
+            }),
+        }
+        // efficiency: only checkable when the part declares one
+        if let Some(assumed) = inst
+            .attributes
+            .get("powertree_eff_assumed_pct")
+            .and_then(|v| v.parse::<f64>().ok())
+        {
+            match inst.attributes.get("efficiency").and_then(|v| {
+                v.trim().trim_end_matches('%').parse::<f64>().ok()
+            }) {
+                Some(declared) if declared + 1e-9 < assumed => out.push(DRCViolation {
+                    rule_id: "ERC032".into(),
+                    rule_name: "Power-tree acceptance".into(),
+                    category: RuleCategory::Electrical,
+                    severity: ViolationSeverity::Error,
+                    description: format!(
+                        "'{}' ({}) declares {declared}% efficiency but the tree was sized assuming {assumed}% — dissipation and input-budget figures no longer hold",
+                        inst.name, module_name
+                    ),
+                    location: ViolationLocation::Component(inst_id),
+                    fix_suggestion: "pick a part meeting the assumed efficiency, or re-run powertree to re-derive the tree with this part's real figure".into(),
+                    standard_reference: None,
+                }),
+                Some(_) => {}
+                None => out.push(DRCViolation {
+                    rule_id: "ERC032".into(),
+                    rule_name: "Power-tree acceptance".into(),
+                    category: RuleCategory::Electrical,
+                    severity: ViolationSeverity::Info,
+                    description: format!(
+                        "'{}' ({}): efficiency acceptance UNCHECKED — the part declares no efficiency figure (tree assumed {assumed}%)",
+                        inst.name, module_name
+                    ),
+                    location: ViolationLocation::Component(inst_id),
+                    fix_suggestion: "declare `attribute efficiency = <datasheet mid-load figure>;` where the datasheet states one".into(),
+                    standard_reference: None,
+                }),
+            }
+        }
+    }
+    out
+}

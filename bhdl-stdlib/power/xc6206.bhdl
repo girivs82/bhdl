@@ -15,6 +15,7 @@ entity XC6206<V_OUT: voltage>(
     attribute output_voltage = V_OUT;
     attribute dropout_voltage = dropout;
     attribute i_quiescent = i_quiescent;
+    attribute output_current = 0.2A;  // Torex XC6206 rated output (datasheet headline)
     attribute power_rating = 250mW;  // SOT-23 free-air, datasheet allowable dissipation
 
     expansion {
