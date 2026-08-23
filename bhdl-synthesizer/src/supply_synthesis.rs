@@ -1067,8 +1067,29 @@ fn choose_part(
                 ),
             }
 
+            // VALIDITY ENVELOPE of an `as design` block — the block's own
+            // `design { }` `require`s, evaluated at this operating point
+            // through the SAME predicate the requirement resolver uses.
+            // A block with a `v_out` parameter is not thereby adjustable
+            // (Buck_AP63205 is a fixed 5V SKU that takes v_out only to
+            // satisfy the stage interface): the envelope says so.
+            if entity_declared_kind(&src, &name).as_deref() == Some("design") {
+                let op = vec![
+                    ("v_out".to_string(), format!("{v_out}V")),
+                    ("v_in".to_string(), format!("{v_in}V")),
+                    ("i_out_max".to_string(), format!("{i_out}A")),
+                ];
+                match crate::stage_resolution::trial_envelope(&src, &name, &op) {
+                    Some(Ok(())) => push("envelope", "design { } accepts the operating point".into(), true),
+                    Some(Err(m)) => push("envelope", m, false),
+                    None => push("envelope", "no design { } — UNCHECKED".into(), true),
+                }
+            }
+
             // Input range (when declared; missing = UNCHECKED pass, stated).
-            match (attr_si("input_voltage_min"), attr_si("input_voltage_max")) {
+            let vin_lo = attr_si("input_voltage_min").or_else(|| attr_si("vin_min"));
+            let vin_hi = attr_si("input_voltage_max").or_else(|| attr_si("vin_max"));
+            match (vin_lo, vin_hi) {
                 (Some(lo), Some(hi)) => push(
                     "v_in range",
                     format!("{lo:.1}–{hi:.1}V covers {v_in:.1}V"),

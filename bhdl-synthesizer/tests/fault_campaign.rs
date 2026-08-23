@@ -1256,6 +1256,11 @@ fn stdlib_regulators_honor_the_pin_contract() {
         for ent in sf.entities() {
             use bhdl_ast::HasName;
             let Some(name) = ent.name().map(|t| t.text().to_string()) else { continue };
+            // The contract is the BOARD-FACING surface: `as part` silicon
+            // (LM317 has no GND pin at all) is wrapped by its block.
+            if ent.declared_kind().as_deref() == Some("part") {
+                continue;
+            }
             let pins: Vec<String> = ent
                 .syntax()
                 .descendants()
@@ -1406,7 +1411,7 @@ async fn powertree_swap_by_rename_to_real_part() {
         !vq.iter().any(|x| x.description.contains("u_v1v8") && x.description.contains("output noise")),
         "30µVrms part meets the 30µVrms assumption: {vq:#?}"
     );
-    let loud = swap_stage(&emitted, "u_v1v8", "LM7805();", "import { LM7805 } from \"bhdl-stdlib/power/lm7805.bhdl\";");
+    let loud = swap_stage(&emitted, "u_v1v8", "Ldo_LM7805(v_out=5V, i_out_max=80mA, v_in=12V);", "import { Ldo_LM7805 } from \"bhdl-stdlib/power/lm7805.bhdl\";");
     let sfl = SourceFile::cast(parse(&loud).syntax()).unwrap();
     let al = analyze(&sfl);
     let mut gl = NetlistGenerator::new();
@@ -1894,10 +1899,14 @@ board ReqDemo {{
     let r = resolve_stages(&board("vout=5V, i_max=2A, vin=12V", ""), &stdlib, &[]).unwrap().unwrap();
     assert_eq!(r.resolutions.len(), 1);
     let u1 = &r.resolutions[0];
-    assert_eq!(u1.bound.as_deref(), Some("Buck_TPS54331"), "{}", bhdl_synthesizer::stage_resolution::render_report(u1));
+    // two 3A blocks cover this (TPS54302, TPS54331): no cost data → least
+    // over-rating tie-break, ties by library order — stated in the note
+    let b = u1.bound.clone().expect("bound");
+    assert!(b == "Buck_TPS54302" || b == "Buck_TPS54331", "{}", bhdl_synthesizer::stage_resolution::render_report(u1));
     assert_eq!(u1.basis, "survey");
-    assert!(r.source.contains("u1: Buck_TPS54331(v_out=5V, i_out_max=2A, v_in=12V)"), "{}", r.source);
-    assert!(r.source.contains("import { Buck_TPS54331 } from \"bhdl-stdlib/power/tps54331.bhdl\";"), "{}", r.source);
+    assert!(u1.notes.iter().any(|n| n.contains("least over-rated")), "{:?}", u1.notes);
+    assert!(r.source.contains(&format!("u1: {b}(v_out=5V, i_out_max=2A, v_in=12V)")), "{}", r.source);
+    assert!(r.source.contains(&format!("import {{ {b} }} from \"bhdl-stdlib/power/")), "{}", r.source);
     assert!(r.source.contains("attribute u1.stage_requirement = \"vout=5V, i_max=2A, vin=12V\";"), "{}", r.source);
     // the resolved text synthesizes and the block composes
     let pr = parse(&r.source);
@@ -1914,7 +1923,7 @@ board ReqDemo {{
     let u1 = &r.resolutions[0];
     assert!(u1.bound.is_none());
     assert_eq!(u1.basis, "unresolved");
-    let c = &u1.candidates[0];
+    let c = u1.candidates.iter().find(|c| c.block == "Buck_TPS54331").unwrap();
     assert!(!c.passes());
     let fails = c.failures().join("\n");
     assert!(fails.contains("envelope") && fails.contains("2.4A"), "{fails}");

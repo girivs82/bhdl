@@ -1,60 +1,41 @@
-// AP63205WU: Diodes Inc 2A synchronous step-down converter
-// Wide input (3.8V-32V), fixed 5V output, integrated MOSFETs (no catch diode)
-// Datasheet: AP63200/AP63201/AP63203/AP63205 series
+// AP63205 — Diodes Inc. 3.8–32 V input, 2 A synchronous buck, fixed
+// 5 V output, TSOT-26 (AP63200/01/03/05 datasheet).
+//
+// Two-layer library model (docs/spec/Requirements_And_Resolution.md §1):
+//   AP63205      as part    — vendor truth.
+//   Buck_AP63205 as design  — the designer's subcircuit (the datasheet
+//                             Fig. 5 application circuit: 4.7 µH, 22 µF
+//                             out, 10 µF in, 100 nF BST), `impl
+//                             BuckStage`. Fixed-voltage part: the block's
+//                             v_out is the 5 V SKU only (envelope).
+// The declared f_sw / rds_on / t_sw / Iq figures are carried over from
+// the previous entity definition unchanged.
 
+// ── Vendor truth ────────────────────────────────────────────────────
 entity AP63205(
     f_sw: frequency = 500kHz,
     rds_on: resistance = 120mΩ,
     t_sw: time = 15ns,
-    i_quiescent: current = 22µA,
-    l_value: inductance = 4.7µH,
-    c_out: capacitance = 22µF,
-    c_in: capacitance = 10µF
-) {
+    i_quiescent: current = 22µA
+) as part {
     pin VIN:  power in;
-    pin VOUT: power out virtual;
     pin EN:   signal in;
     pin BST:  signal inout;
     pin SW:   switch out;
     pin GND:  ground;
 
-    attribute component_class = "switching_regulator";
-    attribute output_voltage = 5V;
-    attribute f_sw = f_sw;
-    attribute rds_on = rds_on;
-    attribute t_sw = t_sw;
-    attribute i_quiescent = i_quiescent;
-    attribute power_rating = 1.1W;  // TSOT-26 free-air ((125−25)°C / ~90°C/W with pad)
-
-    expansion {
-        // Synchronous — no catch diode (integrated low-side FET)
-        SW -> L_out: Ind(l_value).1; L_out.2 -> VOUT;
-        VOUT -> C_out: Cap(c_out).1; C_out.2 -> GND;
-        VIN -> C_in: Cap(c_in).1; C_in.2 -> GND;
-        BST -> C_bst: Cap(100nF).1; C_bst.2 -> SW;
-    }
-
-    // PCB layout from AP63205 datasheet Figure 5 (Typical Application)
-    // Coordinates in mm relative to IC center
-    // Reference: https://www.diodes.com/assets/Datasheets/AP63200-AP63201-AP63203-AP63205.pdf
-    placement {
-        reference "AP63205 Datasheet Fig.5";
-        L_out at (0.0, -6.0) rot 0;
-        C_out at (6.0, 0.0) rot 90;
-        C_in  at (-6.0, 0.0) rot 90;
-        C_bst at (3.5, -4.5) rot 0;
-    }
-    // §4 device-stress IP: buck stress on this part's expansion children at
-    // the solved operating point, against the SNAPPED values.
-    simulation {
-        stress {
-            const duty = vout / vin;
-            const d_il = (vin - vout) * duty / (self.f_sw * L_out.value);
-            L_out.i_peak   = i_out + d_il / 2;
-            C_out.v_ripple = d_il / (8 * self.f_sw * C_out.value);
-            C_in.v_ripple  = i_out * duty * (1 - duty) / (self.f_sw * C_in.value);
-        }
-    }
+    attribute component_class = "regulator_ic";
+    attribute manufacturer    = "Diodes Incorporated";
+    attribute part_number     = "AP63205";
+    attribute output_voltage  = 5V;       // fixed-output SKU
+    attribute output_current  = 2A;       // AP63200/01/03/05 datasheet: 2 A continuous
+    attribute vin_min         = 3.8V;     // datasheet: 3.8 V to 32 V input
+    attribute vin_max         = 32V;
+    attribute f_sw            = f_sw;
+    attribute rds_on          = rds_on;
+    attribute t_sw            = t_sw;
+    attribute i_quiescent     = i_quiescent;
+    attribute power_rating    = 1.1W;     // TSOT-26 free-air ((125−25)°C / ~90°C/W with pad)
 }
 
 symbol AP63205 {
@@ -66,3 +47,79 @@ symbol AP63205 {
 layout AP63205 {
     package TSOT-26;
 }
+
+// ── The designer's subcircuit ───────────────────────────────────────
+entity Buck_AP63205(
+    v_out:     voltage     = 5V,      // fixed 5 V SKU
+    i_out_max: current     = 1A,
+    v_in:      voltage     = 12V,
+    l_value:   inductance  = 4.7µH,   // datasheet Fig. 5
+    c_out:     capacitance = 22µF,
+    c_in:      capacitance = 10µF
+) as design {
+    pin VIN:  power in;
+    pin VOUT: power out virtual;
+    pin EN:   signal in;
+    pin GND:  ground;
+
+    attribute component_class = "switching_regulator";
+    attribute output_voltage  = v_out;
+    attribute v_in            = v_in;
+    attribute i_out_max       = i_out_max;
+    attribute output_current  = 2A;
+    attribute vin_min         = 3.8V;
+    attribute vin_max         = 32V;
+    attribute f_sw            = 500kHz;
+    attribute rds_on          = 120mΩ;
+    attribute t_sw            = 15ns;
+    attribute i_quiescent     = 22uA;
+
+    design {
+        const vout = self.v_out;
+        require vout == 5.0
+            else "Buck_AP63205 envelope: fixed 5V SKU — v_out must be 5V (AP63203 is the 3.3V part)";
+        // 2 A rating × 0.8 derating; datasheet input range; buck headroom.
+        require self.i_out_max <= 1.6
+            else "Buck_AP63205 envelope: i_out_max exceeds 1.6A (2A rating × 0.8 derating)";
+        require self.v_in >= 3.8
+            else "Buck_AP63205 envelope: v_in below the 3.8V input minimum";
+        require self.v_in <= 32.0
+            else "Buck_AP63205 envelope: v_in above the 32V input maximum";
+        require vout < self.v_in
+            else "buck V_OUT must be below V_IN";
+    }
+
+    u: AP63205();
+    VIN -> u.VIN;
+    u.GND -> GND;
+    EN -> u.EN;
+    u.SW -> L_out: Ind(l_value).1; L_out.2 -> VOUT;
+    VOUT -> C_out: Cap(c_out).1; C_out.2 -> GND;
+    VIN -> C_in: Cap(c_in).1; C_in.2 -> GND;
+    u.BST -> C_bst: Cap(100nF).1; C_bst.2 -> u.SW;
+
+    placement {
+        reference "AP63205 Datasheet Fig.5";
+        L_out at (0.0, -6.0) rot 0;
+        C_out at (6.0, 0.0) rot 90;
+        C_in  at (-6.0, 0.0) rot 90;
+        C_bst at (3.5, -4.5) rot 0;
+    }
+    simulation {
+        stress {
+            const duty = vout / vin;
+            const d_il = (vin - vout) * duty / (self.f_sw * L_out.value);
+            L_out.i_peak   = i_out + d_il / 2;
+            C_out.v_ripple = d_il / (8 * self.f_sw * C_out.value);
+            C_in.v_ripple  = i_out * duty * (1 - duty) / (self.f_sw * C_in.value);
+        }
+    }
+}
+
+impl BuckStage for Buck_AP63205 {
+    const vout  = v_out;
+    const i_max = i_out_max;
+    const vin   = v_in;
+}
+
+alias AP63205_5V = Buck_AP63205(5V);

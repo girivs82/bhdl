@@ -1,88 +1,119 @@
-// LM317 — adjustable 3-pin linear regulator (layer-2 entity).
+// LM317 — adjustable 3-pin positive linear regulator, TO-220 (TI LM317).
 //
-// Demonstrates the layer-2 entity shape called out in
-// docs/spec/Parameterization_And_BOM_Resolution.md §5: virtual
-// pins on the output, an `expansion { }` block that materialises
-// the support components (input cap, output cap, feedback
-// divider), and a plain `design { }` block that sizes the
-// feedback divider from the user's runtime `v_out` argument.
+// Two-layer library model (docs/spec/Requirements_And_Resolution.md §1):
+//   LM317      as part    — vendor truth: VIN / VOUT / ADJ, the 1.25 V
+//                           OUT–ADJ reference, ratings.
+//   Ldo_LM317  as design  — the designer's subcircuit: the part plus the
+//                           datasheet application circuit, with the
+//                           OUT–ADJ divider SIZED from v_out in the
+//                           block's `design { }` (the sizing that used
+//                           to live on the conflated entity), `impl
+//                           LdoStage`.
 //
-// Use site (board):
-//
-//     LDO: LM317(v_out: 5V);
-//     @VBUS_9V -> LDO.VIN;
-//     LDO.VOUT -> @VCC_5V;
-//
-// The expansion automatically adds:
-//   - C_in  : 10µF input bulk cap from VIN to GND
-//   - C_out : 22µF output bulk cap from VOUT to GND
-//   - R1, R2: feedback divider VOUT → ADJ → GND, sized so
-//             V_OUT = V_REF × (1 + R1/R2) with V_REF = 1.25V
-//             and R2 fixed at 240Ω (TI's canonical recipe).
-//
-// MPN selection happens via the catalog row in
-// `bhdl-stdlib/parts/ti/lm317.bhdl` (Phase 3).
-//
-// Grammar discipline: parser-compatible v2.0 subset.
+// Divider (datasheet): V_OUT = V_REF·(1 + R1/R2) + I_ADJ·R1, I_ADJ ≈ 50 µA
+// neglected; R2 = 240 Ω (the datasheet's programming resistor, keeps the
+// 10 mA minimum load), R1 = R2·(V_OUT − V_REF)/V_REF.
 
-entity LM317(v_out: voltage = 5V) {
+// ── Vendor truth ────────────────────────────────────────────────────
+entity LM317() as part {
     pin VIN:  power in;
-    pin VOUT: power out virtual;
+    pin VOUT: power out;
     pin ADJ:  signal inout;
-    pin GND:  ground;
 
-    attribute component_class = "ldo";
-    attribute family          = "LM317";
-    attribute output_voltage  = v_out;
-    attribute role            = "adjustable-ldo";
-    // Datasheet (SLVS044) constants for the regulator decomposition / power model:
-    attribute feedback_voltage = 1.25V; // V_REF between OUT and ADJ
-    attribute i_quiescent      = 50uA;  // ADJ pin current, typ (ground-path quiescent)
-    attribute power_rating    = 2W;  // TO-220 free-air dissipation (no heatsink), datasheet class
-    attribute output_current   = 1.5A;  // rated output
-    attribute dropout_voltage  = 2V;    // V_IN−V_OUT for regulation at rated load
-
-    // Plain design block (v0.2 §5.2). Computes the feedback-
-    // divider values from `v_out`. Runs once per instance, after
-    // constructor binding, before expansion materialisation.
-    //
-    // R2 is fixed at 240Ω per the LM317 datasheet's canonical
-    // application circuit (small enough that the 50µA bias
-    // current through ADJ is negligible at the divider's output
-    // voltage). R1 = R2 × (V_OUT / V_REF − 1).
-    design {
-        // V_OUT = V_REF × (1 + R1/R2)  ⇒  R1 = R2 × (V_OUT − V_REF)/V_REF.
-        // Factored into single-binop steps because `parse_expression`
-        // currently mishandles chained mixed-precedence binops.
-        const v_ref = 1.25;
-        require self.v_out >= 1.35
-            else "LM317 minimum V_OUT is V_REF + headroom (~1.35V)";
-        const delta = self.v_out - v_ref;
-        const scale = 240.0 / v_ref;
-        r2_value = 240.0;
-        r1_value = delta * scale;
-    }
-
-    // Expansion uses the short-named passive entities (Res, Cap)
-    // which still take runtime-arg form. The new generic-form
-    // Resistor/Capacitor entities (Phase 1) will get expansion
-    // support in a follow-up so this can read
-    // `Resistor<r1_value, 1%>` instead.
-    expansion {
-        VIN  -> C_in:  Cap(10µF).1;             C_in.2  -> GND;
-        VOUT -> C_out: Cap(22µF).1;             C_out.2 -> GND;
-        VOUT -> R1:    Res(r1_value).1;         R1.2    -> ADJ;
-        ADJ  -> R2:    Res(r2_value).1;         R2.2    -> GND;
-    }
-    // §4 device-stress IP: linear pass-element dissipation at the solved
-    // operating point — P = (V_IN − V_OUT)·I_out + V_IN·I_q. `self.p_diss`
-    // targets THIS device's own sign-off row, gated against the package
-    // `power_rating` (free-air datasheet dissipation). Needs the output
-    // rail's declared `@ I` load; without it the recipe skips and the
-    // dissipation stays UNCHECKED (Real-Data Policy).
+    attribute component_class  = "regulator_ic";
+    attribute family           = "LM317";
+    attribute part_number      = "LM317";
+    attribute role             = "adjustable-ldo";
+    attribute feedback_voltage = 1.25V;  // V_REF between OUT and ADJ
+    attribute i_quiescent      = 50uA;   // ADJ pin current, typ (ground-path quiescent)
+    attribute output_current   = 1.5A;   // rated output
+    attribute dropout_voltage  = 2V;     // V_IN−V_OUT for regulation at rated load
+    attribute vout_min         = 1.25V;  // TI LM317: adjustable 1.25 V to 37 V
+    attribute vout_max         = 37V;
+    attribute vin_max          = 40V;    // TI LM317: V_IN − V_OUT differential up to 40 V; 40 V abs input here (V_OUT ≥ 1.25 V)
+    attribute power_rating     = 2W;     // TO-220 free-air dissipation (no heatsink), datasheet class
+    // §4 device-stress IP: pass-element dissipation at the solved
+    // operating point (the block's stress rows map onto this part).
     simulation {
         stress {
             self.p_diss = (vin - vout) * i_out + vin * self.i_quiescent;
         }
     }
 }
+
+symbol LM317 {
+    left   { VIN }
+    right  { VOUT }
+    bottom { ADJ }
+}
+
+layout LM317 {
+    package TO-220;
+}
+
+// ── The designer's subcircuit ───────────────────────────────────────
+entity Ldo_LM317(
+    v_out:     voltage     = 5V,
+    i_out_max: current     = 500mA,
+    v_in:      voltage     = 12V,
+    c_in:      capacitance = 10µF,
+    c_out:     capacitance = 22µF,
+    r2_value:  resistance  = 240Ω     // datasheet programming resistor
+) as design {
+    // Contract pins. VOUT is virtual — the output cap and the divider
+    // ARE the block's copper; ADJ is internal.
+    pin VIN:  power in;
+    pin VOUT: power out virtual;
+    pin GND:  ground;
+
+    attribute component_class  = "ldo";
+    attribute output_voltage   = v_out;
+    attribute v_in             = v_in;
+    attribute i_out_max        = i_out_max;
+    attribute output_current   = 1.5A;   // promise = the part's rating
+    attribute vin_max          = 40V;
+    attribute dropout_voltage  = 2V;
+    attribute feedback_voltage = 1.25V;
+    attribute i_quiescent      = 50uA;
+
+    // Divider sizing + VALIDITY ENVELOPE. One binary op per `const`
+    // (parse_expression mishandles chained mixed-precedence binops).
+    design {
+        const v_ref = 1.25;
+        const vout  = self.v_out;
+        require vout >= 1.35
+            else "Ldo_LM317 envelope: minimum V_OUT is V_REF + headroom (~1.35V)";
+        require vout <= 37.0
+            else "Ldo_LM317 envelope: V_OUT above the 37V adjustable maximum";
+        // 1.5 A rating × 0.8 derating policy.
+        require self.i_out_max <= 1.2
+            else "Ldo_LM317 envelope: i_out_max exceeds 1.2A (1.5A rating × 0.8 derating)";
+        require self.v_in <= 40.0
+            else "Ldo_LM317 envelope: v_in exceeds the 40V maximum";
+        const v_need = vout + 2.0;
+        require self.v_in >= v_need
+            else "Ldo_LM317 envelope: v_in below v_out + 2V dropout";
+        // R1 = R2·(V_OUT − V_REF)/V_REF
+        const delta = vout - v_ref;
+        const scale = self.r2_value / v_ref;
+        r1_value = delta * scale;
+    }
+
+    // The application circuit — FIRM children.
+    u: LM317();
+    VIN -> u.VIN;
+    VIN  -> C_in:  Cap(c_in).1;        C_in.2  -> GND;
+    u.VOUT -> VOUT;
+    VOUT -> C_out: Cap(c_out).1;       C_out.2 -> GND;
+    VOUT -> R1:    Res(r1_value).1;    R1.2    -> u.ADJ;
+    u.ADJ -> R2:   Res(r2_value).1;    R2.2    -> GND;
+}
+
+impl LdoStage for Ldo_LM317 {
+    const vout  = v_out;
+    const i_max = i_out_max;
+    const vin   = v_in;
+}
+
+alias LM317_5V  = Ldo_LM317(5V);
+alias LM317_3V3 = Ldo_LM317(3.3V);

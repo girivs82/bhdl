@@ -1,4 +1,4 @@
-import { LM7805 } from "bhdl-stdlib/power/lm7805.bhdl";
+import { Ldo_LM7805 } from "bhdl-stdlib/power/lm7805.bhdl";
 import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 
 // Test circuit for LM7805 linear regulator with virtual pin.
@@ -10,7 +10,7 @@ board LinearRegulatorBoard {
     ground GND;
     
     // LM7805 linear regulator
-    u_ldo: LM7805();
+    u_ldo: Ldo_LM7805();
     
     // Input connections
     @VIN -> u_ldo.VIN;

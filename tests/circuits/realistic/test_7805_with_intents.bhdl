@@ -2,7 +2,7 @@
 // Demonstrates intent-driven spatial zone placement
 
 // Import required components from the standard library
-import { LM7805 } from "bhdl-stdlib/power/lm7805.bhdl";
+import { Ldo_LM7805 } from "bhdl-stdlib/power/lm7805.bhdl";
 import { Fuse } from "bhdl-stdlib/protection/tvs.bhdl";
 import { TVSDiode } from "bhdl-stdlib/protection/tvs.bhdl";
 import { ElectrolyticCap, Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
@@ -33,7 +33,7 @@ board PowerSupply_7805_Intent {
     c_in2.2 -> GND;
 
     // TOP ZONE: Power regulation with intent
-    @protected_vin -> reg: LM7805().VIN; reg.VOUT -> VCC
+    @protected_vin -> reg: Ldo_LM7805().VIN; reg.VOUT -> VCC
         for voltage_regulation(5V, 12V);
 
     reg.GND -> GND;

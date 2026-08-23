@@ -90,6 +90,8 @@ pub struct StageCandidate {
     pub file: PathBuf,
     pub gates: Vec<(String, String, bool)>,
     pub cost_rel: Option<f64>,
+    /// Declared output_current rating (A) — the no-cost-data tie-break.
+    pub rating_a: Option<f64>,
     /// Named ctor args the block would be instantiated with.
     pub ctor_args: Vec<(String, String)>,
 }
@@ -258,12 +260,23 @@ pub fn resolve_stages(
                 notes.push(format!("ranked by declared cost_rel over {} survivor(s)", passing.len()));
                 (Some(best.block.clone()), "survey".to_string())
             } else {
+                // No cost data: rank by LEAST OVER-RATING — the smallest
+                // declared output_current that still covers the load
+                // (an engineering tie-break, stated; not a cost judgment).
+                // Ties fall to library order.
                 let missing = passing.iter().filter(|c| c.cost_rel.is_none()).count();
+                let rating = |c: &StageCandidate| c.rating_a.unwrap_or(f64::INFINITY);
+                let best = passing
+                    .iter()
+                    .min_by(|a, b| rating(a).partial_cmp(&rating(b)).unwrap())
+                    .unwrap();
                 notes.push(format!(
-                    "{} survivor(s); {missing} declare no cost_rel — NO cost ranking, library order (stated, not a judgment)",
-                    passing.len()
+                    "{} survivor(s); {missing} declare no cost_rel — NO cost ranking; chose the least over-rated block ({} = {}), ties by library order",
+                    passing.len(),
+                    best.block,
+                    best.rating_a.map(|r| format!("{r:.2}A")).unwrap_or_else(|| "rating undeclared".into())
                 ));
-                (Some(passing[0].block.clone()), "survey".to_string())
+                (Some(best.block.clone()), "survey".to_string())
             }
         };
 
@@ -396,6 +409,34 @@ fn rel_stdlib_path(file: &Path, stdlib_root: &Path) -> String {
     format!("bhdl-stdlib/{}", rel.display()).replace('\\', "/")
 }
 
+/// Trial-evaluate a block's validity envelope (its plain `design { }`)
+/// at an operating point: `params` override the block's constructor
+/// defaults. `None` = the entity declares no design block (nothing to
+/// check — the caller states UNCHECKED); `Some(Err(msg))` = the envelope
+/// rejected it (a failed `require`, or a recipe error). Shared by the
+/// requirement resolver and the `supply` chooser so both apply ONE
+/// predicate.
+pub fn trial_envelope(entity_text: &str, block: &str, params: &[(String, String)]) -> Option<Result<(), String>> {
+    let recipe = design_recipe_for(entity_text, block)?;
+    let mut all: HashMap<String, String> = entity_params_txt(entity_text, block)
+        .into_iter()
+        .filter_map(|(n, d)| d.map(|d| (n, d)))
+        .collect();
+    for (k, v) in params {
+        if all.contains_key(k) {
+            all.insert(k.clone(), v.clone());
+        }
+    }
+    Some(
+        crate::design_evaluator::evaluate_recipe(&recipe, &all, HashMap::new(), String::new(), HashMap::new())
+            .map(|_| ())
+            .map_err(|e| match e {
+                crate::design_evaluator::DesignEvalError::RequireFailed(m) => m,
+                other => format!("design recipe error: {other}"),
+            }),
+    )
+}
+
 /// Trial-instantiate one block against the requirement.
 fn evaluate_candidate(imp: &StageImpl, req: &StageRequirement, trait_def: &StageTrait) -> StageCandidate {
     let text = std::fs::read_to_string(&imp.file).unwrap_or_default();
@@ -506,7 +547,8 @@ fn evaluate_candidate(imp: &StageImpl, req: &StageRequirement, trait_def: &Stage
     }
 
     let cost_rel = attrs.get("cost_rel").and_then(|v| v.trim().parse::<f64>().ok());
-    StageCandidate { block: imp.block.clone(), file: imp.file.clone(), gates, cost_rel, ctor_args }
+    let rating_a = attr_si("output_current");
+    StageCandidate { block: imp.block.clone(), file: imp.file.clone(), gates, cost_rel, rating_a, ctor_args }
 }
 
 fn parse_pct_or_si(v: &str) -> Option<f64> {

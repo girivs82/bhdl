@@ -1,78 +1,63 @@
-// TPS54302 3A Synchronous Buck Converter - Simplified
-// High-efficiency step-down converter with integrated FETs
+// TPS54302 — TI 4.5–28 V input, 3 A synchronous step-down converter,
+// SOT-23-6 (SLVSC73).
+//
+// Two-layer library model (docs/spec/Requirements_And_Resolution.md §1):
+//   TPS54302      as part    — vendor truth: pins, package, datasheet
+//                              attributes, the part-carried BOOT rule.
+//                              Boards may hand-wire it (the silicon +
+//                              their own application circuit).
+//   Buck_TPS54302 as design  — the designer's subcircuit sized by TI's
+//                              design procedure from the application
+//                              facts (v_out, v_in, i_out_max, ripple),
+//                              contract pins VIN / VOUT (virtual) / EN /
+//                              GND, `impl BuckStage`.
+//
+// Sizing (SLVSC73 application equations; same forms as tps54331.bhdl):
+//   L_out : (V_IN−V_OUT)·D / (f_sw·ΔI_L),  ΔI_L = ripple_ratio·I_out
+//   C_out : ΔI_L / (8·f_sw·ΔV_out);   C_in : I_out·D·(1−D) / (f_sw·ΔV_in)
+//   R_top : R_bot·(V_OUT−V_REF)/V_REF   (V_REF = 0.6 V)
+// Synchronous rectification — no catch diode. 100 nF bootstrap BOOT→SW.
+// These are steady-state SEED values (see tps54331.bhdl for the full
+// seed → simulate → snap → margin pipeline).
 
-entity TPS54302() {
-    // Power pins
-    pin VIN: power in;
-    pin GND: ground;
-    pin SW: switch out;
-    // Logical output port: no package pin — the output leaves through the
-    // external inductor — but the ENTITY's interface has a named output
-    // (block diagrams, closed-loop DC, the S4 emitter's rail tie).
-    pin VOUT: power out virtual;
-    
-    // Control pins
-    pin FB: signal in;
-    pin EN: signal in;
-    
-    // Bootstrap and internal supply pins
+// ── Vendor truth ────────────────────────────────────────────────────
+entity TPS54302() as part {
+    pin VIN:  power in;
+    pin GND:  ground;
+    pin SW:   switch out;
+    pin FB:   signal in;
+    pin EN:   signal in;
     pin BOOT: signal inout;
-    pin PH: switch out;
-    
-    // Component attributes
-    attribute component_class = "voltage_regulator";
-    attribute regulator_type = "synchronous_buck";
-    attribute topology = "buck";
-    // NOTE: `package` is a reserved keyword (it heads the `layout { package
-    // <Footprint>; }` block) and cannot be an `attribute` name — using it as
-    // one is a hard parse error that drops every following attribute. The
-    // footprint lives in the `layout TPS54302` block below.
+    pin PH:   switch out;     // phase node alias used by hand-wired boards (same node as SW on this package)
 
-    // Electrical specifications
-    attribute output_current = 3A;
+    attribute component_class = "regulator_ic";
+    attribute manufacturer    = "Texas Instruments";
+    attribute part_number     = "TPS54302";
+    attribute regulator_type  = "synchronous_buck";
+    attribute topology        = "buck";
+    attribute output_current  = 3A;       // SLVSC73: 3 A continuous
+    attribute vin_min         = 4.5V;     // SLVSC73: 4.5 V to 28 V input
+    attribute vin_max         = 28V;
     attribute input_voltage_min = 4.5V;
     attribute input_voltage_max = 28V;
     attribute switching_frequency = 500kHz;
-    attribute efficiency = 92%;
+    attribute f_sw            = 500kHz;
+    attribute efficiency      = 92%;      // SLVSC73 typical-application curves, mid-load
     attribute dropout_voltage = 0.5V;
     attribute feedback_voltage = 0.6V;
-    // Datasheet §7.2.3.5 design example: R_bottom = 10.0kΩ for the FB
-    // divider; the top leg follows from V_OUT and the 0.6V reference. Read
-    // by the S4 supply application-circuit emitter.
     attribute fb_divider_bottom = 10kΩ;
-    // Display form of the FB relation for the schematic sheet (datasheet
-    // Eq. 1). Placeholders: {R1}/{R2} = top/bottom leg, {VREF} = the ref.
-    attribute fb_equation = "VOUT = {VREF}*(1 + {R1}/{R2})";
-
-    // Control-loop stability constants (datasheet SLVSDG6C). The part is
-    // INTERNALLY COMPENSATED — TI does not publish the internal comp R/C, so
-    // the loop is characterised by TI's published closed-form equations:
-    //   crossover  f_co = loop_crossover_k / (V_out · C_out)        [Eq 14]
-    //   target     f_co < f_sw · loop_crossover_max_ratio  (= f_sw/10)
-    //   ceramic C_out → low phase margin unless a feedforward cap
-    //     C_ff = 1 / (2π · f_co · R_top)                            [Eq 16]
-    // `loop_crossover_k` (the "5.1") bundles the error-amp gm (240µA/V), the
-    // current-sense/modulator gain and the internal compensation into one
-    // datasheet-characterised constant.
+    attribute fb_equation     = "VOUT = {VREF}*(1 + {R1}/{R2})";
     attribute loop_crossover_k = 5.1;
     attribute loop_crossover_max_ratio = 0.1;
-
-    // Loss-model constants (datasheet SLVSDG6) — see tps54302.bhdl.
-    attribute i_quiescent = 85uA;   // non-switching operating quiescent (typ)
-    attribute rds_on = 98mΩ;      // high-side FET on-resistance (typ; LS 49mohm)
-    attribute t_sw = 20ns;          // SW transition time for switching-loss estimate
-    // Inductor ripple-current ratio K_IND (datasheet §7.2.3.5.1, Eq 8 design
-    // example): ΔI_L / I_out. Drives the sign-off inductor value-stepping.
-    attribute ripple_ratio = 0.35;
-
-    // Protection features
+    attribute i_quiescent     = 85uA;     // non-switching operating quiescent (typ)
+    attribute rds_on          = 98mΩ;     // high-side FET on-resistance (typ; LS 49mΩ)
+    attribute t_sw            = 20ns;     // SW transition time for switching-loss estimate
+    attribute ripple_ratio    = 0.35;
     attribute has_thermal_protection = true;
     attribute has_current_limiting = true;
     attribute has_undervoltage_lockout = true;
     attribute has_overvoltage_protection = true;
     attribute has_soft_start = true;
-    
-    // External component requirements
     attribute inductor_value_min = "2.2uH";
     attribute inductor_value_rec = "4.7uH";
     attribute inductor_value_max = "10uH";
@@ -81,57 +66,20 @@ entity TPS54302() {
     attribute output_capacitor_min = "22uF";
     attribute output_capacitor_rec = "47uF";
     attribute bootstrap_capacitor = "100nF";
-    
-    // No external diode required - synchronous rectification
     attribute catch_diode_required = false;
     attribute synchronous_rectification = true;
-    
-    // SPICE model parameters
     attribute spice_model = "synchronous_buck_regulator";
     attribute spice_topology = "synchronous_buck";
     attribute spice_switching_frequency = 500kHz;
     attribute spice_duty_cycle = "variable";
     attribute spice_feedback_reference = 0.6V;
 
-    // §4 device-stress IP (docs/spec/Vendor_Simulation_Blocks.md), authored in
-    // HDL so the part's device-level stress model travels with the part — the
-    // datasheet limits stay attached to it the way its electrical attributes
-    // do, instead of living only in the sign-off's hardcoded reference model.
-    //
-    // How THIS synchronous buck stresses its support parts at the solved
-    // operating point. Resolves the operating point (vin / vout / i_out), the
-    // part's own attributes (`self.switching_frequency`), and each support
-    // part's snapped value by board instance name — l_out / c_out1 / c_in1,
-    // the TI SLVSDG6C application-circuit designators. Writes the per-part
-    // stress axes the sign-off derate gate compares against the selected
-    // catalogue rating. A board that names its support parts differently just
-    // doesn't match these references: the eval is skipped and those parts keep
-    // the generic stress model (no error).
-    //
-    // Buck application forms (SLVSDG6C §7.2.3.5):
-    //   duty = V_OUT / V_IN
-    //   ΔI_L = (V_IN − V_OUT)·duty / (f_sw·L)
-    //   inductor peak current  = I_out + ΔI_L/2
-    //   output-cap ripple      = ΔI_L / (8·f_sw·C_out)
-    //   input-cap ripple       = I_out·duty·(1−duty) / (f_sw·C_in)
+    // T2/ERC025 part-carried rule: the high-side FET cannot drive
+    // without the bootstrap cap (SLVSC73 7.3.1). The VALUE rule lives on
+    // the block (it names the block's child).
     simulation {
-        stress {
-            const duty = vout / vin;
-            const d_il = (vin - vout) * duty / (self.switching_frequency * l_out.value);
-            l_out.i_peak    = i_out + d_il / 2;
-            c_out1.v_ripple = d_il / (8 * self.switching_frequency * c_out1.value);
-            c_in1.v_ripple  = i_out * duty * (1 - duty) / (self.switching_frequency * c_in1.value);
-        }
-        // T2/ERC025 part-carried rule (docs/spec/ERC.md): the converter
-        // cannot switch without the BOOT-SW bootstrap cap (datasheet §7.3.1,
-        // 100nF). EN is deliberately NOT required — this part has an internal
-        // EN pull-up (floating = enabled is datasheet-sanctioned), unlike
-        // LDOs where floating EN is undefined. No `connected(SW)` rule: this
-        // entity exposes the one switch node as both SW and PH, and boards
-        // legitimately wire either.
         check {
             require connected(BOOT) else "BOOT needs the 100nF bootstrap cap to SW/PH (datasheet 7.3.1) — the high-side FET cannot drive without it";
-            require c_boot.value == self.bootstrap_capacitor else "the bootstrap cap must be the datasheet 100nF (7.3.1) — other values compromise high-side gate drive";
         }
     }
 }
@@ -147,3 +95,105 @@ symbol TPS54302 {
 layout TPS54302 {
     package SOT-23-6;
 }
+
+// ── The designer's subcircuit ───────────────────────────────────────
+entity Buck_TPS54302(
+    v_out:        voltage     = 5V,
+    v_in:         voltage     = 12V,
+    i_out_max:    current     = 2A,
+    f_sw:         frequency   = 500kHz,  // fixed internal oscillator
+    ripple_ratio: float       = 0.35,
+    ripple_v:     voltage     = 30mV,
+    ripple_v_in:  voltage     = 150mV,
+    r_fb_bot:     resistance  = 10kΩ
+) as design {
+    pin VIN:  power in;
+    pin VOUT: power out virtual;
+    pin EN:   signal in;
+    pin GND:  ground;
+
+    // Promises (mirrored from SLVSC73) + exported operating point.
+    attribute component_class = "switching_regulator";
+    attribute output_voltage  = v_out;
+    attribute v_in            = v_in;
+    attribute i_out_max       = i_out_max;
+    attribute output_current  = 3A;
+    attribute vin_min         = 4.5V;
+    attribute vin_max         = 28V;
+    attribute f_sw            = f_sw;
+    attribute efficiency      = 92%;
+    attribute rds_on          = 98mΩ;
+    attribute t_sw            = 20ns;
+    attribute i_quiescent     = 85uA;
+    attribute feedback_voltage = 0.6V;
+    attribute fb_equation     = "VOUT = {VREF}*(1 + {R1}/{R2})";
+
+    design {
+        const v_ref = 0.6;
+        const vout  = self.v_out;
+        require vout < self.v_in
+            else "buck V_OUT must be below V_IN";
+        // VALIDITY ENVELOPE: 3 A rating × 0.8 derating; SLVSC73 input range.
+        require self.i_out_max <= 2.4
+            else "Buck_TPS54302 envelope: i_out_max exceeds 2.4A (3A rating × 0.8 derating)";
+        require self.v_in >= 4.5
+            else "Buck_TPS54302 envelope: v_in below the 4.5V input minimum";
+        require self.v_in <= 28.0
+            else "Buck_TPS54302 envelope: v_in above the 28V input maximum";
+
+        const duty  = vout / self.v_in;
+        const vdiff = self.v_in - vout;
+        const d_il  = self.ripple_ratio * self.i_out_max;
+        const l_num = vdiff * duty;
+        const l_den = self.f_sw * d_il;
+        l_value     = l_num / l_den;
+        const il_half   = d_il / 2.0;
+        const i_peak    = self.i_out_max + il_half;
+        l_rated_current = i_peak * 1.6;
+        const co_d0 = self.f_sw * self.ripple_v;
+        const co_d  = co_d0 * 8.0;
+        c_out_value = d_il / co_d;
+        const inv_d  = 1.0 - duty;
+        const ci_n0  = self.i_out_max * duty;
+        const ci_num = ci_n0 * inv_d;
+        const ci_den = self.f_sw * self.ripple_v_in;
+        c_in_value   = ci_num / ci_den;
+        const vov     = vout - v_ref;
+        const r_scale = self.r_fb_bot / v_ref;
+        r_top_value   = vov * r_scale;
+    }
+
+    u: TPS54302();
+    VIN -> u.VIN;
+    u.GND -> GND;
+    EN -> u.EN;
+    C_in: Cap(c_in_value) for switching_input_filter(rail: VIN, return: GND, loop_area_max: 2.0mm2, switch_node_keepaway: 1.0mm);
+    VIN -> C_in.1; C_in.2 -> GND;
+    u.SW -> L_out: Ind(l_value, rated_current = l_rated_current).1; L_out.2 -> VOUT;
+    VOUT -> C_out: Cap(c_out_value).1; C_out.2 -> GND;
+    VOUT -> R_top: Res(r_top_value, tolerance = 1%, supply_profile = "grade").1; R_top.2 -> u.FB;
+    u.FB -> R_bot: Res(r_fb_bot, tolerance = 1%, supply_profile = "grade").1; R_bot.2 -> GND;
+    u.BOOT -> C_boot: Cap(100nF).1; C_boot.2 -> u.SW;
+
+    simulation {
+        stress {
+            const duty = vout / vin;
+            const d_il = (vin - vout) * duty / (self.f_sw * L_out.value);
+            L_out.i_peak   = i_out + d_il / 2;
+            C_out.v_ripple = d_il / (8 * self.f_sw * C_out.value);
+            C_in.v_ripple  = i_out * duty * (1 - duty) / (self.f_sw * C_in.value);
+        }
+        check {
+            require C_boot.value == 100nF else "the bootstrap cap must be the datasheet 100nF (SLVSC73 7.3.1) — other values compromise high-side gate drive";
+        }
+    }
+}
+
+impl BuckStage for Buck_TPS54302 {
+    const vout  = v_out;
+    const i_max = i_out_max;
+    const vin   = v_in;
+}
+
+alias TPS54302_5V  = Buck_TPS54302(5V);
+alias TPS54302_3V3 = Buck_TPS54302(3.3V);

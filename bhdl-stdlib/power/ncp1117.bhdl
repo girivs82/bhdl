@@ -1,56 +1,112 @@
-// NCP1117 — 1 A fixed-voltage linear regulator, SOT-223.
+// NCP1117 — onsemi 1 A low-dropout positive regulator, SOT-223.
+// The package tab is tied to VOUT inside the part (pin 2).
 //
-// Used as the on-board 5 V LDO on Arduino UNO and Mega 2560
-// (`NCP1117-5.0_SOT223`). KiCad's symbol has the standard
-// 3-pin LDO pinout. The package's tab is tied to VO inside the
-// part, so KiCad collapses tab + VO onto one pin.
-//
-// This is the parser-compatible "simple" tier: bare pins, no
-// SPICE model, no parametric voltage type. The richer
-// `power/ncp1117.bhdl` (when written) will carry a `voltage`
-// type parameter.
-//
-// Grammar discipline: parser-compatible v2.0 subset.
+// Two-layer library model (docs/spec/Requirements_And_Resolution.md §1):
+//   NCP1117      as part    — vendor truth.
+//   Ldo_NCP1117  as design  — the designer's subcircuit, `impl LdoStage`.
+// The voltage this library knows is the 5.0 V SKU (NCP1117-5.0); the
+// part carries the family number, the orderable suffix is the BOM/MPN
+// path's to derive. INPUT RANGE NOT DECLARED — not in this library's
+// datasheet data; a requirement that states vin is UNCHECKED against
+// this block (stated by the resolver, never a pass).
 
-// Pin contract (power-tree swap-by-rename): every regulator exposes
-// VIN / VOUT / GND, VOUT virtual where the expansion mints the
-// datasheet application circuit — so a Generic* placeholder swaps to
-// this part by renaming the instantiation, wiring untouched.
-entity NCP1117(part_no: string = "NCP1117-5.0_SOT223",
-               c_in: capacitance = 10µF,
-               c_out: capacitance = 10µF) {
+
+// ── Vendor truth ────────────────────────────────────────────────────
+entity NCP1117(v_out: voltage = 5V) as part {
     pin GND:  ground;               // (pin 1)
-    pin VOUT: power out virtual;    // regulated output (pin 2; tab)
+    pin VOUT: power out;            // regulated output (pin 2; tab)
     pin VIN:  power in;             // unregulated input (pin 3)
 
-    attribute component_class = "ldo";
-    attribute output_voltage  = 5V;     // NCP1117-5.0 fixed variant
+    attribute component_class = "regulator_ic";
+    attribute manufacturer    = "onsemi";
     attribute family          = "NCP1117";
-    attribute output_voltage  = 5.0;
-    attribute output_current  = 1.0;
+    attribute part_number     = "NCP1117";
+    attribute output_voltage  = v_out;
+    attribute output_current  = 1.0A;
     attribute dropout_v       = 1.2;
-    attribute dropout_voltage = 1.2V;  // datasheet typ at 800mA
-    attribute i_quiescent     = 5.2mA; // ground-pin current, typ class at load
-    attribute power_rating    = 1.5W;  // SOT-223 with ~1in² copper pad ((125−25)°C / ~67°C/W)
+    attribute dropout_voltage = 1.2V;    // datasheet typ at 800mA
+    attribute i_quiescent     = 5.2mA;   // ground-pin current, typ class at load
+    attribute power_rating    = 1.5W;    // SOT-223 with ~1in² copper pad ((125−25)°C / ~67°C/W)
     attribute pkg             = "SOT-223";
-    attribute part_number     = part_no;
-
-    // Datasheet application circuit (ON Semi NCP1117: 10µF input,
-    // 10µF tantalum output minimum for regulator stability).
-    expansion {
-        VIN -> C_in: Cap(c_in).1; C_in.2 -> GND;
-        VOUT -> C_out: Cap(c_out).1; C_out.2 -> GND;
-    }
 
     // §4 device-stress IP: linear pass-element dissipation at the solved
-    // operating point — P = (V_IN − V_OUT)·I_out + V_IN·I_q. `self.p_diss`
-    // targets THIS device's own sign-off row, gated against the package
-    // `power_rating` (free-air datasheet dissipation). Needs the output
-    // rail's declared `@ I` load; without it the recipe skips and the
-    // dissipation stays UNCHECKED (Real-Data Policy).
+    // operating point — P = (V_IN − V_OUT)·I_out + V_IN·I_q, gated against
+    // the package power_rating. Skips (UNCHECKED) without a declared load.
     simulation {
         stress {
             self.p_diss = (vin - vout) * i_out + vin * self.i_quiescent;
         }
     }
 }
+
+symbol NCP1117 {
+    left   { VIN }
+    right  { VOUT }
+    bottom { GND }
+}
+
+layout NCP1117 {
+    package SOT-223;
+}
+
+// ── The designer's subcircuit ───────────────────────────────────────
+entity Ldo_NCP1117(
+    v_out:     voltage     = 5V,
+    i_out_max: current     = 500mA,
+    v_in:      voltage     = 9V,
+    c_in:      capacitance = 10µF,
+    c_out:     capacitance = 10µF
+) as design {
+    // Contract pins (the regulator pin contract). VOUT is virtual — the
+    // output cap IS the block's copper.
+    pin VIN:  power in;
+    pin VOUT: power out virtual;
+    pin GND:  ground;
+
+    // What the board sees: an LDO. PROMISES mirrored from the part's
+    // datasheet attributes — what the resolver and ERC032 check a
+    // requirement against. The operating point is exported so the
+    // elaboration emitter can reconstruct the constructor.
+    attribute component_class = "ldo";
+    attribute output_voltage  = v_out;
+    attribute v_in            = v_in;
+    attribute i_out_max       = i_out_max;
+    attribute output_current  = 1.0A;
+    attribute dropout_voltage = 1.2V;
+    attribute i_quiescent     = 5.2mA;
+
+    // VALIDITY ENVELOPE — one binary op per `const`; SI base units.
+    design {
+        const vout = self.v_out;
+        const m0 = vout == 5.0;
+        require m0 > 0
+            else "Ldo_NCP1117 envelope: v_out must be a NCP1117 SKU voltage known to this library (5.0 V)";
+        // 1 A rating × 0.8 derating policy.
+        require self.i_out_max <= 0.8
+            else "Ldo_NCP1117 envelope: i_out_max exceeds 800mA (1A rating × 0.8 derating)";
+        const v_need = vout + 1.2;
+        require self.v_in >= v_need
+            else "Ldo_NCP1117 envelope: v_in below v_out + 1.2V dropout";
+    }
+
+    // The application circuit — FIRM children.
+    u: NCP1117(v_out);
+    VIN -> u.VIN;
+    u.GND -> GND;
+    VIN -> C_in: Cap(c_in).1; C_in.2 -> GND;
+    u.VOUT -> VOUT;
+    VOUT -> C_out: Cap(c_out).1; C_out.2 -> GND;
+}
+
+// The block SATISFIES the LdoStage requirement interface
+// (bhdl-stdlib/power/stages.bhdl): each const names the block parameter
+// that receives the requirement value. The envelope and promises above
+// are the acceptance predicate; nothing is restated here.
+impl LdoStage for Ldo_NCP1117 {
+    const vout  = v_out;
+    const i_max = i_out_max;
+    const vin   = v_in;
+}
+
+// SKU aliases name the BLOCK (the reviewed application circuit).
+alias NCP1117_5V = Ldo_NCP1117(5V);

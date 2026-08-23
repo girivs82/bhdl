@@ -14,7 +14,7 @@
 // schematic label for the part the source calls C1 must read R1.
 // Doctrine: docs/spec/Handles_And_Refdes.md §5.
 
-import { LM7805 } from "bhdl-stdlib/power/lm7805.bhdl";
+import { Ldo_LM7805 } from "bhdl-stdlib/power/lm7805.bhdl";
 import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
 import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 
@@ -24,7 +24,7 @@ board AdversarialHandleNames {
     ground GND;
 
     // 'U2' is the FIRST and only IC — its refdes allocates as U1.
-    @VIN -> U2: LM7805().VIN;
+    @VIN -> U2: Ldo_LM7805().VIN;
     U2.GND -> @GND;
     U2.VOUT -> @VOUT_5V;
 

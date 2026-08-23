@@ -4,7 +4,7 @@
 import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
 import { Cap, ElectrolyticCap } from "bhdl-stdlib/passives/capacitor.bhdl";
 import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
-import { LM7805 } from "bhdl-stdlib/power/lm7805.bhdl";
+import { Ldo_LM7805 } from "bhdl-stdlib/power/lm7805.bhdl";
 
 import { TestPoint } from "bhdl-stdlib/connectors/testpoint.bhdl";
 import { Fuse, TVSDiode } from "bhdl-stdlib/protection/tvs.bhdl";
@@ -22,7 +22,7 @@ board PowerSupply_7805 {
     @protected_vin -> c_in2: Cap(0.1µF).1;
     
     // Linear regulator circuit
-    @protected_vin -> reg: LM7805().VIN;
+    @protected_vin -> reg: Ldo_LM7805().VIN;
     reg.GND -> @GND;
     reg.VOUT -> @VCC;
     

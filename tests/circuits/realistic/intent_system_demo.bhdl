@@ -4,7 +4,7 @@
 // minimal entities for the board-local abstractions, one intent per flow
 // statement (the flow model carries a single intent), named nets as @nets.
 
-import { LM7805 } from "bhdl-stdlib/power/lm7805.bhdl";
+import { Ldo_LM7805 } from "bhdl-stdlib/power/lm7805.bhdl";
 import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
 import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 import { TVSDiode } from "bhdl-stdlib/protection/tvs.bhdl";
@@ -155,7 +155,7 @@ board IntentSystemDemo {
     // ============================================================================
     // 1. VOLTAGE REGULATION with precise specs
     // ============================================================================
-    @VIN -> reg5v: LM7805().VIN; reg5v.VOUT -> @VCC_5V
+    @VIN -> reg5v: Ldo_LM7805().VIN; reg5v.VOUT -> @VCC_5V
         for voltage_regulation(
             output_voltage: 5V,
             load_regulation: 0.5%,

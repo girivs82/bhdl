@@ -34,7 +34,7 @@ import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
 import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
 import { TVSDiode } from "bhdl-stdlib/protection/tvs.bhdl";
-import { AP63205 } from "bhdl-stdlib/power/ap63205.bhdl";
+import { Buck_AP63205 } from "bhdl-stdlib/power/ap63205.bhdl";
 import { TPS54331_5V } from "bhdl-stdlib/power/tps54331.bhdl";
 import { AP2112K_3V3 } from "bhdl-stdlib/power/ap2112.bhdl";
 import { XC6206P182 } from "bhdl-stdlib/power/xc6206.bhdl";
@@ -59,7 +59,7 @@ board ComplexPowerTree {
     // === Branch 1: Synchronous Buck Converter Path ===
 
     // AP63205: 24V → 5V sync buck (expansion adds L, C_out, C_in, C_bst — no diode)
-    VIN -> buck: AP63205().VIN for regulation();
+    VIN -> buck: Buck_AP63205().VIN for regulation();
     buck.VOUT -> V5_BUCK;
     buck.GND -> GND;
 

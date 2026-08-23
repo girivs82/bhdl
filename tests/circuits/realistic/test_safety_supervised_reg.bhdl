@@ -61,12 +61,15 @@ entity SupervisedReg5V(vout: voltage = 5V) {
     expansion {
         internal adj: net;
 
-        VIN  -> reg: LM317(5V).VIN;
+        // The LM317 PART (bare silicon): this block authors its own
+        // divider and output cap — the two-layer library model's
+        // hand-wired use. (Ldo_LM317 is the reviewed block with the
+        // divider inside; using it here would double the divider.)
+        VIN  -> reg: LM317().VIN;
         reg.VOUT -> VOUT;
         reg.ADJ -> adj;
         VOUT -> r_fb_top: Res(240Ω).1; r_fb_top.2 -> adj;
         adj  -> r_fb_bot: Res(720Ω).1; r_fb_bot.2 -> GND;
-        reg.GND -> GND;
         VOUT -> c_out: Cap(10µF).1; c_out.2 -> GND;
 
         VOUT -> mon: VoltageSupervisor(4.5V, 5.5V).VDD;

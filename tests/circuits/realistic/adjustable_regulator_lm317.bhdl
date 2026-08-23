@@ -1,4 +1,4 @@
-import { LM317 } from "bhdl-stdlib/power/lm317.bhdl";
+import { Ldo_LM317 } from "bhdl-stdlib/power/lm317.bhdl";
 import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
 
@@ -11,7 +11,7 @@ board AdjustableRegulatorBoard {
     ground GND;
     
     // LM317 configured for 9V output
-    U1: LM317(v_out=9V);
+    U1: Ldo_LM317(v_out=9V);
     
     // Input connections
     @VIN -> U1.VIN;

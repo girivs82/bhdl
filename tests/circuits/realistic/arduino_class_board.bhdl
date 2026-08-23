@@ -24,7 +24,7 @@
 //   - No false pullups on chips without I²C usage (none in this
 //     fixture, but the gating logic stays exercised).
 
-import { LM317 } from "bhdl-stdlib/power/lm317.bhdl";
+import { Ldo_LM317 } from "bhdl-stdlib/power/lm317.bhdl";
 import { ATmega328P_DIP28 } from "bhdl-stdlib/actives/atmega328p.bhdl";
 import { Cap, Res } from "bhdl-stdlib/passives/capacitor.bhdl";
 
@@ -35,7 +35,7 @@ board Arduino_Class_Board {
 
     // 12V → 5V regulator. LM317's expansion provides C_in, C_out,
     // and the R1/R2 feedback divider (R1=720Ω computed from v_out=5V).
-    U_REG: LM317(v_out=5V);
+    U_REG: Ldo_LM317(v_out=5V);
     @VIN -> U_REG.VIN;
     U_REG.VOUT -> @VCC;
     U_REG.GND -> @GND;

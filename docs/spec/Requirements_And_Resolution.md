@@ -241,8 +241,25 @@ Principles that fall out:
    `LP2985(v_out) as part` carries the family MPN — the `-xx` SKU suffix
    is the BOM/MPN path's to derive from `output_voltage`; the block's
    envelope is SKU membership (summed equalities — the expression engine
-   has no `||`), ≤120 mA, 2.5–16 V in, v_in ≥ v_out + dropout). Every
-   other regulator is still a migration-era conflated entity.
+   has no `||`), ≤120 mA, 2.5–16 V in, v_in ≥ v_out + dropout).
+   Migrated since: `Ldo_XC6206`, `Ldo_AP2112K`, `Ldo_NCP1117` (input
+   range NOT declared — UNCHECKED against a vin requirement, stated),
+   `Ldo_LM7805`, `Ldo_LM317` (the OUT–ADJ divider sizing moved into the
+   block's `design { }`), `Buck_TPS54302` (the part stays hand-wirable:
+   boards that author their own application circuit use `TPS54302`
+   directly), `Buck_AP63205` (fixed 5 V SKU — its envelope is
+   `v_out == 5`). Aliases (`XC6206P332`, `LM317_5V`, …) name the blocks.
+   The `supply` chooser now trial-evaluates an `as design` candidate's
+   envelope through the SAME predicate as the resolver
+   (`stage_resolution::trial_envelope`) — it had been selecting the fixed
+   5 V AP63205 for 1.2 V / 3.3 V rails because the old entity silently
+   took any `v_out`. With no cost data the resolver breaks ties by LEAST
+   OVER-RATING (smallest `output_current` that covers the load), then
+   library order — stated in the survey note. Still conflated:
+   `BuckController` (controller + external stages with the yieldable
+   board-takeover recipe — needs its own `BuckExtStage` interface) and
+   the `regulator.bhdl` generic templates (`LinearRegulator<V_OUT,
+   HAS_EN>` / `BuckRegulator<V_OUT>`, class templates rather than parts).
    Not yet: the cost function / provider pricing / qualification
    attributes in the ranking; ERC032 and the resolver share the derate
    policy and the promise vocabulary but are still two code paths.

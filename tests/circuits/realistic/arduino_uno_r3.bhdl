@@ -11,7 +11,7 @@
 // the crossed UART with series 1k resistors, the pin-13 LED buffered by
 // the LMV358's second half, and all seven headers.
 
-import { NCP1117 } from "bhdl-stdlib/power/ncp1117.bhdl";
+import { Ldo_NCP1117 } from "bhdl-stdlib/power/ncp1117.bhdl";
 import { Ldo_LP2985 } from "bhdl-stdlib/power/lp2985.bhdl";
 import { LMV358 } from "bhdl-stdlib/actives/lmv358.bhdl";
 import { ATmega328P_DIP28 } from "bhdl-stdlib/actives/atmega328p.bhdl";
@@ -46,7 +46,7 @@ board ArduinoUnoR3 {
     D1.K -> VIN;
 
     // ── 5V regulator: NCP1117-5.0 with the R3's bulk caps ──
-    U1: NCP1117();
+    U1: Ldo_NCP1117();
     VIN -> U1.VIN;
     U1.VOUT -> @VCC_5V;
     U1.GND -> @GND;

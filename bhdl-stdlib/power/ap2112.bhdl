@@ -1,28 +1,33 @@
-// AP2112K: Diodes Inc 600mA LDO with enable pin
-// Low dropout (250mV @ 600mA), ultralow Iq (55µA)
-// Available in 1.2V, 1.5V, 1.8V, 2.5V, 2.8V, 3.0V, 3.3V fixed outputs
+// AP2112K — Diodes Inc. 600mA CMOS LDO with enable, SOT-23-5.
+// Low dropout (250mV @ 600mA), ultra-low Iq (55µA).
+//
+// Two-layer library model (docs/spec/Requirements_And_Resolution.md §1):
+//   AP2112K      as part    — vendor truth.
+//   Ldo_AP2112K  as design  — the designer's subcircuit, `impl LdoStage`.
+// Fixed-voltage by SKU; the voltages this library knows are the aliased
+// ones (1.8 / 2.5 / 3.3 V). The part carries the family number; the
+// orderable suffix is the BOM/MPN path's to derive from output_voltage.
 
-entity AP2112K<V_OUT: voltage>(
-    dropout: voltage = 250mV,
-    i_quiescent: current = 55µA,
-    c_in: capacitance = 1µF,
-    c_out: capacitance = 1µF
-) {
+
+// ── Vendor truth ────────────────────────────────────────────────────
+entity AP2112K(v_out: voltage = 3.3V, dropout: voltage = 250mV, i_quiescent: current = 55µA) as part {
     pin VIN:  power in;
-    pin VOUT: power out virtual;
+    pin VOUT: power out;
     pin EN:   signal in;
     pin GND:  ground;
 
-    attribute component_class = "voltage_regulator";
-    attribute output_voltage = V_OUT;
+    attribute component_class = "regulator_ic";
+    attribute manufacturer    = "Diodes Incorporated";
+    attribute family          = "AP2112K";
+    attribute part_number     = "AP2112K";
+    attribute output_voltage  = v_out;
     attribute dropout_voltage = dropout;
-    attribute i_quiescent = i_quiescent;
-    attribute power_rating = 400mW;  // SOT-23-5 free-air ((125−25)°C / ~250°C/W)
+    attribute i_quiescent     = i_quiescent;
+    attribute output_current  = 0.6A;    // AP2112 datasheet: 600 mA output current
+    attribute vin_min         = 2.5V;    // AP2112 datasheet: input voltage range 2.5 V to 6.0 V
+    attribute vin_max         = 6V;
+    attribute power_rating    = 400mW;   // SOT-23-5 free-air ((125−25)°C / ~250°C/W)
 
-    expansion {
-        VIN -> C_in: Cap(c_in).1; C_in.2 -> GND;
-        VOUT -> C_out: Cap(c_out).1; C_out.2 -> GND;
-    }
     // §4 device-stress IP: linear pass-element dissipation at the solved
     // operating point — P = (V_IN − V_OUT)·I_out + V_IN·I_q, gated against
     // the package power_rating. Skips (UNCHECKED) without a declared load.
@@ -33,10 +38,6 @@ entity AP2112K<V_OUT: voltage>(
     }
 }
 
-alias AP2112K_3V3 = AP2112K<3.3V>;
-alias AP2112K_2V5 = AP2112K<2.5V>;
-alias AP2112K_1V8 = AP2112K<1.8V>;
-
 symbol AP2112K {
     left   { VIN, EN }
     right  { VOUT }
@@ -46,3 +47,77 @@ symbol AP2112K {
 layout AP2112K {
     package SOT-23-5;
 }
+
+// ── The designer's subcircuit ───────────────────────────────────────
+entity Ldo_AP2112K(
+    v_out:     voltage     = 3.3V,
+    i_out_max: current     = 300mA,
+    v_in:      voltage     = 5V,
+    c_in:      capacitance = 1µF,
+    c_out:     capacitance = 1µF
+) as design {
+    // Contract pins (the regulator pin contract). VOUT is virtual — the
+    // output cap IS the block's copper.
+    pin VIN:  power in;
+    pin VOUT: power out virtual;
+    pin EN:   signal in;       // enable — tie to VIN to enable, or drive it
+    pin GND:  ground;
+
+    // What the board sees: an LDO. PROMISES mirrored from the part's
+    // datasheet attributes — what the resolver and ERC032 check a
+    // requirement against. The operating point is exported so the
+    // elaboration emitter can reconstruct the constructor.
+    attribute component_class = "ldo";
+    attribute output_voltage  = v_out;
+    attribute v_in            = v_in;
+    attribute i_out_max       = i_out_max;
+    attribute output_current  = 0.6A;    // AP2112 datasheet
+    attribute vin_min         = 2.5V;
+    attribute vin_max         = 6V;
+    attribute dropout_voltage = 250mV;
+    attribute i_quiescent     = 55uA;
+
+    // VALIDITY ENVELOPE — one binary op per `const`; SI base units.
+    design {
+        const vout = self.v_out;
+        const m0 = vout == 1.8;
+        const m1 = vout == 2.5;
+        const m2 = vout == 3.3;
+        const s1 = m0 + m1;
+        const s2 = s1 + m2;
+        require s2 > 0
+            else "Ldo_AP2112K envelope: v_out must be a AP2112K SKU voltage known to this library (1.8, 2.5, 3.3 V)";
+        // 600 mA rating × 0.8 derating policy.
+        require self.i_out_max <= 0.48
+            else "Ldo_AP2112K envelope: i_out_max exceeds 480mA (600mA rating × 0.8 derating)";
+        require self.v_in <= 6.0
+            else "Ldo_AP2112K envelope: v_in exceeds the 6.0V input maximum";
+        const v_need = vout + 0.25;
+        require self.v_in >= v_need
+            else "Ldo_AP2112K envelope: v_in below v_out + 250mV dropout";
+    }
+
+    // The application circuit — FIRM children.
+    u: AP2112K(v_out);
+    VIN -> u.VIN;
+    u.GND -> GND;
+    EN -> u.EN;
+    VIN -> C_in: Cap(c_in).1; C_in.2 -> GND;
+    u.VOUT -> VOUT;
+    VOUT -> C_out: Cap(c_out).1; C_out.2 -> GND;
+}
+
+// The block SATISFIES the LdoStage requirement interface
+// (bhdl-stdlib/power/stages.bhdl): each const names the block parameter
+// that receives the requirement value. The envelope and promises above
+// are the acceptance predicate; nothing is restated here.
+impl LdoStage for Ldo_AP2112K {
+    const vout  = v_out;
+    const i_max = i_out_max;
+    const vin   = v_in;
+}
+
+// SKU aliases name the BLOCK (the reviewed application circuit).
+alias AP2112K_3V3 = Ldo_AP2112K(3.3V);
+alias AP2112K_2V5 = Ldo_AP2112K(2.5V);
+alias AP2112K_1V8 = Ldo_AP2112K(1.8V);

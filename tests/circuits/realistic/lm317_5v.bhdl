@@ -7,7 +7,7 @@
 //   - expansion { } materialises C_in, C_out, R1, R2 on the
 //     correct nets.
 
-import { LM317 } from "bhdl-stdlib/power/lm317.bhdl";
+import { Ldo_LM317 } from "bhdl-stdlib/power/lm317.bhdl";
 import { Cap, Res } from "bhdl-stdlib/passives/capacitor.bhdl";
 
 board LM317_5V_Test {
@@ -15,7 +15,7 @@ board LM317_5V_Test {
     port VOUT: power out = 5V  @ 500mA;
     ground GND;
 
-    U1: LM317(v_out=5V);
+    U1: Ldo_LM317(v_out=5V);
 
     @VIN  -> U1.VIN;
     U1.VOUT -> @VOUT;

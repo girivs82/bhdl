@@ -1,53 +1,113 @@
-// LM7805 — fixed 5V 3-pin linear regulator (clean layer-2 entity).
+// LM7805 — fixed 5 V 3-pin linear regulator, TO-220 (TI µA7805 class).
 //
-// Regenerated to the current v2 standard. The pre-v2 entities
-// (regulators/lm7805.bhdl, regulators/lm7805_fixed.bhdl,
-// components/power/linear_regulators/LM7805.bhdl) used struct-block pin
-// definitions (`pin VIN: power in { voltage_range: (7V,35V), … }`), `package`
-// as a constructor parameter, and ternary-heavy attribute expressions — none
-// of which the current parser accepts, so they failed to load on import.
-//
-// Modeled on power/lm317.bhdl: VIN/VOUT/GND, datasheet attributes consumed by
-// the GLACIER regulator decomposition + power model, and an `expansion { }`
-// that materialises the datasheet's input/output bypass capacitors. A fixed
-// 78xx needs no feedback divider, so (unlike LM317) there is no design block.
-//
-// Use site (board):
-//     U1: LM7805();
-//     @VIN -> U1.VIN;  U1.GND -> @GND;  U1.VOUT -> @VCC_5V;
+// Two-layer library model (docs/spec/Requirements_And_Resolution.md §1):
+//   LM7805      as part    — vendor truth.
+//   Ldo_LM7805  as design  — the designer's subcircuit (the datasheet's
+//                            0.33µF input / 0.1µF output bypass),
+//                            `impl LdoStage`.
 
-entity LM7805() {
+
+// ── Vendor truth ────────────────────────────────────────────────────
+entity LM7805(v_out: voltage = 5V) as part {
     pin VIN:  power in;
-    pin VOUT: power out virtual;
+    pin VOUT: power out;
     pin GND:  ground;
 
-    attribute component_class = "voltage_regulator";
+    attribute component_class = "regulator_ic";
     attribute family          = "LM7805";
-    attribute output_voltage  = 5V;
-    // Datasheet (TI LM340A/LM7805) electrical characteristics, consumed by the
-    // regulator decomposition + linear-loss power model
-    // (P = (V_in − V_out)·I_load + V_in·I_q):
-    attribute output_current  = 1.5A;   // rated output (with adequate heatsinking)
-    attribute output_noise    = 40uV;   // TI µA7805 datasheet RMS output noise, 10Hz–100kHz, V_O = 5V
-    attribute dropout_voltage = 2V;     // V_IN − V_OUT required for regulation
-    attribute i_quiescent     = 6mA;    // ground-pin (quiescent) current, typ
-    attribute power_rating    = 2W;  // TO-220 free-air dissipation (no heatsink), datasheet class
+    attribute part_number     = "LM7805";
+    attribute output_voltage  = v_out;
+    attribute output_current  = 1.5A;    // rated output (with adequate heatsinking)
+    attribute vin_min         = 7V;      // TI µA7805: input voltage range 7 V to 35 V (V_O = 5 V)
+    attribute vin_max         = 35V;
+    attribute output_noise    = 40uV;    // TI µA7805 datasheet RMS output noise, 10Hz–100kHz, V_O = 5V
+    attribute dropout_voltage = 2V;      // V_IN − V_OUT required for regulation
+    attribute i_quiescent     = 6mA;     // ground-pin (quiescent) current, typ
+    attribute power_rating    = 2W;      // TO-220 free-air dissipation (no heatsink), datasheet class
 
-    // Datasheet application circuit: input + output bypass capacitors
-    // (0.33µF input near the device, 0.1µF output for transient response).
-    expansion {
-        VIN  -> C_in:  Cap(0.33µF).1;  C_in.2  -> GND;
-        VOUT -> C_out: Cap(0.1µF).1;   C_out.2 -> GND;
-    }
     // §4 device-stress IP: linear pass-element dissipation at the solved
-    // operating point — P = (V_IN − V_OUT)·I_out + V_IN·I_q. `self.p_diss`
-    // targets THIS device's own sign-off row, gated against the package
-    // `power_rating` (free-air datasheet dissipation). Needs the output
-    // rail's declared `@ I` load; without it the recipe skips and the
-    // dissipation stays UNCHECKED (Real-Data Policy).
+    // operating point — P = (V_IN − V_OUT)·I_out + V_IN·I_q, gated against
+    // the package power_rating. Skips (UNCHECKED) without a declared load.
     simulation {
         stress {
             self.p_diss = (vin - vout) * i_out + vin * self.i_quiescent;
         }
     }
 }
+
+symbol LM7805 {
+    left   { VIN }
+    right  { VOUT }
+    bottom { GND }
+}
+
+layout LM7805 {
+    package TO-220;
+}
+
+// ── The designer's subcircuit ───────────────────────────────────────
+entity Ldo_LM7805(
+    v_out:     voltage     = 5V,
+    i_out_max: current     = 500mA,
+    v_in:      voltage     = 12V,
+    c_in:      capacitance = 0.33µF,
+    c_out:     capacitance = 0.1µF
+) as design {
+    // Contract pins (the regulator pin contract). VOUT is virtual — the
+    // output cap IS the block's copper.
+    pin VIN:  power in;
+    pin VOUT: power out virtual;
+    pin GND:  ground;
+
+    // What the board sees: an LDO. PROMISES mirrored from the part's
+    // datasheet attributes — what the resolver and ERC032 check a
+    // requirement against. The operating point is exported so the
+    // elaboration emitter can reconstruct the constructor.
+    attribute component_class = "ldo";
+    attribute output_voltage  = v_out;
+    attribute v_in            = v_in;
+    attribute i_out_max       = i_out_max;
+    attribute output_current  = 1.5A;    // TI µA7805
+    attribute vin_min         = 7V;
+    attribute vin_max         = 35V;
+    attribute output_noise    = 40uV;    // TI µA7805, 10Hz–100kHz
+    attribute dropout_voltage = 2V;
+    attribute i_quiescent     = 6mA;
+
+    // VALIDITY ENVELOPE — one binary op per `const`; SI base units.
+    design {
+        const vout = self.v_out;
+        const m0 = vout == 5.0;
+        require m0 > 0
+            else "Ldo_LM7805 envelope: v_out must be a LM7805 SKU voltage known to this library (5.0 V)";
+        // 1.5 A rating × 0.8 derating policy.
+        require self.i_out_max <= 1.2
+            else "Ldo_LM7805 envelope: i_out_max exceeds 1.2A (1.5A rating × 0.8 derating)";
+        require self.v_in <= 35.0
+            else "Ldo_LM7805 envelope: v_in exceeds the 35V input maximum";
+        const v_need = vout + 2.0;
+        require self.v_in >= v_need
+            else "Ldo_LM7805 envelope: v_in below v_out + 2V dropout (7V minimum)";
+    }
+
+    // The application circuit — FIRM children.
+    u: LM7805(v_out);
+    VIN -> u.VIN;
+    u.GND -> GND;
+    VIN -> C_in: Cap(c_in).1; C_in.2 -> GND;
+    u.VOUT -> VOUT;
+    VOUT -> C_out: Cap(c_out).1; C_out.2 -> GND;
+}
+
+// The block SATISFIES the LdoStage requirement interface
+// (bhdl-stdlib/power/stages.bhdl): each const names the block parameter
+// that receives the requirement value. The envelope and promises above
+// are the acceptance predicate; nothing is restated here.
+impl LdoStage for Ldo_LM7805 {
+    const vout  = v_out;
+    const i_max = i_out_max;
+    const vin   = v_in;
+}
+
+// SKU aliases name the BLOCK (the reviewed application circuit).
+alias LM7805_5V = Ldo_LM7805(5V);

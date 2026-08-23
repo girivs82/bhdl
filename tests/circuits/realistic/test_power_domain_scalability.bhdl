@@ -1,7 +1,7 @@
 // Comprehensive test for power domain scalability features
 // Demonstrates: wildcard expansion, range expansion, and decoupling generation
 
-import { LM7805 } from "bhdl-stdlib/power/lm7805.bhdl";
+import { Ldo_LM7805 } from "bhdl-stdlib/power/lm7805.bhdl";
 
 
 // Board-local test entity: minimal analog temp-sensor shape.
@@ -34,12 +34,12 @@ board MultiSensorBoard {
     fpga: FPGA();
 
     // Regulator component
-    reg: LM7805();
+    reg: Ldo_LM7805();
 
     // Power domain with all scalability features
     power_domain @VCC_3V3 = 3.3V @ 5A {
         sources {
-            reg: LM7805().VOUT;
+            reg: Ldo_LM7805().VOUT;
         }
 
         distribution {
