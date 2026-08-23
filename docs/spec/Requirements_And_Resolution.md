@@ -203,8 +203,8 @@ Principles that fall out:
    silicon's pins are reachable as `U1.u.SW`. Consumers: the chooser
    skips `as part` candidates and treats `as design` as self-expanding;
    the SPICE converter models a regulator-class design block as the
-   regulator. Not yet: the `where` clause form (the envelope is a
-   `require` in `design { }`), `wired(EN)` gating. Hardening that fell
+   regulator. (The `where` clause form and `wired(EN)` gating landed
+   later — see the end of increment 2.) Hardening that fell
    out: a failed expansion / design-recipe `require` is now a synthesis
    ERROR, not a log line — it exposed two stdlib recipes wiring
    `TVSDiode` pins `1/2` (declared `A/K`) that had been silently
@@ -276,6 +276,25 @@ Principles that fall out:
    not import `MOSFET`). Still class templates, not parts:
    `regulator.bhdl` (`LinearRegulator<V_OUT, HAS_EN>` /
    `BuckRegulator<V_OUT>`).
+   Envelope spelling (landed): `entity X(…) as design where i_out_max <=
+   2.4A, v_in >= 3.5V, v_in <= 28V { … }` — each comparison is lowered
+   to a `require` at the front of the block's plain `design { }` (created
+   if absent; bare parameter names become `self.<param>`, the message
+   quotes the clause as written), so the resolver's trial-instantiation
+   and synthesis evaluate ONE predicate. Clauses needing arithmetic (SKU
+   membership, `v_in >= v_out + dropout`) stay as explicit `require`s;
+   both spellings are valid. The `where` may precede or follow the `as`
+   tag. Wiring-gated optional features (landed): in a design block's
+   plain body, `generate if (wired(EN)) { EN -> u.EN; } else { VIN ->
+   u.EN; }` — the board's wiring is the configuration. Lowered to a
+   per-statement gate on the firm recipe, evaluated at expansion against
+   the board's nets (the same "has a net" criterion the heuristic
+   live-pin rule uses, but declared). Gated pins are stamped on the
+   instance (`gated_pins`) so ERC006 does not report an intentionally
+   unwired optional input. Every EN-carrying block (TPS54331, TPS54302,
+   AP63205, LP2985, AP2112K) now defaults to enabled when EN is left
+   unwired. Only `wired(PIN)` / `!wired(PIN)` are supported as the
+   condition; nesting is not.
    Ranking (landed): survivors' silicon is priced through the supplier
    provider (cheapest in-stock MPN with the part-number prefix — the
    `supply` chooser's path); when EVERY survivor priced, cheapest wins
