@@ -505,6 +505,7 @@ pub fn build_trace_matrix(
         let source = get("source");
         let sig = signal.as_deref().and_then(pin_net_of);
         let src = source.as_deref().and_then(pin_net_of);
+        let sig_inst = sig.as_ref().and_then(|g| netlist.instances.iter().find(|(_, i)| i.name == g.0).map(|(id, _)| id));
         match (&signal, &sig) {
             (Some(sp), None) => checks.push((format!("signal {sp} is not a pin on this board"), false, false)),
             (None, _) => checks.push(("no `signal:` pin declared".into(), false, false)),
@@ -549,7 +550,6 @@ pub fn build_trace_matrix(
                     }
                 })
             };
-            let sig_inst = sig.as_ref().and_then(|g| netlist.instances.iter().find(|(_, i)| i.name == g.0).map(|(id, _)| id));
             let rail_v = src.as_ref().and_then(|s| {
                 let net = s.3?;
                 netlist
@@ -565,8 +565,115 @@ pub fn build_trace_matrix(
                 (None, _) => checks.push((format!("level `{level}` is not a voltage"), false, false)),
             }
         }
+        // latency_max: the HARDWARE share is derived — the driver's
+        // declared response latency (a safety mechanism's `latency=`, or
+        // the driving part's `latency` / `propagation_delay` attribute)
+        // plus the signal net's RC settling (pull-up R × node C, 2.2·τ
+        // for a 10–90 % edge) from the netlist. The FIRMWARE share cannot
+        // be measured here: the contract may declare it as `fw_latency`
+        // (a stated term the software side owns). hw + fw ≤ latency_max.
         if let Some(l) = get("latency_max") {
-            checks.push((format!("latency_max {l}: no verifier in this build (timing is firmware + hardware) — UNVERIFIED, stated"), false, true));
+            let budget = crate::stage_acceptance::parse_si(&l);
+            // driver: the non-signal instance on the source net
+            let driver_inst = src.as_ref().and_then(|s| {
+                let net = s.3?;
+                netlist
+                    .pin_instances
+                    .values()
+                    .filter(|pi| pi.net == Some(net) && Some(pi.instance) != sig_inst)
+                    .filter(|pi| netlist.pins.get(pi.pin_def).map(|p| !p.is_virtual).unwrap_or(false))
+                    .map(|pi| pi.instance)
+                    .next()
+            });
+            let driver_name = driver_inst.and_then(|id| netlist.instances.get(id)).map(|i| i.name.clone());
+            let declared_latency: Option<(f64, String)> = driver_name.as_ref().and_then(|dn| {
+                // safety mechanism on that instance
+                safety
+                    .and_then(|sm| {
+                        sm.scopes.iter().flat_map(|sc| sc.mechanisms.iter()).find(|mm| &mm.instance == dn).and_then(|mm| {
+                            mm.latency.as_deref().and_then(crate::stage_acceptance::parse_si).map(|v| (v, format!("mechanism {dn} latency={}", mm.latency.clone().unwrap_or_default())))
+                        })
+                    })
+                    .or_else(|| {
+                        let i = netlist.instances.iter().find(|(_, i)| &i.name == dn)?.1;
+                        ["latency", "propagation_delay", "t_prop", "response_time"]
+                            .iter()
+                            .find_map(|k| i.attributes.get(*k).and_then(|v| crate::stage_acceptance::parse_si(v)).map(|x| (x, format!("{dn}.{k}"))))
+                    })
+            });
+            // RC on the signal net: pull-up R (resistor with its other pin on a
+            // Power net) × sum of capacitors on the net
+            let rc = sig.as_ref().and_then(|g| g.3).map(|net| {
+                let on_net: Vec<_> = netlist.pin_instances.values().filter(|pi| pi.net == Some(net)).collect();
+                let mut r_pu: Option<f64> = None;
+                let mut c_sum = 0.0;
+                let mut c_n = 0usize;
+                for pi in &on_net {
+                    let Some(i) = netlist.instances.get(pi.instance) else { continue };
+                    let class = i.attributes.get("component_class").map(String::as_str).unwrap_or("");
+                    let val = i.attributes.get("value").and_then(|v| crate::stage_acceptance::parse_si(v));
+                    match class {
+                        "resistor" => {
+                            // other pin on a Power net → pull-up
+                            let to_rail = netlist.pin_instances.values().any(|o| {
+                                o.instance == pi.instance
+                                    && o.net != Some(net)
+                                    && o.net.and_then(|n| netlist.nets.get(n)).map(|n| matches!(n.net_class, bhdl_netlist::types::NetClass::Power { .. })).unwrap_or(false)
+                            });
+                            if to_rail {
+                                if let Some(v) = val { r_pu = Some(r_pu.map_or(v, |r: f64| r.min(v))); }
+                            }
+                        }
+                        "capacitor" => {
+                            if let Some(v) = val { c_sum += v; c_n += 1; }
+                        }
+                        _ => {}
+                    }
+                }
+                (r_pu, c_sum, c_n)
+            });
+            let fw = get("fw_latency").map(|v| (v.clone(), crate::stage_acceptance::parse_si(&v)));
+            match (budget, &declared_latency) {
+                (None, _) => checks.push((format!("latency_max `{l}` is not a time"), false, false)),
+                (Some(_), None) => checks.push((
+                    format!(
+                        "latency_max {l}: driver {} declares no response latency (mechanism `latency=` or a `latency`/`propagation_delay` attribute) — hardware share UNCHECKED, not a pass",
+                        driver_name.clone().unwrap_or_else(|| "?".into())
+                    ),
+                    false,
+                    true,
+                )),
+                (Some(b), Some((lat, lat_src))) => {
+                    let (edge, rc_note) = match rc {
+                        Some((Some(r), c, n)) if c > 0.0 => (2.2 * r * c, format!("RC edge 2.2·({r:.0}Ω×{:.1}nF from {n} cap(s)) = {:.1}µs", c * 1e9, 2.2 * r * c * 1e6)),
+                        Some((Some(r), _, _)) => (0.0, format!("pull-up {r:.0}Ω, no capacitor on the net — RC term 0")),
+                        _ => (0.0, "no pull-up/RC on the net — RC term 0".into()),
+                    };
+                    let hw = lat + edge;
+                    match fw {
+                        Some((txt, Some(f))) => {
+                            let total = hw + f;
+                            checks.push((
+                                format!(
+                                    "latency: hw {:.3}ms ({lat_src} {:.3}ms + {rc_note}) + fw {txt} (declared contract term, not measured) = {:.3}ms ≤ {l}",
+                                    hw * 1e3, lat * 1e3, total * 1e3
+                                ),
+                                total <= b + 1e-12,
+                                false,
+                            ));
+                        }
+                        Some((txt, None)) => checks.push((format!("fw_latency `{txt}` is not a time"), false, false)),
+                        None => checks.push((
+                            format!(
+                                "latency: hw {:.3}ms ({lat_src} {:.3}ms + {rc_note}) ≤ {l}; no fw_latency declared — the firmware share is the software side's unstated budget (hardware share {})",
+                                hw * 1e3, lat * 1e3, if hw <= b { "fits" } else { "ALONE exceeds the budget" }
+                            ),
+                            hw <= b + 1e-12,
+                            false,
+                        )),
+                    }
+                }
+            }
         }
         let status = if checks.iter().any(|c| !c.1 && !c.2) {
             TraceStatus::Violated
@@ -584,7 +691,7 @@ pub fn build_trace_matrix(
             stated_by: "designer (HSI)".into(),
             statement: kv.iter().map(|(k, v)| format!("{k}: {v}")).collect::<Vec<_>>().join("; "),
             implemented_by: implemented,
-            verifier: "netlist: wiring + pin direction + source supply level".into(),
+            verifier: "netlist: wiring + pin direction + source supply level + hw latency (driver latency + RC edge) vs latency_max".into(),
             status,
             evidence: checks.iter().map(|c| format!("{} {}", if c.1 { "ok" } else if c.2 { "UNCHECKED" } else { "NOK" }, c.0)).collect::<Vec<_>>().join("; "),
         });

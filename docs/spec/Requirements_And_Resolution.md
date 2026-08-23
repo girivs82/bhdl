@@ -206,9 +206,17 @@ Principles that fall out:
    with the software view; the supply rail of the part that drives the
    source net matches `level` (±5 %; net classes, not pin types — a
    composite's virtual pin is followed to the real driver). `latency_max`
-   has no verifier (timing is firmware + hardware) and makes the row
-   UNVERIFIED with that stated; `owner` and `source` are the
-   implementers (fw / hw). A wrong net or level is VIOLATED.
+   (landed verifier): the HARDWARE share is derived — the driver's
+   declared response latency (a safety mechanism's `latency=`, or the
+   driving part's `latency` / `propagation_delay` attribute) plus the
+   signal net's RC settling (pull-up R × node C, 2.2·τ for a 10–90 %
+   edge) from the netlist; the FIRMWARE share cannot be measured here
+   and is declared by the contract as `fw_latency` (a stated term the
+   software side owns). `hw + fw ≤ latency_max` is the gate, itemized
+   in the evidence; without `fw_latency` only the hardware share is
+   checked and the row says so; a driver with no declared latency makes
+   the hardware share UNCHECKED. `owner` and `source` are the
+   implementers (fw / hw). A wrong net, level or latency is VIOLATED.
 6. **HSR evidence (landed).** The safety goal *is* the HSR here (goal →
    effect → FTTI → mechanism → measured DC), and it already carries an
    id. `bhdl trace --safety m.json` consumes the campaign model that

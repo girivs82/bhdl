@@ -2273,7 +2273,13 @@ async fn trace_hsr_evidence_and_hsi_contracts() {
     let src = std::fs::read_to_string(ws.join("tests/circuits/realistic/test_safety_supervised_reg.bhdl")).unwrap();
     let src = src.replacen(
         "    rail_b.nFAULT -> r_flag_b: Res(10kΩ).1; r_flag_b.2 -> @GND;\n",
-        "    rail_b.nFAULT -> r_flag_b: Res(10kΩ).1; r_flag_b.2 -> @GND;\n    hsi HSI_FAULT_A { signal: r_flag_a.1; direction: input; level: 5V; active: low; source: rail_a.nFAULT; latency_max: 10ms; owner: \"fw/safety_monitor\"; }\n    hsi HSI_BAD { signal: r_flag_a.1; direction: output; level: 3.3V; source: rail_b.nFAULT; }\n    hsi HSI_GOOD { signal: r_flag_b.1; direction: input; level: 5V; source: rail_b.nFAULT; }\n",
+        "    rail_b.nFAULT -> r_flag_b: Res(10kΩ).1; r_flag_b.2 -> @GND;\n    hsi HSI_FAULT_A { signal: r_flag_a.1; direction: input; level: 5V; active: low; source: rail_a.nFAULT; latency_max: 10ms; owner: \"fw/safety_monitor\"; }\n    hsi HSI_BAD { signal: r_flag_a.1; direction: output; level: 3.3V; source: rail_b.nFAULT; }\n    hsi HSI_GOOD { signal: r_flag_b.1; direction: input; level: 5V; source: rail_b.nFAULT; }\n    hsi HSI_TIMED { signal: r_flag_a.1; direction: input; level: 5V; source: rail_a.nFAULT; latency_max: 10ms; fw_latency: 2ms; }\n    hsi HSI_SLOW { signal: r_flag_a.1; direction: input; level: 5V; source: rail_a.nFAULT; latency_max: 1ms; fw_latency: 2ms; }\n",
+        1,
+    )
+    // the rail-A monitor declares its response latency (FIXTURE value)
+    .replacen(
+        "mechanism dut.mon: psm(SG_OV, detects=[overvoltage, silent_ov], dc=0.90,",
+        "mechanism dut.mon: psm(SG_OV, detects=[overvoltage, silent_ov], dc=0.90, latency=25us,",
         1,
     );
     let pr = parse(&src);
@@ -2301,9 +2307,19 @@ async fn trace_hsr_evidence_and_hsi_contracts() {
     let good = row(&m, "HSI_GOOD");
     assert_eq!(good.status, TraceStatus::Verified, "{good:#?}");
     assert!(good.evidence.contains("ok wiring") && good.evidence.contains("ok direction") && good.evidence.contains("ok level: source supply rail 5.00V"), "{good:#?}");
+    // latency: the hardware share is DERIVED (driver's declared latency +
+    // RC edge on the net); fw_latency is a declared contract term
     let a = row(&m, "HSI_FAULT_A");
-    assert_eq!(a.status, TraceStatus::Unverified, "{a:#?}");
-    assert!(a.evidence.contains("latency_max 10ms: no verifier"), "{a:#?}");
+    assert_eq!(a.status, TraceStatus::Verified, "{a:#?}");
+    assert!(a.evidence.contains("ok latency: hw 0.025ms (mechanism rail_a_mon latency=25us"), "{a:#?}");
+    assert!(a.evidence.contains("no fw_latency declared"), "{a:#?}");
+    let t = row(&m, "HSI_TIMED");
+    assert_eq!(t.status, TraceStatus::Verified, "{t:#?}");
+    assert!(t.evidence.contains("+ fw 2ms (declared contract term, not measured) = 2.025ms ≤ 10ms"), "{t:#?}");
+    let slow = row(&m, "HSI_SLOW");
+    assert_eq!(slow.status, TraceStatus::Violated, "{slow:#?}");
+    assert!(slow.evidence.contains("NOK latency") && slow.evidence.contains("≤ 1ms"), "{slow:#?}");
+
     assert!(a.implemented_by.iter().any(|i| i == "fw: fw/safety_monitor"), "{a:#?}");
     let bad = row(&m, "HSI_BAD");
     assert_eq!(bad.status, TraceStatus::Violated, "{bad:#?}");
