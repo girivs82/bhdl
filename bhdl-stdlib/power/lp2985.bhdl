@@ -21,6 +21,7 @@ entity LP2985(part_no: string = "LP2985-3.3",
     attribute family          = "LP2985";
     attribute output_voltage  = 3.3V;
     attribute output_current  = 0.15;
+    attribute output_noise    = 30uV;   // TI datasheet RMS output noise, 10Hz–100kHz, C_BP = 10nF
     attribute dropout_v       = 0.28;
     attribute dropout_voltage = 280mV;  // datasheet typ at 150mA
     attribute i_quiescent     = 850uA;  // ground-pin current at rated 150mA load (typ)

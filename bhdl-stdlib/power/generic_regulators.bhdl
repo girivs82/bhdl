@@ -12,6 +12,15 @@
 //
 // These are placeholders: no expansion blocks, no vendor data — a
 // board carrying them is a planned tree, not a finished design.
+//
+// NOISE CONVENTION for real regulators: `attribute output_noise =
+// <µVrms>;` — the datasheet's RMS output-noise figure (state the
+// bandwidth and bypass condition in the trailing comment). Declared
+// ONLY where the datasheet states one: switching parts give ripple,
+// not noise, and must not declare ripple here. ERC032 compares a
+// committed part's output_noise against the tree's
+// powertree_noise_assumed_uvrms; an undeclared figure is UNCHECKED
+// and said so — never a pass.
 
 entity GenericBuck(vin: voltage, vout: voltage, rated: current) {
     pin VIN: power in;

@@ -21,6 +21,9 @@ entity LinearRegulator<V_OUT: voltage, HAS_EN: bool = false>(
     attribute output_voltage = V_OUT;
     attribute dropout_voltage = dropout;
     attribute i_quiescent = i_quiescent;
+    // 78xx-class RMS output noise (TI µA7805: 40µV, 10Hz–100kHz) — the
+    // same class the generic's dropout/Iq defaults come from
+    attribute output_noise = 40uV;
 
     expansion {
         VIN -> C_in: Cap(c_in).1; C_in.2 -> GND;

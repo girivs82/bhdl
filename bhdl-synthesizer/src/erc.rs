@@ -2993,6 +2993,58 @@ pub fn check_powertree_acceptance(
                 standard_reference: None,
             }),
         }
+        // output noise: the stdlib convention `output_noise = <µVrms>`
+        // (datasheet RMS figure). A committed part noisier than the
+        // tree assumed breaks the noise-sensitive loads the stage was
+        // chosen for; undeclared = UNCHECKED, stated.
+        if let Some(assumed_uv) = inst
+            .attributes
+            .get("powertree_noise_assumed_uvrms")
+            .and_then(|v| v.parse::<f64>().ok())
+        {
+            let parse_uv = |v: &str| -> Option<f64> {
+                let v = v.trim().trim_end_matches("rms").trim_end_matches("RMS").trim();
+                let end = v.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(v.len());
+                let num: f64 = v[..end].parse().ok()?;
+                match v[end..].trim() {
+                    "uV" | "µV" => Some(num),
+                    "mV" => Some(num * 1e3),
+                    "V" => Some(num * 1e6),
+                    "" => Some(num),
+                    _ => None,
+                }
+            };
+            match inst.attributes.get("output_noise").and_then(|v| parse_uv(v)) {
+                Some(declared) if declared > assumed_uv + 1e-9 => out.push(DRCViolation {
+                    rule_id: "ERC032".into(),
+                    rule_name: "Power-tree acceptance".into(),
+                    category: RuleCategory::Electrical,
+                    severity: ViolationSeverity::Error,
+                    description: format!(
+                        "'{}' ({}) declares {declared:.0}µVrms output noise but the tree assumed ≤ {assumed_uv:.0}µVrms for this stage — the noise-sensitive loads it serves are no longer met",
+                        inst.name, module_name
+                    ),
+                    location: ViolationLocation::Component(inst_id),
+                    fix_suggestion: "pick a quieter part, or re-run powertree so the stage is re-derived (post-regulation) for this part's real figure".into(),
+                    standard_reference: None,
+                }),
+                Some(_) => {}
+                None => out.push(DRCViolation {
+                    rule_id: "ERC032".into(),
+                    rule_name: "Power-tree acceptance".into(),
+                    category: RuleCategory::Electrical,
+                    severity: ViolationSeverity::Info,
+                    description: format!(
+                        "'{}' ({}): noise acceptance UNCHECKED — the part declares no output_noise figure (tree assumed ≤ {assumed_uv:.0}µVrms)",
+                        inst.name, module_name
+                    ),
+                    location: ViolationLocation::Component(inst_id),
+                    fix_suggestion: "declare `attribute output_noise = <datasheet µVrms>;` where the datasheet states one (switching parts state ripple, not noise — leave undeclared)".into(),
+                    standard_reference: None,
+                }),
+            }
+        }
+
         // efficiency: only checkable when the part declares one
         if let Some(assumed) = inst
             .attributes

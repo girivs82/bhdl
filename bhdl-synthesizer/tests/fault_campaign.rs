@@ -1376,6 +1376,42 @@ async fn powertree_swap_by_rename_to_real_part() {
             && x.description.contains("silently shrank")),
         "under-rated rename must be an Error: {v3:#?}"
     );
+
+    // ── noise convention: the 1.8V stage assumed the low-noise LDO
+    // class (30µVrms). Committing LP2985 (datasheet 30µVrms) passes;
+    // committing a 78xx-class part (40µVrms) is the noise Error. ──
+    let quiet = emitted
+        .replace("u_v1v8: GenericLdo(vin=3.3V, vout=1.8V, rated=0.1A);", "u_v1v8: LP2985();")
+        .replace(
+            "import { GenericBuck, GenericBuckExt, GenericLdo, GenericPrereg } from \"bhdl-stdlib/power/generic_regulators.bhdl\";",
+            "import { GenericBuck, GenericBuckExt, GenericLdo, GenericPrereg } from \"bhdl-stdlib/power/generic_regulators.bhdl\";\nimport { LP2985 } from \"bhdl-stdlib/power/lp2985.bhdl\";",
+        );
+    let sfq = SourceFile::cast(parse(&quiet).syntax()).unwrap();
+    let aq = analyze(&sfq);
+    let mut gq = NetlistGenerator::new();
+    let nq = gq.generate_from_ast_and_analysis(&sfq, &aq).await.expect("LP2985 board synthesizes");
+    let vq = bhdl_synthesizer::erc::check_powertree_acceptance(&nq, &aq);
+    assert!(
+        !vq.iter().any(|x| x.description.contains("u_v1v8") && x.description.contains("output noise")),
+        "30µVrms part meets the 30µVrms assumption: {vq:#?}"
+    );
+    let loud = emitted
+        .replace("u_v1v8: GenericLdo(vin=3.3V, vout=1.8V, rated=0.1A);", "u_v1v8: LM7805();")
+        .replace(
+            "import { GenericBuck, GenericBuckExt, GenericLdo, GenericPrereg } from \"bhdl-stdlib/power/generic_regulators.bhdl\";",
+            "import { GenericBuck, GenericBuckExt, GenericLdo, GenericPrereg } from \"bhdl-stdlib/power/generic_regulators.bhdl\";\nimport { LM7805 } from \"bhdl-stdlib/power/lm7805.bhdl\";",
+        );
+    let sfl = SourceFile::cast(parse(&loud).syntax()).unwrap();
+    let al = analyze(&sfl);
+    let mut gl = NetlistGenerator::new();
+    let nl = gl.generate_from_ast_and_analysis(&sfl, &al).await.expect("LM7805 board synthesizes");
+    let vl = bhdl_synthesizer::erc::check_powertree_acceptance(&nl, &al);
+    assert!(
+        vl.iter().any(|x| x.severity == bhdl_synthesizer::design_rule_checker::ViolationSeverity::Error
+            && x.description.contains("u_v1v8")
+            && x.description.contains("output noise")),
+        "40µVrms part against a 30µVrms assumption must be the noise Error: {vl:#?}"
+    );
 }
 
 /// Partness (`entity X as part|design`): the declared bit — a design

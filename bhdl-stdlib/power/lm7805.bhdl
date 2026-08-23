@@ -28,6 +28,7 @@ entity LM7805() {
     // regulator decomposition + linear-loss power model
     // (P = (V_in − V_out)·I_load + V_in·I_q):
     attribute output_current  = 1.5A;   // rated output (with adequate heatsinking)
+    attribute output_noise    = 40uV;   // TI µA7805 datasheet RMS output noise, 10Hz–100kHz, V_O = 5V
     attribute dropout_voltage = 2V;     // V_IN − V_OUT required for regulation
     attribute i_quiescent     = 6mA;    // ground-pin (quiescent) current, typ
     attribute power_rating    = 2W;  // TO-220 free-air dissipation (no heatsink), datasheet class
