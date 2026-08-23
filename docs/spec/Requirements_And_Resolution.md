@@ -429,3 +429,39 @@ Principles that fall out:
    interface requirements; designer-authored behavioral requirements
    ("ripple ≤ 20mV") as first-class rows need their own verifiers
    first — per the rule, they are documentation until then.
+
+## 6. Library coverage (per interface)
+
+The survey prints this every build for the requirement at hand; this is
+the standing picture. *auto* = a genuine block the resolver may bind on
+its own; *template* = listed (⧖), committed only by a `resolve … = Block(
+<the designer's args>)` override. A function a block does not declare is
+UNCHECKED against a requirement that states it — never a pass.
+
+| Interface | Block | Binds | Promises | UNCHECKED (not provided) | The designer supplies |
+|---|---|---|---|---|---|
+| `BuckStage` | `Buck_TPS54331` | auto | 3 A, 3.5–28 V, 89 %, −40…85 °C | noise, qual | — |
+| `BuckStage` | `Buck_TPS54302` | auto | 3 A, 4.5–28 V, 92 % | noise, temp, qual | — |
+| `BuckStage` | `Buck_AP63205` | auto (5 V SKU only) | 2 A, 3.8–32 V | noise, temp, qual, efficiency | — |
+| `BuckStage` | `BuckRegulator` (LM2596 class) | template | headroom envelope only | i_max, vin range, noise, temp, qual | class numbers |
+| `LdoStage` | `Ldo_LP2985` | auto | 150 mA, 2.5–16 V, 30 µV | temp, qual | — |
+| `LdoStage` | `Ldo_XC6206` | auto | 200 mA, 1.8–6 V | noise, temp, qual | — |
+| `LdoStage` | `Ldo_AP2112K` | auto (1.8/2.5/3.3 V SKUs) | 600 mA, 2.5–6 V | noise, temp, qual | — |
+| `LdoStage` | `Ldo_LM7805` | auto (5 V) | 1.5 A, 7–35 V, 40 µV | temp, qual | — |
+| `LdoStage` | `Ldo_LM317` | auto (1.35–37 V) | 1.5 A, ≤ 40 V in | vin_min, noise, temp, qual | — |
+| `LdoStage` | `Ldo_NCP1117` | auto (5 V) | 1 A | vin range, noise, temp, qual | — |
+| `LdoStage` | `LinearRegulator` (78xx class) | template | 40 µV class, headroom | i_max, vin range, temp, qual | class numbers |
+| `BuckExtStage` | `BuckController` | template | 1 phase; rating = the FETs' | vin range, noise, temp, qual | FETs + axes |
+| `PreregStage` | `PassiveFrontEnd` (fuse + TVS) | auto | fuse rating, `ov_clamp`, 0 V … clamp point | ov_trip, uv_trip, reverse_polarity, temp, qual | — |
+| `PreregStage` | `Efuse_TPS2660` | template | 2 A, 4.2–55 V, `ov_trip`, `uv_trip`, `reverse_polarity` | ov_clamp, temp, qual | `r_ilim` (ILIM law not in the library) |
+| `PreregStage` | `IdealDiode_LM74700` | template | rating = the FET's, 3.2–65 V, `reverse_polarity`, AEC-Q100 | ov_clamp, ov_trip, uv_trip, temp | pass FET + axes |
+
+Reading the table is the point: a `PreregStage` requirement that states
+`reverse_polarity` has no auto-bindable block — the designer must choose
+the eFuse (and supply its current-limit resistor) or the ideal diode
+(and supply its FET); one that states only `ov_clamp` binds the passive
+front end on its own. No block in the library declares output noise for
+a switcher (ripple is not noise) or a qualification other than the
+LM74700-Q1's — an `AEC-Q100` buck or LDO requirement resolves to
+nothing, honestly. The "Promises" column is what ERC032 re-checks on the
+flattened circuit every build.
