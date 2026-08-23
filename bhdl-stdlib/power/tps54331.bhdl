@@ -1,12 +1,27 @@
 // TPS54331: TI 3A step-down (buck) converter (SLVSA86).
 //
-// The FIRST stdlib entity to size its REACTIVE support components
-// (inductor + input/output caps) from electrical targets via a
-// `design { }` block — the buck analogue of LM317's resistor-divider
-// sizing. Earlier the L/C were fixed parameter defaults; now they are
-// computed from V_OUT, V_IN, I_out, f_sw and the ripple targets, then
-// substituted into the expansion children by variable name (the same
-// design→expansion path LM317 uses, task #88).
+// THE TEMPLATE for the two-layer library model
+// (docs/spec/Requirements_And_Resolution.md §1): this file carries two
+// entities —
+//
+//   TPS54331      as part    — VENDOR TRUTH. The silicon: exact pins,
+//                              package, datasheet attributes. No
+//                              application circuit. Every figure cites
+//                              the datasheet.
+//   Buck_TPS54331 as design  — THE DESIGNER'S SUBCIRCUIT. Instantiates
+//                              the part, adds the application circuit
+//                              sized by TI's design procedure, exposes
+//                              the contract pins (VIN / VOUT / GND / EN).
+//                              Built once, reviewed against the
+//                              datasheet, parameterized by the
+//                              application's requirements, reused.
+//
+// The block is what the board sees as "the regulator": it carries the
+// behavioral model attributes the solver/sign-off read (class
+// switching_regulator, f_sw, rds_on, …) and the promises the power
+// tree's acceptance check reads (output_current, efficiency). Committing
+// a real part to a power-tree stage = renaming the Generic* placeholder
+// to this block; wiring is untouched because the pin contract matches.
 //
 // Sized components (TI SLVSA86 application equations):
 //   - L_out : (V_IN−V_OUT)·D / (f_sw·ΔI_L),  ΔI_L = ripple_ratio·I_out
@@ -31,73 +46,101 @@
 //   1. seed         — these closed-form values
 //   2. simulate     — refine to the real-valued requirement
 //   3. snap         — nearest E-series (real part)
-//   4. simulate     — validate the ON-GRID value vs base spec; a bad
-//                     down-snap shows up HERE, before any margin can mask
-//                     it (step up one E-series value and re-validate)
-//   5. margin       — derate for ageing/reliability, applied in the
-//                     SIM-DETERMINED safe direction (not assumed "up"):
-//                     sensitivity ∂slack/∂value picks the direction that
-//                     increases slack to the binding constraint. One-sided
-//                     spec → step along the E-series grid away from the
-//                     boundary (up OR down per the component's circuit
-//                     role); two-sided window (e.g. an FB divider, a gate
-//                     resistor) → step toward the window centre. Margin is
-//                     additive on the grid, never absorbed by rounding —
-//                     which is why snap precedes margin.
+//   4. simulate     — validate the ON-GRID value vs base spec
+//   5. margin       — derate for ageing/reliability, in the SIM-DETERMINED
+//                     safe direction; additive on the grid, never absorbed
+//                     by rounding
 //   6. simulate     — sign off on the as-built, margined, on-grid value
 //
-// Use site (board):  buck: TPS54331_3V3();  or  TPS54331(v_out: 5V, v_in: 12V).
-//
-// All electrical targets are constructor params with sane defaults, so a
-// bare `TPS54331_3V3()` sizes for a 12V→3.3V @ 2A rail; override any of
-// them at the call site for a different operating point.
+// Use site (board):  buck: TPS54331_3V3();  or  Buck_TPS54331(v_out=5V, v_in=12V).
 //
 // `v_out` is a regular constructor parameter, NOT a generic `<…>`: it
 // changes computed values (divider ratio, L/C via duty cycle), not the
-// entity's structure (same pins, same expansion topology), so it belongs
-// in the `design { }` self-readable parameter set — the same modelling
-// LM317 uses. Generics are reserved for structural parameters (bus width,
-// lane count). The SKU aliases below bind it as a positional arg.
+// block's structure (same pins, same topology), so it belongs in the
+// `design { }` self-readable parameter set. Generics are reserved for
+// structural parameters (bus width, lane count). The SKU aliases below
+// bind it as a positional arg.
 
-entity TPS54331(
-    v_out:        voltage     = 3.3V,    // regulated output (sets divider + duty)
-    v_in:         voltage     = 12V,     // input rail (sets duty cycle)
-    i_out_max:    current     = 2A,      // max load current
-    f_sw:         frequency   = 570kHz,  // internal oscillator (fixed-freq part)
-    ripple_ratio: float       = 0.3,     // ΔI_L / I_out (datasheet 0.2–0.4)
-    ripple_v:     voltage      = 30mV,   // target output ripple
-    ripple_v_in:  voltage      = 150mV,  // target input ripple
-    r_fb_bot:     resistance   = 10kΩ,   // FB divider reference resistor
-    diode_vf:     voltage      = 0.45V,
-    dropout:      voltage      = 0.5V,
-    rds_on:       resistance   = 90mΩ,
-    t_sw:         time         = 20ns,
-    i_quiescent:  current      = 3.4mA
-) {
+// ── Vendor truth ────────────────────────────────────────────────────
+entity TPS54331 as part {
     pin VIN:  power in;
-    pin VOUT: power out virtual;
     pin SW:   switch out;
     pin FB:   feedback in;
     pin BOOT: signal inout;
     pin EN:   signal in;
     pin GND:  ground;
 
+    attribute component_class   = "regulator_ic";   // the silicon, not "a regulator the board sees"
+    attribute manufacturer      = "Texas Instruments";
+    attribute part_number       = "TPS54331";
+    attribute output_current    = 3A;       // SLVSA86: 3A continuous output current
+    attribute f_sw              = 570kHz;   // internal fixed-frequency oscillator
+    attribute rds_on            = 90mΩ;     // high-side MOSFET, typ
+    attribute t_sw              = 20ns;     // switching transition class
+    attribute i_quiescent       = 3.4mA;    // operating quiescent current, typ
+    attribute dropout_voltage   = 0.5V;     // minimum V_IN − V_OUT for regulation (application class)
+    // Datasheet SLVS839 efficiency curves: ~89% typical mid-load for the
+    // 12V→3.3V application (Fig. 1).
+    attribute efficiency        = 89%;
+    // 0.8V internal reference (SLVS839 §7.3.2) + the sheet's display form
+    // of the FB relation (datasheet Eq. 1).
+    attribute feedback_voltage  = 0.8V;
+    attribute fb_equation       = "VOUT = {VREF}*(1 + {R1}/{R2})";
+}
+
+symbol TPS54331 {
+    left   { VIN, EN, BOOT }
+    right  { SW, FB }
+    bottom { GND }
+}
+
+layout TPS54331 {
+    package HTSSOP-16;
+}
+
+// ── The designer's subcircuit ───────────────────────────────────────
+entity Buck_TPS54331(
+    v_out:        voltage     = 3.3V,    // regulated output (sets divider + duty)
+    v_in:         voltage     = 12V,     // input rail (sets duty cycle)
+    i_out_max:    current     = 2A,      // max load current
+    f_sw:         frequency   = 570kHz,  // internal oscillator (fixed-freq part)
+    ripple_ratio: float       = 0.3,     // ΔI_L / I_out (datasheet 0.2–0.4)
+    ripple_v:     voltage     = 30mV,    // target output ripple
+    ripple_v_in:  voltage     = 150mV,   // target input ripple
+    r_fb_bot:     resistance  = 10kΩ,    // FB divider reference resistor
+    diode_vf:     voltage     = 0.45V,
+    dropout:      voltage     = 0.5V,
+    rds_on:       resistance  = 90mΩ,
+    t_sw:         time        = 20ns,
+    i_quiescent:  current     = 3.4mA
+) as design {
+    // Contract pins (the regulator pin contract): the board wires
+    // these and nothing else. VOUT is virtual — the block's children
+    // (L_out, C_out, the divider) ARE its copper.
+    pin VIN:  power in;
+    pin VOUT: power out virtual;
+    pin EN:   signal in;
+    pin GND:  ground;
+
+    // What the board sees: the regulator. The solver's regulator
+    // decomposition and the sign-off ripple/input-draw models read these
+    // from the block (the silicon underneath has no switching model of
+    // its own). Figures mirror the part's datasheet attributes above —
+    // the block's PROMISES, which ERC032 checks a power-tree stage
+    // against.
     attribute component_class = "switching_regulator";
     attribute output_voltage = v_out;
+    attribute output_current = 3A;        // promise = the part's rating (SLVSA86)
     attribute f_sw = f_sw;
     attribute rds_on = rds_on;
     attribute t_sw = t_sw;
     attribute i_quiescent = i_quiescent;
-    // Datasheet SLVS839 efficiency curves: ~89% typical mid-load for the
-    // 12V→3.3V application (Fig. 1). Read by the S4b input-draw stamp.
-    attribute efficiency = 89%;
-    // 0.8V internal reference (SLVS839 §7.3.2) + the sheet's display form
-    // of the FB relation (datasheet Eq. 1).
+    attribute efficiency = 89%;           // SLVS839 Fig. 1, 12V→3.3V mid-load
     attribute feedback_voltage = 0.8V;
     attribute fb_equation = "VOUT = {VREF}*(1 + {R1}/{R2})";
 
     // Reactive + divider sizing. Runs once per instance, after
-    // constructor binding, before expansion materialisation. Each line
+    // constructor binding, before the children materialise. Each line
     // is a single binary op into a `const` because `parse_expression`
     // currently mishandles chained mixed-precedence binops (same
     // discipline as lm317.bhdl). All quantities evaluate in SI base
@@ -107,6 +150,11 @@ entity TPS54331(
         const vout  = self.v_out;                // regulated output target
         require vout < self.v_in
             else "buck V_OUT must be below V_IN";
+        // VALIDITY ENVELOPE (the block's generality, enforced): the part
+        // is rated 3A; the power-tree derating policy runs parts at
+        // ≤80% of nameplate. Outside this envelope is a different block.
+        require self.i_out_max <= 2.4
+            else "Buck_TPS54331 envelope: i_out_max exceeds 2.4A (3A rating × 0.8 derating)";
 
         const duty  = vout / self.v_in;          // D = V_OUT / V_IN
         const vdiff = self.v_in - vout;          // V_IN − V_OUT
@@ -117,17 +165,12 @@ entity TPS54331(
         const l_den = self.f_sw * d_il;
         l_value     = l_num / l_den;
 
-        // Inductor SATURATION-CURRENT requirement, sized from the operating
-        // point: I_peak = I_out + ΔI_L/2, with 1.6× headroom over peak (the
-        // part's Isat/Irms must clear this or it saturates in the power
-        // path; sign-off derates I_pk by 1.25× and wants 1.2× margin on
-        // top, so 1.5× is the policy floor — 1.6× leaves slack for the
+        // Inductor SATURATION-CURRENT requirement from the operating
+        // point: I_peak = I_out + ΔI_L/2, with 1.6× headroom over peak
+        // (sign-off derates I_pk by 1.25× and wants 1.2× margin on top,
+        // so 1.5× is the policy floor — 1.6× leaves slack for the
         // GLACIER-refined peak exceeding this closed form). Flows to the
-        // inductor as `rated_current` → the supply provider's current
-        // gate. This is the L analogue of the divider /
-        // L / C sizing already done here — a sizing output, not a board
-        // parameter. (A GLACIER-refined I_peak supersedes this closed form
-        // once the in-loop stress model lands.)
+        // inductor as `rated_current` → the supply provider's current gate.
         const il_half     = d_il / 2.0;
         const i_peak      = self.i_out_max + il_half;
         l_rated_current   = i_peak * 1.6;
@@ -151,38 +194,41 @@ entity TPS54331(
         r_top_value   = vov * r_scale;
     }
 
-    // The computed values flow in by variable name (`Ind(l_value)` etc.);
-    // R_bot, the catch diode and the bootstrap cap are datasheet-fixed.
+    // The application circuit — FIRM children (plain-body composition):
+    // the designer asked for exactly these. The computed values flow in
+    // by variable name (`Ind(l_value)` etc.); R_bot, the catch diode and
+    // the bootstrap cap are datasheet-fixed.
+    u: TPS54331();
+    VIN -> u.VIN;
+    u.GND -> GND;
+    EN -> u.EN;
+
     // The input cap carries the switching_input_filter intent so the
     // placer keeps the hot V_IN→C_in→GND loop tight (the EMC-critical
     // loop); the intent rides the standalone decl, the wiring references
     // the instance.
-    expansion {
-        C_in: Cap(c_in_value) for switching_input_filter(rail: VIN, return: GND, loop_area_max: 2.0mm2, switch_node_keepaway: 1.0mm);
-        VIN -> C_in.1; C_in.2 -> GND;
+    C_in: Cap(c_in_value) for switching_input_filter(rail: VIN, return: GND, loop_area_max: 2.0mm2, switch_node_keepaway: 1.0mm);
+    VIN -> C_in.1; C_in.2 -> GND;
 
-        SW -> L_out: Ind(l_value, rated_current = l_rated_current).1; L_out.2 -> VOUT;
-        GND -> D_catch: Diode(diode_vf).A; D_catch.K -> SW;
-        VOUT -> C_out: Cap(c_out_value).1; C_out.2 -> GND;
-        // FB divider sets V_OUT = V_REF·(1 + R_top/R_bot); its ratio
-        // accuracy and temperature stability set the output-voltage
-        // accuracy, so these are PRECISION parts — the recipe states that
-        // as part attributes on the ordinary `Res` (no special type):
-        //   tolerance: 1%      → hard grade gate, ≤1% parts (vs the 5%
-        //                        default that loads/pull-ups get);
-        //   supply_profile: grade → prefer tight tolerance + low drift.
-        // The board designer writes nothing; a bare `bhdl bom` resolves
-        // these to thin-film, low-TC parts automatically.
-        VOUT -> R_top: Res(r_top_value, tolerance = 1%, supply_profile = "grade").1; R_top.2 -> FB;
-        FB -> R_bot: Res(r_fb_bot, tolerance = 1%, supply_profile = "grade").1; R_bot.2 -> GND;
-        BOOT -> C_boot: Cap(100nF).1; C_boot.2 -> SW;
-    }
+    u.SW -> L_out: Ind(l_value, rated_current = l_rated_current).1; L_out.2 -> VOUT;
+    GND -> D_catch: Diode(diode_vf).A; D_catch.K -> u.SW;
+    VOUT -> C_out: Cap(c_out_value).1; C_out.2 -> GND;
+    // FB divider sets V_OUT = V_REF·(1 + R_top/R_bot); its ratio
+    // accuracy and temperature stability set the output-voltage
+    // accuracy, so these are PRECISION parts — stated as part attributes
+    // on the ordinary `Res`: tolerance 1% (hard grade gate) and the
+    // "grade" supply profile (prefer tight tolerance + low drift). A bare
+    // `bhdl bom` resolves these to thin-film, low-TC parts automatically.
+    VOUT -> R_top: Res(r_top_value, tolerance = 1%, supply_profile = "grade").1; R_top.2 -> u.FB;
+    u.FB -> R_bot: Res(r_fb_bot, tolerance = 1%, supply_profile = "grade").1; R_bot.2 -> GND;
+    u.BOOT -> C_boot: Cap(100nF).1; C_boot.2 -> u.SW;
 
-    // §4 device-stress IP: how this buck stresses its own expansion children
-    // at the solved operating point (child references are the expansion names
-    // above — sign-off maps them onto the prefixed refdes, U1_L_out …). Same
-    // TI application forms the design block sizes with, but run against the
-    // SNAPPED values, so the margins reflect the as-built parts.
+    // §4 device-stress IP: how this stage stresses its own children at
+    // the solved operating point (child references are the local names
+    // above — sign-off maps them onto the prefixed refdes, buck_L_out …).
+    // Same TI application forms the design block sizes with, but run
+    // against the SNAPPED values, so the margins reflect the as-built
+    // parts.
     simulation {
         stress {
             const duty = vout / vin;
@@ -195,16 +241,8 @@ entity TPS54331(
 }
 
 // SKU aliases bind `v_out` positionally (first param) — same alias-with-
-// constructor-arg form as `alias 2N2222 = BJT("2N2222")`.
-alias TPS54331_3V3 = TPS54331(3.3V);
-alias TPS54331_5V = TPS54331(5V);
-
-symbol TPS54331 {
-    left   { VIN, EN, BOOT }
-    right  { SW, FB }
-    bottom { GND }
-}
-
-layout TPS54331 {
-    package HTSSOP-16;
-}
+// constructor-arg form as `alias 2N2222 = BJT("2N2222")`. They name the
+// BLOCK: a board asking for a 3.3V TPS54331 stage gets the reviewed
+// application circuit, never the bare silicon.
+alias TPS54331_3V3 = Buck_TPS54331(3.3V);
+alias TPS54331_5V = Buck_TPS54331(5V);

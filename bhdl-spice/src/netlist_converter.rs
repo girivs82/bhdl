@@ -1253,6 +1253,33 @@ impl NetlistToSpiceConverter {
                     debug!("Skipping logical module: {}", instance.name);
                 }
             }
+            ModuleKind::DesignBlock => {
+                // A DESIGN BLOCK (`entity X as design`) is composition — its
+                // children are the physical parts. But in the two-layer
+                // library model (docs/spec/Requirements_And_Resolution.md)
+                // the BLOCK is what the board sees as "the regulator": the
+                // bare silicon underneath has no switching model of its
+                // own, so the behavioral regulator model (VOUT source +
+                // dropout connectivity) lives on the block, exactly as it
+                // lived on the old conflated entity. Route regulator-class
+                // blocks through the physical path; pure compositions
+                // (no electrical model of their own) stay skipped.
+                if matches!(
+                    extracted_model.component_type,
+                    crate::components::ComponentType::VoltageRegulator
+                ) {
+                    self.add_physical_component(
+                        circuit,
+                        netlist,
+                        &instance.name,
+                        instance_id,
+                        &connected_nets,
+                        extracted_model,
+                    )?;
+                } else {
+                    debug!("Skipping design block (composition only): {}", instance.name);
+                }
+            }
             _ => {
                 debug!("Skipping module kind {:?} for {}", module.kind, instance.name);
             }

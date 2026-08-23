@@ -1,7 +1,8 @@
 # Requirements, Blocks, and Resolution — the library model
 
-Status: design record (settled in discussion 2026-08-23; implementation
-pending, first increment = the TPS54331 part/block split). Companion to
+Status: design record (settled in discussion 2026-08-23). Increment 1
+(the TPS54331 part/block split, `bhdl-stdlib/power/tps54331.bhdl`) is
+LANDED and is the template; increments 2–3 pending. Companion to
 `Expansion_Vs_Hierarchy.md`, which settled composition under `entity`.
 
 ## 1. The two-layer library
@@ -191,11 +192,21 @@ Principles that fall out:
 
 ## 5. First increments
 
-1. Split TPS54331 as the template: `TPS54331 as part` (pins, datasheet
-   attrs) + `Buck_TPS54331(vout, i_max, vin_min, vin_max, ripple, …) as
-   design` with derived internals, `where` envelope, `wired(EN)`
-   gating, boundary promises; point the pin-contract test, power-tree
-   emission and ERC032 at the block; round-trip gate and corpus hold.
+1. DONE — TPS54331 split as the template: `TPS54331 as part` (pins,
+   package, datasheet attrs, class `regulator_ic`) + `Buck_TPS54331(v_out,
+   v_in, i_out_max, ripple, …) as design` (contract pins VIN/VOUT
+   virtual/EN/GND, class `switching_regulator`, promises, sized
+   internals, envelope `require i_out_max <= 2.4A` = 3A × 0.8 derating
+   as a hard synthesis error). The SKU aliases name the block. The
+   silicon's pins are reachable as `U1.u.SW`. Consumers: the chooser
+   skips `as part` candidates and treats `as design` as self-expanding;
+   the SPICE converter models a regulator-class design block as the
+   regulator. Not yet: the `where` clause form (the envelope is a
+   `require` in `design { }`), `wired(EN)` gating. Hardening that fell
+   out: a failed expansion / design-recipe `require` is now a synthesis
+   ERROR, not a log line — it exposed two stdlib recipes wiring
+   `TVSDiode` pins `1/2` (declared `A/K`) that had been silently
+   dropping the USB ESD diodes.
 2. `BuckStage` / `LdoStage` requirement interfaces; the power tree emits
    requirement instantiations; the resolver grows from the `supply`
    survey code with the cost function, provider data and qualification

@@ -723,7 +723,8 @@ impl NetlistGenerator {
                     &analysis.entity_attribute_index,
                     &analysis.entity_param_names,
                     &analysis.entity_attr_param_refs,
-                );
+                )
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
                 let grew = self.netlist.instances.len() > before;
                 info!(
                     "Phase 4.5 round {round}: expansion produced {} expanded instance(s)",

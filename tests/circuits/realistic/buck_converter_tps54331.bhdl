@@ -1,8 +1,9 @@
-// Buck Converter using TPS54331 with Virtual Pin
-// Tests virtual pin expansion and synthesis knowledge
-// 12V to 5V @ 2A using TPS54331's virtual VOUT pin
+// Buck Converter using the Buck_TPS54331 design block
+// Tests the two-layer library model: the board wires the block's
+// contract pins; the block composes the TPS54331 part + application circuit.
+// 12V to 5V @ 2A
 
-import { TPS54331 } from "bhdl-stdlib/power/tps54331.bhdl";
+import { Buck_TPS54331 } from "bhdl-stdlib/power/tps54331.bhdl";
 import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
 import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 import { TestPoint } from "bhdl-stdlib/connectors/testpoint.bhdl";
@@ -19,8 +20,8 @@ board BuckConverterTPS54331 {
     VIN -> C_IN2: Cap(0.1µF, voltage=25V).1;  
     C_IN2.2 -> GND;
     
-    // Buck controller with virtual pin
-    U1: TPS54331(v_out=5V);
+    // Buck stage (design block; VOUT is its virtual contract pin)
+    U1: Buck_TPS54331(v_out=5V);
     VIN -> U1.VIN;
     U1.GND -> GND;
     U1.EN -> VIN;  // Always enabled
@@ -40,10 +41,12 @@ board BuckConverterTPS54331 {
     @VOUT_5V -> R_LOAD: Res(2.5Ω, wattage=10W).1;
     R_LOAD.2 -> GND;
     
-    // Optional: Add test points
+    // Optional: Add test points. SW and FB belong to the silicon INSIDE
+    // the block (two-layer library model: U1 is Buck_TPS54331, the part
+    // is U1.u) — reached through the hierarchical accessor.
     @VOUT_5V -> TP1: TestPoint();
-    U1.SW -> TP2: TestPoint();
-    U1.FB -> TP3: TestPoint();
+    U1.u.SW -> TP2: TestPoint();
+    U1.u.FB -> TP3: TestPoint();
 }
 
 // Module definition for test point (simple)

@@ -140,8 +140,8 @@ entity ATmega32U4_TQFP44(part_no: string = "ATMEGA32U4-AU") {
         VCC   -> R_reset: Res(10kΩ).1;   R_reset.2 -> RESET;
         RESET -> C_reset: Cap(100nF).1;  C_reset.2 -> GND;
         // USB D+/D- ESD protection.
-        D_P   -> TVS_dp:  TVSDiode(5V).1; TVS_dp.2 -> UGND;
-        D_N   -> TVS_dn:  TVSDiode(5V).1; TVS_dn.2 -> UGND;
+        D_P   -> TVS_dp:  TVSDiode(5V).K; TVS_dp.A -> UGND;
+        D_N   -> TVS_dn:  TVSDiode(5V).K; TVS_dn.A -> UGND;
 
         // I²C pullups on PD1 (SDA) and PD0 (SCL). Gated by
         // conditional expansion (#89): fire only when the board

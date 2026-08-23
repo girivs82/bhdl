@@ -1792,3 +1792,66 @@ board AoNoise {
         assert!((o.p_in_w - o.p_load_w - o.p_diss_w).abs() < 1e-6, "{o:#?}");
     }
 }
+
+/// Two-layer library model, first increment (Requirements_And_Resolution
+/// §5.1): `TPS54331 as part` (vendor truth) + `Buck_TPS54331 as design`
+/// (the reviewed subcircuit). A board instantiating the BLOCK gets the
+/// part + sized application circuit; the block carries no BOM line; the
+/// silicon's internals are reachable through the accessor; and the
+/// block's validity envelope (3A × 0.8 derating) is a hard error.
+#[tokio::test]
+async fn tps54331_part_block_split() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let board = |i_max: &str| format!(r#"
+import {{ Buck_TPS54331 }} from "bhdl-stdlib/power/tps54331.bhdl";
+import {{ Res }} from "bhdl-stdlib/passives/resistor.bhdl";
+board SplitDemo {{
+    power VIN = 12V @ 3A;
+    port V5: power out = 5V @ 2A;
+    ground GND;
+    @VIN -> U1: Buck_TPS54331(v_out=5V, i_out_max={i_max}).VIN;
+    U1.GND -> @GND; U1.EN -> @VIN;
+    U1.VOUT -> @V5;
+    @V5 -> R_LOAD: Res(2.5Ω, wattage=10W).1; R_LOAD.2 -> @GND;
+    U1.u.SW -> tp: Res(1MΩ).1; tp.2 -> @GND;
+}}
+"#);
+    let pr = parse(&board("2A"));
+    assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+
+    let kind_of = |name: &str| {
+        let i = n.instances.values().find(|i| i.name == name).unwrap_or_else(|| panic!("instance {name}"));
+        n.modules.get(i.definition).map(|m| m.kind.clone()).unwrap()
+    };
+    assert_eq!(kind_of("U1"), bhdl_netlist::types::ModuleKind::DesignBlock, "the block is a design block");
+    assert_ne!(kind_of("U1_u"), bhdl_netlist::types::ModuleKind::DesignBlock, "U1.u is the silicon (a part)");
+    for child in ["U1_L_out", "U1_C_out", "U1_C_in", "U1_D_catch", "U1_R_top", "U1_R_bot", "U1_C_boot"] {
+        assert!(n.instances.values().any(|i| i.name == child), "block child {child} materialised");
+    }
+    let pin_net = |inst: &str, pin: &str| -> Option<bhdl_netlist::types::NetId> {
+        n.pin_instances.values().find_map(|pi| {
+            let i = n.instances.get(pi.instance)?;
+            if i.name != inst { return None; }
+            let p = n.pins.get(pi.pin_def)?;
+            if p.name != pin { return None; }
+            pi.net
+        })
+    };
+    assert_eq!(pin_net("U1_u", "SW"), pin_net("tp", "1"), "accessor U1.u.SW reaches the part's switch node");
+    assert_eq!(pin_net("U1_u", "SW"), pin_net("U1_L_out", "1"), "inductor hangs on the part's SW");
+    assert_eq!(pin_net("U1_L_out", "2"), pin_net("R_LOAD", "1"), "virtual VOUT lands the load on the inductor output");
+
+    // envelope: 2.6A > 2.4A (3A rating × 0.8 derate) is a hard error
+    let pr = parse(&board("2.6A"));
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let r = gen.generate_from_ast_and_analysis(&sf, &analysis).await;
+    let err = match r { Ok(_) => panic!("envelope violation must fail synthesis"), Err(e) => format!("{e:#}") };
+    assert!(err.contains("envelope"), "envelope message surfaced: {err}");
+}

@@ -3244,7 +3244,7 @@ async fn run_visualization(source_file: &SourceFile, input_content: &str, output
         &analysis.design_recipes, &analysis.entity_attribute_index,
         &analysis.entity_param_names,
         &analysis.entity_attr_param_refs,
-    );
+    ).map_err(|e| anyhow::anyhow!("{e}"))?;
     if !recipe_results.is_empty() {
         println!("  {} expansion blocks applied for {} entity instance(s)",
             "✓".green(), recipe_results.len());
@@ -3611,7 +3611,7 @@ async fn run_layout(
         &mut netlist, &analysis.expansion_recipes, &analysis.design_recipes, &analysis.entity_attribute_index,
         &analysis.entity_param_names,
         &analysis.entity_attr_param_refs,
-    );
+    ).map_err(|e| anyhow::anyhow!("{e}"))?;
     println!("  {} Expansion: {} instances", "✓".green(), netlist.instances.len());
 
     // Snap computed passive values to catalog E-series before layout/sim.
@@ -4183,7 +4183,7 @@ async fn run_spice(source_file: &SourceFile, input_content: &str, input_path: &P
     }
     bhdl_synthesizer::expansion_interpreter::expand_entity_instances_with_designs(
         &mut netlist, &analysis_result.expansion_recipes, &analysis_result.design_recipes, &analysis_result.entity_attribute_index,
-        &analysis_result.entity_param_names, &analysis_result.entity_attr_param_refs);
+        &analysis_result.entity_param_names, &analysis_result.entity_attr_param_refs).map_err(|e| anyhow::anyhow!("{e}"))?;
 
     // Apply the selected SKU variant's patches AFTER expansion (so
     // patches address post-expansion instance names). Without this,
@@ -4980,7 +4980,7 @@ async fn cmd_transient(
         &analysis.entity_attribute_index,
         &analysis.entity_param_names,
         &analysis.entity_attr_param_refs,
-    );
+    ).map_err(|e| anyhow::anyhow!("{e}"))?;
     snap_catalog_values(&mut netlist);
     run_value_derivation(&mut netlist, &analysis, source_path)?;
 
@@ -5269,7 +5269,7 @@ async fn cmd_bom(
         &analysis.design_recipes, &analysis.entity_attribute_index,
         &analysis.entity_param_names,
         &analysis.entity_attr_param_refs,
-    );
+    ).map_err(|e| anyhow::anyhow!("{e}"))?;
     if !recipe_results.is_empty() {
         println!("  {} expansion blocks applied for {} entity instance(s)",
             "✓".green(), recipe_results.len());

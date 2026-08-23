@@ -435,13 +435,17 @@ fn desugar_one(
     // style) materialize their application circuit themselves — emitting
     // S4 support parts too would put two inductors in parallel on the
     // switch node. S4 emission is for BARE entities only.
+    //
+    // An `entity … as design` block (the two-layer library model) IS its
+    // application circuit — same rule, declared rather than detected.
     let self_expanding = find_entity_decl(&entity_src, &part)
         .map(|at| {
             let tail = &entity_src[at..];
             let end = tail[1..].find("\nentity ").map(|p| p + 1).unwrap_or(tail.len());
             tail[..end].contains("expansion {")
         })
-        .unwrap_or(false);
+        .unwrap_or(false)
+        || entity_declared_kind(&entity_src, &part).as_deref() == Some("design");
     let duty = if v_in_f > 0.0 { v_out_f / v_in_f } else { 0.0 };
     let d_il = 0.3 * i_out_f;
     let mut used_cap = false;
@@ -985,6 +989,13 @@ fn choose_part(
             let attrs = entity_attrs_txt(&src, &name);
             let class = attrs.get("component_class").map(String::as_str).unwrap_or("");
             if !matches!(class, "voltage_regulator" | "ldo" | "switching_regulator") {
+                continue;
+            }
+            // Two-layer library model (docs/spec/Requirements_And_Resolution.md):
+            // an `entity X as part` is vendor truth — the bare silicon,
+            // never "a regulator the board sees". Only the `as design`
+            // block (or a migration-era conflated entity) is choosable.
+            if entity_declared_kind(&src, &name).as_deref() == Some("part") {
                 continue;
             }
             // Explicit opt-out: a generic-tier entity (BuckController) is a
@@ -1692,6 +1703,22 @@ fn fmt_a(v: f64) -> String {
 
 /// Byte offset of `entity <name>` in `src`, resolving one level of
 /// `alias <name> = <Target>` indirection (SKU aliases).
+/// Textual `entity X(...) as part|design {` partness (chooser runs pre-parse).
+/// Follows the alias hop of `find_entity_decl`. None = undeclared.
+fn entity_declared_kind(src: &str, name: &str) -> Option<String> {
+    let at = find_entity_decl(src, name)?;
+    let head = &src[at..];
+    let head = &head[..head.find('{').unwrap_or(head.len())];
+    let after_as = head.rsplit(" as ").next()?;
+    if head.contains(" as ") {
+        let kind: String = after_as.trim().chars().take_while(|c| c.is_alphabetic()).collect();
+        if kind == "part" || kind == "design" {
+            return Some(kind);
+        }
+    }
+    None
+}
+
 fn find_entity_decl(src: &str, name: &str) -> Option<usize> {
     let pat = format!("entity {name}");
     let mut off = 0usize;

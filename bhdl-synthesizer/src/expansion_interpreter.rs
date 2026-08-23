@@ -48,6 +48,7 @@ pub fn expand_entity_instances(
     let empty_params = HashMap::new();
     let empty_refs = HashMap::new();
     expand_entity_instances_with_designs(netlist, recipes, &empty_designs, &empty_attrs, &empty_params, &empty_refs)
+        .expect("expansion recipe failed (test wrapper)")
 }
 
 /// As [`expand_entity_instances`] but with vendor `design { }` recipes
@@ -69,15 +70,15 @@ pub fn expand_entity_instances_with_designs(
     entity_attr_index: &HashMap<String, HashMap<String, String>>,
     entity_param_names: &HashMap<String, Vec<String>>,
     entity_attr_param_refs: &HashMap<String, HashMap<String, String>>,
-) -> Vec<ExpansionResult> {
+) -> Result<Vec<ExpansionResult>, String> {
     if recipes.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     // Phase 1 — identify which instances need expansion (immutable scan)
     let candidates = find_expansion_candidates(netlist, recipes, design_recipes);
     if candidates.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     info!("Expansion interpreter: {} candidate(s) found", candidates.len());
@@ -91,19 +92,22 @@ pub fn expand_entity_instances_with_designs(
                 results.push(result);
             }
             Err(e) => {
-                // A failed expansion is NOT a skipped expansion: children
-                // minted before the failing connection stay in the netlist,
-                // partially wired or floating. Say so loudly — DRC001
-                // backstops the floating parts, but the recipe is broken.
-                error!(
-                    "Expansion of '{}' FAILED mid-application: {} — children                      created before the failure remain in the netlist,                      partially wired; fix the entity's expansion recipe",
-                    cand.instance_name, e
-                );
+                // A failed expansion is a failed SYNTHESIS. Children
+                // minted before the failure are partially wired or
+                // floating, and a design block's `require` rejection
+                // (validity envelope) means the instantiation is invalid.
+                // This used to log and continue — the board then "built"
+                // with un-sized, half-wired children (silent-drop
+                // miscompile). Stop here; the message names the instance.
+                return Err(format!(
+                    "expansion of '{}' failed: {e}",
+                    cand.instance_name
+                ));
             }
         }
     }
 
-    results
+    Ok(results)
 }
 
 /// A candidate for expansion.
@@ -426,7 +430,7 @@ fn expand_one_instance(
     // intent, run the matching designer; its computed component values then
     // replace the expansion block's literal defaults for the children whose
     // names appear in the returned map.
-    let intent_design = intent_driven_values(netlist, cand);
+    let intent_design = intent_driven_values(netlist, cand)?;
 
     // Per-child connectivity gating: determine which expansion
     // children should actually fire based on whether their
@@ -961,11 +965,10 @@ fn expand_one_instance(
 fn intent_driven_values(
     netlist: &Netlist,
     cand: &ExpansionCandidate,
-) -> std::collections::HashMap<String, f64> {
+) -> Result<std::collections::HashMap<String, f64>, String> {
     // Vendor `design { }` block takes priority over the Rust reference
     // designer. If the recipe rejects (a `require` failed, an expression
-    // didn't evaluate), warn and fall through to the reference path so the
-    // design still completes with sensible defaults.
+    // didn't evaluate) that is a HARD synthesis error — see below.
     if let Some(recipe) = &cand.design_recipe {
         let board  = read_board_context(netlist, cand);
         let device = read_device_attributes(netlist, cand);
@@ -1002,23 +1005,22 @@ fn intent_driven_values(
             Ok(values) => {
                 info!("Vendor design recipe for '{}'.'{}': {} value(s)",
                     cand.instance_name, recipe.intent_name, values.len());
-                return values;
+                return Ok(values);
             }
             Err(e) => {
-                // Fail loudly. A vendor explicitly authored this design
-                // block; silently falling back to the Rust reference
-                // designer would mask both buggy scripts and legitimate
-                // vendor rejections (`require` failures) — producing
-                // wrong-looking-but-plausible numbers either way. If the
-                // vendor wants graceful degradation they can author it
-                // inside the recipe; the framework no longer second-
-                // guesses them.
-                error!("Vendor design recipe for '{}'.'{}' failed: {e}",
-                    cand.instance_name, recipe.intent_name);
-                error!("  (The Rust reference designer is NOT used as a \
-                        fallback — fix the recipe or remove the design \
-                        block to fall through to the framework default.)");
-                return std::collections::HashMap::new();
+                // Fail HARD. The author explicitly wrote this design
+                // block; a failed `require` is the block's validity
+                // envelope rejecting the instantiation (Requirements_And_
+                // Resolution §2.4: "never a silent bad circuit"), and a
+                // script error is a bug. Previously this logged and
+                // returned an empty map — synthesis then continued with
+                // UN-SIZED children (a silent-drop miscompile: the board
+                // built, the inductor had no value). The Rust reference
+                // designer is not a fallback either.
+                return Err(format!(
+                    "design block of '{}' ({}) rejected the instantiation: {e}",
+                    cand.instance_name, recipe.intent_name
+                ));
             }
         }
     }
@@ -1043,7 +1045,7 @@ fn intent_driven_values(
         }
         _ => {}
     }
-    out
+    Ok(out)
 }
 
 /// Scan an expansion candidate's child instances for the one carrying

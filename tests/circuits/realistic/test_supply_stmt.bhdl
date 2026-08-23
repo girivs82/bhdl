@@ -16,6 +16,6 @@ board SupplyStmtS1 {
         ripple_max: 30mV;
         i_q_max:    5mA;
         profile:    cost;
-        using:      TPS54331;   // S1: explicit part; S2 adds the chooser
+        using:      Buck_TPS54331;   // S1: explicit block; S2 adds the chooser
     }
 }

@@ -121,7 +121,7 @@ entity FT232RL(part_no: string = "FT232RL") {
         VCC     -> R_reset:  Res(10kΩ).1;   R_reset.2  -> RESET_N;
         RESET_N -> C_reset:  Cap(100nF).1;  C_reset.2  -> GND1;
         // USB data-line ESD protection.
-        USBDP   -> TVS_dp:   TVSDiode(5V).1; TVS_dp.2  -> GND2;
-        USBDM   -> TVS_dn:   TVSDiode(5V).1; TVS_dn.2  -> GND2;
+        USBDP   -> TVS_dp:   TVSDiode(5V).K; TVS_dp.A  -> GND2;
+        USBDM   -> TVS_dn:   TVSDiode(5V).K; TVS_dn.A  -> GND2;
     }
 }
