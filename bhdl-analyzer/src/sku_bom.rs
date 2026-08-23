@@ -156,18 +156,25 @@ pub fn walk(netlist: &Netlist) -> Vec<BomRow> {
         // useful because passives use `value`, ICs use `mpn`/
         // `part_number`, vendor-designed children get `value`
         // populated by the synthesizer.
+        //
+        // For a value-identified passive (resistor / capacitor / inductor)
+        // `value` IS the identity. For everything else the orderable
+        // identity wins: an IC instantiated as `LP2985(v_out=3.3V)`
+        // carries value="3.3V" from its first constructor arg, and a BOM
+        // row reading "3.3V" is not a part.
+        let value_is_identity = matches!(
+            component_class.as_str(),
+            "resistor" | "capacitor" | "inductor" | "ferrite_bead" | "led"
+        );
         let value = {
             let v = get("value");
-            if !v.is_empty() { v }
-            else {
-                let m = get(attr::MPN);
-                if !m.is_empty() { m }
-                else {
-                    let p = get(attr::PART_NUMBER);
-                    if !p.is_empty() { p }
-                    else { component_class.clone() }
-                }
-            }
+            let m = get(attr::MPN);
+            let p = get(attr::PART_NUMBER);
+            if value_is_identity && !v.is_empty() { v }
+            else if !m.is_empty() { m }
+            else if !p.is_empty() { p }
+            else if !v.is_empty() { v }
+            else { component_class.clone() }
         };
 
         // Collect distributor SKUs into a single map for the row.
