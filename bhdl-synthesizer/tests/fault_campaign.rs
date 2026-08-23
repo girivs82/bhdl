@@ -2019,7 +2019,7 @@ board ExtDemo {{
     }
     // a multi-phase requirement cannot be committed to the single-phase template
     let e = resolve_stages(&ext("vout=5V, i_max=60A, vin=24V, phases=3", ovr), &stdlib, &[]).unwrap_err();
-    assert!(format!("{e:#}").contains("phases: block supports 1"), "{e:#}");
+    assert!(format!("{e:#}").contains("phases: supports 1 phase(s) ≥ required 3"), "{e:#}");
 
     // 4c. qualification: temperature range / named qualification gate
     //     against DECLARED promises only — TPS54331 declares −40…85 °C
@@ -2202,4 +2202,57 @@ board GateDemo {{
     let text = board("100mA", "");
     let v = bhdl_synthesizer::stage_resolution::trial_envelope(&text, "Blk", &[("i_out_max".into(), "200mA".into())]).expect("has a design recipe");
     assert!(v.unwrap_err().contains("where i_out_max <= 120mA"));
+}
+
+/// ONE acceptance predicate (Requirements_And_Resolution §3): what the
+/// resolver decides before binding and what ERC032 decides on the
+/// flattened circuit are the same function over the same gates. Bind a
+/// block the resolver accepts → ERC032 clean; bind (by override) a block
+/// whose noise promise is UNDECLARED against a noise requirement →
+/// resolver marks it UNCHECKED and ERC032 reports exactly that gate as
+/// an UNCHECKED Info, never an Error and never silence.
+#[tokio::test]
+async fn resolver_and_erc032_share_one_acceptance_predicate() {
+    use bhdl_synthesizer::stage_resolution::resolve_stages;
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let stdlib = ws.join("bhdl-stdlib");
+    let board = |args: &str, extra: &str| format!(r#"
+import {{ LdoStage }} from "bhdl-stdlib/power/stages.bhdl";
+import {{ Res }} from "bhdl-stdlib/passives/resistor.bhdl";
+board OnePred {{
+    power V5 = 5V @ 1A;
+    port V3V3: power out = 3.3V @ 100mA;
+    ground GND;
+    @V5 -> u2: LdoStage({args}).VIN;
+    u2.GND -> @GND; u2.VOUT -> @V3V3;
+    @V3V3 -> R_LOAD: Res(33Ω, wattage=1W).1; R_LOAD.2 -> @GND;
+    {extra}
+}}
+"#);
+    async fn erc(src: String) -> Vec<bhdl_synthesizer::design_rule_checker::DRCViolation> {
+        let pr = parse(&src);
+        assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+        let sf = SourceFile::cast(pr.syntax()).unwrap();
+        let analysis = analyze(&sf);
+        let mut gen = NetlistGenerator::new();
+        let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+        bhdl_synthesizer::erc::check_powertree_acceptance(&n, &analysis)
+    }
+    // accepted by the resolver (LP2985 declares 30µV) → ERC032 clean on u2
+    let r = resolve_stages(&board("vout=3.3V, i_max=100mA, vin=5V, noise=30uV", ""), &stdlib, &[]).unwrap().unwrap();
+    assert_eq!(r.resolutions[0].bound.as_deref(), Some("Ldo_LP2985"));
+    let v = erc(r.source.clone()).await;
+    assert!(!v.iter().any(|x| x.description.contains("'u2'")), "{v:#?}");
+    // override onto XC6206 (no output_noise declared): resolver UNCHECKED → ERC032 UNCHECKED Info on the SAME gate
+    let r = resolve_stages(&board("vout=3.3V, i_max=100mA, vin=5V, noise=30uV", "resolve u2 = Ldo_XC6206;"), &stdlib, &[]).unwrap().unwrap();
+    assert_eq!(r.resolutions[0].basis, "override");
+    let c = r.resolutions[0].candidates.iter().find(|c| c.block == "Ldo_XC6206").unwrap();
+    assert!(c.unchecked.contains(&"noise".to_string()), "{c:#?}");
+    let v = erc(r.source.clone()).await;
+    let noise: Vec<_> = v.iter().filter(|x| x.description.contains("'u2'") && x.description.contains("noise")).collect();
+    assert_eq!(noise.len(), 1, "{v:#?}");
+    assert_eq!(noise[0].severity, bhdl_synthesizer::design_rule_checker::ViolationSeverity::Info);
+    assert!(noise[0].description.contains("UNCHECKED"), "{}", noise[0].description);
+    assert!(!v.iter().any(|x| x.description.contains("'u2'") && x.severity == bhdl_synthesizer::design_rule_checker::ViolationSeverity::Error), "{v:#?}");
 }

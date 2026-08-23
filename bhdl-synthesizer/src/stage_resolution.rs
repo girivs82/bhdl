@@ -615,88 +615,31 @@ fn evaluate_candidate(imp: &StageImpl, req: &StageRequirement, trait_def: &Stage
         None => push_unchecked(&mut gates, &mut unchecked, "envelope", "block declares no design { } — no envelope to check (UNCHECKED, not a pass)".into()),
     }
 
-    // Promises. Attribute values may be param refs (`attribute f_sw = f_sw`).
     let attrs = entity_attrs_txt(&text, &imp.block);
     let attr_si = |k: &str| -> Option<f64> {
         let v = attrs.get(k)?;
         parse_si_txt(v).or_else(|| params.get(v.trim()).and_then(|d| parse_si_txt(d)))
     };
-    let req_si = |k: &str| req_value(req, k).and_then(|v| parse_si_txt(&v));
 
-    if let Some(i_max) = req_si("i_max") {
-        let need = i_max / CURRENT_DERATE;
-        match attr_si("output_current") {
-            Some(r) => push_gate(&mut gates, 
-                "i_max",
-                format!("output_current {r:.3}A ≥ required rating {need:.3}A (i_max {i_max:.3}A / {CURRENT_DERATE} derate)"),
-                r + 1e-12 >= need,
-            ),
-            None => push_unchecked(&mut gates, &mut unchecked, "i_max", "block declares no output_current — UNCHECKED, not a pass".into()),
+    // Promises — THE SAME PREDICATE ERC032 applies after binding
+    // (stage_acceptance::check). Here the promises are read from the
+    // block's entity text with attribute values resolved through its
+    // params (`attribute f_sw = f_sw`); ERC032 reads the instance's
+    // resolved attributes on the flattened circuit.
+    {
+        use crate::stage_acceptance::{check, promises_from_attrs, requirement_from_pairs, GateVerdict};
+        let mut sreq = requirement_from_pairs(req.params.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+        if req.trait_name == "BuckExtStage" && sreq.phases.is_none() {
+            sreq.phases = Some(1.0); // a controller stage must state its phase support
         }
-    }
-    let vin = req_si("vin");
-    let vin_min = req_si("vin_min").or(vin);
-    let vin_max = req_si("vin_max").or(vin);
-    if let Some(lo) = vin_min {
-        match attr_si("vin_min") {
-            Some(b) => push_gate(&mut gates, "vin_min", format!("block vin_min {b:.2}V ≤ requirement {lo:.2}V"), b <= lo + 1e-9),
-            None => push_unchecked(&mut gates, &mut unchecked, "vin_min", "block declares no vin_min — UNCHECKED, not a pass".into()),
-        }
-    }
-    if let Some(hi) = vin_max {
-        match attr_si("vin_max") {
-            Some(b) => push_gate(&mut gates, "vin_max", format!("block vin_max {b:.2}V ≥ requirement {hi:.2}V"), b + 1e-9 >= hi),
-            None => push_unchecked(&mut gates, &mut unchecked, "vin_max", "block declares no vin_max — UNCHECKED, not a pass".into()),
-        }
-    }
-    if let Some(n) = req_si("noise") {
-        match attr_si("output_noise") {
-            Some(b) => push_gate(&mut gates, "noise", format!("output_noise {:.1}µV ≤ requirement {:.1}µV", b * 1e6, n * 1e6), b <= n + 1e-15),
-            None => push_unchecked(&mut gates, &mut unchecked, "noise", "block declares no output_noise — UNCHECKED, not a pass".into()),
-        }
-    }
-    if let Some(e) = req_value(req, "efficiency_min").and_then(|v| parse_pct_or_si(&v)) {
-        match attrs.get("efficiency").and_then(|v| parse_pct_or_si(v)) {
-            Some(b) => push_gate(&mut gates, "efficiency", format!("efficiency {:.1}% ≥ requirement {:.1}%", b * 100.0, e * 100.0), b + 1e-9 >= e),
-            None => push_unchecked(&mut gates, &mut unchecked, "efficiency", "block declares no efficiency — UNCHECKED, not a pass".into()),
-        }
-    }
-
-    // qualification: temperature range and named qualification, against
-    // DECLARED promises only (UNCHECKED otherwise — never a pass)
-    let temp = |k: &str, src: &dyn Fn(&str) -> Option<String>| -> Option<f64> { src(k).and_then(|v| parse_temp_c(&v)) };
-    let req_get = |k: &str| req_value(req, k);
-    let attr_get = |k: &str| attrs.get(k).cloned().or_else(|| None).map(|v| params.get(v.trim()).cloned().unwrap_or(v));
-    if let Some(lo) = temp("temp_min", &req_get) {
-        match temp("temp_min", &attr_get) {
-            Some(b) => push_gate(&mut gates, "temp_min", format!("block temp_min {b:.0}°C ≤ required {lo:.0}°C"), b <= lo + 1e-9),
-            None => push_unchecked(&mut gates, &mut unchecked, "temp_min", "block declares no temp_min — UNCHECKED, not a pass".into()),
-        }
-    }
-    if let Some(hi) = temp("temp_max", &req_get) {
-        match temp("temp_max", &attr_get) {
-            Some(b) => push_gate(&mut gates, "temp_max", format!("block temp_max {b:.0}°C ≥ required {hi:.0}°C"), b + 1e-9 >= hi),
-            None => push_unchecked(&mut gates, &mut unchecked, "temp_max", "block declares no temp_max — UNCHECKED, not a pass".into()),
-        }
-    }
-    if let Some(q) = req_value(req, "qual") {
-        let q = q.trim().trim_matches('"').to_string();
-        match attrs.get("qualification") {
-            Some(have) => {
-                let ok = have.to_ascii_lowercase().contains(&q.to_ascii_lowercase());
-                push_gate(&mut gates, "qual", format!("block qualification \"{have}\" covers required \"{q}\""), ok);
+        let promises = promises_from_attrs(|k| attrs.get(k).map(|v| params.get(v.trim()).cloned().unwrap_or_else(|| v.clone())));
+        for g in check(&sreq, &promises) {
+            let name: &'static str = g.name;
+            match g.verdict {
+                GateVerdict::Ok => push_gate(&mut gates, name, g.detail, true),
+                GateVerdict::Failed => push_gate(&mut gates, name, g.detail, false),
+                GateVerdict::Unchecked => push_unchecked(&mut gates, &mut unchecked, name, format!("block {}", g.detail)),
             }
-            None => push_unchecked(&mut gates, &mut unchecked, "qual", format!("block declares no qualification (required \"{q}\") — UNCHECKED, not a pass")),
-        }
-    }
-
-    // phases (BuckExtStage): the block must support at least the
-    // requirement's phase count (default 1)
-    let req_phases = req_value(req, "phases").and_then(|v| v.trim().parse::<f64>().ok()).unwrap_or(1.0);
-    if req.trait_name == "BuckExtStage" || req_value(req, "phases").is_some() {
-        match attrs.get("phases").and_then(|v| v.trim().parse::<f64>().ok()) {
-            Some(b) => push_gate(&mut gates, "phases", format!("block supports {b:.0} phase(s) ≥ required {req_phases:.0}"), b + 1e-9 >= req_phases),
-            None => push_unchecked(&mut gates, &mut unchecked, "phases", "block declares no phases — UNCHECKED, not a pass".into()),
         }
     }
 
@@ -729,20 +672,6 @@ fn evaluate_candidate(imp: &StageImpl, req: &StageRequirement, trait_def: &Stage
     }
 }
 
-/// `-40degC` / `85°C` / `125C` / bare number → °C.
-fn parse_temp_c(v: &str) -> Option<f64> {
-    let t = v.trim().trim_matches('"');
-    let end = t
-        .char_indices()
-        .take_while(|(_, c)| c.is_ascii_digit() || *c == '.' || *c == '-' || *c == '+')
-        .map(|(i, c)| i + c.len_utf8())
-        .last()?;
-    let num: f64 = t[..end].parse().ok()?;
-    match t[end..].trim() {
-        "" | "C" | "°C" | "degC" => Some(num),
-        _ => None,
-    }
-}
 
 /// The part a block instantiates: the first `<name>: <Entity>(` body
 /// statement whose entity is declared `as part` in the same file (or
@@ -768,13 +697,6 @@ fn block_part_instance(text: &str, block: &str) -> Option<String> {
     fallback
 }
 
-fn parse_pct_or_si(v: &str) -> Option<f64> {
-    let t = v.trim();
-    if let Some(p) = t.strip_suffix('%') {
-        return p.trim().parse::<f64>().ok().map(|x| x / 100.0);
-    }
-    parse_si_txt(t)
-}
 
 /// The block's plain `design { }` recipe, extracted through the analyzer
 /// so the resolver evaluates EXACTLY what synthesis will.

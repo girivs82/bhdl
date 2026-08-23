@@ -2940,29 +2940,19 @@ pub fn check_powertree_acceptance(
     netlist: &Netlist,
     _analysis: &AnalysisResult,
 ) -> Vec<DRCViolation> {
+    use crate::stage_acceptance::{check, promises_from_attrs, requirement_from_pairs, GateVerdict, StageRequirement, CURRENT_DERATE};
     let mut out = Vec::new();
-    let parse_amps = |v: &str| -> Option<f64> {
-        let v = v.trim();
-        let end = v.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(v.len());
-        let num: f64 = v[..end].parse().ok()?;
-        match v[end..].trim() {
-            "" | "A" => Some(num),
-            "mA" => Some(num * 1e-3),
-            _ => None,
-        }
-    };
     for (inst_id, inst) in &netlist.instances {
-        let Some(required) = inst
-            .attributes
-            .get("powertree_rating_required_a")
-            .and_then(|v| v.parse::<f64>().ok())
-        else {
+        // A stage: a resolved/placeholder requirement (`stage_requirement`)
+        // or a power-tree emitted stage (`powertree_*` assumptions).
+        let req_text = inst.attributes.get("stage_requirement").cloned();
+        let rating_required = inst.attributes.get("powertree_rating_required_a").and_then(|v| v.parse::<f64>().ok());
+        if req_text.is_none() && rating_required.is_none() {
             continue;
-        };
+        }
         let module_name = netlist
-            .instances
-            .get(inst_id)
-            .and_then(|i| netlist.modules.get(i.definition))
+            .modules
+            .get(inst.definition)
             .map(|m| m.name.clone())
             .unwrap_or_default();
         if module_name.starts_with("Generic") {
@@ -2981,129 +2971,60 @@ pub fn check_powertree_acceptance(
             });
             continue;
         }
-        // rated output current: the part must be RATED at least the
-        // tree's derated requirement
-        match inst
-            .attributes
-            .get("output_current")
-            .or_else(|| inst.attributes.get("max_current"))
-            .or_else(|| inst.attributes.get("i_rating"))
-            .and_then(|v| parse_amps(v))
-        {
-            Some(rated) if rated + 1e-9 < required => out.push(DRCViolation {
-                rule_id: "ERC032".into(),
-                rule_name: "Power-tree acceptance".into(),
-                category: RuleCategory::Electrical,
-                severity: ViolationSeverity::Error,
-                description: format!(
-                    "'{}' ({}) is rated {rated}A but the power tree requires ≥ {required:.3}A (worst-case load / 0.8 derating) — the rename silently shrank the stage",
-                    inst.name, module_name
-                ),
-                location: ViolationLocation::Component(inst_id),
-                fix_suggestion: "pick a part rated for the stage's derated requirement, or re-run powertree if the loads changed".into(),
-                standard_reference: None,
-            }),
-            Some(_) => {}
-            None => out.push(DRCViolation {
-                rule_id: "ERC032".into(),
-                rule_name: "Power-tree acceptance".into(),
-                category: RuleCategory::Electrical,
-                severity: ViolationSeverity::Warning,
-                description: format!(
-                    "'{}' ({}) declares no rated output current — the power tree's ≥ {required:.3}A acceptance is UNVERIFIABLE",
-                    inst.name, module_name
-                ),
-                location: ViolationLocation::Component(inst_id),
-                fix_suggestion: "declare `attribute output_current = <datasheet rating>;` on the entity (Real-Data: the datasheet states it)".into(),
-                standard_reference: None,
-            }),
-        }
-        // output noise: the stdlib convention `output_noise = <µVrms>`
-        // (datasheet RMS figure). A committed part noisier than the
-        // tree assumed breaks the noise-sensitive loads the stage was
-        // chosen for; undeclared = UNCHECKED, stated.
-        if let Some(assumed_uv) = inst
-            .attributes
-            .get("powertree_noise_assumed_uvrms")
-            .and_then(|v| v.parse::<f64>().ok())
-        {
-            let parse_uv = |v: &str| -> Option<f64> {
-                let v = v.trim().trim_end_matches("rms").trim_end_matches("RMS").trim();
-                let end = v.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(v.len());
-                let num: f64 = v[..end].parse().ok()?;
-                match v[end..].trim() {
-                    "uV" | "µV" => Some(num),
-                    "mV" => Some(num * 1e3),
-                    "V" => Some(num * 1e6),
-                    "" => Some(num),
-                    _ => None,
-                }
-            };
-            match inst.attributes.get("output_noise").and_then(|v| parse_uv(v)) {
-                Some(declared) if declared > assumed_uv + 1e-9 => out.push(DRCViolation {
-                    rule_id: "ERC032".into(),
-                    rule_name: "Power-tree acceptance".into(),
-                    category: RuleCategory::Electrical,
-                    severity: ViolationSeverity::Error,
-                    description: format!(
-                        "'{}' ({}) declares {declared:.0}µVrms output noise but the tree assumed ≤ {assumed_uv:.0}µVrms for this stage — the noise-sensitive loads it serves are no longer met",
-                        inst.name, module_name
-                    ),
-                    location: ViolationLocation::Component(inst_id),
-                    fix_suggestion: "pick a quieter part, or re-run powertree so the stage is re-derived (post-regulation) for this part's real figure".into(),
-                    standard_reference: None,
-                }),
-                Some(_) => {}
-                None => out.push(DRCViolation {
-                    rule_id: "ERC032".into(),
-                    rule_name: "Power-tree acceptance".into(),
-                    category: RuleCategory::Electrical,
-                    severity: ViolationSeverity::Info,
-                    description: format!(
-                        "'{}' ({}): noise acceptance UNCHECKED — the part declares no output_noise figure (tree assumed ≤ {assumed_uv:.0}µVrms)",
-                        inst.name, module_name
-                    ),
-                    location: ViolationLocation::Component(inst_id),
-                    fix_suggestion: "declare `attribute output_noise = <datasheet µVrms>;` where the datasheet states one (switching parts state ripple, not noise — leave undeclared)".into(),
-                    standard_reference: None,
-                }),
-            }
-        }
 
-        // efficiency: only checkable when the part declares one
-        if let Some(assumed) = inst
-            .attributes
-            .get("powertree_eff_assumed_pct")
-            .and_then(|v| v.parse::<f64>().ok())
-        {
-            match inst.attributes.get("efficiency").and_then(|v| {
-                v.trim().trim_end_matches('%').parse::<f64>().ok()
-            }) {
-                Some(declared) if declared + 1e-9 < assumed => out.push(DRCViolation {
+        // THE SAME PREDICATE the resolver used to bind this stage
+        // (stage_acceptance::check), now against the instance's resolved
+        // attributes on the flattened circuit. The requirement: the
+        // stamped `stage_requirement` text, with the power tree's
+        // assumption attributes filling in what a tree-emitted stage
+        // carries (rating_required = i_max / derate, the noise ceiling,
+        // the assumed efficiency).
+        let mut req: StageRequirement = req_text
+            .as_deref()
+            .map(|t| requirement_from_pairs(t.split(',').filter_map(|kv| kv.split_once('='))))
+            .unwrap_or_default();
+        if req.i_max_a.is_none() {
+            req.i_max_a = rating_required.map(|r| r * CURRENT_DERATE);
+        }
+        if req.noise_v.is_none() {
+            req.noise_v = inst.attributes.get("powertree_noise_assumed_uvrms").and_then(|v| v.parse::<f64>().ok()).map(|uv| uv * 1e-6);
+        }
+        if req.efficiency_min.is_none() {
+            req.efficiency_min = inst.attributes.get("powertree_eff_assumed_pct").and_then(|v| v.parse::<f64>().ok()).map(|p| p / 100.0);
+        }
+        // vin is the TREE's business (it chose the source rail) — not
+        // re-checked here unless the requirement states a range.
+        req.vin_v = None;
+        let promises = promises_from_attrs(|k| inst.attributes.get(k).cloned());
+
+        for gate in check(&req, &promises) {
+            match gate.verdict {
+                GateVerdict::Ok => {}
+                GateVerdict::Failed => out.push(DRCViolation {
                     rule_id: "ERC032".into(),
                     rule_name: "Power-tree acceptance".into(),
                     category: RuleCategory::Electrical,
                     severity: ViolationSeverity::Error,
                     description: format!(
-                        "'{}' ({}) declares {declared}% efficiency but the tree was sized assuming {assumed}% — dissipation and input-budget figures no longer hold",
-                        inst.name, module_name
+                        "'{}' ({}) {}: {} — the committed stage no longer meets the requirement it was bound to{}",
+                        inst.name,
+                        module_name,
+                        gate.name,
+                        gate.detail,
+                        if gate.name == "i_max" { " (the rename silently shrank the stage)" } else { "" }
                     ),
                     location: ViolationLocation::Component(inst_id),
-                    fix_suggestion: "pick a part meeting the assumed efficiency, or re-run powertree to re-derive the tree with this part's real figure".into(),
+                    fix_suggestion: "pick a block/part meeting the requirement (re-run the resolver survey), or re-run powertree if the loads changed".into(),
                     standard_reference: None,
                 }),
-                Some(_) => {}
-                None => out.push(DRCViolation {
+                GateVerdict::Unchecked => out.push(DRCViolation {
                     rule_id: "ERC032".into(),
                     rule_name: "Power-tree acceptance".into(),
                     category: RuleCategory::Electrical,
                     severity: ViolationSeverity::Info,
-                    description: format!(
-                        "'{}' ({}): efficiency acceptance UNCHECKED — the part declares no efficiency figure (tree assumed {assumed}%)",
-                        inst.name, module_name
-                    ),
+                    description: format!("'{}' ({}): {} acceptance UNCHECKED — {}", inst.name, module_name, gate.name, gate.detail),
                     location: ViolationLocation::Component(inst_id),
-                    fix_suggestion: "declare `attribute efficiency = <datasheet mid-load figure>;` where the datasheet states one".into(),
+                    fix_suggestion: format!("declare `{}` on the entity (Real-Data: the datasheet states it, or leave it undeclared)", gate.declare),
                     standard_reference: None,
                 }),
             }
