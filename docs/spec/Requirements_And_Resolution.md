@@ -306,9 +306,19 @@ Principles that fall out:
    (`temp_min/temp_max` in degC, `qualification` string); undeclared =
    UNCHECKED = not a pass. Today only TPS54331 declares its ambient
    range (SLVSA86 −40…85 °C); no stdlib part declares a qualification —
-   an `AEC-Q100` requirement resolves to nothing, honestly. Not yet:
-   ERC032 and the resolver share the derate policy and the promise
-   vocabulary but are still two code paths.
+   an `AEC-Q100` requirement resolves to nothing, honestly.
+   ONE PREDICATE (landed): `bhdl_synthesizer::stage_acceptance::check`
+   is the acceptance function. The resolver calls it with promises read
+   from the block's entity text (attributes resolved through params);
+   ERC032 calls it with the committed instance's resolved attributes on
+   the flattened circuit, its requirement taken from the stamped
+   `stage_requirement` text (a tree-emitted stage's `powertree_*`
+   assumptions fill in i_max / noise / efficiency). Same gates, same
+   derating constant, same UNCHECKED semantics: a gate the resolver
+   reported UNCHECKED is exactly the gate ERC032 reports as an UNCHECKED
+   Info — never an Error, never silence. The resolver keeps only its own
+   concerns on top: the `as design` / migration-era block gate, the
+   envelope trial, the template rule, and ranking.
 3. DONE — `bhdl <board> trace [--json]`
    (`bhdl_synthesizer::trace_matrix`). The matrix is DERIVED from this
    build's evidence, never transcribed: one row per contract construct
