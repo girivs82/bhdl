@@ -3019,6 +3019,42 @@ pub fn check_powertree_acceptance(
         req.vin_v = None;
         let promises = promises_from_attrs(|k| inst.attributes.get(k).cloned());
 
+        // AS-BUILT LOAD vs the requirement: the rail this stage drives
+        // carries the board's declared load budget (`@ I`); a requirement
+        // whose i_max understates it was resolved for the wrong load — the
+        // block's envelope and thermal gate were checked at a load the
+        // board does not have. Error, with both numbers.
+        if let Some(i_req) = req.i_max_a {
+            let rail_budget = netlist
+                .pin_instances
+                .values()
+                .filter(|pi| pi.instance == inst_id)
+                .filter(|pi| netlist.pins.get(pi.pin_def).map(|p| p.name == "VOUT").unwrap_or(false))
+                .filter_map(|pi| pi.net.and_then(|n| netlist.nets.get(n)))
+                .filter_map(|n| match &n.net_class {
+                    bhdl_netlist::types::NetClass::Power { current: Some(i), .. } => Some(*i),
+                    _ => None,
+                })
+                .fold(None::<f64>, |acc, i| Some(acc.map_or(i, |a: f64| a.max(i))));
+            if let Some(budget) = rail_budget {
+                if budget > i_req * 1.001 {
+                    out.push(DRCViolation {
+                        rule_id: "ERC032".into(),
+                        rule_name: "Power-tree acceptance".into(),
+                        category: RuleCategory::Electrical,
+                        severity: ViolationSeverity::Error,
+                        description: format!(
+                            "'{}' ({}) requirement i_max={i_req:.3}A understates the rail it drives — the board declares {budget:.3}A on that rail; the block was resolved (envelope, derating, thermal) for the smaller load",
+                            inst.name, module_name
+                        ),
+                        location: ViolationLocation::Component(inst_id),
+                        fix_suggestion: format!("state i_max={budget:.3}A (or higher) in the requirement and let the resolver re-survey, or lower the rail's `@ I` budget to the real load"),
+                        standard_reference: None,
+                    });
+                }
+            }
+        }
+
         for gate in check(&req, &promises) {
             match gate.verdict {
                 GateVerdict::Ok => {}

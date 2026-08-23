@@ -1514,6 +1514,58 @@ pub fn compute_signoff(
             step: None,
             source: None,
         });
+
+        // ── junction temperature row: the measured dissipation through the
+        // part's θ_JA against its junction rating at the board's ambient.
+        // T_A: the stage requirement's `temp_max` (on this silicon's
+        // block, via composed_parent, or on the instance itself), else
+        // 25 °C ASSUMED and said so. Axis = thermal RISE: stress = P·θ_JA,
+        // rating = T_J,max − T_A, so the margin is the rise budget ratio.
+        let theta_ja = get("theta_ja").and_then(|s| crate::stage_acceptance::parse_si(s));
+        let tj_max = get("tj_max").and_then(|s| crate::stage_acceptance::parse_temp_c(s));
+        if let (Some(theta), Some(tjm)) = (theta_ja, tj_max) {
+            let req_text = get("stage_requirement").cloned().or_else(|| {
+                get("composed_parent")
+                    .and_then(|pn| netlist.instances.values().find(|i| &i.name == pn))
+                    .and_then(|parent| parent.attributes.get("stage_requirement").cloned())
+            });
+            let ta_req = req_text.as_deref().and_then(|t| {
+                t.split(',').filter_map(|kv| kv.split_once('=')).find(|(k, _)| k.trim() == "temp_max").and_then(|(_, v)| crate::stage_acceptance::parse_temp_c(v))
+            });
+            let (ta, ta_src) = match ta_req {
+                Some(t) => (t, format!("T_A={t:.0}°C (requirement temp_max)")),
+                None => (25.0, "T_A=25°C ASSUMED (no temp_max requirement on this stage)".to_string()),
+            };
+            let rise = p_diss * theta;
+            let allowed = tjm - ta;
+            let tj = ta + rise;
+            let margin = if rise > 0.0 { Some(allowed / rise) } else { None };
+            let verdict = match margin {
+                Some(m) if m >= SIGNOFF_MARGIN => Verdict::SignedOff,
+                Some(m) if m >= 1.0 => Verdict::UnderMargin,
+                Some(_) => Verdict::OverStress,
+                None => Verdict::NoData,
+            };
+            rows.push(SignoffRow {
+                refdes: inst.name.clone(),
+                display: display_label(inst),
+                class: "junction temperature".into(),
+                axis: "T",
+                value: format!("T_J,max={tjm:.0}°C"),
+                stress: Some(rise),
+                derated: Some(rise),
+                rating: Some(allowed),
+                margin,
+                verdict,
+                dnp,
+                ripple: Some(format!(
+                    "T_J = {ta_src} + {:.3}W × {theta:.1}°C/W = {tj:.1}°C (θ_JA: JEDEC board metric, board-dependent)",
+                    p_diss
+                )),
+                step: None,
+                source: None,
+            });
+        }
     }
 
     // Requirement rows (Power_Supply_Synthesis.md §5): a `supply` statement's

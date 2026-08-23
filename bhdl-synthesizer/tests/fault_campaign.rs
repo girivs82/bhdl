@@ -2416,7 +2416,7 @@ import {{ PreregStage }} from "bhdl-stdlib/power/stages.bhdl";
 import {{ Res }} from "bhdl-stdlib/passives/resistor.bhdl";
 board PreDemo {{
     power VIN = 12V @ 3A;
-    port V_PROT: power out = 12V @ 2A;
+    port V_PROT: power out = 12V @ 1A;
     ground GND;
     @VIN -> fe: PreregStage({args}).VIN;
     fe.GND -> @GND; fe.VOUT -> @V_PROT;
@@ -2544,7 +2544,9 @@ import {{ Res }} from "bhdl-stdlib/passives/resistor.bhdl";
 board Proj {{
     {project}
     power V12 = 12V @ 1A;
-    port V3V3: power out = 3.3V @ 400mA;
+    // budget matches the largest requirement the test states — the
+    // understatement check (ERC032) fires when i_max < the rail budget
+    port V3V3: power out = 3.3V @ 100mA;
     ground GND;
     @V12 -> u2: LdoStage({args}).VIN;
     u2.GND -> @GND; u2.VOUT -> @V3V3;
@@ -2593,4 +2595,70 @@ safety Proj as brd {
     let row = m.rows.iter().find(|r| r.id == "Proj.u2").expect("stage row");
     assert_eq!(row.status, bhdl_synthesizer::trace_matrix::TraceStatus::Unverified, "{row:#?}");
     assert!(row.evidence.contains("derived ASIL B (serves goal SG_RAIL)") && row.evidence.contains("requirement states NONE — add `asil=B`"), "{row:#?}");
+}
+
+/// Junction-temperature sign-off row + the as-built-load check: the
+/// sign-off takes the part's stress-model dissipation through its
+/// datasheet θ_JA against T_J,max at the stage requirement's ambient
+/// (rise budget), and ERC032 flags a requirement whose i_max understates
+/// the rail budget the board actually declares (the block was resolved
+/// for the smaller load).
+#[tokio::test]
+async fn junction_temperature_row_and_understated_load() {
+    use bhdl_synthesizer::stage_resolution::resolve_stages;
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let stdlib = ws.join("bhdl-stdlib");
+    let board = |budget: &str, i_max: &str| format!(r#"
+import {{ LdoStage }} from "bhdl-stdlib/power/stages.bhdl";
+import {{ Res }} from "bhdl-stdlib/passives/resistor.bhdl";
+board TjDemo {{
+    power V5 = 5V @ 1A;
+    port V3V3: power out = 3.3V @ {budget};
+    ground GND;
+    @V5 -> u2: LdoStage(vout=3.3V, i_max={i_max}, vin=5V, temp_max=85degC).VIN;
+    u2.GND -> @GND; u2.VOUT -> @V3V3;
+    resolve u2 = Ldo_LP2985;
+    @V3V3 -> R_LOAD: Res(33Ω, wattage=1W).1; R_LOAD.2 -> @GND;
+}}
+"#);
+    async fn build(src: String, stdlib: &std::path::Path) -> (bhdl_netlist::Netlist, bhdl_analyzer::AnalysisResult) {
+        use bhdl_synthesizer::stage_resolution::resolve_stages;
+        let r = resolve_stages(&src, stdlib, &[]).unwrap().unwrap();
+        let pr = parse(&r.source);
+        assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+        let sf = SourceFile::cast(pr.syntax()).unwrap();
+        let analysis = analyze(&sf);
+        let mut gen = NetlistGenerator::new();
+        let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+        (n, analysis)
+    }
+    // requirement understates the rail (100mA vs 200mA budget) → ERC032 Error
+    let (n, analysis) = build(board("200mA", "100mA"), &stdlib).await;
+    let v = bhdl_synthesizer::erc::check_powertree_acceptance(&n, &analysis);
+    let under = v.iter().find(|x| x.description.contains("understates the rail")).expect("understatement finding: {v:#?}");
+    assert_eq!(under.severity, bhdl_synthesizer::design_rule_checker::ViolationSeverity::Error);
+    assert!(under.description.contains("i_max=0.100A") && under.description.contains("0.200A"), "{}", under.description);
+    // consistent requirement (a LEGAL point — LP2985's envelope refuses
+    // 200mA outright) → no such finding; the sign-off's T_J row takes the
+    // stress-model dissipation at the rail's 100mA through θ_JA 205.4
+    let (n, analysis) = build(board("100mA", "100mA"), &stdlib).await;
+    let v = bhdl_synthesizer::erc::check_powertree_acceptance(&n, &analysis);
+    assert!(!v.iter().any(|x| x.description.contains("understates")), "{v:#?}");
+    let rows = bhdl_synthesizer::signoff::compute_signoff(
+        &n,
+        &std::collections::HashMap::new(),
+        &std::collections::HashMap::new(),
+        &std::collections::HashMap::new(),
+        &analysis.entity_attribute_index,
+        &analysis.stress_recipes,
+    );
+    let tj = rows.iter().find(|r| r.refdes == "u2_u" && r.class == "junction temperature").unwrap_or_else(|| panic!("T_J row: {:?}", rows.iter().map(|r| (&r.refdes, &r.class)).collect::<Vec<_>>()));
+    let note = tj.ripple.clone().unwrap_or_default();
+    assert!(note.contains("T_A=85°C (requirement temp_max)") && note.contains("× 205.4°C/W"), "{note}");
+    // 0.174 W × 205.4 = 35.7 °C rise vs the 40 °C budget (125 − 85):
+    // inside the rating but under the 1.2× sign-off margin — UnderMargin,
+    // exactly what a JEDEC-board θ_JA at 85 °C ambient should say
+    assert!(matches!(tj.verdict, bhdl_synthesizer::signoff::Verdict::UnderMargin), "{tj:?}");
+    assert!((tj.rating.unwrap() - 40.0).abs() < 1e-6 && (tj.stress.unwrap() - 35.7).abs() < 0.5, "{tj:?}");
 }
