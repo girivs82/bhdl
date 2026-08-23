@@ -296,6 +296,21 @@ Principles that fall out:
    took any `v_out`. With no cost data the resolver breaks ties by LEAST
    OVER-RATING (smallest `output_current` that covers the load), then
    library order — stated in the survey note.
+   `PreregStage` (the protected front end; landed last) completes the
+   set: vocabulary `vout, i_max, vin, vin_min/max?` plus the protection
+   FUNCTIONS as distinct words — `ov_clamp` (passive clamp ≤), `ov_trip`
+   (active cutoff ≤), `uv_trip` (lockout ≥), `reverse_polarity` — each
+   gated only against a block that declares it. The tree emits
+   `PreregStage(...)` for its front end; `GenericPrereg` is now just the
+   unresolved placeholder. Implementer: `PassiveFrontEnd`
+   (`bhdl-stdlib/protection/front_end.bhdl`, fuse + unidirectional TVS
+   from real library parts — a genuine block, not a template) promising
+   the fuse rating, `ov_clamp = tvs_v`, and an input range BY
+   CONSTRUCTION (0 V … the clamp point); it declares no cutoff, lockout
+   or reverse-polarity protection, so a requirement stating one is
+   UNCHECKED against it and stays unresolved — the eFuse / ideal-diode
+   block to add is visible as missing coverage. Its envelope is the
+   fuse derating (`where i_load <= 0.8 * i_rating, v_in < tvs_v`).
    `BuckExtStage` (controller + external power stage; `phases` is part
    of the requirement) is the third interface; the power tree emits it
    for `BuckExternal` stages. Its only implementer is the generic

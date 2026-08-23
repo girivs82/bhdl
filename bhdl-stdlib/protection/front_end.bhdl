@@ -1,0 +1,61 @@
+// PassiveFrontEnd — a designer-owned protected front end built from real
+// library parts: a fuse (overcurrent) and a unidirectional TVS (surge /
+// overvoltage CLAMP on the protected line).
+//
+// Two-layer library model (docs/spec/Requirements_And_Resolution.md §1):
+// the "part" layer here is the two passives themselves (Fuse, TVSDiode —
+// BOM-resolved by value); this file is the DESIGN block, `impl
+// PreregStage`. It is a genuine (auto-bindable) block, not a template:
+// every child is an orderable part.
+//
+// What it promises — and, as important, what it does NOT:
+//   output_current = the fuse rating (`i_rating`)      → i_max gate
+//   ov_clamp       = the TVS breakdown voltage          → ov_clamp gate
+//   NO ov_trip (no active cutoff), NO uv_trip (no lockout), NO
+//   reverse_polarity protection: a requirement stating any of those is
+//   UNCHECKED against this block (the survey says so) — an eFuse / ideal-
+//   diode block is the one to add for them.
+// Input range promised by CONSTRUCTION, not by a datasheet: a passive
+// path has no minimum (vin_min = 0 V), and its working ceiling is the
+// clamp point — above tvs_v the TVS conducts, so the line cannot be
+// operated there (vin_max = tvs_v). (The TVS entity declares breakdown,
+// not standoff; the block promises nothing about the margin between.)
+
+import { Fuse, TVSDiode } from "bhdl-stdlib/protection/tvs.bhdl";
+
+entity PassiveFrontEnd(
+    v_in:      voltage = 12V,   // nominal input (pass-through; vout = vin)
+    i_load:    current = 2A,    // the load the path carries (requirement i_max)
+    i_rating:  current = 3A,    // fuse rating — the sized pass element
+    tvs_v:     voltage = 24V    // TVS breakdown: the line is clamped at ≤ this
+) as design
+  // ENVELOPE: the fuse is a rated part; the load runs at ≤ 80 % of it
+  // (the power-tree derating policy) — above that, pick a bigger fuse
+  // (`resolve u = PassiveFrontEnd(i_rating=8A);`).
+  where i_load <= 0.8 * i_rating, v_in < tvs_v
+{
+    pin VIN:  power in;
+    pin VOUT: power out virtual;
+    pin GND:  ground;
+
+    attribute component_class = "protection";
+    attribute topology        = "prereg";
+    attribute output_voltage  = v_in;      // pass-through
+    attribute v_in            = v_in;
+    attribute i_load          = i_load;
+    attribute output_current  = i_rating;  // the fuse rating
+    attribute ov_clamp        = tvs_v;     // TVS breakdown (clamp, not cutoff)
+    attribute vin_min         = 0V;        // passive path: no minimum
+    attribute vin_max         = tvs_v;     // working ceiling = the clamp point (by construction)
+
+    VIN -> F: Fuse(i_rating).1;
+    F.2 -> VOUT;
+    VOUT -> D_tvs: TVSDiode(tvs_v).K;
+    D_tvs.A -> GND;
+}
+
+impl PreregStage for PassiveFrontEnd {
+    const vout  = v_in;    // pass-through: the requirement's vout is the input
+    const i_max = i_load;
+    const vin   = v_in;
+}

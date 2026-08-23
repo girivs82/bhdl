@@ -402,6 +402,7 @@ pub fn resolve_stages(
                 let generic = match req.trait_name.as_str() {
                     "LdoStage" => "GenericLdo",
                     "BuckExtStage" => "GenericBuckExt",
+                    "PreregStage" => "GenericPrereg",
                     _ => "GenericBuck",
                 };
                 imports_needed.insert(generic.to_string(), "bhdl-stdlib/power/generic_regulators.bhdl".into());

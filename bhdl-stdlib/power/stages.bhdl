@@ -99,3 +99,32 @@ trait BuckExtStage {
     const temp_max: temperature;    // operating ambient maximum required
     const qual: string;             // e.g. "AEC-Q100" — must appear in the part's `qualification`
 }
+
+// The protected FRONT END the tree puts between the input and every
+// non-always-on rail (`Prereg` topology): the pass element (fuse /
+// eFuse / ideal diode) plus input protection. Requirement vocabulary:
+// the pass current, the input range, and the protection FUNCTIONS —
+// distinct words for distinct behaviours, each checked against a block
+// that DECLARES it (undeclared = UNCHECKED, never a pass):
+//   ov_clamp  — a passive clamp (TVS) limits the line to ≤ this voltage
+//   ov_trip   — an ACTIVE cutoff opens the path above this voltage
+//   uv_trip   — an undervoltage lockout holds the path off below this
+//   reverse_polarity — "true": the path blocks reversed input
+// vout is the pass-through voltage (normally = vin).
+trait PreregStage {
+    pin VIN: power in;
+    pin VOUT: power out;
+    pin GND: ground;
+    const vout: voltage;
+    const i_max: current;
+    const vin: voltage;
+    const vin_min: voltage;         // optional; defaults to vin
+    const vin_max: voltage;         // optional; defaults to vin
+    const ov_clamp: voltage;        // optional
+    const ov_trip: voltage;         // optional
+    const uv_trip: voltage;         // optional
+    const reverse_polarity: string; // optional: "true"
+    const temp_min: temperature;
+    const temp_max: temperature;
+    const qual: string;
+}

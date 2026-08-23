@@ -1072,7 +1072,7 @@ pub const EMIT_BEGIN: &str =
 pub const EMIT_END: &str = "// ── END GENERATED POWER TREE ──";
 
 /// The import the emitted region needs at file level.
-pub const EMIT_IMPORT: &str = "import { BuckStage, LdoStage, BuckExtStage } from \"bhdl-stdlib/power/stages.bhdl\";\nimport { GenericPrereg } from \"bhdl-stdlib/power/generic_regulators.bhdl\";";
+pub const EMIT_IMPORT: &str = "import { BuckStage, LdoStage, BuckExtStage, PreregStage } from \"bhdl-stdlib/power/stages.bhdl\";";
 
 fn fmt_v(v: f64) -> String {
     format!("{v}V")
@@ -1130,11 +1130,12 @@ pub fn emit_power_region(option: &TreeOption, gnd: &str) -> String {
         // assumption where it is a real ceiling. Controller+external
         // stages and the prereg have no interface yet and stay generic.
         match st.topology {
-            Topology::Buck | Topology::Ldo | Topology::BuckExternal => {
+            Topology::Buck | Topology::Ldo | Topology::BuckExternal | Topology::Prereg => {
                 let iface = match st.topology {
                     Topology::Buck => "BuckStage",
                     Topology::Ldo => "LdoStage",
-                    _ => "BuckExtStage",
+                    Topology::BuckExternal => "BuckExtStage",
+                    Topology::Prereg => "PreregStage",
                 };
                 let noise = if st.topology == Topology::Ldo && st.noise_assumed_uvrms > 0.0 {
                     format!(", noise={:.0}uV", st.noise_assumed_uvrms)
@@ -1153,17 +1154,6 @@ pub fn emit_power_region(option: &TreeOption, gnd: &str) -> String {
                     fmt_v(st.vout),
                     fmt_a_ceil(st.i_max_a),
                     fmt_v(st.vin),
-                ));
-            }
-            Topology::Prereg => {
-                let entity = "GenericPrereg";
-                // NAMED ctor args (vin/vout/rated) = the uniform contract
-                // a real entity must share for the rename-swap.
-                out.push_str(&format!(
-                    "\n    {inst}: {entity}(vin={}, vout={}, rated={});\n",
-                    fmt_v(st.vin),
-                    fmt_v(st.vout),
-                    fmt_a_ceil(st.required_rating_a)
                 ));
             }
         }

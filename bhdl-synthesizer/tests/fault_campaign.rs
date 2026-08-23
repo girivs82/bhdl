@@ -1180,6 +1180,10 @@ board Protected {
         // the always-on rail hangs DIRECT off the input, stated
         let stby = o.stages.iter().find(|s| s.to == "VSTBY").unwrap();
         assert_eq!(stby.from, "VIN", "AO bypass: {stby:#?}");
+        // the front end EMITS as a PreregStage requirement (resolvable)
+        let region = bhdl_synthesizer::powertree::emit_power_region(o, "GND");
+        let line = region.lines().find(|l| l.contains("u_v_prot:")).expect("prereg stage emitted").to_string();
+        assert!(line.contains("PreregStage(") && !line.contains("GenericPrereg"), "{line}");
         assert!(
             o.notes.iter().any(|nn| nn.contains("always-on") && nn.contains("VSTBY")),
             "{:#?}", o.notes
@@ -2347,10 +2351,9 @@ async fn trace_hsr_evidence_and_hsi_contracts() {
     assert!(m.findings.iter().any(|f| f.starts_with("safety gap (no goal row)")), "{:#?}", m.findings);
 }
 
-/// ERC032's fix text names the right path per placeholder: a Buck / LDO
-/// / BuckExt placeholder is an unresolved REQUIREMENT (survey, impl,
-/// `resolve`); the prereg has no interface yet and is committed by
-/// renaming onto a real protection entity.
+/// ERC032's fix text: every placeholder (Buck / LDO / BuckExt / Prereg)
+/// is an unresolved REQUIREMENT — the fix names the interface to impl and
+/// the `resolve` form; never "rename the Generic*".
 #[tokio::test]
 async fn erc032_fix_text_per_placeholder() {
     let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
@@ -2380,8 +2383,62 @@ board Fix {
     let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
     let v = bhdl_synthesizer::erc::check_powertree_acceptance(&n, &analysis);
     let pre = v.iter().find(|x| x.description.contains("'pre'")).expect("prereg placeholder finding");
-    assert!(pre.fix_suggestion.contains("no `PreregStage` interface exists yet") && pre.fix_suggestion.contains("renaming"), "{}", pre.fix_suggestion);
+    assert!(pre.fix_suggestion.contains("`impl`s PreregStage") && pre.fix_suggestion.contains("resolve pre = <Block>"), "{}", pre.fix_suggestion);
+    assert!(!pre.fix_suggestion.contains("renam"), "{}", pre.fix_suggestion);
     let u1 = v.iter().find(|x| x.description.contains("'u1'")).expect("buck placeholder finding");
     assert!(u1.fix_suggestion.contains("`impl`s BuckStage") && u1.fix_suggestion.contains("resolve u1 = <Block>"), "{}", u1.fix_suggestion);
     assert!(!u1.fix_suggestion.contains("renam"), "a requirement is not committed by renaming: {}", u1.fix_suggestion);
+}
+
+/// PreregStage (the last tree stage to get an interface): the tree emits
+/// `PreregStage(...)` for its protected front end; `PassiveFrontEnd`
+/// (fuse + TVS, real parts) resolves it, promising the fuse rating, a
+/// passive OV clamp and an input range BY CONSTRUCTION; protection
+/// functions it does not provide (active cutoff, UV lockout, reverse
+/// polarity) are UNCHECKED against it — a requirement stating one stays
+/// unresolved with that said.
+#[tokio::test]
+async fn prereg_stage_interface_and_passive_front_end() {
+    use bhdl_synthesizer::stage_resolution::resolve_stages;
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let stdlib = ws.join("bhdl-stdlib");
+    let board = |args: &str| format!(r#"
+import {{ PreregStage }} from "bhdl-stdlib/power/stages.bhdl";
+import {{ Res }} from "bhdl-stdlib/passives/resistor.bhdl";
+board PreDemo {{
+    power VIN = 12V @ 3A;
+    port V_PROT: power out = 12V @ 2A;
+    ground GND;
+    @VIN -> fe: PreregStage({args}).VIN;
+    fe.GND -> @GND; fe.VOUT -> @V_PROT;
+    @V_PROT -> R_LOAD: Res(6Ω, wattage=50W).1; R_LOAD.2 -> @GND;
+}}
+"#);
+    let r = resolve_stages(&board("vout=12V, i_max=2A, vin=12V, ov_clamp=30V"), &stdlib, &[]).unwrap().unwrap();
+    assert_eq!(r.resolutions[0].bound.as_deref(), Some("PassiveFrontEnd"), "{}", bhdl_synthesizer::stage_resolution::render_report(&r.resolutions[0]));
+    let c = &r.resolutions[0].candidates[0];
+    assert!(c.gates.iter().any(|g| g.0 == "ov_clamp" && g.2 && g.1.contains("24.0V")), "{c:#?}");
+    // the bound block synthesizes: fuse + TVS on the protected line
+    let pr = parse(&r.source);
+    assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+    for child in ["fe_F", "fe_D_tvs"] {
+        assert!(n.instances.values().any(|i| i.name == child), "{child}");
+    }
+    // too much load for the default 3A fuse: the where-envelope refuses (override with i_rating)
+    let r = resolve_stages(&board("vout=12V, i_max=2.6A, vin=12V"), &stdlib, &[]).unwrap().unwrap();
+    assert!(r.resolutions[0].bound.is_none());
+    assert!(r.resolutions[0].candidates[0].failures().iter().any(|f| f.contains("envelope") && f.contains("i_load <= 0.8 * i_rating")), "{:?}", r.resolutions[0].candidates[0].failures());
+    // protection the block does not provide: UNCHECKED, unresolved
+    for extra in ["reverse_polarity=\"true\"", "ov_trip=30V", "uv_trip=8V"] {
+        let r = resolve_stages(&board(&format!("vout=12V, i_max=2A, vin=12V, {extra}")), &stdlib, &[]).unwrap().unwrap();
+        assert!(r.resolutions[0].bound.is_none(), "{extra}");
+        let gate = extra.split('=').next().unwrap();
+        assert!(r.resolutions[0].candidates[0].unchecked.contains(&gate.to_string()), "{extra}: {:#?}", r.resolutions[0].candidates[0]);
+        assert!(r.source.contains("fe: GenericPrereg("), "{}", r.source);
+    }
 }

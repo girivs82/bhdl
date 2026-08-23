@@ -33,6 +33,11 @@ pub struct StageRequirement {
     pub temp_min_c: Option<f64>,
     pub temp_max_c: Option<f64>,
     pub qual: Option<String>,
+    // PreregStage protection functions (distinct words, distinct behaviours)
+    pub ov_clamp_v: Option<f64>,
+    pub ov_trip_v: Option<f64>,
+    pub uv_trip_v: Option<f64>,
+    pub reverse_polarity: Option<bool>,
 }
 
 /// What the stage declares (SI units; efficiency as a fraction). `None`
@@ -48,6 +53,10 @@ pub struct StagePromises {
     pub temp_min_c: Option<f64>,
     pub temp_max_c: Option<f64>,
     pub qualification: Option<String>,
+    pub ov_clamp_v: Option<f64>,
+    pub ov_trip_v: Option<f64>,
+    pub uv_trip_v: Option<f64>,
+    pub reverse_polarity: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -148,6 +157,33 @@ pub fn check(req: &StageRequirement, p: &StagePromises) -> Vec<Gate> {
             None => unchecked(&mut g, "temp_max", "declares no temp_max — UNCHECKED, not a pass".into(), "attribute temp_max = <datasheet>degC;"),
         }
     }
+    // protection functions: a clamp must clamp at or below the asked
+    // ceiling; a cutoff must open at or below it; a lockout must hold
+    // off at or above the asked floor; reverse-polarity must be declared
+    if let Some(v) = req.ov_clamp_v {
+        match p.ov_clamp_v {
+            Some(b) => push(&mut g, "ov_clamp", format!("clamps at {b:.1}V ≤ required ceiling {v:.1}V"), b <= v + 1e-9),
+            None => unchecked(&mut g, "ov_clamp", "declares no ov_clamp (no passive clamp) — UNCHECKED, not a pass".into(), "attribute ov_clamp = <clamp voltage>;"),
+        }
+    }
+    if let Some(v) = req.ov_trip_v {
+        match p.ov_trip_v {
+            Some(b) => push(&mut g, "ov_trip", format!("cuts off at {b:.1}V ≤ required {v:.1}V"), b <= v + 1e-9),
+            None => unchecked(&mut g, "ov_trip", "declares no ov_trip (no active overvoltage cutoff) — UNCHECKED, not a pass".into(), "attribute ov_trip = <cutoff voltage>;"),
+        }
+    }
+    if let Some(v) = req.uv_trip_v {
+        match p.uv_trip_v {
+            Some(b) => push(&mut g, "uv_trip", format!("locks out below {b:.1}V ≥ required {v:.1}V"), b + 1e-9 >= v),
+            None => unchecked(&mut g, "uv_trip", "declares no uv_trip (no undervoltage lockout) — UNCHECKED, not a pass".into(), "attribute uv_trip = <lockout voltage>;"),
+        }
+    }
+    if req.reverse_polarity == Some(true) {
+        match p.reverse_polarity {
+            Some(b) => push(&mut g, "reverse_polarity", format!("reverse-polarity protection declared {b}"), b),
+            None => unchecked(&mut g, "reverse_polarity", "declares no reverse_polarity protection — UNCHECKED, not a pass".into(), "attribute reverse_polarity = true;"),
+        }
+    }
     if let Some(q) = &req.qual {
         match &p.qualification {
             Some(have) => push(&mut g, "qual", format!("qualification \"{have}\" covers required \"{q}\""), have.to_ascii_lowercase().contains(&q.to_ascii_lowercase())),
@@ -232,6 +268,10 @@ pub fn requirement_from_pairs<'a>(pairs: impl Iterator<Item = (&'a str, &'a str)
             "temp_min" => r.temp_min_c = parse_temp_c(v),
             "temp_max" => r.temp_max_c = parse_temp_c(v),
             "qual" => r.qual = Some(v.trim().trim_matches('"').to_string()).filter(|s| !s.is_empty()),
+            "ov_clamp" => r.ov_clamp_v = parse_si(v),
+            "ov_trip" => r.ov_trip_v = parse_si(v),
+            "uv_trip" => r.uv_trip_v = parse_si(v),
+            "reverse_polarity" => r.reverse_polarity = Some(v.trim().trim_matches('"').eq_ignore_ascii_case("true")),
             _ => {}
         }
     }
@@ -256,6 +296,10 @@ pub fn promises_from_attrs<'a>(get: impl Fn(&str) -> Option<String>) -> StagePro
         temp_min_c: get("temp_min").and_then(|v| parse_temp_c(&v)),
         temp_max_c: get("temp_max").and_then(|v| parse_temp_c(&v)),
         qualification: get("qualification").map(|v| v.trim().trim_matches('"').to_string()).filter(|s| !s.is_empty()),
+        ov_clamp_v: get("ov_clamp").and_then(|v| parse_si(&v)),
+        ov_trip_v: get("ov_trip").and_then(|v| parse_si(&v)),
+        uv_trip_v: get("uv_trip").and_then(|v| parse_si(&v)),
+        reverse_polarity: get("reverse_polarity").map(|v| v.trim().trim_matches('"').eq_ignore_ascii_case("true")),
     }
 }
 
