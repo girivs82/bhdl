@@ -1,5 +1,5 @@
-// AP2112K — Diodes Inc. 600mA CMOS LDO with enable, SOT-23-5.
-// Low dropout (250mV @ 600mA), ultra-low Iq (55µA).
+// AP2112K — Diodes Inc. 600mA CMOS LDO with enable, SOT-23-5 (SOT25)
+// (DS39724 Rev. 2). Low dropout (250mV @ 600mA), ultra-low Iq (55µA typ).
 //
 // Two-layer library model (docs/spec/Requirements_And_Resolution.md §1):
 //   AP2112K      as part    — vendor truth.
@@ -28,12 +28,15 @@ entity AP2112K(v_out: voltage = 3.3V, dropout: voltage = 250mV, i_quiescent: cur
     attribute output_voltage  = v_out;
     attribute dropout_voltage = dropout;
     attribute i_quiescent     = i_quiescent;
-    attribute output_current  = 0.6A;    // AP2112 datasheet: 600 mA output current
-    attribute vin_min         = 2.5V;    // AP2112 datasheet: input voltage range 2.5 V to 6.0 V
+    attribute output_current  = 0.6A;    // DS39724: IOUT(MAX) 600 mA min
+    attribute vin_min         = 2.5V;    // DS39724 recommended operating: VIN 2.5 V to 6.0 V
     attribute vin_max         = 6V;
-    attribute power_rating    = 400mW;   // SOT-23-5 free-air ((125−25)°C / ~250°C/W)
-    attribute temp_min        = -40degC; // AP2112 datasheet: operating ambient temperature −40 °C to +85 °C
+    attribute power_rating    = 400mW;   // class estimate ((125−25)°C / ~250°C/W) — the datasheet gives θJA, not a Pd figure
+    attribute temp_min        = -40degC; // DS39724 recommended operating: TA −40 °C to +85 °C (ambient)
     attribute temp_max        = 85degC;
+    attribute tj_max          = 150degC; // DS39724 absolute maximum: operating junction temperature +150 °C
+    attribute theta_ja        = 184degC/W; // DS39724 thermal resistance junction-to-ambient, SOT25, no heatsink
+    attribute theta_jc        = 96degC/W;  // DS39724 junction-to-case, SOT25
 
     // §4 device-stress IP: linear pass-element dissipation at the solved
     // operating point — P = (V_IN − V_OUT)·I_out + V_IN·I_q, gated against
@@ -82,8 +85,10 @@ entity Ldo_AP2112K(
     attribute vin_min         = 2.5V;
     attribute vin_max         = 6V;
     attribute dropout_voltage = 250mV;
-    attribute temp_min        = -40degC; // AP2112 (ambient)
+    attribute temp_min        = -40degC; // DS39724 (ambient)
     attribute temp_max        = 85degC;
+    attribute tj_max          = 150degC;   // DS39724
+    attribute theta_ja        = 184degC/W; // DS39724, SOT25
     attribute i_quiescent     = 55uA;
 
     // VALIDITY ENVELOPE — one binary op per `const`; SI base units.

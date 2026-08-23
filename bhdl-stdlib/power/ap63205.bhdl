@@ -1,5 +1,5 @@
 // AP63205 — Diodes Inc. 3.8–32 V input, 2 A synchronous buck, fixed
-// 5 V output, TSOT-26 (AP63200/01/03/05 datasheet).
+// 5 V output, TSOT-26 (DS41326 Rev. 3, AP63200/01/03/05).
 //
 // Two-layer library model (docs/spec/Requirements_And_Resolution.md §1):
 //   AP63205      as part    — vendor truth.
@@ -8,8 +8,11 @@
 //                             out, 10 µF in, 100 nF BST), `impl
 //                             BuckStage`. Fixed-voltage part: the block's
 //                             v_out is the 5 V SKU only (envelope).
-// The declared f_sw / rds_on / t_sw / Iq figures are carried over from
-// the previous entity definition unchanged.
+// Figures from DS41326 Rev. 3: fSW 1100 kHz typ for AP63203/AP63205 (the
+// 500 kHz oscillator is the AP63200/AP63201's — the earlier 500 kHz here
+// was wrong), RDS(on) HS 125 mΩ / LS 68 mΩ typ, IQ 22 µA typ, TA −40…85 °C
+// ambient, θJA 89 °C/W TSOT26. t_sw is NOT in the datasheet and stays the
+// carried-over switching-loss class estimate, stated.
 
 // The block's children are the block's business: the library file
 // imports what its application circuit instantiates (a board that
@@ -19,10 +22,10 @@ import { Ind } from "bhdl-stdlib/passives/inductor.bhdl";
 
 // ── Vendor truth ────────────────────────────────────────────────────
 entity AP63205(
-    f_sw: frequency = 500kHz,
-    rds_on: resistance = 120mΩ,
-    t_sw: time = 15ns,
-    i_quiescent: current = 22µA
+    f_sw: frequency = 1100kHz,      // DS41326: oscillator frequency, AP63203/AP63205, 1100 kHz typ
+    rds_on: resistance = 125mΩ,     // DS41326: RDS(ON)1 high-side, 125 mΩ typ (low-side 68 mΩ)
+    t_sw: time = 15ns,              // NOT in DS41326 — switching-loss class estimate, carried over
+    i_quiescent: current = 22µA     // DS41326: IQ 22 µA typ
 ) as part {
     pin VIN:  power in;
     pin EN:   signal in;
@@ -34,14 +37,19 @@ entity AP63205(
     attribute manufacturer    = "Diodes Incorporated";
     attribute part_number     = "AP63205";
     attribute output_voltage  = 5V;       // fixed-output SKU
-    attribute output_current  = 2A;       // AP63200/01/03/05 datasheet: 2 A continuous
-    attribute vin_min         = 3.8V;     // datasheet: 3.8 V to 32 V input
+    attribute output_current  = 2A;       // DS41326: 2 A continuous output current
+    attribute vin_min         = 3.8V;     // DS41326: input voltage range 3.8 V to 32 V
     attribute vin_max         = 32V;
+    attribute temp_min        = -40degC;  // DS41326 recommended operating: TA −40 °C to +85 °C (ambient)
+    attribute temp_max        = 85degC;
+    attribute tj_max          = 160degC;  // DS41326 absolute maximum junction temperature (thermal shutdown +160 °C)
+    attribute theta_ja        = 89degC/W; // DS41326 junction-to-ambient, TSOT26
+    attribute theta_jc        = 39degC/W; // DS41326 junction-to-case, TSOT26
     attribute f_sw            = f_sw;
     attribute rds_on          = rds_on;
     attribute t_sw            = t_sw;
     attribute i_quiescent     = i_quiescent;
-    attribute power_rating    = 1.1W;     // TSOT-26 free-air ((125−25)°C / ~90°C/W with pad)
+    attribute power_rating    = 1.1W;     // class estimate ((125−25)°C / ~90 °C/W) — consistent with the datasheet θJA 89
 }
 
 symbol AP63205 {
@@ -75,9 +83,13 @@ entity Buck_AP63205(
     attribute output_current  = 2A;
     attribute vin_min         = 3.8V;
     attribute vin_max         = 32V;
-    attribute f_sw            = 500kHz;
-    attribute rds_on          = 120mΩ;
-    attribute t_sw            = 15ns;
+    attribute temp_min        = -40degC;  // DS41326 (ambient)
+    attribute temp_max        = 85degC;
+    attribute tj_max          = 160degC;
+    attribute theta_ja        = 89degC/W; // DS41326, TSOT26
+    attribute f_sw            = 1100kHz;  // DS41326 (AP63203/AP63205)
+    attribute rds_on          = 125mΩ;    // DS41326 HS typ
+    attribute t_sw            = 15ns;     // class estimate (not in DS41326)
     attribute i_quiescent     = 22uA;
 
     design {

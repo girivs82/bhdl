@@ -2029,15 +2029,15 @@ board ExtDemo {{
     //     SLVS839H / SLVSDG6C) and declare θ_JA + T_J,max, so an ambient
     //     requirement is met THERMALLY at the requirement's dissipation:
     //     0.5 A at 60 °C → T_J ≈ 96 / 86 °C ≤ 150 passes; 2 A at 85 °C on the
-    //     JEDEC board → 229 / 188 °C refused. AP63205 (no θ_JA data) is
-    //     UNCHECKED, never a pass.
+    //     JEDEC board → 229 / 188 °C refused. AP63205 is AMBIENT-rated
+    //     (DS41326: TA −40…85 °C) and passes 60 °C directly.
     let r = resolve_stages(&board("vout=5V, i_max=0.5A, vin=12V, temp_max=60degC", ""), &stdlib, &[]).unwrap().unwrap();
     assert!(r.resolutions[0].bound.is_some(), "{}", bhdl_synthesizer::stage_resolution::render_report(&r.resolutions[0]));
     let c331 = r.resolutions[0].candidates.iter().find(|c| c.block == "Buck_TPS54331").unwrap();
     let tg = c331.gates.iter().find(|g| g.0 == "temp_max").unwrap();
     assert!(tg.2 && tg.1.contains("thermal: T_J = 60°C + 0.309W × 116.3°C/W = 95.9°C"), "{tg:?}");
     let c205 = r.resolutions[0].candidates.iter().find(|c| c.block == "Buck_AP63205").unwrap();
-    assert!(c205.unchecked.contains(&"temp_max".to_string()), "{c205:#?}");
+    assert!(c205.gates.iter().any(|g| g.0 == "temp_max" && g.2 && g.1.contains("temp_max 85°C ≥ required 60°C")), "{c205:#?}");
     let r = resolve_stages(&board("vout=5V, i_max=2A, vin=12V, temp_max=85degC", ""), &stdlib, &[]).unwrap().unwrap();
     assert!(r.resolutions[0].bound.is_none(), "2 A at 85 °C exceeds T_J,max on the JEDEC board: {}", bhdl_synthesizer::stage_resolution::render_report(&r.resolutions[0]));
     let c331 = r.resolutions[0].candidates.iter().find(|c| c.block == "Buck_TPS54331").unwrap();

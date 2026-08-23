@@ -27,12 +27,14 @@ entity XC6206(v_out: voltage = 3.3V, dropout: voltage = 250mV, i_quiescent: curr
     attribute output_voltage  = v_out;
     attribute dropout_voltage = dropout;
     attribute i_quiescent     = i_quiescent;
-    attribute output_current  = 0.2A;    // Torex XC6206 rated output (datasheet headline)
-    attribute vin_min         = 1.8V;    // Torex XC6206: operating voltage range 1.8 V to 6.0 V
+    attribute output_current  = 0.2A;    // Torex XC6206 datasheet (ETR0305): IOUTMAX 200 mA min
+    attribute vin_min         = 1.8V;    // ETR0305 electrical characteristics: VIN 1.8 V to 6.0 V
     attribute vin_max         = 6V;
-    attribute power_rating    = 250mW;   // SOT-23 free-air, datasheet allowable dissipation
-    attribute temp_min        = -40degC; // Torex XC6206: operating ambient temperature −40 °C to +85 °C
+    attribute power_rating    = 250mW;   // ETR0305 absolute maximum: Pd 250 mW, SOT-23
+    attribute temp_min        = -40degC; // ETR0305: operating temperature range Topr −40 °C to +85 °C
     attribute temp_max        = 85degC;
+    // No θJA / θJC and no junction rating in the datasheet — only the
+    // package Pd above. Thermal sign-off gates on Pd; θ_JA stays undeclared.
 
     // §4 device-stress IP: linear pass-element dissipation at the solved
     // operating point — P = (V_IN − V_OUT)·I_out + V_IN·I_q, gated against

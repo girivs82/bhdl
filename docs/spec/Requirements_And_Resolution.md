@@ -466,14 +466,14 @@ UNCHECKED against a requirement that states it — never a pass.
 |---|---|---|---|---|---|
 | `BuckStage` | `Buck_TPS54331` | auto | 3 A, 3.5–28 V, 89 %, T_J ≤ 150 °C via θ_JA 116.3 | noise, qual | — |
 | `BuckStage` | `Buck_TPS54302` | auto | 3 A, 4.5–28 V, 92 %, T_J ≤ 150 °C via θ_JA 118.9 | noise, qual | — |
-| `BuckStage` | `Buck_AP63205` | auto (5 V SKU only) | 2 A, 3.8–32 V | noise, temp, qual, efficiency | — |
+| `BuckStage` | `Buck_AP63205` | auto (5 V SKU only) | 2 A, 3.8–32 V, −40…85 °C ambient, θ_JA 89 | noise, qual, efficiency | — |
 | `BuckStage` | `BuckRegulator` (LM2596 class) | template | headroom envelope only | i_max, vin range, noise, temp, qual | class numbers |
 | `LdoStage` | `Ldo_LP2985` | auto | 150 mA, 2.5–16 V, 30 µV, T_J ≤ 125 °C via θ_JA 205.4 | qual | — |
 | `LdoStage` | `Ldo_XC6206` | auto | 200 mA, 1.8–6 V, −40…85 °C | noise, qual | — |
-| `LdoStage` | `Ldo_AP2112K` | auto (1.8/2.5/3.3 V SKUs) | 600 mA, 2.5–6 V, −40…85 °C | noise, qual | — |
+| `LdoStage` | `Ldo_AP2112K` | auto (1.8/2.5/3.3 V SKUs) | 600 mA, 2.5–6 V, −40…85 °C ambient, θ_JA 184 | noise, qual | — |
 | `LdoStage` | `Ldo_LM7805` | auto (5 V) | 1.5 A, 7–35 V, 40 µV, T_J ≤ 125 °C via θ_JA 19 | qual | — |
 | `LdoStage` | `Ldo_LM317` | auto (1.35–37 V) | 1.5 A, ≤ 40 V in, T_J ≤ 125 °C via θ_JA 23.5 | vin_min, noise, qual | — |
-| `LdoStage` | `Ldo_NCP1117` | auto (5 V) | 1 A | vin range, noise, temp, qual | — |
+| `LdoStage` | `Ldo_NCP1117` | auto (5 V) | 1 A, 0…125 °C ambient (NCP grade), θ_JA 160 min-pad | vin range, noise, qual | — |
 | `LdoStage` | `LinearRegulator` (78xx class) | template | 40 µV class, headroom | i_max, vin range, temp, qual | class numbers |
 | `BuckExtStage` | `BuckController` | template | 1 phase; rating = the FETs' | vin range, noise, temp, qual | FETs + axes |
 | `PreregStage` | `PassiveFrontEnd` (fuse + TVS) | auto | fuse rating, `ov_clamp`, 0 V … clamp point | ov_trip, uv_trip, reverse_polarity, temp, qual | — |
@@ -500,7 +500,12 @@ junction figure is never declared as an ambient one: TPS54331's earlier
 "−40…85 °C ambient" was not in its datasheet and was retracted. No TI
 datasheet here claims an ASIL: "Functional Safety-Capable" (TPS2660,
 LM74700-Q1) means documentation is available and is recorded as
-`functional_safety`, not as `asil_capable`. NCP1117 (onsemi) has no
-θ_JA in the library yet.
+`functional_safety`, not as `asil_capable`. Non-TI datasheets (fetched
+via distributor mirrors where the vendor site blocks automation):
+AP2112 DS39724 Rev. 2 (SOT25 θ_JA 184, TA −40…85), AP63205 DS41326
+Rev. 3 (TSOT26 θ_JA 89, TA −40…85 — and fSW 1100 kHz / RDS(on) 125 mΩ,
+correcting the carried-over 500 kHz), NCP1117/D Rev. 17 (SOT-223 θ_JA
+160 minimum pad, ambient 0…125 °C for the NCP grade), XC6206 ETR0305
+(Topr −40…85, Pd 250 mW — no θ_JA or T_J in the datasheet, stated).
 The "Promises" column is what ERC032 re-checks on the flattened circuit
 every build.

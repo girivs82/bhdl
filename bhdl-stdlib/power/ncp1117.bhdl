@@ -6,9 +6,11 @@
 //   Ldo_NCP1117  as design  — the designer's subcircuit, `impl LdoStage`.
 // The voltage this library knows is the 5.0 V SKU (NCP1117-5.0); the
 // part carries the family number, the orderable suffix is the BOM/MPN
-// path's to derive. INPUT RANGE NOT DECLARED — not in this library's
-// datasheet data; a requirement that states vin is UNCHECKED against
-// this block (stated by the resolver, never a pass).
+// path's to derive. INPUT RANGE NOT DECLARED: NCP1117/D Rev. 17 gives
+// only an absolute-maximum VIN of 20 V (and "output current must not
+// exceed 1.0 A with Vin greater than 12 V"), no recommended operating
+// input range — a requirement that states vin is UNCHECKED against this
+// block (stated by the resolver, never a pass).
 
 
 // The block's children are the block's business: the library file
@@ -27,18 +29,20 @@ entity NCP1117(v_out: voltage = 5V) as part {
     attribute family          = "NCP1117";
     attribute part_number     = "NCP1117";
     attribute output_voltage  = v_out;
-    attribute output_current  = 1.0A;
+    attribute output_current  = 1.0A;    // NCP1117/D: output current in excess of 1.0 A
     attribute dropout_v       = 1.2;
     attribute dropout_voltage = 1.2V;    // datasheet typ at 800mA
     attribute i_quiescent     = 5.2mA;   // ground-pin current, typ class at load
-    attribute power_rating    = 1.5W;    // SOT-223 with ~1in² copper pad ((125−25)°C / ~67°C/W)
+    attribute power_rating    = 1.5W;    // class estimate for a ~1in² copper pad; the datasheet's Pd is "internally limited"
     attribute pkg             = "SOT-223";
-    // Operating JUNCTION range per the datasheet — recorded for thermal
-    // sign-off. The datasheet states no ambient range, so the stage
-    // interface's temp_min/temp_max (ambient) stay UNDECLARED here:
-    // a temperature requirement is UNCHECKED against this block, stated.
-    attribute tj_min          = -40degC; // onsemi NCP1117: operating junction temperature −40 °C to 125 °C
-    attribute tj_max          = 125degC;
+    attribute temp_min        = 0degC;   // NCP1117/D Rev. 17: operating AMBIENT 0 °C to +125 °C for NCP1117 (NCV1117: −40 °C)
+    attribute temp_max        = 125degC;
+    attribute theta_ja        = 160degC/W; // NCP1117/D: RθJA SOT-223 (case 318H), MINIMUM-size pad — larger copper lowers it (datasheet Fig. 18)
+    attribute theta_jc        = 15degC/W;  // NCP1117/D: RθJC SOT-223
+    // Die junction range (abs. max) for thermal sign-off; the ambient
+    // operating range above is what the stage interface gates on.
+    attribute tj_min          = -55degC; // NCP1117/D Rev. 17: maximum die junction temperature range −55 °C to 150 °C
+    attribute tj_max          = 150degC;
 
     // §4 device-stress IP: linear pass-element dissipation at the solved
     // operating point — P = (V_IN − V_OUT)·I_out + V_IN·I_q, gated against
@@ -85,6 +89,10 @@ entity Ldo_NCP1117(
     attribute output_current  = 1.0A;
     attribute dropout_voltage = 1.2V;
     attribute i_quiescent     = 5.2mA;
+    attribute temp_min        = 0degC;     // NCP1117/D (ambient, NCP grade)
+    attribute temp_max        = 125degC;
+    attribute tj_max          = 150degC;
+    attribute theta_ja        = 160degC/W; // NCP1117/D, SOT-223 minimum pad
 
     // VALIDITY ENVELOPE — one binary op per `const`; SI base units.
     design {
