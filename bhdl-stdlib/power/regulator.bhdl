@@ -1,85 +1,203 @@
-// Simplified Linear Regulators - v2.0 compatible
-// Generic entity with alias specializations for common regulators
-// Supports conditional enable pin via HAS_EN bool parameter
+// CLASS TEMPLATES for linear and buck regulators — v2.0 compatible.
+//
+// Two-layer library model (docs/spec/Requirements_And_Resolution.md §1),
+// the TEMPLATE variant (cf. buck_controller.bhdl): these describe a
+// regulator CLASS (78xx-class three-terminal linear; LM2596-class
+// integrated buck), not a datasheet part. The class figures are the
+// conservative class defaults stated on each parameter; a real design
+// supplies its part's numbers at the instantiation (or uses a vendor
+// block: Ldo_LM7805 in lm7805.bhdl is the TI µA7805 itself).
+//
+//   LinearRegulatorIc / BuckRegulatorIc  as part    — placeholder silicon:
+//       the class axes as parameters, NO part_number (nothing orderable;
+//       the BOM path resolves nothing for it — stated, not faked).
+//   LinearRegulator / BuckRegulator       as design  — the class block:
+//       contract pins, the class application circuit, `impl LdoStage` /
+//       `impl BuckStage` with `supply_choosable = false`: the resolver
+//       LISTS a template but never auto-binds it; commit one with
+//       `resolve u1 = LinearRegulator(dropout=1.2V, i_quiescent=…);`.
+//
+// No current rating is promised (a class cannot): a requirement's i_max
+// is UNCHECKED against these blocks — stated by the survey.
 
-// Pin contract (power-tree swap-by-rename): VIN / VOUT / GND, VOUT
-// virtual — the expansion mints the 78xx-class bypass caps, so a
-// Generic* placeholder swaps to this part by renaming.
-entity LinearRegulator<V_OUT: voltage, HAS_EN: bool = false>(
-    dropout: voltage = 2V,
-    i_quiescent: current = 5mA,
-    // TI UA7805-class datasheet bypass: 0.33µF input, 0.1µF output.
-    c_in: capacitance = 0.33µF,
-    c_out: capacitance = 0.1µF
-) {
-    pin VIN: power in;
-    pin VOUT: power out virtual;
-    pin GND: ground;
-    pin EN: signal in when HAS_EN;
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Ind } from "bhdl-stdlib/passives/inductor.bhdl";
+import { Diode } from "bhdl-stdlib/passives/diode.bhdl";
 
-    attribute component_class = "voltage_regulator";
-    attribute output_voltage = V_OUT;
+// ── Linear (three-terminal, 78xx class) ─────────────────────────────
+entity LinearRegulatorIc(
+    v_out:       voltage = 5V,
+    dropout:     voltage = 2V,      // 78xx class (TI µA7805: 2 V)
+    i_quiescent: current = 5mA      // 78xx class bias current
+) as part {
+    pin VIN:  power in;
+    pin VOUT: power out;
+    pin EN:   signal in;            // optional on the class; gated by the block
+    pin GND:  ground;
+
+    attribute component_class = "regulator_ic";
+    attribute template        = "class";   // no orderable part behind this
+    attribute output_voltage  = v_out;
     attribute dropout_voltage = dropout;
-    attribute i_quiescent = i_quiescent;
+    attribute i_quiescent     = i_quiescent;
     // 78xx-class RMS output noise (TI µA7805: 40µV, 10Hz–100kHz) — the
-    // same class the generic's dropout/Iq defaults come from
-    attribute output_noise = 40uV;
-
-    expansion {
-        VIN -> C_in: Cap(c_in).1; C_in.2 -> GND;
-        VOUT -> C_out: Cap(c_out).1; C_out.2 -> GND;
+    // same class the dropout/Iq defaults come from
+    attribute output_noise    = 40uV;
+    simulation {
+        stress {
+            self.p_diss = (vin - vout) * i_out + vin * self.i_quiescent;
+        }
     }
 }
 
-// Alias data honesty (campaign fill): the generic's defaults
-// (dropout 2 V, Iq 5 mA) are the 78xx class — CORRECT for LM7805
-// (TI UA7805: dropout 2 V, bias current ~5 mA class). The LM1117's
-// real dropout is 1.2 V typ at full load (TI LM1117 headline spec),
-// but a type-arg alias cannot bind constructor params — bind it at
-// the instantiation site: `reg: LM1117_33(dropout=1.2V)`. Boards
-// that leave the default get graded against the CONSERVATIVE 2 V.
-alias LM7805 = LinearRegulator<5V>;
-alias LM1117_33 = LinearRegulator<3.3V>;
-alias LM1117_18 = LinearRegulator<1.8V>;
-alias LM1117_33_EN = LinearRegulator<3.3V, true>;
-
-// Simplified Buck (Switching) Regulators - v2.0 compatible
-// Uses expansion block to declaratively specify inductor, catch diode, and output cap
-
-entity BuckRegulator<V_OUT: voltage>(
-    dropout: voltage = 0.5V,
-    // 150 kHz: the LM2596's fixed internal oscillator (TI LM2596
-    // datasheet headline) — the only aliases of this generic are
-    // LM2596 SKUs, and the old 500 kHz default contradicted the
-    // alias comment below (ripple/loss sims ran 3.3× fast).
-    f_sw: frequency = 150kHz,
-    rds_on: resistance = 200mΩ,
-    t_sw: time = 80ns,
-    i_quiescent: current = 5mA,
-    l_value: inductance = 33µH,
-    c_out: capacitance = 470µF,
-    diode_vf: voltage = 0.5V,
-    has_diode: bool = true
-) {
-    pin VIN: power in;
+entity LinearRegulator(
+    v_out:       voltage     = 5V,
+    i_out_max:   current     = 500mA,  // sized-for load (no class rating to derate against)
+    v_in:        voltage     = 12V,
+    dropout:     voltage     = 2V,
+    i_quiescent: current     = 5mA,
+    // TI UA7805-class datasheet bypass: 0.33µF input, 0.1µF output.
+    c_in:        capacitance = 0.33µF,
+    c_out:       capacitance = 0.1µF
+) as design {
+    pin VIN:  power in;
     pin VOUT: power out virtual;
-    pin GND: ground;
+    pin EN:   signal in;
+    pin GND:  ground;
 
-    attribute component_class = "switching_regulator";
-    attribute output_voltage = V_OUT;
-    attribute f_sw = f_sw;
-    attribute rds_on = rds_on;
-    attribute t_sw = t_sw;
-    attribute i_quiescent = i_quiescent;
+    attribute component_class  = "ldo";
+    attribute supply_choosable = false;    // TEMPLATE: listed, never auto-bound
+    attribute output_voltage   = v_out;
+    attribute v_in             = v_in;
+    attribute i_out_max        = i_out_max;
+    attribute dropout_voltage  = dropout;
+    attribute i_quiescent      = i_quiescent;
+    attribute output_noise     = 40uV;     // 78xx class (TI µA7805)
 
-    expansion {
-        internal sw: net;
-        VOUT -> L: Ind(l_value).1; L.2 -> sw;
-        sw -> D: Diode(diode_vf).K; D.A -> GND;
-        VOUT -> C_out: Cap(c_out).1; C_out.2 -> GND;
+    // ENVELOPE: the one thing a class can state — regulation headroom.
+    design {
+        const v_need = self.v_out + self.dropout;
+        require self.v_in >= v_need
+            else "LinearRegulator envelope: v_in below v_out + dropout";
+    }
+
+    u: LinearRegulatorIc(v_out, dropout, i_quiescent);
+    VIN -> u.VIN;
+    u.GND -> GND;
+    // EN is OPTIONAL: wired → board-driven; unwired → tied to VIN.
+    generate if (wired(EN)) {
+        EN -> u.EN;
+    } else {
+        VIN -> u.EN;
+    }
+    VIN -> C_in: Cap(c_in).1; C_in.2 -> GND;
+    u.VOUT -> VOUT;
+    VOUT -> C_out: Cap(c_out).1; C_out.2 -> GND;
+}
+
+impl LdoStage for LinearRegulator {
+    const vout  = v_out;
+    const i_max = i_out_max;
+    const vin   = v_in;
+}
+
+// Class stand-ins kept for existing boards. Data honesty: the class
+// defaults (dropout 2 V, Iq 5 mA, 40 µV) are the 78xx class — CORRECT
+// for an LM7805 (for the TI µA7805 itself with its datasheet ratings and
+// input range use `Ldo_LM7805` from lm7805.bhdl). The LM1117's real
+// dropout is 1.2 V typ at full load (TI LM1117 headline spec) — bind it
+// at the instantiation: `reg: LM1117_33(dropout=1.2V)`. Boards that
+// leave the default are graded against the CONSERVATIVE 2 V.
+alias LM7805      = LinearRegulator(5V);
+alias LM1117_33   = LinearRegulator(3.3V);
+alias LM1117_18   = LinearRegulator(1.8V);
+alias LM1117_33_EN = LinearRegulator(3.3V);   // EN is always available now (wired → used)
+
+// ── Buck (integrated switch, LM2596 class) ──────────────────────────
+entity BuckRegulatorIc(
+    v_out:       voltage    = 5V,
+    // 150 kHz: the LM2596's fixed internal oscillator (TI LM2596
+    // datasheet headline) — the only stand-ins of this class are LM2596
+    // SKUs.
+    f_sw:        frequency  = 150kHz,
+    rds_on:      resistance = 200mΩ,
+    t_sw:        time       = 80ns,
+    i_quiescent: current    = 5mA,
+    dropout:     voltage    = 0.5V
+) as part {
+    pin VIN:  power in;
+    pin SW:   switch out;
+    pin GND:  ground;
+
+    attribute component_class = "regulator_ic";
+    attribute template        = "class";
+    attribute output_voltage  = v_out;
+    attribute f_sw            = f_sw;
+    attribute rds_on          = rds_on;
+    attribute t_sw            = t_sw;
+    attribute i_quiescent     = i_quiescent;
+    attribute dropout_voltage = dropout;
+}
+
+entity BuckRegulator(
+    v_out:       voltage     = 5V,
+    i_out_max:   current     = 1A,
+    v_in:        voltage     = 12V,
+    f_sw:        frequency   = 150kHz,
+    rds_on:      resistance  = 200mΩ,
+    t_sw:        time        = 80ns,
+    i_quiescent: current     = 5mA,
+    dropout:     voltage     = 0.5V,
+    l_value:     inductance  = 33µH,
+    c_out:       capacitance = 470µF,
+    diode_vf:    voltage     = 0.5V
+) as design {
+    pin VIN:  power in;
+    pin VOUT: power out virtual;
+    pin GND:  ground;
+
+    attribute component_class  = "switching_regulator";
+    attribute supply_choosable = false;    // TEMPLATE: listed, never auto-bound
+    attribute output_voltage   = v_out;
+    attribute v_in             = v_in;
+    attribute i_out_max        = i_out_max;
+    attribute f_sw             = f_sw;
+    attribute rds_on           = rds_on;
+    attribute t_sw             = t_sw;
+    attribute i_quiescent      = i_quiescent;
+
+    design {
+        const v_need = self.v_out + self.dropout;
+        require self.v_in >= v_need
+            else "BuckRegulator envelope: v_in below v_out + dropout (buck headroom)";
+    }
+
+    u: BuckRegulatorIc(v_out, f_sw, rds_on, t_sw, i_quiescent, dropout);
+    VIN -> u.VIN;
+    u.GND -> GND;
+    // the class application circuit: L on the switch node, catch diode,
+    // output cap (declarative, as the former expansion block)
+    u.SW -> L: Ind(l_value).1; L.2 -> VOUT;
+    GND -> D: Diode(diode_vf).A; D.K -> u.SW;
+    VOUT -> C_out: Cap(c_out).1; C_out.2 -> GND;
+
+    simulation {
+        stress {
+            const duty = vout / vin;
+            const d_il = (vin - vout) * duty / (self.f_sw * L.value);
+            L.i_peak       = i_out + d_il / 2;
+            C_out.v_ripple = d_il / (8 * self.f_sw * C_out.value);
+        }
     }
 }
 
-// LM2596: 150kHz fixed, Rds_on ~200mΩ, t_sw ~80ns, I_q ~5mA
-alias LM2596_5V = BuckRegulator<5V>;
-alias LM2596_3V3 = BuckRegulator<3.3V>;
+impl BuckStage for BuckRegulator {
+    const vout  = v_out;
+    const i_max = i_out_max;
+    const vin   = v_in;
+}
+
+// LM2596 class stand-ins: 150kHz fixed, Rds_on ~200mΩ, t_sw ~80ns, I_q ~5mA.
+// No LM2596 datasheet part exists in this library yet.
+alias LM2596_5V  = BuckRegulator(5V);
+alias LM2596_3V3 = BuckRegulator(3.3V);
