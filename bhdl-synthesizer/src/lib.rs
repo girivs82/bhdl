@@ -1608,6 +1608,56 @@ impl NetlistGenerator {
                 }
             }
 
+            // (1p) POSITIONAL constructor args on the PARAM_LIST bind to
+            // the effective entity's declared params IN ORDER
+            // (`Res(12Ω, 5%, 0.25W)` → value, tolerance, power_rating).
+            // The analyzer's component-inference path only binds
+            // positionals for connection-context instances, so a
+            // STANDALONE `r: Res(12Ω);` statement — exactly what the
+            // elaborate emitter writes — re-synthesized with no value
+            // attribute at all, invisible to the round-trip gate
+            // (netlist_equiv ignores attributes). Bind them here, at
+            // the same priority as explicit named args (never
+            // overwriting one already stamped). Positional args are
+            // bare expression children of PARAM_LIST; PARAM_ASSIGN
+            // nodes are the named ones handled above.
+            if let Some(param_list) = comp_inst.param_list() {
+                let pnames = effective_type
+                    .as_ref()
+                    .and_then(|t| entity_param_names.get(t));
+                let mut pos = 0usize;
+                for el in param_list.syntax().children_with_tokens() {
+                    let (kind, text) = match &el {
+                        rowan::NodeOrToken::Node(n) => (n.kind(), n.text().to_string()),
+                        rowan::NodeOrToken::Token(t) => (t.kind(), t.text().to_string()),
+                    };
+                    if matches!(
+                        kind,
+                        SyntaxKind::PARAM_ASSIGN
+                            | SyntaxKind::L_PAREN
+                            | SyntaxKind::R_PAREN
+                            | SyntaxKind::COMMA
+                            | SyntaxKind::WHITESPACE
+                            | SyntaxKind::COMMENT
+                    ) {
+                        continue;
+                    }
+                    let idx = pos;
+                    pos += 1;
+                    // unknown type or more args than params: the
+                    // analyzer's arity check already reports it — never
+                    // invent a name here
+                    let Some(pname) = pnames.and_then(|p| p.get(idx)) else { continue };
+                    let val = unquote_string_literal(text.trim());
+                    if let Some(inst) = self.netlist.instances.get_mut(inst_id) {
+                        if !inst.attributes.contains_key(pname) {
+                            inst.attributes.insert(pname.clone(), val);
+                            stamped_explicit += 1;
+                        }
+                    }
+                }
+            }
+
             // (1a) Inline-flow instances (`… -> r: Res(x, k=v).pin`) carry
             // their constructor args under PARAM_ASSIGN_BLOCK, not
             // PARAM_LIST (parser `parse_component_parameters`). Without this,

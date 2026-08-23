@@ -682,11 +682,17 @@ async fn decap_synthesis_double_generate_partitions() {
     }
     // second generate IN-PROCESS on the ELABORATED text (what the
     // round-trip gate actually re-synthesizes)
-    let ctors = bhdl_synthesizer::elaborate::extract_ctors(&[&sf]);
+    // ctor signatures from the board AND its stdlib imports (as the
+    // CLI's transitive-import extraction does) — else Res emits bare
+    let res_src = std::fs::read_to_string(ws.join("bhdl-stdlib/passives/resistor.bhdl")).unwrap();
+    let res_pr = parse(&res_src);
+    let res_sf = SourceFile::cast(res_pr.syntax()).unwrap();
+    let ctors = bhdl_synthesizer::elaborate::extract_ctors(&[&sf, &res_sf]);
     let src2 = bhdl_synthesizer::elaborate::emit_elaborated_with_preamble(
         &n1, "test_decap_synthesis.bhdl", &ctors,
         &bhdl_synthesizer::elaborate::extract_preamble(&src, &sf),
     );
+    assert!(src2.contains("r_load: Res(12Ω"), "emission carries positional args: {src2}");
     // the CLI injects the decap library import (decap_lib attribute) —
     // replicate it
     let src2 = format!(
@@ -729,6 +735,19 @@ async fn decap_synthesis_double_generate_partitions() {
         "healthy merged ground net expected: {p1:#?}"
     );
     assert_eq!(p1, nets(&n2), "elaborated re-synthesis, same process, SAME partition");
+    // ATTRIBUTE FIDELITY on re-synthesis: the elaborated text restates
+    // `r_load: Res(12Ω, 5%, 0.25W);` as a STANDALONE positional
+    // instantiation — the value must bind to the resistance attribute
+    // exactly as the inline form did (this was a silent gap: the
+    // positional args bound only in connection context)
+    let (_, r2) = n2.instances.iter().find(|(_, i)| i.name == "r_load").expect("r_load re-synthesized");
+    assert_eq!(
+        r2.attributes.get("resistance").map(String::as_str),
+        Some("12Ω"),
+        "positional ctor args must bind on standalone instantiation: {:#?}",
+        r2.attributes
+    );
+    assert_eq!(r2.attributes.get("tolerance").map(String::as_str), Some("5%"), "{:#?}", r2.attributes);
     // scoped-attribute consumption: the elaborated text carries
     // provenance as REAL `attribute inst.key = "v";` statements and
     // phase 4.45 applies them back — the re-synthesized decaps carry
@@ -1674,3 +1693,4 @@ async fn powertree_drift_check_catches_evolved_loads() {
         "{d4:#?}"
     );
 }
+
