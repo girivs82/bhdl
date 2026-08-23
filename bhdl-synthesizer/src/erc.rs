@@ -2951,7 +2951,7 @@ pub fn check_powertree_acceptance(
                     inst.name, module_name
                 ),
                 location: ViolationLocation::Component(inst_id),
-                fix_suggestion: "commit the stage by renaming the Generic* instantiation to a real regulator honoring the pin contract".into(),
+                fix_suggestion: "no library block resolves this requirement (see the ⚙ survey's near-misses): add or extend an `as design` block that `impl`s the stage interface, pin one with `resolve <inst> = <Block>;`, or — for a stage with no interface yet — rename the Generic* instantiation to a real regulator honoring the pin contract".into(),
                 standard_reference: None,
             });
             continue;

@@ -186,6 +186,29 @@ pub struct Lockfile {
     /// distributor dataset is redistributed).
     #[serde(default, rename = "part")]
     pub parts: Vec<LockedPart>,
+    /// Requirement → block bindings (docs/spec/Requirements_And_Resolution.md
+    /// §3). Owned by the stage resolver: a bound block is tried FIRST on
+    /// the next build so a binding is stable while it still meets the
+    /// requirement, and re-resolved (loudly) when it no longer does.
+    #[serde(default, rename = "stage")]
+    pub stages: Vec<LockedStage>,
+}
+
+/// One requirement-interface binding (`u1: BuckStage(...)` → block).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LockedStage {
+    /// The board the requirement lives in (instance names are per board).
+    #[serde(default)]
+    pub board: String,
+    /// The requirement instance's structural name (e.g. `u1`, `psu_v3v3`).
+    pub instance: String,
+    /// The requirement interface (`BuckStage`, `LdoStage`).
+    pub trait_name: String,
+    /// The requirement text as written (`vout=5V, i_max=2A, vin=12V`) —
+    /// so a changed requirement is visible in the lock diff.
+    pub requirement: String,
+    /// The bound `as design` block.
+    pub block: String,
 }
 
 /// One pinned supply-chain selection.
@@ -696,7 +719,7 @@ impl LibraryResolver {
                 });
             }
         }
-        Ok(Lockfile { version: Lockfile::CURRENT_VERSION, libraries, parts: Vec::new() })
+        Ok(Lockfile { version: Lockfile::CURRENT_VERSION, libraries, parts: Vec::new(), stages: Vec::new() })
     }
 }
 
@@ -958,6 +981,7 @@ mod tests {
                 source: "path:libs/acme-stdlib".into(),
                 rev: None,
             }],
+            stages: Vec::new(),
             parts: vec![LockedPart {
                 refdes: "buck_R_top".into(),
                 mpn: "RT0603BRC0731K6L".into(),

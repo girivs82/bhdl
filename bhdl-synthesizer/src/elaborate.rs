@@ -137,7 +137,7 @@ pub fn emit_elaborated_with_preamble(
         let attrs: BTreeMap<&String, &String> = inst.attributes.iter().collect();
         let mut provenance: Vec<String> = Vec::new();
         for (k, v) in &attrs {
-            if k.starts_with("expansion_") || k.starts_with("vpin_") || k.starts_with("decap_") || k.starts_with("powertree_") || k.starts_with("composed_") {
+            if k.starts_with("expansion_") || k.starts_with("vpin_") || k.starts_with("decap_") || k.starts_with("powertree_") || k.starts_with("composed_") || k.starts_with("stage_") {
                 provenance.push(format!(
                     "    attribute {}.{} = \"{}\";\n",
                     inst.name, k, v.replace('"', "\\\"")
@@ -391,6 +391,25 @@ pub fn netlist_equiv(a: &Netlist, b: &Netlist) -> Result<(), Vec<String>> {
         }
         m
     }
+    // Values: an instance present in both must carry the same sized
+    // `value` — structure alone let a dropped constructor arg re-size a
+    // child on the round trip and still "verify".
+    fn values(n: &Netlist) -> BTreeMap<String, String> {
+        n.instances
+            .iter()
+            .filter(|(id, _)| !crate::is_template_stub(n, *id))
+            .filter_map(|(_, i)| i.attributes.get("value").map(|v| (i.name.clone(), v.clone())))
+            .collect()
+    }
+    let (va, vb) = (values(a), values(b));
+    for (name, v) in &va {
+        if let Some(v2) = vb.get(name) {
+            if v != v2 {
+                diffs.push(format!("value differs for {name}: ORIGINAL {v} vs ELABORATED {v2}"));
+            }
+        }
+    }
+
     let (na, nb) = (net_partition(a), net_partition(b));
     for (ends, class) in &na {
         match nb.get(ends) {

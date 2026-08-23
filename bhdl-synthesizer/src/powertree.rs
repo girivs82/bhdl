@@ -1072,7 +1072,7 @@ pub const EMIT_BEGIN: &str =
 pub const EMIT_END: &str = "// ── END GENERATED POWER TREE ──";
 
 /// The import the emitted region needs at file level.
-pub const EMIT_IMPORT: &str = "import { GenericBuck, GenericBuckExt, GenericLdo, GenericPrereg } from \"bhdl-stdlib/power/generic_regulators.bhdl\";";
+pub const EMIT_IMPORT: &str = "import { BuckStage, LdoStage } from \"bhdl-stdlib/power/stages.bhdl\";\nimport { GenericBuckExt, GenericPrereg } from \"bhdl-stdlib/power/generic_regulators.bhdl\";";
 
 fn fmt_v(v: f64) -> String {
     format!("{v}V")
@@ -1120,23 +1120,42 @@ pub fn emit_power_region(option: &TreeOption, gnd: &str) -> String {
     }
     for st in ordered {
         let inst = format!("u_{}", st.to.to_lowercase());
-        let entity = match st.topology {
-            Topology::Prereg => "GenericPrereg",
-            Topology::Buck => "GenericBuck",
-            Topology::BuckExternal => "GenericBuckExt",
-            Topology::Ldo => "GenericLdo",
-        };
-        // NAMED ctor args: they stamp onto the instance by name in
-        // synthesis (positional binding on standalone instantiations
-        // is unreliable), they read unambiguously, and the param
-        // names (vin/vout/rated) ARE the uniform contract a real
-        // regulator entity must share for the rename-swap.
-        out.push_str(&format!(
-            "\n    {inst}: {entity}(vin={}, vout={}, rated={});\n",
-            fmt_v(st.vin),
-            fmt_v(st.vout),
-            fmt_a_ceil(st.required_rating_a)
-        ));
+        // Buck and LDO stages are emitted as REQUIREMENT instantiations
+        // (docs/spec/Requirements_And_Resolution.md §3): the resolver
+        // binds an `as design` block at build time and records it in
+        // bhdl.lock; unresolved stays a Generic* placeholder under
+        // ERC032. The requirement vocabulary is the stage's application
+        // facts — vout, the derated load i_max (the block derates it
+        // against its own rating), the input rail, and the tree's noise
+        // assumption where it is a real ceiling. Controller+external
+        // stages and the prereg have no interface yet and stay generic.
+        match st.topology {
+            Topology::Buck | Topology::Ldo => {
+                let iface = if st.topology == Topology::Buck { "BuckStage" } else { "LdoStage" };
+                let noise = if st.topology == Topology::Ldo && st.noise_assumed_uvrms > 0.0 {
+                    format!(", noise={:.0}uV", st.noise_assumed_uvrms)
+                } else {
+                    String::new()
+                };
+                out.push_str(&format!(
+                    "\n    {inst}: {iface}(vout={}, i_max={}, vin={}{noise});\n",
+                    fmt_v(st.vout),
+                    fmt_a_ceil(st.i_max_a),
+                    fmt_v(st.vin),
+                ));
+            }
+            Topology::Prereg | Topology::BuckExternal => {
+                let entity = if st.topology == Topology::Prereg { "GenericPrereg" } else { "GenericBuckExt" };
+                // NAMED ctor args (vin/vout/rated) = the uniform contract
+                // a real entity must share for the rename-swap.
+                out.push_str(&format!(
+                    "\n    {inst}: {entity}(vin={}, vout={}, rated={});\n",
+                    fmt_v(st.vin),
+                    fmt_v(st.vout),
+                    fmt_a_ceil(st.required_rating_a)
+                ));
+            }
+        }
         out.push_str(&format!("    @{} -> {inst}.VIN;\n", st.from));
         out.push_str(&format!("    {inst}.VOUT -> @{};\n", st.to));
         out.push_str(&format!("    {inst}.GND -> @{gnd};\n"));

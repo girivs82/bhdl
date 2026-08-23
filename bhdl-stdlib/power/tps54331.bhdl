@@ -74,6 +74,8 @@ entity TPS54331 as part {
     attribute manufacturer      = "Texas Instruments";
     attribute part_number       = "TPS54331";
     attribute output_current    = 3A;       // SLVSA86: 3A continuous output current
+    attribute vin_min           = 3.5V;     // SLVSA86: operating input voltage range 3.5 V to 28 V
+    attribute vin_max           = 28V;
     attribute f_sw              = 570kHz;   // internal fixed-frequency oscillator
     attribute rds_on            = 90mΩ;     // high-side MOSFET, typ
     attribute t_sw              = 20ns;     // switching transition class
@@ -130,7 +132,15 @@ entity Buck_TPS54331(
     // against.
     attribute component_class = "switching_regulator";
     attribute output_voltage = v_out;
+    // The block's OPERATING POINT, exported: the elaboration emitter
+    // reconstructs constructor args only from exported attributes — a
+    // sizing input that is not exported would silently re-size to its
+    // default on the round trip.
+    attribute v_in = v_in;
+    attribute i_out_max = i_out_max;
     attribute output_current = 3A;        // promise = the part's rating (SLVSA86)
+    attribute vin_min = 3.5V;             // promise = the part's input range (SLVSA86)
+    attribute vin_max = 28V;
     attribute f_sw = f_sw;
     attribute rds_on = rds_on;
     attribute t_sw = t_sw;
@@ -238,6 +248,19 @@ entity Buck_TPS54331(
             C_in.v_ripple  = i_out * duty * (1 - duty) / (self.f_sw * C_in.value);
         }
     }
+}
+
+// The block SATISFIES the BuckStage requirement interface
+// (bhdl-stdlib/power/stages.bhdl). The body is the requirement → ctor
+// mapping the resolver uses to trial-instantiate the block: each const
+// names the block parameter that receives the requirement value. The
+// block's validity envelope (the `require` lines in design { }) and its
+// boundary promises (output_current, vin_min/max, efficiency) are the
+// acceptance predicate; nothing is restated here.
+impl BuckStage for Buck_TPS54331 {
+    const vout  = v_out;
+    const i_max = i_out_max;
+    const vin   = v_in;
 }
 
 // SKU aliases bind `v_out` positionally (first param) — same alias-with-

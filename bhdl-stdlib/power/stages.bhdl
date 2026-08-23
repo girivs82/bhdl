@@ -1,0 +1,56 @@
+// Power-stage REQUIREMENT interfaces (docs/spec/Requirements_And_Resolution.md §3).
+//
+// A designer does not start with "a TPS54331 here"; they start with "a
+// buck here with these specifications". These traits are that
+// statement: the contract pins every stage block exposes, plus the
+// requirement vocabulary — application facts at the datasheet-procedure
+// level (what every family block can be asked for), never a part value
+// or a topology switch.
+//
+//   u1: BuckStage(vout=5V, i_max=2A, vin=12V);
+//
+// is a REQUIREMENT INSTANTIATION. Resolution (the `resolve` pass, run
+// before synthesis) surveys every `impl BuckStage for <Block>` in the
+// library, keeps the blocks whose validity envelope covers the
+// requirement and whose promises meet it, ranks them, binds one, and
+// records the binding in bhdl.lock. The requirement stays in the source;
+// the bound block appears in the elaborated text; the binding is
+// reversible (`resolve u1 = Buck_TPS54331;` pins it by hand) and is
+// re-checked every build.
+//
+// Resolving to NOTHING is a first-class outcome: the requirement
+// synthesizes as the Generic* placeholder, ERC032 says so every run, and
+// the near-misses are printed ("Buck_TPS54331 fails i_max: 3A rating ×
+// 0.8 = 2.4A < 4A"). Library coverage is visible, not assumed.
+//
+// The consts are the requirement PARAMETERS. The ones a block must
+// accept are those its `impl` binds; `vin_min`/`vin_max` default to `vin`
+// when the requirement gives only a nominal input; `noise` and
+// `efficiency_min` are optional — when given, a block that does not
+// DECLARE the matching promise is UNCHECKED and therefore not a
+// candidate (never a pass).
+
+trait BuckStage {
+    pin VIN: power in;
+    pin VOUT: power out;
+    pin GND: ground;
+    const vout: voltage;            // regulated output
+    const i_max: current;           // maximum load current (the block is derated against this)
+    const vin: voltage;             // nominal input rail
+    const vin_min: voltage;         // optional; defaults to vin
+    const vin_max: voltage;         // optional; defaults to vin
+    const noise: voltage;           // optional; output noise/ripple ceiling (RMS)
+    const efficiency_min: float;    // optional; minimum declared efficiency
+}
+
+trait LdoStage {
+    pin VIN: power in;
+    pin VOUT: power out;
+    pin GND: ground;
+    const vout: voltage;
+    const i_max: current;
+    const vin: voltage;
+    const vin_min: voltage;         // optional; defaults to vin
+    const vin_max: voltage;         // optional; defaults to vin
+    const noise: voltage;           // optional; output-noise ceiling (RMS)
+}

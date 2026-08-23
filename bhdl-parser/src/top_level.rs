@@ -186,6 +186,25 @@ impl<'t> Parser<'t> {
                         self.parse_supply_stmt();
                         continue;
                     }
+                    // `resolve <inst> = <Block>;` — designer override of
+                    // requirement resolution (contextual, same discipline).
+                    if self.peek_text().as_deref() == Some("resolve")
+                        && self.peek_nth_nontrivia(1) == Some(SyntaxKind::IDENT)
+                        && self.peek_nth_nontrivia(2) == Some(SyntaxKind::EQ)
+                    {
+                        self.builder.start_node(SyntaxKind::RESOLVE_STMT.into());
+                        self.bump(); // resolve
+                        self.skip_trivia();
+                        self.expect(SyntaxKind::IDENT);
+                        self.skip_trivia();
+                        self.expect(SyntaxKind::EQ);
+                        self.skip_trivia();
+                        self.expect(SyntaxKind::IDENT);
+                        self.skip_trivia();
+                        self.expect(SyntaxKind::SEMI);
+                        self.builder.finish_node();
+                        continue;
+                    }
                     // `decouple` is a contextual keyword at board scope
                     // (same discipline as `supply`): decap-network
                     // synthesis from a domain's Z(f) mask.

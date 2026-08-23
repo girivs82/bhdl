@@ -2,7 +2,8 @@
 
 Status: design record (settled in discussion 2026-08-23). Increment 1
 (the TPS54331 part/block split, `bhdl-stdlib/power/tps54331.bhdl`) is
-LANDED and is the template; increments 2–3 pending. Companion to
+LANDED and is the template; increment 2 (requirement interfaces +
+resolver + lock + override) is LANDED; increment 3 pending. Companion to
 `Expansion_Vs_Hierarchy.md`, which settled composition under `entity`.
 
 ## 1. The two-layer library
@@ -207,12 +208,39 @@ Principles that fall out:
    ERROR, not a log line — it exposed two stdlib recipes wiring
    `TVSDiode` pins `1/2` (declared `A/K`) that had been silently
    dropping the USB ESD diodes.
-2. `BuckStage` / `LdoStage` requirement interfaces; the power tree emits
-   requirement instantiations; the resolver grows from the `supply`
-   survey code with the cost function, provider data and qualification
-   attributes; bindings recorded in the lock with a designer override;
-   ERC032's predicate becomes the shared acceptance/resolution
-   function; near-misses printed when nothing resolves.
+2. DONE — `trait BuckStage` / `trait LdoStage`
+   (`bhdl-stdlib/power/stages.bhdl`: contract pins + requirement consts
+   `vout, i_max, vin, vin_min?, vin_max?, noise?, efficiency_min?`). A
+   block satisfies one with `impl BuckStage for Buck_TPS54331 { const
+   vout = v_out; … }` — the impl body IS the requirement → constructor
+   mapping. `bhdl_synthesizer::stage_resolution` runs as a text-level
+   pre-pass before the main parse (the `supply` discipline): it surveys
+   every impl in the library, TRIAL-INSTANTIATES each candidate
+   (evaluates the block's `design { }` with the mapped params — a
+   failed `require` is the envelope rejecting it) and checks the
+   boundary promises (`output_current ≥ i_max/0.8`, `vin_min/max`,
+   `output_noise`, `efficiency`; an undeclared promise the requirement
+   needs = UNCHECKED = not a pass). Binding order: lock (kept while it
+   still passes, re-resolved loudly when stale) → `resolve u1 = Block;`
+   override (hard error if it fails its gates or names no impl) →
+   survey (ranked by `cost_rel` only when every survivor declares one,
+   else library order — the basis is stated). The bound block is
+   spliced in with NAMED ctor args + import; `stage_*` scoped
+   attributes keep the requirement live on the instance and ERC032
+   re-checks the promises on the flattened circuit. Unresolved →
+   `Generic*` placeholder with `powertree_rating_required_a` stamped
+   (ERC032 every build) and the near-misses printed. Bindings live in
+   `bhdl.lock` `[[stage]]` keyed by (board, instance); `--locked` fails
+   on a changed binding. The power tree now EMITS `BuckStage(...)` /
+   `LdoStage(...)` requirements (controller+external stages and the
+   prereg have no interface yet and stay `Generic*`). Synthesis refuses
+   an unresolved trait instantiation (it used to build an empty stub).
+   Library coverage today: `BuckStage` ← `Buck_TPS54331` only;
+   `LdoStage` has NO implementing block (stated by the survey, never
+   faked) — the LDO `as design` split is the next library increment.
+   Not yet: the cost function / provider pricing / qualification
+   attributes in the ranking; ERC032 and the resolver share the derate
+   policy and the promise vocabulary but are still two code paths.
 3. Requirement ids + `satisfies` generalized from the safety prototype;
    the per-build trace matrix as a report, with "no verifier" as a
    finding.

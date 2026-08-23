@@ -584,6 +584,16 @@ async fn main() -> Result<()> {
             }
         };
 
+    // Requirement resolution (docs/spec/Requirements_And_Resolution.md §3):
+    // `u1: BuckStage(vout=…, i_max=…)` requirement instantiations are
+    // resolved to an `as design` block BEFORE the main parse, the same
+    // text-level discipline as `supply`. The source file keeps the
+    // requirement; the elaborated text shows the bound block; bhdl.lock
+    // records the binding (tried first next build — stable while it
+    // still meets the requirement). Unresolved = Generic* placeholder +
+    // ERC032, with the near-misses printed.
+    let input_content = resolve_stage_requirements(&input_content, &cli.input, cli.manifest.as_deref(), cli.locked)?;
+
     // Always start with parsing
     let parse_result = parse(&input_content);
     
@@ -1030,6 +1040,7 @@ fn enforce_lockfile(
     if lock_path.is_file() {
         if let Ok(stored) = Lockfile::load(&lock_path) {
             current.parts = stored.parts;
+            current.stages = stored.stages;
         }
     }
 
@@ -1068,6 +1079,87 @@ fn enforce_lockfile(
         if verbose { eprintln!("library lock: generated {}", lock_path.display()); }
     }
     Ok(())
+}
+
+/// Requirement resolution pre-pass (docs/spec/Requirements_And_Resolution.md
+/// §3) — see the module docs of `bhdl_synthesizer::stage_resolution`.
+/// Runs on source TEXT before the main parse; prints the survey; records
+/// bindings in bhdl.lock next to the project manifest (never with
+/// `--locked`, which instead fails on a changed binding).
+fn resolve_stage_requirements(
+    input_content: &str,
+    input: &Path,
+    manifest: Option<&Path>,
+    locked_flag: bool,
+) -> Result<String> {
+    let stage_lock_path = {
+        let start = input.parent().unwrap_or_else(|| std::path::Path::new("."));
+        manifest
+            .map(|m| m.to_path_buf())
+            .or_else(|| bhdl_common::library::discover_project_manifest(start))
+            .map(|m| m.with_file_name("bhdl.lock"))
+    };
+    let locked_stages: Vec<bhdl_common::library::LockedStage> = stage_lock_path
+        .as_ref()
+        .filter(|p| p.is_file())
+        .and_then(|p| bhdl_common::library::Lockfile::load(p).ok())
+        .map(|l| l.stages)
+        .unwrap_or_default();
+    match bhdl_synthesizer::stage_resolution::resolve_stages(
+        input_content,
+        &bhdl_common::import_search::locate_dir("bhdl-stdlib")
+            .unwrap_or_else(|| PathBuf::from("bhdl-stdlib")),
+        &locked_stages,
+    ) {
+        Ok(Some(r)) => {
+            let mut new_lock: Vec<bhdl_common::library::LockedStage> = locked_stages
+                .iter()
+                .filter(|l| !r.resolutions.iter().any(|x| x.board == l.board && x.instance == l.instance))
+                .cloned()
+                .collect();
+            for res in &r.resolutions {
+                print!("{} {}", "⚙".cyan(), bhdl_synthesizer::stage_resolution::render_report(res));
+                if let Some(b) = &res.bound {
+                    new_lock.push(bhdl_common::library::LockedStage {
+                        board: res.board.clone(),
+                        instance: res.instance.clone(),
+                        trait_name: res.trait_name.clone(),
+                        requirement: res.requirement.clone(),
+                        block: b.clone(),
+                    });
+                }
+            }
+            new_lock.sort_by(|a, b| (&a.board, &a.instance).cmp(&(&b.board, &b.instance)));
+            if let Some(lp) = &stage_lock_path {
+                if new_lock != locked_stages && !locked_flag {
+                    let mut lock = if lp.is_file() {
+                        bhdl_common::library::Lockfile::load(lp)?
+                    } else {
+                        bhdl_common::library::Lockfile {
+                            version: bhdl_common::library::Lockfile::CURRENT_VERSION,
+                            libraries: Vec::new(),
+                            parts: Vec::new(),
+                            stages: Vec::new(),
+                        }
+                    };
+                    lock.stages = new_lock;
+                    lock.save(lp)?;
+                    println!("  {} stage bindings recorded in {}", "✓".green(), lp.display());
+                } else if new_lock != locked_stages && locked_flag {
+                    anyhow::bail!(
+                        "--locked: stage bindings changed (bhdl.lock holds {} binding(s), this build resolved {}); rebuild without --locked to re-record",
+                        locked_stages.len(), new_lock.len()
+                    );
+                }
+            }
+            Ok(r.source)
+        }
+        Ok(None) => Ok(input_content.to_string()),
+        Err(e) => {
+            eprintln!("{} {e:#}", "stage resolution error:".red().bold());
+            std::process::exit(1);
+        }
+    }
 }
 
 fn run_parse(source_file: &SourceFile, root: &bhdl_ast::SyntaxNode<bhdl_ast::BhdlLanguage>, format: &str) -> Result<()> {
@@ -1918,26 +2010,38 @@ async fn run_powertree(
                     .map_err(|e| anyhow::anyhow!("{e}"))?;
                 fs::write(input_path, &new_text)?;
                 println!(
-                    "\n  emitted option [{n}] \"{}\" into {} ({} stage(s) as generic placeholders)",
+                    "\n  emitted option [{n}] \"{}\" into {} ({} stage(s) as requirement instantiations)",
                     opt.label, input_path.display(), opt.stages.len()
                 );
                 // GATE: the modified board must still build through the
                 // verified pipeline — restore the original on failure.
+                // The emitted stages are REQUIREMENT instantiations, so
+                // the resolver pre-pass runs here exactly as it does on
+                // a fresh build.
+                let new_text = resolve_stage_requirements(&new_text, input_path, None, false)?;
                 let re_pr = parse(&new_text);
-                let ok = if re_pr.errors().is_empty() {
+                let verdict: Result<()> = if re_pr.errors().is_empty() {
                     let re_sf = SourceFile::cast(re_pr.syntax()).unwrap();
-                    verified_netlist(&re_sf, &new_text, input_path, no_elaborate).await.is_ok()
+                    verified_netlist(&re_sf, &new_text, input_path, no_elaborate).await.map(|_| ())
                 } else {
-                    false
+                    Err(anyhow::anyhow!(
+                        "parse errors: {}",
+                        re_pr.errors().iter().map(|e| e.message.clone()).collect::<Vec<_>>().join("; ")
+                    ))
                 };
-                if !ok {
+                if let Err(e) = verdict {
                     fs::write(input_path, &disk_raw)?;
+                    // keep the failing text for diagnosis (same convention
+                    // as the elaboration gate's `<input>.failed.bhdl`)
+                    let failed = input_path.with_extension("emit.failed.bhdl");
+                    let _ = fs::write(&failed, &new_text);
+                    eprintln!("  failing text kept at {}", failed.display());
                     anyhow::bail!(
-                        "--emit: the emitted board FAILED to re-verify — original file restored; this is a powertree emission bug, report it"
+                        "--emit: the emitted board FAILED to re-verify — original file restored; this is a powertree emission bug, report it\n  cause: {e:#}"
                     );
                 }
                 println!("  {} emitted board re-verified through the full pipeline", "✓".green().bold());
-                println!("  committing a real part = RENAME the Generic* instantiation; sign-off must check the part meets the powertree_* assumption attributes");
+                println!("  buck/LDO stages are BuckStage/LdoStage requirements — resolved to library blocks at build time (bhdl.lock); `resolve <inst> = <Block>;` pins one by hand; unresolved stays Generic* under ERC032");
             }
         }
     }
@@ -5486,6 +5590,7 @@ async fn cmd_bom(
                         version: bhdl_common::library::Lockfile::CURRENT_VERSION,
                         libraries: Vec::new(),
                         parts: Vec::new(),
+                        stages: Vec::new(),
                     });
                     lock.set_parts(
                         resolved

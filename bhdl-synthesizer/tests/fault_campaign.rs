@@ -1195,7 +1195,7 @@ async fn powertree_emit_closes_the_loop() {
     let opts = propose_trees(&h, "VIN").unwrap();
 
     let region = emit_power_region(&opts[0], "GND");
-    let emitted = splice_power_region(&src, &region).unwrap();
+    let emitted = resolve_emitted(ws, &splice_power_region(&src, &region).unwrap());
 
     // the emitted board parses and synthesizes
     let pr2 = parse(&emitted);
@@ -1279,6 +1279,31 @@ fn stdlib_regulators_honor_the_pin_contract() {
     assert!(checked >= 10, "expected the stdlib regulator population, checked {checked}");
 }
 
+/// Resolve the emitted requirement instantiations exactly as the CLI
+/// does before synthesis (no lock, no override).
+fn resolve_emitted(ws: &std::path::Path, text: &str) -> String {
+    bhdl_synthesizer::stage_resolution::resolve_stages(text, ws.join("bhdl-stdlib").as_path(), &[])
+        .expect("resolver")
+        .expect("requirements present")
+        .source
+}
+
+/// Swap one emitted stage line (`    <inst>: …;`) for a hand-written
+/// instantiation and add its import after the emitter's import block —
+/// the "commit a real part" edit, independent of how the emitter
+/// spells the requirement.
+fn swap_stage(text: &str, inst: &str, new_inst_stmt: &str, import_line: &str) -> String {
+    let prefix = format!("    {inst}: ");
+    let swapped: String = text
+        .lines()
+        .map(|l| if l.starts_with(&prefix) { format!("    {inst}: {new_inst_stmt}") } else { l.to_string() })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let imp = bhdl_synthesizer::powertree::EMIT_IMPORT;
+    assert!(swapped.contains(imp), "emitter import block present");
+    swapped.replacen(imp, &format!("{imp}\n{import_line}"), 1)
+}
+
 /// Swap-by-rename, END TO END: emit the power tree with generics,
 /// then rename the LDO placeholder to a REAL part (XC6206P182 —
 /// contract pins, virtual VOUT, datasheet expansion) and
@@ -1298,20 +1323,12 @@ async fn powertree_swap_by_rename_to_real_part() {
     let netlist = gen.generate_from_ast_and_analysis(&sf, &analysis).await.unwrap();
     let h = harvest_loads(&netlist, &sf);
     let opts = propose_trees(&h, "VIN").unwrap();
-    let emitted = splice_power_region(&src, &emit_power_region(&opts[0], "GND")).unwrap();
+    let emitted = resolve_emitted(ws, &splice_power_region(&src, &emit_power_region(&opts[0], "GND")).unwrap());
 
     // THE SWAP: one line — rename the generic to the real part (the
     // 1.8V fixed XC6206 SKU). Ctor args change with it (the real
     // part's voltage is its SKU); the WIRING lines are untouched.
-    let swapped = emitted
-        .replace(
-            "u_v1v8: GenericLdo(vin=3.3V, vout=1.8V, rated=0.1A);",
-            "u_v1v8: XC6206P182();",
-        )
-        .replace(
-            "import { GenericBuck, GenericBuckExt, GenericLdo, GenericPrereg } from \"bhdl-stdlib/power/generic_regulators.bhdl\";",
-            "import { GenericBuck, GenericBuckExt, GenericLdo, GenericPrereg } from \"bhdl-stdlib/power/generic_regulators.bhdl\";\nimport { XC6206P182 } from \"bhdl-stdlib/power/xc6206.bhdl\";",
-        );
+    let swapped = swap_stage(&emitted, "u_v1v8", "XC6206P182();", "import { XC6206P182 } from \"bhdl-stdlib/power/xc6206.bhdl\";");
     assert_ne!(swapped, emitted, "the rename must have applied");
 
     let pr2 = parse(&swapped);
@@ -1353,15 +1370,7 @@ async fn powertree_swap_by_rename_to_real_part() {
 
     // under-rated rename = Error: fake the same swap onto a 0.2A LDO
     // with a 5A requirement
-    let shrunk = emitted
-        .replace(
-            "u_v1v0: GenericBuck(vin=12V, vout=1V, rated=5A);",
-            "u_v1v0: XC6206P332();",
-        )
-        .replace(
-            "import { GenericBuck, GenericBuckExt, GenericLdo, GenericPrereg } from \"bhdl-stdlib/power/generic_regulators.bhdl\";",
-            "import { GenericBuck, GenericBuckExt, GenericLdo, GenericPrereg } from \"bhdl-stdlib/power/generic_regulators.bhdl\";\nimport { XC6206P332 } from \"bhdl-stdlib/power/xc6206.bhdl\";",
-        );
+    let shrunk = swap_stage(&emitted, "u_v1v0", "XC6206P332();", "import { XC6206P332 } from \"bhdl-stdlib/power/xc6206.bhdl\";");
     assert_ne!(shrunk, emitted);
     let pr3 = parse(&shrunk);
     assert!(pr3.errors().is_empty(), "{:?}", pr3.errors());
@@ -1380,12 +1389,7 @@ async fn powertree_swap_by_rename_to_real_part() {
     // ── noise convention: the 1.8V stage assumed the low-noise LDO
     // class (30µVrms). Committing LP2985 (datasheet 30µVrms) passes;
     // committing a 78xx-class part (40µVrms) is the noise Error. ──
-    let quiet = emitted
-        .replace("u_v1v8: GenericLdo(vin=3.3V, vout=1.8V, rated=0.1A);", "u_v1v8: LP2985();")
-        .replace(
-            "import { GenericBuck, GenericBuckExt, GenericLdo, GenericPrereg } from \"bhdl-stdlib/power/generic_regulators.bhdl\";",
-            "import { GenericBuck, GenericBuckExt, GenericLdo, GenericPrereg } from \"bhdl-stdlib/power/generic_regulators.bhdl\";\nimport { LP2985 } from \"bhdl-stdlib/power/lp2985.bhdl\";",
-        );
+    let quiet = swap_stage(&emitted, "u_v1v8", "LP2985();", "import { LP2985 } from \"bhdl-stdlib/power/lp2985.bhdl\";");
     let sfq = SourceFile::cast(parse(&quiet).syntax()).unwrap();
     let aq = analyze(&sfq);
     let mut gq = NetlistGenerator::new();
@@ -1395,12 +1399,7 @@ async fn powertree_swap_by_rename_to_real_part() {
         !vq.iter().any(|x| x.description.contains("u_v1v8") && x.description.contains("output noise")),
         "30µVrms part meets the 30µVrms assumption: {vq:#?}"
     );
-    let loud = emitted
-        .replace("u_v1v8: GenericLdo(vin=3.3V, vout=1.8V, rated=0.1A);", "u_v1v8: LM7805();")
-        .replace(
-            "import { GenericBuck, GenericBuckExt, GenericLdo, GenericPrereg } from \"bhdl-stdlib/power/generic_regulators.bhdl\";",
-            "import { GenericBuck, GenericBuckExt, GenericLdo, GenericPrereg } from \"bhdl-stdlib/power/generic_regulators.bhdl\";\nimport { LM7805 } from \"bhdl-stdlib/power/lm7805.bhdl\";",
-        );
+    let loud = swap_stage(&emitted, "u_v1v8", "LM7805();", "import { LM7805 } from \"bhdl-stdlib/power/lm7805.bhdl\";");
     let sfl = SourceFile::cast(parse(&loud).syntax()).unwrap();
     let al = analyze(&sfl);
     let mut gl = NetlistGenerator::new();
@@ -1684,7 +1683,7 @@ async fn powertree_drift_check_catches_evolved_loads() {
     let netlist = gen.generate_from_ast_and_analysis(&sf, &analysis).await.unwrap();
     let h = harvest_loads(&netlist, &sf);
     let opts = propose_trees(&h, "VIN").unwrap();
-    let emitted = splice_power_region(&src, &emit_power_region(&opts[0], "GND")).unwrap();
+    let emitted = resolve_emitted(ws, &splice_power_region(&src, &emit_power_region(&opts[0], "GND")).unwrap());
 
     let build = |text: &str| {
         let pr = parse(text);
@@ -1854,4 +1853,110 @@ board SplitDemo {{
     let r = gen.generate_from_ast_and_analysis(&sf, &analysis).await;
     let err = match r { Ok(_) => panic!("envelope violation must fail synthesis"), Err(e) => format!("{e:#}") };
     assert!(err.contains("envelope"), "envelope message surfaced: {err}");
+}
+
+/// Requirement interfaces end to end (Requirements_And_Resolution §3,
+/// increment 2): `u1: BuckStage(...)` resolves to `Buck_TPS54331` by
+/// trial-instantiation; an out-of-envelope requirement is UNRESOLVED
+/// with every gate stated and becomes the Generic placeholder; an
+/// `LdoStage` has no implementing block yet (stated, not faked); a
+/// `resolve` override that fails its gates is a hard error; the lock
+/// binding is tried first and re-resolved loudly when stale; and an
+/// unresolved trait instantiation can never reach synthesis silently.
+#[tokio::test]
+async fn stage_requirements_resolve_lock_override_and_refuse() {
+    use bhdl_synthesizer::stage_resolution::resolve_stages;
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let stdlib = ws.join("bhdl-stdlib");
+    let board = |args: &str, extra: &str| format!(r#"
+import {{ BuckStage, LdoStage }} from "bhdl-stdlib/power/stages.bhdl";
+import {{ Res }} from "bhdl-stdlib/passives/resistor.bhdl";
+board ReqDemo {{
+    power VIN = 12V @ 3A;
+    port V5: power out = 5V @ 2A;
+    ground GND;
+    @VIN -> u1: BuckStage({args}).VIN; // BuckStage(in a comment — µ≤ multibyte)
+    u1.GND -> @GND; u1.VOUT -> @V5;
+    @V5 -> R_LOAD: Res(2.5Ω, wattage=10W).1; R_LOAD.2 -> @GND;
+    {extra}
+}}
+"#);
+
+    // 1. survey resolves
+    let r = resolve_stages(&board("vout=5V, i_max=2A, vin=12V", ""), &stdlib, &[]).unwrap().unwrap();
+    assert_eq!(r.resolutions.len(), 1);
+    let u1 = &r.resolutions[0];
+    assert_eq!(u1.bound.as_deref(), Some("Buck_TPS54331"), "{}", bhdl_synthesizer::stage_resolution::render_report(u1));
+    assert_eq!(u1.basis, "survey");
+    assert!(r.source.contains("u1: Buck_TPS54331(v_out=5V, i_out_max=2A, v_in=12V)"), "{}", r.source);
+    assert!(r.source.contains("import { Buck_TPS54331 } from \"bhdl-stdlib/power/tps54331.bhdl\";"), "{}", r.source);
+    assert!(r.source.contains("attribute u1.stage_requirement = \"vout=5V, i_max=2A, vin=12V\";"), "{}", r.source);
+    // the resolved text synthesizes and the block composes
+    let pr = parse(&r.source);
+    assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+    assert!(n.instances.values().any(|i| i.name == "u1_u"), "the silicon materialised");
+    assert!(n.instances.values().any(|i| i.name == "u1_L_out"));
+
+    // 2. out of envelope + noise requirement: every gate stated, placeholder
+    let r = resolve_stages(&board("vout=5V, i_max=2.6A, vin=12V, noise=50mV", ""), &stdlib, &[]).unwrap().unwrap();
+    let u1 = &r.resolutions[0];
+    assert!(u1.bound.is_none());
+    assert_eq!(u1.basis, "unresolved");
+    let c = &u1.candidates[0];
+    assert!(!c.passes());
+    let fails = c.failures().join("\n");
+    assert!(fails.contains("envelope") && fails.contains("2.4A"), "{fails}");
+    assert!(fails.contains("i_max") && fails.contains("3.250A"), "{fails}");
+    assert!(fails.contains("noise") && fails.contains("UNCHECKED"), "{fails}");
+    assert!(r.source.contains("u1: GenericBuck(vin=12V, vout=5V, rated=2.6A)"), "{}", r.source);
+    assert!(r.source.contains("attribute u1.powertree_rating_required_a = \"3.2500\";"), "{}", r.source);
+
+    // 3. LDO: no implementing block — stated
+    let ldo = board("vout=5V, i_max=2A, vin=12V", "@V5 -> u2: LdoStage(vout=3.3V, i_max=100mA, vin=5V).VIN; u2.GND -> @GND;");
+    let r = resolve_stages(&ldo, &stdlib, &[]).unwrap().unwrap();
+    let u2 = r.resolutions.iter().find(|x| x.instance == "u2").unwrap();
+    assert!(u2.bound.is_none() && u2.candidates.is_empty());
+    assert!(r.source.contains("u2: GenericLdo(vin=5V, vout=3.3V, rated=100mA)"), "{}", r.source);
+
+    // 4. override: accepted when it passes; hard error when it fails / is unknown
+    let r = resolve_stages(&board("vout=5V, i_max=2A, vin=12V", "resolve u1 = Buck_TPS54331;"), &stdlib, &[]).unwrap().unwrap();
+    assert_eq!(r.resolutions[0].basis, "override");
+    assert!(!r.source.contains("\n    resolve u1"), "override statement consumed: {}", r.source);
+    let e = resolve_stages(&board("vout=5V, i_max=2.6A, vin=12V", "resolve u1 = Buck_TPS54331;"), &stdlib, &[]).unwrap_err();
+    assert!(format!("{e:#}").contains("does not meet the requirement"), "{e:#}");
+    let e = resolve_stages(&board("vout=5V, i_max=2A, vin=12V", "resolve u1 = Buck_NoSuch;"), &stdlib, &[]).unwrap_err();
+    assert!(format!("{e:#}").contains("no `impl BuckStage for Buck_NoSuch`"), "{e:#}");
+
+    // 5. lock: tried first; stale lock re-resolved loudly
+    let lock = vec![bhdl_common::library::LockedStage {
+        board: "ReqDemo".into(),
+        instance: "u1".into(),
+        trait_name: "BuckStage".into(),
+        requirement: "vout=5V, i_max=1A, vin=12V".into(),
+        block: "Buck_TPS54331".into(),
+    }];
+    let r = resolve_stages(&board("vout=5V, i_max=2A, vin=12V", ""), &stdlib, &lock).unwrap().unwrap();
+    assert_eq!(r.resolutions[0].basis, "lock");
+    assert!(r.resolutions[0].notes.iter().any(|n| n.contains("requirement changed since lock")), "{:?}", r.resolutions[0].notes);
+    let r = resolve_stages(&board("vout=5V, i_max=2.6A, vin=12V", ""), &stdlib, &lock).unwrap().unwrap();
+    assert_eq!(r.resolutions[0].basis, "unresolved");
+    assert!(r.resolutions[0].notes.iter().any(|n| n.contains("no longer meets")), "{:?}", r.resolutions[0].notes);
+    // a different board's lock entry is not this board's
+    let other = vec![bhdl_common::library::LockedStage { board: "Other".into(), ..lock[0].clone() }];
+    let r = resolve_stages(&board("vout=5V, i_max=2A, vin=12V", ""), &stdlib, &other).unwrap().unwrap();
+    assert_eq!(r.resolutions[0].basis, "survey");
+
+    // 6. an unresolved requirement can never synthesize silently
+    let raw = board("vout=5V, i_max=2A, vin=12V", "");
+    let pr = parse(&raw);
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let err = gen.generate_from_ast_and_analysis(&sf, &analysis).await.err().expect("must refuse");
+    assert!(format!("{err:#}").contains("BuckStage"), "{err:#}");
 }

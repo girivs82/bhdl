@@ -410,6 +410,10 @@ pub enum SyntaxKind {
     SUPPLY_STMT,           // the whole statement (board scope)
     SUPPLY_SPEC_ENTRY,     // one `key: value;` entry in the spec block
 
+    // Requirement resolution (docs/spec/Requirements_And_Resolution.md §3):
+    // resolve <instance> = <Block>;   — designer override of the resolver
+    RESOLVE_STMT,
+
     // Symbol and layout definition nodes
     SYMBOL_DEF,            // symbol EntityName { ... }
     SYMBOL_BODY_HINT,      // body rectangle;

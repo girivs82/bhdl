@@ -45,6 +45,7 @@ pub mod glacier_physical_selection;
 // Power-supply synthesis: the `supply` statement desugar (S1).
 // docs/spec/Power_Supply_Synthesis.md.
 pub mod supply_synthesis;
+pub mod stage_resolution;
 // Electrical rule checks — the real DRC content (driver conflicts,
 // diff-pair polarity, TX/RX crossing, voltage domains, I2C pull-ups).
 pub mod erc;
@@ -592,8 +593,9 @@ impl NetlistGenerator {
                     error!("  - {}", diagnostic.message);
                 }
                 return Err(anyhow::anyhow!(
-                    "Circuit has {} undefined component(s). Please import required components before synthesis.",
-                    undefined_components.len()
+                    "Circuit has {} undefined component(s). Please import required components before synthesis:\n  {}",
+                    undefined_components.len(),
+                    undefined_components.iter().map(|d| d.message.clone()).collect::<Vec<_>>().join("\n  ")
                 ));
             }
         }
@@ -656,6 +658,35 @@ impl NetlistGenerator {
         // explicit `port` form and the power/ground sugar arrive here through
         // the same BoardPortInfo records.
         self.create_board_ports(analysis)?;
+
+        // Phase 4.35: a REQUIREMENT instantiation (`u1: BuckStage(…)`,
+        // the type is a trait) must never reach synthesis — the resolver
+        // pre-pass (CLI, docs/spec/Requirements_And_Resolution.md §3)
+        // binds it to a block or to the Generic* placeholder first. A
+        // trait has no pins to wire; letting it through produced a
+        // silent empty stub that "built". Hard error.
+        {
+            let trait_names: std::collections::HashSet<String> = analysis
+                .global_scope
+                .get_symbols()
+                .iter()
+                .filter(|(_, sym)| matches!(sym.kind, bhdl_analyzer::symbol_table::SymbolKind::Trait))
+                .map(|(n, _)| n.clone())
+                .collect();
+            if !trait_names.is_empty() {
+                for (_, inst) in self.netlist.instances.iter() {
+                    let m = self.netlist.modules.get(inst.definition).map(|m| m.name.clone()).unwrap_or_default();
+                    if trait_names.contains(&m) {
+                        anyhow::bail!(
+                            "'{}' instantiates the requirement interface '{m}' — a requirement, not a part. \
+                             It must be RESOLVED to a library block before synthesis (the CLI runs the \
+                             resolver automatically; `resolve {} = <Block>;` pins one by hand).",
+                            inst.name, inst.name
+                        );
+                    }
+                }
+            }
+        }
 
         // Phase 4.4: Stamp constructor arguments onto instances.
         // A board like `U1: LM317(v_out=5V);` carries the arg
@@ -1404,6 +1435,19 @@ impl NetlistGenerator {
                 SyntaxKind::IDENT | SyntaxKind::NUMBER if seen_colon => {
                     return e.as_token().map(|t| t.text().to_string());
                 }
+                // An ARRAY element refdes (`led[0]: LED(red).A`) is a
+                // node of another kind whose text IS the instance name
+                // the connectivity walker registered (`led[0]`). Accept
+                // any node whose text has the `ident[index]` shape.
+                _ if seen_colon => {
+                    let txt = e.as_node().map(|n| n.text().to_string().trim().to_string())?;
+                    let shape_ok = txt
+                        .chars()
+                        .all(|c| c.is_alphanumeric() || c == '_' || c == '[' || c == ']')
+                        && txt.contains('[')
+                        && txt.ends_with(']');
+                    return if shape_ok { Some(txt) } else { None };
+                }
                 _ => return None,
             }
             el = e.prev_sibling_or_token();
@@ -1560,7 +1604,10 @@ impl NetlistGenerator {
                     Some(refdes) => (refdes, idents.first().cloned()),
                     // Anonymous inline use (no `refdes:` binding, e.g.
                     // `VIN -> Cap(10µF).1`) — nothing to stamp by name.
-                    None => continue,
+                    None => {
+                        debug!("Phase 4.4: no refdes binding before {:?} — anonymous inline use, not stamped", idents);
+                        continue;
+                    }
                 }
             };
             let inst_name = &inst_name;
@@ -1569,7 +1616,10 @@ impl NetlistGenerator {
             let inst_id = self.netlist.instances.iter()
                 .find(|(_, inst)| inst.name == *inst_name)
                 .map(|(id, _)| id);
-            let Some(inst_id) = inst_id else { continue; };
+            let Some(inst_id) = inst_id else {
+                debug!("Phase 4.4: no netlist instance named '{inst_name}' (type {entity_type:?}) — args not stamped");
+                continue;
+            };
 
             // Resolve constructor-argument aliases (`alias TPS54331_3V3 =
             // TPS54331(3.3V)`): if the instance's type is such an alias,
@@ -1651,7 +1701,12 @@ impl NetlistGenerator {
                     let Some(pname) = pnames.and_then(|p| p.get(idx)) else { continue };
                     let val = unquote_string_literal(text.trim());
                     if let Some(inst) = self.netlist.instances.get_mut(inst_id) {
-                        if !inst.attributes.contains_key(pname) {
+                        let unresolved = inst
+                            .attributes
+                            .get(pname)
+                            .map(|v| v.is_empty() || v == pname)
+                            .unwrap_or(true);
+                        if unresolved {
                             inst.attributes.insert(pname.clone(), val);
                             stamped_explicit += 1;
                         }
@@ -1669,6 +1724,48 @@ impl NetlistGenerator {
             // child node) are correctly skipped and still bind via component
             // inference. `or_insert` keeps any PARAM_LIST stamp above.
             if let Some(block) = comp_inst.param_assign_block() {
+                // Positional args in the flow form bind by index exactly
+                // as (1p) does for PARAM_LIST — `led: LED(red).A` must
+                // stamp `color=red`, or the entity's `attribute color =
+                // color` echoes the param NAME and the elaborated text
+                // re-emits `LED(color)` (caught by the value gate).
+                let pnames = effective_type
+                    .as_ref()
+                    .and_then(|t| entity_param_names.get(t));
+                // In this form EVERY arg is a PARAM_ASSIGN node; the
+                // positional ones simply carry no `=` (verified on the
+                // AST: `LED(red)` → PARAM_ASSIGN(IDENT_REF "red")).
+                let mut pos = 0usize;
+                for n in block.syntax().children() {
+                    if n.kind() != SyntaxKind::PARAM_ASSIGN {
+                        continue;
+                    }
+                    let named = n
+                        .children_with_tokens()
+                        .any(|e| e.kind() == SyntaxKind::EQ);
+                    if named {
+                        continue;
+                    }
+                    let text = n.text().to_string();
+                    let idx = pos;
+                    pos += 1;
+                    let Some(pname) = pnames.and_then(|p| p.get(idx)) else { continue };
+                    let val = unquote_string_literal(text.trim());
+                    if let Some(inst) = self.netlist.instances.get_mut(inst_id) {
+                        // Absent, EMPTY, or an ECHO of the param name
+                        // (`attribute color = color` exported before the
+                        // arg was bound) are all unresolved slots.
+                        let unresolved = inst
+                            .attributes
+                            .get(pname)
+                            .map(|v| v.is_empty() || v == pname)
+                            .unwrap_or(true);
+                        if unresolved {
+                            inst.attributes.insert(pname.clone(), val);
+                            stamped_explicit += 1;
+                        }
+                    }
+                }
                 for assign in block.assignments() {
                     if let (Some(name_tok), Some(value_expr)) =
                         (bhdl_ast::HasName::name(&assign), assign.value())
@@ -1725,9 +1822,18 @@ impl NetlistGenerator {
                             // entry().or_insert() skips when the user
                             // already passed an override (the
                             // explicit-args pass above stamped them).
-                            let pre_exists = inst.attributes.contains_key(&pname);
-                            inst.attributes.entry(pname.clone()).or_insert(pdefault);
+                            // An EMPTY existing value is an unresolved
+                            // slot some earlier path left behind, not an
+                            // override — `DemoSense()` synthesized with
+                            // value="" while its elaborated twin carried
+                            // the 10kΩ default (caught by the value gate).
+                            let pre_exists = inst
+                                .attributes
+                                .get(&pname)
+                                .map(|v| !v.is_empty())
+                                .unwrap_or(false);
                             if !pre_exists {
+                                inst.attributes.insert(pname.clone(), pdefault);
                                 stamped_defaults += 1;
                             }
                         }

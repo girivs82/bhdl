@@ -757,7 +757,7 @@ fn find_entity(stdlib_root: &Path, name: &str) -> Result<(PathBuf, String)> {
     )
 }
 
-fn collect_bhdl(dir: &Path, out: &mut Vec<PathBuf>) {
+pub(crate) fn collect_bhdl(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(rd) = std::fs::read_dir(dir) else { return };
     for entry in rd.flatten() {
         let p = entry.path();
@@ -885,7 +885,7 @@ pub(crate) fn parse_si_txt(s: &str) -> Option<f64> {
 
 /// `attribute <key> = <value>;` map of the named entity (comment-stripped,
 /// quotes trimmed), scanned textually from the entity block.
-fn entity_attrs_txt(src: &str, name: &str) -> HashMap<String, String> {
+pub(crate) fn entity_attrs_txt(src: &str, name: &str) -> HashMap<String, String> {
     let mut out = HashMap::new();
     let Some(at) = find_entity_decl(src, name) else { return out };
     for line in src[at..].lines() {
@@ -905,7 +905,7 @@ fn entity_attrs_txt(src: &str, name: &str) -> HashMap<String, String> {
 }
 
 /// Default value text of one constructor param, e.g. `i_out_max` → `"2A"`.
-fn entity_param_default(src: &str, name: &str, param: &str) -> Option<String> {
+pub(crate) fn entity_param_default(src: &str, name: &str, param: &str) -> Option<String> {
     // Reuse the comment-safe walker by re-deriving the raw chunks.
     let Some(ent_at) = find_entity_decl(src, name) else { return None };
     let after = &src[ent_at..];
@@ -1705,7 +1705,7 @@ fn fmt_a(v: f64) -> String {
 /// `alias <name> = <Target>` indirection (SKU aliases).
 /// Textual `entity X(...) as part|design {` partness (chooser runs pre-parse).
 /// Follows the alias hop of `find_entity_decl`. None = undeclared.
-fn entity_declared_kind(src: &str, name: &str) -> Option<String> {
+pub(crate) fn entity_declared_kind(src: &str, name: &str) -> Option<String> {
     let at = find_entity_decl(src, name)?;
     let head = &src[at..];
     let head = &head[..head.find('{').unwrap_or(head.len())];
@@ -1719,7 +1719,7 @@ fn entity_declared_kind(src: &str, name: &str) -> Option<String> {
     None
 }
 
-fn find_entity_decl(src: &str, name: &str) -> Option<usize> {
+pub(crate) fn find_entity_decl(src: &str, name: &str) -> Option<usize> {
     let pat = format!("entity {name}");
     let mut off = 0usize;
     for line in src.split_inclusive('\n') {
