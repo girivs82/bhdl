@@ -115,6 +115,9 @@ pub fn build_trace_matrix(
     sf: &bhdl_ast::SourceFile,
     violations: &[DRCViolation],
     safety: Option<&bhdl_common::safety::SafetyModel>,
+    // true when `safety` is a campaign model the caller loaded (the
+    // evidence was sought), false when it is just the resolved model
+    safety_supplied: bool,
 ) -> TraceMatrix {
     use rowan::ast::AstNode;
     let board = sf
@@ -348,18 +351,82 @@ pub fn build_trace_matrix(
                     .filter(|mm| mm.goal == g.path)
                     .map(|mm| format!("{} ({:?})", mm.instance, mm.kind))
                     .collect();
-                let gaps: Vec<&bhdl_common::safety::Gap> = sm.gaps.iter().filter(|gp| gp.goal == g.path).collect();
-                let (status, evidence) = if !gaps.is_empty() {
-                    (
-                        TraceStatus::Violated,
-                        gaps.iter().map(|gp| format!("{:?}: {} — {}", gp.class, gp.subject, gp.fix)).collect::<Vec<_>>().join("; "),
-                    )
+                // gaps are attributed to `<goal path>` or `<goal path>.<effect>`
+                let gaps: Vec<&bhdl_common::safety::Gap> = sm
+                    .gaps
+                    .iter()
+                    .filter(|gp| gp.goal == g.path || gp.goal.starts_with(&format!("{}.", g.path)))
+                    .collect();
+                // a gap that means "the verifier could not run" (fault not
+                // run, FIT uncomputed, data missing, assumption open) is
+                // UNVERIFIED; one that means "the goal is not met"
+                // (undetected effect, PSM without LSM, unsourced DC) is
+                // VIOLATED
+                // a `FaultUnrun` gap whose fault record shows it DID run
+                // with a failed expectation or FTTI is a violation too
+                // (the campaign keeps the class, the record has the truth)
+                let fault_failed = |gp: &bhdl_common::safety::Gap| -> bool {
+                    gp.class == bhdl_common::safety::GapClass::FaultUnrun
+                        && sm.scopes.iter().flat_map(|sc| sc.faults.iter()).any(|f| {
+                            format!("{}({})", f.kind, f.targets.join(",")) == gp.subject
+                                && f.run
+                                && (f.expectation_met == Some(false) || f.timing_met == Some(false))
+                        })
+                };
+                let is_violation = |gp: &bhdl_common::safety::Gap| {
+                    matches!(
+                        gp.class,
+                        bhdl_common::safety::GapClass::EffectUndetected
+                            | bhdl_common::safety::GapClass::PsmWithoutLsm
+                            | bhdl_common::safety::GapClass::DcUnsourced
+                            | bhdl_common::safety::GapClass::AouViolated
+                            | bhdl_common::safety::GapClass::MetricMissed
+                    ) || fault_failed(gp)
+                };
+                // measured evidence from the campaign model: per-mechanism
+                // measured DC and the goal's fault expectations
+                let measured: Vec<String> = scope
+                    .mechanisms
+                    .iter()
+                    .filter(|mm| mm.goal == g.path)
+                    .map(|mm| match mm.measured_dc {
+                        Some(dc) => format!("{} measured DC {:.1}%{}", mm.instance, dc * 100.0, mm.claimed_dc.map(|c| format!(" (claimed {:.1}%)", c * 100.0)).unwrap_or_default()),
+                        None => format!("{} DC not measured", mm.instance),
+                    })
+                    .collect();
+                let universe_for_goal: Vec<&bhdl_common::safety::UniverseFault> = sm
+                    .universe
+                    .iter()
+                    .filter(|u| u.scope == scope.path || u.scope == g.path.rsplit_once('.').map(|(s, _)| s).unwrap_or(""))
+                    .collect();
+                let gap_text = |v: &[&bhdl_common::safety::Gap]| v.iter().map(|gp| format!("{:?}: {} — {}", gp.class, gp.subject, gp.fix)).collect::<Vec<_>>().join("; ");
+                let violations: Vec<&bhdl_common::safety::Gap> = gaps.iter().copied().filter(|gp| is_violation(gp)).collect();
+                let unverifiable: Vec<&bhdl_common::safety::Gap> = gaps.iter().copied().filter(|gp| !is_violation(gp)).collect();
+                let (status, evidence) = if !violations.is_empty() {
+                    (TraceStatus::Violated, gap_text(&violations))
+                } else if !unverifiable.is_empty() {
+                    (TraceStatus::Unverified, format!("campaign evidence incomplete — {}", gap_text(&unverifiable)))
                 } else if !campaign_ran {
-                    (TraceStatus::Unverified, "fault campaign not part of this build — run `bhdl safety` for the measured DC / FTTI evidence".into())
+                    (
+                        TraceStatus::Unverified,
+                        if safety_supplied {
+                            "safety model supplied but its fault universe did not run (no converging DC solve) — no measured DC / FTTI evidence".into()
+                        } else {
+                            "fault campaign not part of this build — run `bhdl safety --json m.json`, then `bhdl trace --safety m.json` for the measured DC / FTTI evidence".into()
+                        },
+                    )
                 } else if mechs.is_empty() {
                     (TraceStatus::Unresolved, "goal declares no mechanism".into())
                 } else {
-                    (TraceStatus::Verified, "fault campaign: no gap against this goal".into())
+                    let ran = universe_for_goal.iter().filter(|u| u.ran).count();
+                    let detected = universe_for_goal.iter().filter(|u| u.ran && !u.detected.is_empty()).count();
+                    (
+                        TraceStatus::Verified,
+                        format!(
+                            "fault campaign: no gap against this goal; {}; universe faults in scope: {ran} run, {detected} detected",
+                            measured.join(", ")
+                        ),
+                    )
                 };
                 m.rows.push(TraceRow {
                     id: g.id.clone().unwrap_or_else(|| g.path.clone()),
@@ -377,6 +444,150 @@ pub fn build_trace_matrix(
                 });
             }
         }
+    }
+
+    // safety gaps attributed to no goal row (board-level FIT data, parts
+    // without safety data): findings, not silence
+    if let Some(sm) = safety {
+        let goal_paths: Vec<String> = sm.scopes.iter().flat_map(|s| s.goals.iter().map(|g| g.path.clone())).collect();
+        for gp in &sm.gaps {
+            let attributed = goal_paths.iter().any(|p| gp.goal == *p || gp.goal.starts_with(&format!("{p}.")));
+            if !attributed {
+                m.findings.push(format!("safety gap (no goal row): {:?}: {} — {}", gp.class, gp.subject, gp.fix));
+            }
+        }
+    }
+
+    // ── 5b. hardware–software interface contracts `hsi NAME { … }` ──
+    // Machine-checkable parts are checked on the netlist: the MCU pin and
+    // the hardware source share a net (wiring), the pin's declared
+    // direction agrees with the software view, and the source's supply
+    // rail matches the declared logic level. `latency_max` has NO
+    // verifier in this build and is stated UNVERIFIED, never a pass.
+    for hsi in sf.syntax().descendants().filter(|n| n.kind() == bhdl_parser::SyntaxKind::HSI_STMT) {
+        // `hsi` itself lexes as an IDENT (contextual keyword): the id is
+        // the second IDENT token
+        let id = hsi
+            .children_with_tokens()
+            .filter_map(|e| e.into_token())
+            .filter(|t| t.kind() == bhdl_parser::SyntaxKind::IDENT)
+            .nth(1)
+            .map(|t| t.text().to_string())
+            .unwrap_or_default();
+        let mut kv: BTreeMap<String, String> = BTreeMap::new();
+        for e in hsi.children().filter(|n| n.kind() == bhdl_parser::SyntaxKind::HSI_ENTRY) {
+            let toks: Vec<_> = e.descendants_with_tokens().filter_map(|x| x.into_token()).filter(|t| t.kind() != bhdl_parser::SyntaxKind::WHITESPACE && t.kind() != bhdl_parser::SyntaxKind::COMMENT).collect();
+            let Some(key) = toks.first().map(|t| t.text().to_string()) else { continue };
+            let value: String = toks
+                .iter()
+                .skip(1)
+                .skip_while(|t| t.kind() == bhdl_parser::SyntaxKind::COLON)
+                .take_while(|t| t.kind() != bhdl_parser::SyntaxKind::SEMI)
+                .map(|t| t.text().to_string())
+                .collect::<Vec<_>>()
+                .join("")
+                .trim_matches('"')
+                .to_string();
+            kv.insert(key, value);
+        }
+        let get = |k: &str| kv.get(k).cloned().filter(|v| !v.is_empty());
+        let pin_net_of = |spec: &str| -> Option<(String, String, bhdl_netlist::types::PinDirection, Option<bhdl_netlist::types::NetId>)> {
+            let (inst, pin) = spec.split_once('.')?;
+            let i = netlist.instances.iter().find(|(_, i)| i.name == inst)?;
+            let pi = netlist.pin_instances.values().find(|pi| {
+                pi.instance == i.0 && netlist.pins.get(pi.pin_def).map(|p| p.name == pin).unwrap_or(false)
+            })?;
+            let p = netlist.pins.get(pi.pin_def)?;
+            Some((inst.to_string(), pin.to_string(), p.direction.clone(), pi.net))
+        };
+        let mut checks: Vec<(String, bool, bool)> = Vec::new(); // (detail, ok, unchecked)
+        let signal = get("signal");
+        let source = get("source");
+        let sig = signal.as_deref().and_then(pin_net_of);
+        let src = source.as_deref().and_then(pin_net_of);
+        match (&signal, &sig) {
+            (Some(sp), None) => checks.push((format!("signal {sp} is not a pin on this board"), false, false)),
+            (None, _) => checks.push(("no `signal:` pin declared".into(), false, false)),
+            _ => {}
+        }
+        if let (Some(sp), Some(s)) = (&source, &src) {
+            match &sig {
+                Some(g) => {
+                    let wired = g.3.is_some() && g.3 == s.3;
+                    checks.push((format!("wiring: {sp} and {} share a net", signal.clone().unwrap_or_default()), wired, false));
+                }
+                None => {}
+            }
+            let _ = s;
+        } else if let Some(sp) = &source {
+            checks.push((format!("source {sp} is not a pin on this board"), false, false));
+        }
+        if let (Some(dir), Some(g)) = (get("direction"), &sig) {
+            use bhdl_netlist::types::PinDirection as D;
+            let ok = match dir.as_str() {
+                "input" => matches!(g.2, D::In | D::InOut | D::Passive),
+                "output" => matches!(g.2, D::Out | D::InOut | D::Passive),
+                "inout" => matches!(g.2, D::InOut | D::Passive),
+                _ => false,
+            };
+            checks.push((format!("direction: software sees {dir}; pin {}.{} is declared {:?}", g.0, g.1, g.2), ok, false));
+        }
+        if let Some(level) = get("level") {
+            let want = crate::stage_acceptance::parse_si(&level);
+            // the supply rail of the part that DRIVES the source net sets
+            // the logic level: walk the net to its output pin(s) (the
+            // declared source may be a composite's virtual pin), then to
+            // that part's power pin's rail
+            // (net CLASSES, not pin types: expansion-minted child modules
+            // carry generic pin types, but a rail net is a Power net)
+            let supply_of = |inst: bhdl_netlist::types::InstanceId| -> Option<f64> {
+                netlist.pin_instances.values().find_map(|pi| {
+                    if pi.instance != inst { return None; }
+                    match &netlist.nets.get(pi.net?)?.net_class {
+                        bhdl_netlist::types::NetClass::Power { voltage, .. } => Some(*voltage),
+                        _ => None,
+                    }
+                })
+            };
+            let sig_inst = sig.as_ref().and_then(|g| netlist.instances.iter().find(|(_, i)| i.name == g.0).map(|(id, _)| id));
+            let rail_v = src.as_ref().and_then(|s| {
+                let net = s.3?;
+                netlist
+                    .pin_instances
+                    .values()
+                    .filter(|pi| pi.net == Some(net) && Some(pi.instance) != sig_inst)
+                    .filter(|pi| netlist.pins.get(pi.pin_def).map(|p| !p.is_virtual).unwrap_or(false))
+                    .find_map(|pi| supply_of(pi.instance))
+            });
+            match (want, rail_v) {
+                (Some(w), Some(v)) => checks.push((format!("level: source supply rail {v:.2}V vs declared {w:.2}V"), (v - w).abs() <= 0.05 * w.max(0.1), false)),
+                (Some(_), None) => checks.push(("level: source's supply rail not resolvable on this board — UNCHECKED".into(), false, true)),
+                (None, _) => checks.push((format!("level `{level}` is not a voltage"), false, false)),
+            }
+        }
+        if let Some(l) = get("latency_max") {
+            checks.push((format!("latency_max {l}: no verifier in this build (timing is firmware + hardware) — UNVERIFIED, stated"), false, true));
+        }
+        let status = if checks.iter().any(|c| !c.1 && !c.2) {
+            TraceStatus::Violated
+        } else if checks.iter().any(|c| c.2) {
+            TraceStatus::Unverified
+        } else {
+            TraceStatus::Verified
+        };
+        let mut implemented: Vec<String> = Vec::new();
+        if let Some(s) = &source { implemented.push(format!("hw: {s}")); }
+        if let Some(o) = get("owner") { implemented.push(format!("fw: {o}")); }
+        m.rows.push(TraceRow {
+            id: id.clone(),
+            kind: "hardware–software interface".into(),
+            stated_by: "designer (HSI)".into(),
+            statement: kv.iter().map(|(k, v)| format!("{k}: {v}")).collect::<Vec<_>>().join("; "),
+            implemented_by: implemented,
+            verifier: "netlist: wiring + pin direction + source supply level".into(),
+            status,
+            evidence: checks.iter().map(|c| format!("{} {}", if c.1 { "ok" } else if c.2 { "UNCHECKED" } else { "NOK" }, c.0)).collect::<Vec<_>>().join("; "),
+        });
     }
 
     // ── 6. `satisfies { REQ: via element; }` links ──

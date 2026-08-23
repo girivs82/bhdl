@@ -193,6 +193,16 @@ impl<'t> Parser<'t> {
                         self.parse_supply_stmt();
                         continue;
                     }
+                    // `hsi NAME { key: value; … }` — a hardware–software
+                    // interface contract (contextual keyword, same
+                    // discipline as `supply`).
+                    if self.peek_text().as_deref() == Some("hsi")
+                        && self.peek_nth_nontrivia(1) == Some(SyntaxKind::IDENT)
+                        && self.peek_nth_nontrivia(2) == Some(SyntaxKind::L_BRACE)
+                    {
+                        self.parse_hsi_stmt();
+                        continue;
+                    }
                     // `resolve <inst> = <Block>;` — designer override of
                     // requirement resolution (contextual, same discipline).
                     if self.peek_text().as_deref() == Some("resolve")
@@ -2316,6 +2326,49 @@ impl<'t> Parser<'t> {
     // profile, and — S1 — the explicit `using: <Part>`). Values are kept as
     // raw token runs per entry (VALUE `30mV`, IDENT `cost` / `TPS54331`);
     // the desugar pass interprets them.
+    /// `hsi NAME { key: value; … }` — entries are `IDENT : <tokens> ;`.
+    fn parse_hsi_stmt(&mut self) {
+        self.builder.start_node(SyntaxKind::HSI_STMT.into());
+        self.bump(); // hsi
+        self.skip_trivia();
+        self.expect(SyntaxKind::IDENT); // the contract id
+        self.skip_trivia();
+        self.expect(SyntaxKind::L_BRACE);
+        loop {
+            self.skip_trivia();
+            match self.peek() {
+                Some(SyntaxKind::R_BRACE) => break,
+                // keys may be keywords (`signal`, `source`, `level`): any
+                // token followed by `:` opens an entry
+                Some(_) if self.peek_nth_nontrivia(1) == Some(SyntaxKind::COLON) => {
+                    self.builder.start_node(SyntaxKind::HSI_ENTRY.into());
+                    self.bump_any(); // key
+                    self.skip_trivia();
+                    self.expect(SyntaxKind::COLON);
+                    // value: every token up to the terminating `;`
+                    while self.peek().is_some()
+                        && self.peek() != Some(SyntaxKind::SEMI)
+                        && self.peek() != Some(SyntaxKind::R_BRACE)
+                    {
+                        self.bump_any();
+                    }
+                    self.expect(SyntaxKind::SEMI);
+                    self.builder.finish_node();
+                }
+                Some(_) => {
+                    self.error("Expected `key: value;` entry in hsi block".to_string());
+                    self.bump_any();
+                }
+                None => {
+                    self.error("Unexpected end of file in hsi block".to_string());
+                    break;
+                }
+            }
+        }
+        self.expect(SyntaxKind::R_BRACE);
+        self.builder.finish_node();
+    }
+
     fn parse_supply_stmt(&mut self) {
         self.builder.start_node(SyntaxKind::SUPPLY_STMT.into());
         self.bump(); // consume the `supply` IDENT

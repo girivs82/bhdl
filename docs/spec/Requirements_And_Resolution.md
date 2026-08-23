@@ -187,10 +187,42 @@ Principles that fall out:
    stages; resolution binds parts last. Making requirements explicit
    objects adds ids, links and the matrix — review and evidence — not
    new semantics.
-5. **HSI.** The hardware–software interface is an interface contract
-   (signals, levels, timing, ownership) — expressible through the
-   interface/trait system with the same id/satisfies discipline; a
-   natural extension once interface requirements exist.
+5. **HSI (landed).** The hardware–software interface is a board-level
+   contract statement:
+   ```
+   hsi HSI_FAULT_A {
+       signal: u3.PB0;           // the MCU pin the firmware reads/drives
+       direction: input;         // from the software's seat
+       level: 3.3V;              // logic level the hardware presents
+       active: low;
+       source: rail_a.nFAULT;    // the hardware driver
+       latency_max: 10ms;        // declared, NOT verified in this build
+       owner: "fw/safety_monitor";
+   }
+   ```
+   It is a trace-matrix row (kind "hardware–software interface", id =
+   the statement's name). Machine-verified on the netlist: `signal` and
+   `source` share a net (wiring); the pin's declared direction agrees
+   with the software view; the supply rail of the part that drives the
+   source net matches `level` (±5 %; net classes, not pin types — a
+   composite's virtual pin is followed to the real driver). `latency_max`
+   has no verifier (timing is firmware + hardware) and makes the row
+   UNVERIFIED with that stated; `owner` and `source` are the
+   implementers (fw / hw). A wrong net or level is VIOLATED.
+6. **HSR evidence (landed).** The safety goal *is* the HSR here (goal →
+   effect → FTTI → mechanism → measured DC), and it already carries an
+   id. `bhdl trace --safety m.json` consumes the campaign model that
+   `bhdl safety --json m.json` wrote: goal rows become VIOLATED on an
+   undetected effect / PSM-without-LSM / unsourced DC / AoU violation /
+   metric miss — and on a fault that RAN with a failed expectation or
+   FTTI (the campaign keeps the `FaultUnrun` class; the fault record has
+   the truth); UNVERIFIED naming the exact fault not yet run; VERIFIED
+   with each mechanism's measured DC and the in-scope universe counts.
+   Gaps attributed to no goal (FIT uncomputed, parts without safety
+   data) are findings. A model for another board is refused. Without
+   `--safety`, goal rows stay UNVERIFIED and say how to get the evidence.
+   The trace command now resolves the same transitive imports the safety
+   command does, so library goals/assumptions are visible.
 
 ## 5. First increments
 

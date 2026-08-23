@@ -2105,7 +2105,7 @@ async fn trace_matrix_derives_rows_with_evidence_and_links() {
     );
     let drc = checker.run_checks(&n, &analysis);
     let safety = bhdl_synthesizer::safety_model::build_safety_model(&n, &[&sf]);
-    let m = build_trace_matrix(&n, &analysis, &sf, &drc.violations, Some(&safety));
+    let m = build_trace_matrix(&n, &analysis, &sf, &drc.violations, Some(&safety), false);
     let row = |id: &str| m.rows.iter().find(|r| r.id == id).unwrap_or_else(|| panic!("row {id}: {:#?}", m.rows.iter().map(|r| &r.id).collect::<Vec<_>>()));
 
     // stage requirements: unresolved / resolved-with-implementers
@@ -2255,4 +2255,78 @@ board OnePred {{
     assert_eq!(noise[0].severity, bhdl_synthesizer::design_rule_checker::ViolationSeverity::Info);
     assert!(noise[0].description.contains("UNCHECKED"), "{}", noise[0].description);
     assert!(!v.iter().any(|x| x.description.contains("'u2'") && x.severity == bhdl_synthesizer::design_rule_checker::ViolationSeverity::Error), "{v:#?}");
+}
+
+/// HSR evidence + HSI contracts in the trace matrix (Requirements_And_
+/// Resolution §4): a supplied campaign model turns safety-goal rows into
+/// measured verdicts — a detected effect that failed its FTTI is
+/// VIOLATED (the campaign keeps the `FaultUnrun` class; the fault record
+/// has the truth), an unrun fault is UNVERIFIED naming the fault,
+/// unattributed gaps are findings; an `hsi NAME { … }` contract is
+/// verified on the netlist for wiring / pin direction / source supply
+/// level, and `latency_max` is stated UNVERIFIED (no verifier).
+#[tokio::test]
+async fn trace_hsr_evidence_and_hsi_contracts() {
+    use bhdl_synthesizer::trace_matrix::{build_trace_matrix, TraceStatus};
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let src = std::fs::read_to_string(ws.join("tests/circuits/realistic/test_safety_supervised_reg.bhdl")).unwrap();
+    let src = src.replacen(
+        "    rail_b.nFAULT -> r_flag_b: Res(10kΩ).1; r_flag_b.2 -> @GND;\n",
+        "    rail_b.nFAULT -> r_flag_b: Res(10kΩ).1; r_flag_b.2 -> @GND;\n    hsi HSI_FAULT_A { signal: r_flag_a.1; direction: input; level: 5V; active: low; source: rail_a.nFAULT; latency_max: 10ms; owner: \"fw/safety_monitor\"; }\n    hsi HSI_BAD { signal: r_flag_a.1; direction: output; level: 3.3V; source: rail_b.nFAULT; }\n    hsi HSI_GOOD { signal: r_flag_b.1; direction: input; level: 5V; source: rail_b.nFAULT; }\n",
+        1,
+    );
+    let pr = parse(&src);
+    assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+    let mut checker = bhdl_synthesizer::design_rule_checker::DesignRuleChecker::new(bhdl_synthesizer::design_rule_checker::IndustryStandard::IPC2221);
+    let drc = checker.run_checks(&n, &analysis);
+    // the safety library the fixture imports (goals / assumptions live there)
+    let lib_srcs: Vec<SourceFile> = src
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("import").and_then(|r| r.split('"').nth(1)).map(str::to_string))
+        .filter_map(|rel| std::fs::read_to_string(ws.join(&rel)).ok())
+        .filter_map(|t| SourceFile::cast(parse(&t).syntax()))
+        .collect();
+    let mut srcs: Vec<&SourceFile> = vec![&sf];
+    srcs.extend(lib_srcs.iter());
+    let mut model = bhdl_synthesizer::safety_model::build_safety_model(&n, &srcs);
+
+    // ── HSI ──
+    let m = build_trace_matrix(&n, &analysis, &sf, &drc.violations, Some(&model), false);
+    let row = |m: &bhdl_synthesizer::trace_matrix::TraceMatrix, id: &str| m.rows.iter().find(|r| r.id == id).cloned().unwrap_or_else(|| panic!("row {id}: {:?}", m.rows.iter().map(|r| &r.id).collect::<Vec<_>>()));
+    let good = row(&m, "HSI_GOOD");
+    assert_eq!(good.status, TraceStatus::Verified, "{good:#?}");
+    assert!(good.evidence.contains("ok wiring") && good.evidence.contains("ok direction") && good.evidence.contains("ok level: source supply rail 5.00V"), "{good:#?}");
+    let a = row(&m, "HSI_FAULT_A");
+    assert_eq!(a.status, TraceStatus::Unverified, "{a:#?}");
+    assert!(a.evidence.contains("latency_max 10ms: no verifier"), "{a:#?}");
+    assert!(a.implemented_by.iter().any(|i| i == "fw: fw/safety_monitor"), "{a:#?}");
+    let bad = row(&m, "HSI_BAD");
+    assert_eq!(bad.status, TraceStatus::Violated, "{bad:#?}");
+    assert!(bad.evidence.contains("NOK wiring") && bad.evidence.contains("NOK level: source supply rail 5.00V vs declared 3.30V"), "{bad:#?}");
+
+    // ── HSR evidence: fabricate campaign records on the resolved model (the
+    //    campaign itself is `bhdl safety`; here the matrix's reading of its
+    //    output is what is under test) ──
+    let goal_path = model.scopes.iter().flat_map(|s| s.goals.iter().map(|g| g.path.clone())).find(|p| p.ends_with("rail_a.SG_OV")).unwrap_or_else(|| panic!("rail_a.SG_OV not in {:?} (errors {:?})", model.scopes.iter().map(|s| (s.path.clone(), s.goals.iter().map(|g| g.path.clone()).collect::<Vec<_>>())).collect::<Vec<_>>(), model.errors));
+    model.universe.push(bhdl_common::safety::UniverseFault { scope: "rail_a".into(), part: "rail_a_r_fb_top".into(), mode: "open".into(), targets: vec![], ran: true, fired: vec!["overvoltage".into()], detected: vec!["rail_a_mon".into()], false_alarm: false, latent: false, latent_exposed_fit: 0.0, weight_fit: None, note: None });
+    model.gaps.retain(|g| !g.goal.starts_with(&goal_path));
+    model.gaps.push(bhdl_common::safety::Gap { class: bhdl_common::safety::GapClass::FaultUnrun, goal: format!("{goal_path}.overvoltage"), subject: "open(rail_a_r_fb_top)".into(), fix: "campaign ran: overvoltage fired and is detected, but the FTTI check FAILED".into() });
+    for s in model.scopes.iter_mut() {
+        for f in s.faults.iter_mut() {
+            if f.kind == "open" && f.targets.iter().any(|t| t == "rail_a_r_fb_top") { f.run = true; f.expectation_met = Some(true); f.timing_met = Some(false); }
+        }
+    }
+    let m = build_trace_matrix(&n, &analysis, &sf, &drc.violations, Some(&model), true);
+    let ov = m.rows.iter().find(|r| r.kind == "safety goal" && r.stated_by.contains("rail_a.SG_OV")).expect("SG_OV row");
+    assert_eq!(ov.status, TraceStatus::Violated, "ran + FTTI failed is a violation: {ov:#?}");
+    assert!(ov.evidence.contains("FTTI check FAILED"), "{ov:#?}");
+    let uv = m.rows.iter().find(|r| r.kind == "safety goal" && r.stated_by.contains("rail_a.SG_UV")).expect("SG_UV row");
+    assert_eq!(uv.status, TraceStatus::Unverified, "{uv:#?}");
+    assert!(uv.evidence.contains("FaultUnrun") || uv.evidence.contains("campaign evidence incomplete"), "{uv:#?}");
+    assert!(m.findings.iter().any(|f| f.starts_with("safety gap (no goal row)")), "{:#?}", m.findings);
 }

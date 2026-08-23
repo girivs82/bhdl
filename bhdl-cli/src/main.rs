@@ -214,6 +214,11 @@ enum Commands {
         /// Also dump the matrix as JSON to this path.
         #[arg(long)]
         json: Option<PathBuf>,
+        /// A safety model JSON written by `bhdl safety --json` — the fault
+        /// campaign's evidence (measured DC, gaps, universe) for the
+        /// safety-goal (HSR) rows. Without it those rows are UNVERIFIED.
+        #[arg(long)]
+        safety: Option<PathBuf>,
     },
     Safety {
         /// Baseline file (JSON). If absent it is WRITTEN from this run;
@@ -655,8 +660,8 @@ async fn main() -> Result<()> {
             run_freeze(&source_file, &input_content, &cli.input, output, frozen_libraries, cli.no_elaborate).await?;
         }
 
-        Some(Commands::Trace { json }) => {
-            run_trace(&source_file, &input_content, &cli.input, cli.no_elaborate, json).await?;
+        Some(Commands::Trace { json, safety }) => {
+            run_trace(&source_file, &input_content, &cli.input, cli.no_elaborate, json, safety).await?;
         }
 
         Some(Commands::Safety { baseline, update_baseline, json, fmeda }) => {
@@ -2300,6 +2305,7 @@ async fn run_trace(
     input_path: &Path,
     no_elaborate: bool,
     json_out: Option<PathBuf>,
+    safety_in: Option<PathBuf>,
 ) -> Result<()> {
     let netlist = verified_netlist(source_file, input_content, input_path, no_elaborate).await?;
     let analysis = analyze(source_file);
@@ -2307,14 +2313,34 @@ async fn run_trace(
         bhdl_synthesizer::design_rule_checker::IndustryStandard::IPC2221,
     );
     let drc = checker.run_checks(&netlist, &analysis);
-    let sources: Vec<&SourceFile> = vec![source_file];
-    let safety = bhdl_synthesizer::safety_model::build_safety_model(&netlist, &sources);
+    let owned = collect_imported_sources(&[(source_file, input_path)]);
+    let mut sources: Vec<&SourceFile> = vec![source_file];
+    for sf in &owned {
+        sources.push(sf);
+    }
+    // Campaign evidence: the model `bhdl safety --json` wrote (goals,
+    // mechanisms with measured DC, gaps, universe). It must be THIS
+    // board's model; a mismatch is an error, not a silent substitution.
+    let safety = match &safety_in {
+        Some(p) => {
+            let text = fs::read_to_string(p).with_context(|| format!("reading {}", p.display()))?;
+            let m: bhdl_common::safety::SafetyModel = serde_json::from_str(&text).with_context(|| format!("parsing {} as a safety model", p.display()))?;
+            let here = bhdl_synthesizer::safety_model::build_safety_model(&netlist, &sources);
+            if m.board != here.board {
+                anyhow::bail!("--safety {}: model is for board '{}', this build is '{}'", p.display(), m.board, here.board);
+            }
+            println!("  {} safety evidence from {} ({} universe fault(s), {} gap(s))", "✓".green(), p.display(), m.universe.len(), m.gaps.len());
+            m
+        }
+        None => bhdl_synthesizer::safety_model::build_safety_model(&netlist, &sources),
+    };
     let matrix = bhdl_synthesizer::trace_matrix::build_trace_matrix(
         &netlist,
         &analysis,
         source_file,
         &drc.violations,
         Some(&safety),
+        safety_in.is_some(),
     );
     println!("\n{}", bhdl_synthesizer::trace_matrix::render_markdown(&matrix));
     if let Some(p) = json_out {
@@ -2329,6 +2355,49 @@ async fn run_trace(
         );
     }
     Ok(())
+}
+
+/// Every file reachable through `import … from "…"` (transitively) from
+/// the given roots — so entity `safety { }` data blocks and library goals
+/// / assumptions in stdlib/vendor files are visible to the safety model.
+/// Resolution order mirrors the import loader: relative to the importing
+/// file, then BHDL_LIB_PATH, then cwd. The roots themselves are not
+/// returned.
+fn collect_imported_sources(roots: &[(&SourceFile, &Path)]) -> Vec<SourceFile> {
+    let mut owned: Vec<SourceFile> = Vec::new();
+    let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    let root_paths: Vec<PathBuf> = roots.iter().map(|(_, p)| p.to_path_buf()).collect();
+    let mut queue: Vec<(SourceFile, PathBuf)> = roots.iter().map(|(sf, p)| ((*sf).clone(), p.to_path_buf())).collect();
+    let lib_root = std::env::var("BHDL_LIB_PATH").map(PathBuf::from).ok();
+    while let Some((sf, path)) = queue.pop() {
+        let canon = path.canonicalize().unwrap_or(path.clone());
+        if !seen.insert(canon) { continue; }
+        let base = path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from("."));
+        for n in sf.syntax().descendants().filter(|n| n.kind() == bhdl_parser::SyntaxKind::IMPORT_STMT) {
+            let Some(rel) = n
+                .descendants_with_tokens()
+                .filter_map(|e| e.into_token())
+                .find(|t| t.kind() == bhdl_parser::SyntaxKind::STRING)
+                .map(|t| t.text().trim_matches('"').to_string())
+            else { continue };
+            let mut cands = vec![base.join(&rel)];
+            if let Some(lr) = &lib_root { cands.push(lr.join(&rel)); }
+            cands.push(PathBuf::from(&rel));
+            for c in cands {
+                if let Ok(text) = fs::read_to_string(&c) {
+                    let pr = parse(&text);
+                    if let Some(isf) = SourceFile::cast(pr.syntax()) {
+                        queue.push((isf, c));
+                    }
+                    break;
+                }
+            }
+        }
+        if !root_paths.iter().any(|r| *r == path) {
+            owned.push(sf);
+        }
+    }
+    owned
 }
 
 async fn run_safety(
@@ -2444,45 +2513,7 @@ async fn run_safety(
     // the board file (its own inline blocks, if any), and every file
     // reachable through `import ... from "..."` (transitively) so entity
     // `safety { }` data blocks in the stdlib/vendor files are visible.
-    let mut owned: Vec<SourceFile> = Vec::new();
-    {
-        let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
-        let mut queue: Vec<(SourceFile, PathBuf)> = vec![(source_file.clone(), source_path.to_path_buf())];
-        if board_path != source_path {
-            queue.push((board_source.clone(), board_path.clone()));
-        }
-        let lib_root = std::env::var("BHDL_LIB_PATH").map(PathBuf::from).ok();
-        while let Some((sf, path)) = queue.pop() {
-            let canon = path.canonicalize().unwrap_or(path.clone());
-            if !seen.insert(canon) { continue; }
-            let base = path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from("."));
-            for n in sf.syntax().descendants().filter(|n| n.kind() == bhdl_parser::SyntaxKind::IMPORT_STMT) {
-                let Some(rel) = n
-                    .descendants_with_tokens()
-                    .filter_map(|e| e.into_token())
-                    .find(|t| t.kind() == bhdl_parser::SyntaxKind::STRING)
-                    .map(|t| t.text().trim_matches('"').to_string())
-                else { continue };
-                // resolution order mirrors the import loader: relative to the
-                // importing file, then BHDL_LIB_PATH, then cwd.
-                let mut cands = vec![base.join(&rel)];
-                if let Some(lr) = &lib_root { cands.push(lr.join(&rel)); }
-                cands.push(PathBuf::from(&rel));
-                for c in cands {
-                    if let Ok(text) = fs::read_to_string(&c) {
-                        let pr = parse(&text);
-                        if let Some(isf) = SourceFile::cast(pr.syntax()) {
-                            queue.push((isf, c));
-                        }
-                        break;
-                    }
-                }
-            }
-            if path != source_path && path != board_path {
-                owned.push(sf);
-            }
-        }
-    }
+    let owned = collect_imported_sources(&[(source_file, source_path), (&board_source, board_path.as_path())]);
     let mut sources: Vec<&SourceFile> = vec![source_file];
     if board_path != source_path {
         sources.push(&board_source);
