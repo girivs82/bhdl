@@ -1,4 +1,4 @@
-// TPS54331: TI 3A step-down (buck) converter (SLVSA86).
+// TPS54331: TI 3A step-down (buck) converter (SLVS839H).
 //
 // THE TEMPLATE for the two-layer library model
 // (docs/spec/Requirements_And_Resolution.md §1): this file carries two
@@ -23,7 +23,7 @@
 // a real part to a power-tree stage = renaming the Generic* placeholder
 // to this block; wiring is untouched because the pin contract matches.
 //
-// Sized components (TI SLVSA86 application equations):
+// Sized components (TI SLVS839H application equations):
 //   - L_out : (V_IN−V_OUT)·D / (f_sw·ΔI_L),  ΔI_L = ripple_ratio·I_out
 //   - C_out : ΔI_L / (8·f_sw·ΔV_out)
 //   - C_in  : I_out·D·(1−D) / (f_sw·ΔV_in)
@@ -81,20 +81,25 @@ entity TPS54331 as part {
     attribute component_class   = "regulator_ic";   // the silicon, not "a regulator the board sees"
     attribute manufacturer      = "Texas Instruments";
     attribute part_number       = "TPS54331";
-    attribute output_current    = 3A;       // SLVSA86: 3A continuous output current
-    attribute vin_min           = 3.5V;     // SLVSA86: operating input voltage range 3.5 V to 28 V
+    attribute output_current    = 3A;       // SLVS839H: 3A continuous output current
+    attribute vin_min           = 3.5V;     // SLVS839H: operating input voltage range 3.5 V to 28 V
     attribute vin_max           = 28V;
-    attribute temp_min          = -40degC;    // SLVSA86: operating ambient −40 °C to 85 °C
-    attribute temp_max          = 85degC;
+    // Operating JUNCTION range (SLVS839H §6.3) — the datasheet states no
+    // ambient range. The ambient requirement is met THERMALLY via θ_JA:
+    // T_J = T_A + P·θ_JA ≤ T_J,max (docs/spec/Requirements_And_Resolution.md).
+    attribute tj_min            = -40degC;
+    attribute tj_max            = 150degC;
+    attribute theta_ja          = 116.3degC/W;  // SLVS839H §6.4, D (SOIC-8): RθJA — JEDEC-standard board metric (SPRA953), board-dependent
+    attribute theta_jc          = 53.7degC/W;   // SLVS839H §6.4, D: RθJC(top)
     attribute f_sw              = 570kHz;   // internal fixed-frequency oscillator
     attribute rds_on            = 90mΩ;     // high-side MOSFET, typ
     attribute t_sw              = 20ns;     // switching transition class
     attribute i_quiescent       = 3.4mA;    // operating quiescent current, typ
     attribute dropout_voltage   = 0.5V;     // minimum V_IN − V_OUT for regulation (application class)
-    // Datasheet SLVS839 efficiency curves: ~89% typical mid-load for the
+    // Datasheet SLVS839H efficiency curves: ~89% typical mid-load for the
     // 12V→3.3V application (Fig. 1).
     attribute efficiency        = 89%;
-    // 0.8V internal reference (SLVS839 §7.3.2) + the sheet's display form
+    // 0.8V internal reference (SLVS839H §7.3.2) + the sheet's display form
     // of the FB relation (datasheet Eq. 1).
     attribute feedback_voltage  = 0.8V;
     attribute fb_equation       = "VOUT = {VREF}*(1 + {R1}/{R2})";
@@ -107,7 +112,7 @@ symbol TPS54331 {
 }
 
 layout TPS54331 {
-    package HTSSOP-16;
+    package SOIC-8;   // SLVS839H: D (SOIC) — the DDA (HSOIC PowerPAD) variant has RθJA 48.7 °C/W
 }
 
 // ── The designer's subcircuit ───────────────────────────────────────
@@ -130,7 +135,7 @@ entity Buck_TPS54331(
   // the block's generality, enforced — lowered to `require`s at the
   // front of design { } so the resolver's trial-instantiation and
   // synthesis evaluate the same predicate. 3A rating × 0.8 derating
-  // policy; SLVSA86 input range.
+  // policy; SLVS839H input range.
   where i_out_max <= 2.4A, v_in >= 3.5V, v_in <= 28V
 {
     // Contract pins (the regulator pin contract): the board wires
@@ -155,16 +160,17 @@ entity Buck_TPS54331(
     // default on the round trip.
     attribute v_in = v_in;
     attribute i_out_max = i_out_max;
-    attribute output_current = 3A;        // promise = the part's rating (SLVSA86)
-    attribute vin_min = 3.5V;             // promise = the part's input range (SLVSA86)
+    attribute output_current = 3A;        // promise = the part's rating (SLVS839H)
+    attribute vin_min = 3.5V;             // promise = the part's input range (SLVS839H)
     attribute vin_max = 28V;
-    attribute temp_min = -40degC;           // promise = the part's ambient range (SLVSA86)
-    attribute temp_max = 85degC;
+    attribute tj_min = -40degC;             // SLVS839H §6.3 (junction; no ambient rating — thermal path via θ_JA)
+    attribute tj_max = 150degC;
+    attribute theta_ja = 116.3degC/W;       // SLVS839H §6.4, D (SOIC-8), JEDEC board metric
     attribute f_sw = f_sw;
     attribute rds_on = rds_on;
     attribute t_sw = t_sw;
     attribute i_quiescent = i_quiescent;
-    attribute efficiency = 89%;           // SLVS839 Fig. 1, 12V→3.3V mid-load
+    attribute efficiency = 89%;           // SLVS839H Fig. 1, 12V→3.3V mid-load
     attribute feedback_voltage = 0.8V;
     attribute fb_equation = "VOUT = {VREF}*(1 + {R1}/{R2})";
 

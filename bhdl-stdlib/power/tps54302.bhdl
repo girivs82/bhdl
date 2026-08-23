@@ -1,5 +1,5 @@
 // TPS54302 — TI 4.5–28 V input, 3 A synchronous step-down converter,
-// SOT-23-6 (SLVSC73).
+// SOT-23-6 (SLVSDG6C).
 //
 // Two-layer library model (docs/spec/Requirements_And_Resolution.md §1):
 //   TPS54302      as part    — vendor truth: pins, package, datasheet
@@ -12,7 +12,7 @@
 //                              contract pins VIN / VOUT (virtual) / EN /
 //                              GND, `impl BuckStage`.
 //
-// Sizing (SLVSC73 application equations; same forms as tps54331.bhdl):
+// Sizing (SLVSDG6C application equations; same forms as tps54331.bhdl):
 //   L_out : (V_IN−V_OUT)·D / (f_sw·ΔI_L),  ΔI_L = ripple_ratio·I_out
 //   C_out : ΔI_L / (8·f_sw·ΔV_out);   C_in : I_out·D·(1−D) / (f_sw·ΔV_in)
 //   R_top : R_bot·(V_OUT−V_REF)/V_REF   (V_REF = 0.6 V)
@@ -42,8 +42,8 @@ entity TPS54302() as part {
     attribute part_number     = "TPS54302";
     attribute regulator_type  = "synchronous_buck";
     attribute topology        = "buck";
-    attribute output_current  = 3A;       // SLVSC73: 3 A continuous
-    attribute vin_min         = 4.5V;     // SLVSC73: 4.5 V to 28 V input
+    attribute output_current  = 3A;       // SLVSDG6C: 3 A continuous
+    attribute vin_min         = 4.5V;     // SLVSDG6C: 4.5 V to 28 V input
     attribute vin_max         = 28V;
     attribute input_voltage_min = 4.5V;
     attribute input_voltage_max = 28V;
@@ -51,11 +51,13 @@ entity TPS54302() as part {
     // sign-off. The datasheet states no ambient range, so the stage
     // interface's temp_min/temp_max (ambient) stay UNDECLARED here:
     // a temperature requirement is UNCHECKED against this block, stated.
-    attribute tj_min          = -40degC; // SLVSC73: operating junction temperature −40 °C to 150 °C
+    attribute tj_min          = -40degC; // SLVSDG6C §6.3: operating junction temperature −40 °C to 150 °C
     attribute tj_max          = 150degC;
+    attribute theta_ja        = 118.9degC/W; // SLVSDG6C §6.4, DDC (SOT-23-6): RθJA — JEDEC-standard board metric (SPRA953), board-dependent (57.2 on the EVM)
+    attribute theta_jc        = 58.3degC/W;  // SLVSDG6C §6.4: RθJC(top)
     attribute switching_frequency = 500kHz;
     attribute f_sw            = 500kHz;
-    attribute efficiency      = 92%;      // SLVSC73 typical-application curves, mid-load
+    attribute efficiency      = 92%;      // SLVSDG6C typical-application curves, mid-load
     attribute dropout_voltage = 0.5V;
     attribute feedback_voltage = 0.6V;
     attribute fb_divider_bottom = 10kΩ;
@@ -88,7 +90,7 @@ entity TPS54302() as part {
     attribute spice_feedback_reference = 0.6V;
 
     // T2/ERC025 part-carried rule: the high-side FET cannot drive
-    // without the bootstrap cap (SLVSC73 7.3.1). The VALUE rule lives on
+    // without the bootstrap cap (SLVSDG6C 7.3.1). The VALUE rule lives on
     // the block (it names the block's child).
     simulation {
         check {
@@ -125,7 +127,7 @@ entity Buck_TPS54302(
     pin EN:   signal in;
     pin GND:  ground;
 
-    // Promises (mirrored from SLVSC73) + exported operating point.
+    // Promises (mirrored from SLVSDG6C) + exported operating point.
     attribute component_class = "switching_regulator";
     attribute output_voltage  = v_out;
     attribute v_in            = v_in;
@@ -133,6 +135,9 @@ entity Buck_TPS54302(
     attribute output_current  = 3A;
     attribute vin_min         = 4.5V;
     attribute vin_max         = 28V;
+    attribute tj_min          = -40degC;     // SLVSDG6C §6.3 (junction; thermal path via θ_JA)
+    attribute tj_max          = 150degC;
+    attribute theta_ja        = 118.9degC/W; // SLVSDG6C §6.4, DDC, JEDEC board metric
     attribute f_sw            = f_sw;
     attribute efficiency      = 92%;
     attribute rds_on          = 98mΩ;
@@ -146,7 +151,7 @@ entity Buck_TPS54302(
         const vout  = self.v_out;
         require vout < self.v_in
             else "buck V_OUT must be below V_IN";
-        // VALIDITY ENVELOPE: 3 A rating × 0.8 derating; SLVSC73 input range.
+        // VALIDITY ENVELOPE: 3 A rating × 0.8 derating; SLVSDG6C input range.
         require self.i_out_max <= 2.4
             else "Buck_TPS54302 envelope: i_out_max exceeds 2.4A (3A rating × 0.8 derating)";
         require self.v_in >= 4.5
@@ -202,7 +207,7 @@ entity Buck_TPS54302(
             C_in.v_ripple  = i_out * duty * (1 - duty) / (self.f_sw * C_in.value);
         }
         check {
-            require C_boot.value == 100nF else "the bootstrap cap must be the datasheet 100nF (SLVSC73 7.3.1) — other values compromise high-side gate drive";
+            require C_boot.value == 100nF else "the bootstrap cap must be the datasheet 100nF (SLVSDG6C 7.3.1) — other values compromise high-side gate drive";
         }
     }
 }

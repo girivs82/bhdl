@@ -33,8 +33,10 @@ entity LM7805(v_out: voltage = 5V) as part {
     // sign-off. The datasheet states no ambient range, so the stage
     // interface's temp_min/temp_max (ambient) stay UNDECLARED here:
     // a temperature requirement is UNCHECKED against this block, stated.
-    attribute tj_min          = 0degC;   // TI µA7805C: operating virtual junction temperature 0 °C to 125 °C
+    attribute tj_min          = 0degC;   // SLVS056P (µA78xx) §6.3: operating virtual junction temperature 0 °C to 125 °C
     attribute tj_max          = 125degC;
+    attribute theta_ja        = 19degC/W;  // SLVS056P §7.4, KCS/KCT/KC (TO-220): RθJA — JEDEC-standard board metric (SPRA953), board-dependent
+    attribute theta_jc        = 17degC/W;  // SLVS056P §7.4, KCS/KCT/KC: RθJC(top)
 
     // §4 device-stress IP: linear pass-element dissipation at the solved
     // operating point — P = (V_IN − V_OUT)·I_out + V_IN·I_q, gated against
@@ -84,6 +86,9 @@ entity Ldo_LM7805(
     attribute output_noise    = 40uV;    // TI µA7805, 10Hz–100kHz
     attribute dropout_voltage = 2V;
     attribute i_quiescent     = 6mA;
+    attribute tj_min          = 0degC;     // SLVS056P (junction; thermal path via θ_JA)
+    attribute tj_max          = 125degC;
+    attribute theta_ja        = 19degC/W;  // SLVS056P, TO-220, JEDEC board metric
 
     // VALIDITY ENVELOPE — one binary op per `const`; SI base units.
     design {

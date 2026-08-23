@@ -42,8 +42,10 @@ entity LM317() as part {
     // sign-off. The datasheet states no ambient range, so the stage
     // interface's temp_min/temp_max (ambient) stay UNDECLARED here:
     // a temperature requirement is UNCHECKED against this block, stated.
-    attribute tj_min           = 0degC;   // TI LM317 (commercial grade): operating junction 0 °C to 125 °C (LM317A: −40 °C)
+    attribute tj_min           = 0degC;   // SLVS044Z §6.3: operating virtual junction 0 °C to 125 °C (LM317A: −40 °C)
     attribute tj_max           = 125degC;
+    attribute theta_ja         = 23.5degC/W; // SLVS044Z §6.4, KCS (TO-220): RθJA — JEDEC-standard board metric (SPRA953), board-dependent
+    attribute theta_jc         = 15.9degC/W; // SLVS044Z §6.4, KCS: RθJC(top)
     // §4 device-stress IP: pass-element dissipation at the solved
     // operating point (the block's stress rows map onto this part).
     simulation {
@@ -87,6 +89,9 @@ entity Ldo_LM317(
     attribute dropout_voltage  = 2V;
     attribute feedback_voltage = 1.25V;
     attribute i_quiescent      = 50uA;
+    attribute tj_min           = 0degC;      // SLVS044Z (junction; thermal path via θ_JA)
+    attribute tj_max           = 125degC;
+    attribute theta_ja         = 23.5degC/W; // SLVS044Z, KCS TO-220, JEDEC board metric
 
     // Divider sizing + VALIDITY ENVELOPE. One binary op per `const`
     // (parse_expression mishandles chained mixed-precedence binops).

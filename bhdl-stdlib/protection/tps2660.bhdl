@@ -1,5 +1,5 @@
 // TPS2660 — TI 60 V, 2 A industrial eFuse with integrated reverse-input
-// polarity protection (SLVSDT6). Programmable overvoltage cutoff (OVP
+// polarity protection (SLVSDG2G). Programmable overvoltage cutoff (OVP
 // pin), undervoltage lockout (UVLO pin) and current limit (ILIM pin).
 //
 // Two-layer library model (docs/spec/Requirements_And_Resolution.md §1):
@@ -13,14 +13,14 @@
 //
 // REAL-DATA PROVENANCE, stated:
 //   - input range 4.2 V … 55 V operating, 2 A, reverse input to −60 V:
-//     SLVSDT6 features / recommended operating conditions.
-//   - V_OVP / V_UVLO pin thresholds 1.2 V typ: SLVSDT6 electrical
+//     SLVSDG2G features / recommended operating conditions.
+//   - V_OVP / V_UVLO pin thresholds 1.2 V typ: SLVSDG2G electrical
 //     characteristics — recorded from the datasheet; RE-VERIFY against
 //     the datasheet revision at sign-off (the divider maths below hangs
 //     on it).
 //   - the ILIM resistor law (R_ILIM → I_LIM) is NOT in this library's
 //     data, so the block does not compute it: `r_ilim` is a REQUIRED
-//     constructor argument the designer takes from SLVSDT6 for their
+//     constructor argument the designer takes from SLVSDG2G for their
 //     limit. That missing axis is why this block is a TEMPLATE
 //     (`supply_choosable = false`): the survey lists it, and the designer
 //     commits it with
@@ -45,17 +45,23 @@ entity TPS2660() as part {
     attribute component_class = "protection_ic";
     attribute manufacturer    = "Texas Instruments";
     attribute part_number     = "TPS2660";
-    attribute vin_min         = 4.2V;    // SLVSDT6: operating input 4.2 V to 55 V
+    attribute vin_min         = 4.2V;    // SLVSDG2G: operating input 4.2 V to 55 V
     attribute vin_max         = 55V;
-    attribute output_current  = 2A;      // SLVSDT6: 2 A (maximum programmable current limit)
-    attribute reverse_polarity = true;   // SLVSDT6: reverse input polarity protection (to −60 V)
-    attribute threshold_v     = 1.2V;    // SLVSDT6: OVP / UVLO pin thresholds, 1.2 V typ — re-verify at sign-off
+    attribute output_current  = 2A;      // SLVSDG2G: 2 A (maximum programmable current limit)
+    attribute reverse_polarity = true;   // SLVSDG2G: reverse input polarity protection (to −60 V)
+    attribute threshold_v     = 1.2V;    // SLVSDG2G: OVP / UVLO pin thresholds, 1.2 V typ — re-verify at sign-off
     // Operating JUNCTION range per the datasheet — recorded for thermal
     // sign-off. The datasheet states no ambient range, so the stage
     // interface's temp_min/temp_max (ambient) stay UNDECLARED here:
     // a temperature requirement is UNCHECKED against this block, stated.
-    attribute tj_min          = -40degC; // SLVSDT6: operating junction temperature −40 °C to 125 °C
-    attribute tj_max          = 125degC;
+    attribute tj_min          = -40degC; // SLVSDG2G §6.3: operating junction temperature −40 °C to 150 °C
+    attribute tj_max          = 150degC;
+    attribute theta_ja        = 38.6degC/W; // SLVSDG2G §6.4, PWP (HTSSOP-16): RθJA — JEDEC-standard board metric (SPRA953), board-dependent
+    attribute theta_jc        = 22.7degC/W; // SLVSDG2G §6.4, PWP: RθJC(top)
+    // TI classification "Functional safety capable" = documentation
+    // (FMEDA / pin FMA) available to aid a safety design. That is NOT an
+    // ASIL capability claim, so `asil_capable` is deliberately undeclared.
+    attribute functional_safety = "capable — documentation available (SLVSDG2G features)";
 }
 
 symbol TPS2660 {
@@ -74,11 +80,11 @@ entity Efuse_TPS2660(
     i_out_max: current    = 1A,
     ov_trip:   voltage    = 30V,     // cut off above this
     uv_trip:   voltage    = 8V,      // hold off below this
-    r_ilim:    resistance,           // REQUIRED: from SLVSDT6 for your current limit (no law in this library)
+    r_ilim:    resistance,           // REQUIRED: from SLVSDG2G for your current limit (no law in this library)
     r_bot:     resistance = 10kΩ,    // divider bottom resistor (both dividers)
     c_out:     capacitance = 1µF
 ) as design
-  // ENVELOPE: 2 A × 0.8 derating; SLVSDT6 input range; the trip points
+  // ENVELOPE: 2 A × 0.8 derating; SLVSDG2G input range; the trip points
   // must bracket the nominal input.
   where i_out_max <= 1.6A, v_in >= 4.2V, v_in <= 55V, ov_trip > v_in, uv_trip < v_in
 {
@@ -93,15 +99,19 @@ entity Efuse_TPS2660(
     attribute output_voltage   = v_in;    // pass-through
     attribute v_in             = v_in;
     attribute i_out_max        = i_out_max;
-    attribute output_current   = 2A;      // SLVSDT6
+    attribute output_current   = 2A;      // SLVSDG2G
     attribute vin_min          = 4.2V;
     attribute vin_max          = 55V;
     attribute ov_trip          = ov_trip; // promise = the divider below is sized to it
     attribute uv_trip          = uv_trip;
-    attribute reverse_polarity = true;    // SLVSDT6
+    attribute reverse_polarity = true;    // SLVSDG2G
+    attribute tj_min           = -40degC;    // SLVSDG2G (junction; thermal path via θ_JA)
+    attribute tj_max           = 150degC;
+    attribute theta_ja         = 38.6degC/W; // SLVSDG2G, PWP, JEDEC board metric
+    attribute functional_safety = "capable — documentation available (SLVSDG2G)";
 
     // Divider sizing: V_trip = V_th · (1 + R_top / R_bot)  ⇒
-    //   R_top = R_bot · (V_trip − V_th) / V_th,  V_th = 1.2 V (SLVSDT6)
+    //   R_top = R_bot · (V_trip − V_th) / V_th,  V_th = 1.2 V (SLVSDG2G)
     // One binary op per const.
     design {
         const v_th  = 1.2;

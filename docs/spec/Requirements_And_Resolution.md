@@ -391,7 +391,7 @@ Principles that fall out:
    `temp_max`, `qual` gate against DECLARED part promises
    (`temp_min/temp_max` in degC, `qualification` string); undeclared =
    UNCHECKED = not a pass. Today only TPS54331 declares its ambient
-   range (SLVSA86 −40…85 °C); no stdlib part declares a qualification —
+   range (not in SLVS839H — retracted; see §6); no stdlib part declares a qualification —
    an `AEC-Q100` requirement resolves to nothing, honestly.
    PROJECT-WIDE FILTERS (landed): a board states once, where they
    originate, the requirements that apply to every stage on it —
@@ -464,20 +464,20 @@ UNCHECKED against a requirement that states it — never a pass.
 
 | Interface | Block | Binds | Promises | UNCHECKED (not provided) | The designer supplies |
 |---|---|---|---|---|---|
-| `BuckStage` | `Buck_TPS54331` | auto | 3 A, 3.5–28 V, 89 %, −40…85 °C | noise, qual | — |
-| `BuckStage` | `Buck_TPS54302` | auto | 3 A, 4.5–28 V, 92 % | noise, temp, qual | — |
+| `BuckStage` | `Buck_TPS54331` | auto | 3 A, 3.5–28 V, 89 %, T_J ≤ 150 °C via θ_JA 116.3 | noise, qual | — |
+| `BuckStage` | `Buck_TPS54302` | auto | 3 A, 4.5–28 V, 92 %, T_J ≤ 150 °C via θ_JA 118.9 | noise, qual | — |
 | `BuckStage` | `Buck_AP63205` | auto (5 V SKU only) | 2 A, 3.8–32 V | noise, temp, qual, efficiency | — |
 | `BuckStage` | `BuckRegulator` (LM2596 class) | template | headroom envelope only | i_max, vin range, noise, temp, qual | class numbers |
-| `LdoStage` | `Ldo_LP2985` | auto | 150 mA, 2.5–16 V, 30 µV | temp, qual | — |
+| `LdoStage` | `Ldo_LP2985` | auto | 150 mA, 2.5–16 V, 30 µV, T_J ≤ 125 °C via θ_JA 205.4 | qual | — |
 | `LdoStage` | `Ldo_XC6206` | auto | 200 mA, 1.8–6 V, −40…85 °C | noise, qual | — |
 | `LdoStage` | `Ldo_AP2112K` | auto (1.8/2.5/3.3 V SKUs) | 600 mA, 2.5–6 V, −40…85 °C | noise, qual | — |
-| `LdoStage` | `Ldo_LM7805` | auto (5 V) | 1.5 A, 7–35 V, 40 µV | temp, qual | — |
-| `LdoStage` | `Ldo_LM317` | auto (1.35–37 V) | 1.5 A, ≤ 40 V in | vin_min, noise, temp, qual | — |
+| `LdoStage` | `Ldo_LM7805` | auto (5 V) | 1.5 A, 7–35 V, 40 µV, T_J ≤ 125 °C via θ_JA 19 | qual | — |
+| `LdoStage` | `Ldo_LM317` | auto (1.35–37 V) | 1.5 A, ≤ 40 V in, T_J ≤ 125 °C via θ_JA 23.5 | vin_min, noise, qual | — |
 | `LdoStage` | `Ldo_NCP1117` | auto (5 V) | 1 A | vin range, noise, temp, qual | — |
 | `LdoStage` | `LinearRegulator` (78xx class) | template | 40 µV class, headroom | i_max, vin range, temp, qual | class numbers |
 | `BuckExtStage` | `BuckController` | template | 1 phase; rating = the FETs' | vin range, noise, temp, qual | FETs + axes |
 | `PreregStage` | `PassiveFrontEnd` (fuse + TVS) | auto | fuse rating, `ov_clamp`, 0 V … clamp point | ov_trip, uv_trip, reverse_polarity, temp, qual | — |
-| `PreregStage` | `Efuse_TPS2660` | template | 2 A, 4.2–55 V, `ov_trip`, `uv_trip`, `reverse_polarity` | ov_clamp, temp, qual | `r_ilim` (ILIM law not in the library) |
+| `PreregStage` | `Efuse_TPS2660` | template | 2 A, 4.2–55 V, `ov_trip`, `uv_trip`, `reverse_polarity`, T_J ≤ 150 °C via θ_JA 38.6 | ov_clamp, qual | `r_ilim` (ILIM law not in the library) |
 | `PreregStage` | `IdealDiode_LM74700` | template | rating = the FET's, 3.2–65 V, `reverse_polarity`, AEC-Q100 grade 1 (−40…125 °C) | ov_clamp, ov_trip, uv_trip | pass FET + axes |
 
 Reading the table is the point: a `PreregStage` requirement that states
@@ -489,9 +489,18 @@ a switcher (ripple is not noise) or a qualification other than the
 LM74700-Q1's — an `AEC-Q100` buck or LDO requirement resolves to
 nothing, honestly. Temperature: the interface's `temp_min/max` is the
 operating AMBIENT range; only datasheets that rate ambient feed it
-(TPS54331, XC6206, AP2112K, LM74700-Q1 grade 1). Parts whose datasheets
-rate the JUNCTION (LP2985, NCP1117, LM317, LM7805, TPS54302, TPS2660)
-carry that as `tj_min/tj_max` for thermal sign-off and stay UNCHECKED
-for an ambient requirement — a junction figure is not an ambient one.
+directly (XC6206, AP2112K, LM74700-Q1 grade 1). Parts whose datasheets
+rate the JUNCTION carry `tj_min/tj_max` plus `theta_ja` / `theta_jc`
+read from the datasheet thermal tables (TPS54331 SLVS839H 116.3,
+TPS54302 SLVSDG6C 118.9, LP2985 SLVS522S 205.4, LM317 SLVS044Z 23.5,
+µA7805 SLVS056P 19, TPS2660 SLVSDG2G 38.6, LM74700-Q1 SNOSD17G 189.8
+°C/W — all JEDEC-standard board metrics, SPRA953, board-dependent) and
+meet an ambient requirement THERMALLY at the stage's dissipation. A
+junction figure is never declared as an ambient one: TPS54331's earlier
+"−40…85 °C ambient" was not in its datasheet and was retracted. No TI
+datasheet here claims an ASIL: "Functional Safety-Capable" (TPS2660,
+LM74700-Q1) means documentation is available and is recorded as
+`functional_safety`, not as `asil_capable`. NCP1117 (onsemi) has no
+θ_JA in the library yet.
 The "Promises" column is what ERC032 re-checks on the flattened circuit
 every build.

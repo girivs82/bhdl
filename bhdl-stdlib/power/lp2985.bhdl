@@ -1,4 +1,4 @@
-// LP2985 — TI 150 mA low-noise LDO, SOT-23-5 (SNVS065).
+// LP2985 — TI 150 mA low-noise LDO, SOT-23-5 (SLVS522S).
 //
 // Two-layer library model (docs/spec/Requirements_And_Resolution.md §1),
 // the LDO template:
@@ -41,10 +41,10 @@ entity LP2985(v_out: voltage = 3.3V) as part {
     attribute family          = "LP2985";
     attribute part_number     = "LP2985";
     attribute output_voltage  = v_out;
-    attribute output_current  = 0.15A;  // SNVS065: 150 mA rated output
-    attribute vin_min         = 2.5V;   // SNVS065: input voltage range 2.5 V to 16 V
+    attribute output_current  = 0.15A;  // SLVS522S: 150 mA rated output
+    attribute vin_min         = 2.5V;   // SLVS522S: input voltage range 2.5 V to 16 V
     attribute vin_max         = 16V;
-    attribute output_noise    = 30uV;   // SNVS065 RMS output noise, 10Hz–100kHz, C_BP = 10nF
+    attribute output_noise    = 30uV;   // SLVS522S RMS output noise, 10Hz–100kHz, C_BP = 10nF
     attribute dropout_v       = 0.28;
     attribute dropout_voltage = 280mV;  // datasheet typ at 150mA
     attribute i_quiescent     = 850uA;  // ground-pin current at rated 150mA load (typ)
@@ -54,8 +54,10 @@ entity LP2985(v_out: voltage = 3.3V) as part {
     // sign-off. The datasheet states no ambient range, so the stage
     // interface's temp_min/temp_max (ambient) stay UNDECLARED here:
     // a temperature requirement is UNCHECKED against this block, stated.
-    attribute tj_min          = -40degC; // SNVS065: operating junction temperature −40 °C to 125 °C
+    attribute tj_min          = -40degC; // SLVS522S: operating junction temperature −40 °C to 125 °C
     attribute tj_max          = 125degC;
+    attribute theta_ja        = 205.4degC/W; // SLVS522S thermal information, DBV (SOT-23-5): RθJA — JEDEC-standard board metric (SPRA953), board-dependent
+    attribute theta_jc        = 78.8degC/W;  // SLVS522S: RθJC(top)
     // §4 device-stress IP: linear pass-element dissipation at the solved
     // operating point — P = (V_IN − V_OUT)·I_out + V_IN·I_q. `self.p_diss`
     // targets THIS device's own sign-off row, gated against the package
@@ -90,11 +92,11 @@ entity Ldo_LP2985(
     v_out:     voltage     = 3.3V,    // SKU voltage: 1.8 / 2.5 / 3.0 / 3.3 / 5.0
     i_out_max: current     = 100mA,   // max load current (envelope: ≤ 120 mA = 150 mA × 0.8)
     v_in:      voltage     = 5V,      // input rail
-    c_in:      capacitance = 1µF,     // SNVS065 §8.2.2: 1µF input
+    c_in:      capacitance = 1µF,     // SLVS522S §8.2.2: 1µF input
     c_out:     capacitance = 2.2µF,   // ceramic, ≥1µF low-ESR for stability
     c_bp:      capacitance = 0.01µF   // reference bypass (the 30µV figure is at C_BP = 10nF)
 ) as design
-  // VALIDITY ENVELOPE: 150 mA × 0.8 derating; SNVS065 input maximum.
+  // VALIDITY ENVELOPE: 150 mA × 0.8 derating; SLVS522S input maximum.
   // (SKU membership and the dropout headroom need arithmetic and stay
   // in design { } below.)
   where i_out_max <= 120mA, v_in <= 16V
@@ -114,12 +116,15 @@ entity Ldo_LP2985(
     attribute output_voltage  = v_out;
     attribute v_in            = v_in;
     attribute i_out_max       = i_out_max;
-    attribute output_current  = 0.15A;  // SNVS065
-    attribute vin_min         = 2.5V;   // SNVS065
+    attribute output_current  = 0.15A;  // SLVS522S
+    attribute vin_min         = 2.5V;   // SLVS522S
     attribute vin_max         = 16V;
-    attribute output_noise    = 30uV;   // SNVS065, 10Hz–100kHz, C_BP = 10nF (the default here)
-    attribute dropout_voltage = 280mV;  // SNVS065 typ at 150mA
+    attribute output_noise    = 30uV;   // SLVS522S, 10Hz–100kHz, C_BP = 10nF (the default here)
+    attribute dropout_voltage = 280mV;  // SLVS522S typ at 150mA
     attribute i_quiescent     = 850uA;
+    attribute tj_min          = -40degC;     // SLVS522S (junction; thermal path via θ_JA)
+    attribute tj_max          = 125degC;
+    attribute theta_ja        = 205.4degC/W; // SLVS522S, DBV, JEDEC board metric
 
     // VALIDITY ENVELOPE. One binary op per `const` (same discipline as
     // tps54331.bhdl / lm317.bhdl). All quantities in SI base units.
@@ -145,7 +150,7 @@ entity Ldo_LP2985(
             else "Ldo_LP2985 envelope: v_in below v_out + 280mV dropout";
     }
 
-    // The application circuit (SNVS065 §8.2.2) — FIRM children.
+    // The application circuit (SLVS522S §8.2.2) — FIRM children.
     u: LP2985(v_out);
     VIN -> u.VIN;
     u.GND -> GND;
