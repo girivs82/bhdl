@@ -202,6 +202,19 @@ enum Commands {
     /// as a number). The input may be the board file or a sidecar that
     /// imports the board. Exit status 1 when the model has errors or gaps
     /// (BHDL_SIGNOFF_ADVISORY=1 demotes to a warning).
+    /// Requirement TRACE MATRIX (docs/spec/Requirements_And_Resolution.md
+    /// §4): every contract construct that has a machine verifier — stage
+    /// requirements, rail budgets, vendor domain contracts, part-carried
+    /// check rules, safety goals — with implementing elements, verifier,
+    /// status (VERIFIED / VIOLATED / UNVERIFIED / UNRESOLVED) and evidence.
+    /// UNVERIFIED = the verifier could not run: a finding, never a pass.
+    /// `satisfies { REQ: via inst; }` links are honored; dangling ones
+    /// are findings. Exit status 1 on VIOLATED rows or findings.
+    Trace {
+        /// Also dump the matrix as JSON to this path.
+        #[arg(long)]
+        json: Option<PathBuf>,
+    },
     Safety {
         /// Baseline file (JSON). If absent it is WRITTEN from this run;
         /// if present the run is COMPARED against it and the delta printed
@@ -640,6 +653,10 @@ async fn main() -> Result<()> {
 
         Some(Commands::Freeze { output }) => {
             run_freeze(&source_file, &input_content, &cli.input, output, frozen_libraries, cli.no_elaborate).await?;
+        }
+
+        Some(Commands::Trace { json }) => {
+            run_trace(&source_file, &input_content, &cli.input, cli.no_elaborate, json).await?;
         }
 
         Some(Commands::Safety { baseline, update_baseline, json, fmeda }) => {
@@ -2273,6 +2290,47 @@ async fn run_freeze(
 
 /// `bhdl-cli safety` — build the functional-safety model and print the
 /// Phase-1 report (docs/spec/Functional_Safety.md §4, §5).
+/// `bhdl trace` — build the requirement trace matrix from THIS build's
+/// evidence: the verified netlist, the DRC run on it, and the resolved
+/// safety model (goals/mechanisms/gaps; the fault campaign itself is
+/// `bhdl safety`, so goal rows without it are UNVERIFIED — stated).
+async fn run_trace(
+    source_file: &SourceFile,
+    input_content: &str,
+    input_path: &Path,
+    no_elaborate: bool,
+    json_out: Option<PathBuf>,
+) -> Result<()> {
+    let netlist = verified_netlist(source_file, input_content, input_path, no_elaborate).await?;
+    let analysis = analyze(source_file);
+    let mut checker = bhdl_synthesizer::design_rule_checker::DesignRuleChecker::new(
+        bhdl_synthesizer::design_rule_checker::IndustryStandard::IPC2221,
+    );
+    let drc = checker.run_checks(&netlist, &analysis);
+    let sources: Vec<&SourceFile> = vec![source_file];
+    let safety = bhdl_synthesizer::safety_model::build_safety_model(&netlist, &sources);
+    let matrix = bhdl_synthesizer::trace_matrix::build_trace_matrix(
+        &netlist,
+        &analysis,
+        source_file,
+        &drc.violations,
+        Some(&safety),
+    );
+    println!("\n{}", bhdl_synthesizer::trace_matrix::render_markdown(&matrix));
+    if let Some(p) = json_out {
+        fs::write(&p, serde_json::to_string_pretty(&matrix)?)?;
+        println!("  {} trace matrix JSON written to {}", "✓".green(), p.display());
+    }
+    if !matrix.clean() {
+        anyhow::bail!(
+            "trace matrix: {} VIOLATED row(s), {} finding(s)",
+            matrix.count(bhdl_synthesizer::trace_matrix::TraceStatus::Violated),
+            matrix.findings.len()
+        );
+    }
+    Ok(())
+}
+
 async fn run_safety(
     source_file: &SourceFile,
     input_content: &str,

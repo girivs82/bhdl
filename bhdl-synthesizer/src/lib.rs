@@ -46,6 +46,7 @@ pub mod glacier_physical_selection;
 // docs/spec/Power_Supply_Synthesis.md.
 pub mod supply_synthesis;
 pub mod stage_resolution;
+pub mod trace_matrix;
 // Electrical rule checks — the real DRC content (driver conflicts,
 // diff-pair polarity, TX/RX crossing, voltage domains, I2C pull-ups).
 pub mod erc;

@@ -1239,11 +1239,23 @@ pub fn check_part_carried(
             let holds = match crate::design_evaluator::evaluate_text(&substituted, &ctx) {
                 Ok(v) => v != 0.0,
                 Err(e) => {
-                    log::debug!(
-                        "ERC025: check on {} ({}) skipped — '{}' unresolvable: {e:?}",
-                        inst.name, module.name, chk.condition
-                    );
-                    continue; // Real-Data Policy: absence of data ≠ pass/fail
+                    // Real-Data Policy: absence of data ≠ pass/fail — but
+                    // it is not silence either. Stated as UNCHECKED so
+                    // the trace matrix records "no verifier" as a finding.
+                    out.push(DRCViolation {
+                        rule_id: "ERC025".into(),
+                        rule_name: "Part-carried check".into(),
+                        category: RuleCategory::Electrical,
+                        severity: ViolationSeverity::Info,
+                        description: format!(
+                            "{} ({}): require {} UNCHECKED — predicate unresolvable: {e:?}",
+                            inst.name, module.name, chk.condition.trim()
+                        ),
+                        location: ViolationLocation::Component(inst_id),
+                        fix_suggestion: "declare the attribute/child the predicate refers to, or drop the rule".into(),
+                        standard_reference: None,
+                    });
+                    continue;
                 }
             };
             if !holds {

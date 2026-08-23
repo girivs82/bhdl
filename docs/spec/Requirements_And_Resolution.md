@@ -3,7 +3,8 @@
 Status: design record (settled in discussion 2026-08-23). Increment 1
 (the TPS54331 part/block split, `bhdl-stdlib/power/tps54331.bhdl`) is
 LANDED and is the template; increment 2 (requirement interfaces +
-resolver + lock + override) is LANDED; increment 3 pending. Companion to
+resolver + lock + override) is LANDED; increment 3 (ids, `satisfies`,
+the trace matrix — `bhdl trace`) is LANDED. Companion to
 `Expansion_Vs_Hierarchy.md`, which settled composition under `entity`.
 
 ## 1. The two-layer library
@@ -245,6 +246,27 @@ Principles that fall out:
    Not yet: the cost function / provider pricing / qualification
    attributes in the ranking; ERC032 and the resolver share the derate
    policy and the promise vocabulary but are still two code paths.
-3. Requirement ids + `satisfies` generalized from the safety prototype;
-   the per-build trace matrix as a report, with "no verifier" as a
-   finding.
+3. DONE — `bhdl <board> trace [--json]`
+   (`bhdl_synthesizer::trace_matrix`). The matrix is DERIVED from this
+   build's evidence, never transcribed: one row per contract construct
+   that has a machine verifier — stage requirements (resolver + ERC032),
+   rail budgets (ERC028), vendor `domain` contracts (the `decouple` PDN
+   sweep report), part-carried `check { }` rules (ERC025), safety goals
+   (campaign gaps; goal rows are UNVERIFIED unless `bhdl safety` ran).
+   Every row carries id, kind, stated-by, the statement, implementing
+   elements, verifier, status (VERIFIED / VIOLATED / UNVERIFIED /
+   UNRESOLVED) and evidence. UNVERIFIED means the verifier could not run
+   — e.g. a vendor domain with no `decouple` targeting it, or a promise
+   the part does not declare — and is reported as a finding, never a
+   pass. Ids are stable machine ids (`<board>.<inst>`, `…rail.<net>`,
+   `<inst>.<domain>`, `<inst>.check[n]`, the safety goal's declared id);
+   `attribute u1.requirement_id = "PWR_003";` names one explicitly.
+   `satisfies { ID: via inst; }` (the safety prototype's grammar,
+   generalized) appends declared implementers; a link to an unknown id
+   or element is a finding. Exit 1 on VIOLATED rows or findings;
+   UNVERIFIED/UNRESOLVED are stated (the commit gate is policy above
+   this). Fell out: ERC025 now emits an UNCHECKED Info for an
+   unresolvable predicate instead of a silent skip. Not yet: HSI
+   interface requirements; designer-authored behavioral requirements
+   ("ripple ≤ 20mV") as first-class rows need their own verifiers
+   first — per the rule, they are documentation until then.

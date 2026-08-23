@@ -1976,3 +1976,78 @@ board ReqDemo {{
     let err = gen.generate_from_ast_and_analysis(&sf, &analysis).await.err().expect("must refuse");
     assert!(format!("{err:#}").contains("BuckStage"), "{err:#}");
 }
+
+/// The per-build trace matrix (Requirements_And_Resolution §4, increment
+/// 3): rows are DERIVED from constructs with verifiers — stage
+/// requirements, rail budgets, vendor domain contracts, part-carried
+/// checks — each ending in evidence; "no verifier ran" is UNVERIFIED,
+/// never a pass; explicit ids via `attribute x.requirement_id`;
+/// `satisfies { ID: via inst; }` links land on the row, dangling ones are
+/// findings.
+#[tokio::test]
+async fn trace_matrix_derives_rows_with_evidence_and_links() {
+    use bhdl_synthesizer::trace_matrix::{build_trace_matrix, TraceStatus};
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    use bhdl_synthesizer::powertree::{emit_power_region, harvest_loads, propose_trees, splice_power_region};
+    let src = std::fs::read_to_string(ws.join("tests/circuits/realistic/test_powertree_loads.bhdl")).unwrap();
+    let pr = parse(&src);
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let netlist = gen.generate_from_ast_and_analysis(&sf, &analysis).await.unwrap();
+    let h = harvest_loads(&netlist, &sf);
+    let opts = propose_trees(&h, "VIN").unwrap();
+    let emitted = resolve_emitted(ws, &splice_power_region(&src, &emit_power_region(&opts[0], "GND")).unwrap());
+    // explicit id + satisfies links (one valid, one dangling requirement, one dangling element)
+    // (the generated region ends the board body — append right after it)
+    let end_marker = bhdl_synthesizer::powertree::EMIT_END;
+    let at = emitted.find(end_marker).expect("emit marker") + end_marker.len();
+    let mut emitted = emitted;
+    emitted.insert_str(
+        at,
+        "\n    attribute u_v3v3.requirement_id = \"PWR_3V3\";\n    satisfies {\n        PWR_3V3: via u_v3v3_u;\n        NOPE_1: via u_v3v3;\n        PWR_3V3: via ghost;\n    }",
+    );
+    let pr = parse(&emitted);
+    assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+    let mut checker = bhdl_synthesizer::design_rule_checker::DesignRuleChecker::new(
+        bhdl_synthesizer::design_rule_checker::IndustryStandard::IPC2221,
+    );
+    let drc = checker.run_checks(&n, &analysis);
+    let safety = bhdl_synthesizer::safety_model::build_safety_model(&n, &[&sf]);
+    let m = build_trace_matrix(&n, &analysis, &sf, &drc.violations, Some(&safety));
+    let row = |id: &str| m.rows.iter().find(|r| r.id == id).unwrap_or_else(|| panic!("row {id}: {:#?}", m.rows.iter().map(|r| &r.id).collect::<Vec<_>>()));
+
+    // stage requirements: unresolved / resolved-with-implementers
+    assert_eq!(row("PowertreeDemo.u_v1v0").status, TraceStatus::Unresolved);
+    let ldo = row("PowertreeDemo.u_v1v8");
+    assert!(ldo.implemented_by.iter().any(|i| i == "u_v1v8 : Ldo_LP2985"), "{ldo:#?}");
+    assert!(ldo.implemented_by.iter().any(|i| i == "u_v1v8_u"), "{ldo:#?}");
+    // explicit id replaces the derived one; the satisfies link landed
+    assert!(m.rows.iter().all(|r| r.id != "PowertreeDemo.u_v3v3"));
+    let buck = row("PWR_3V3");
+    assert!(buck.implemented_by.iter().any(|i| i == "u_v3v3_u (declared)"), "{buck:#?}");
+    // a promise the part does not declare = UNVERIFIED, never a pass
+    assert_eq!(buck.status, TraceStatus::Unverified, "{buck:#?}");
+    assert!(buck.evidence.contains("UNCHECKED"), "{buck:#?}");
+    // vendor domain contracts with no decouple = UNVERIFIED, once per real instance (no template-stub duplicates)
+    let domains: Vec<_> = m.rows.iter().filter(|r| r.kind == "vendor domain contract").collect();
+    assert_eq!(domains.len(), 3, "{:#?}", domains.iter().map(|r| &r.id).collect::<Vec<_>>());
+    assert!(domains.iter().all(|r| r.status == TraceStatus::Unverified && r.evidence.contains("no `decouple`")));
+    // part-carried check (LP2985 EN rule) verified on the netlist
+    let chk = row("PowertreeDemo.u_v1v8_u.check[0]");
+    assert_eq!(chk.status, TraceStatus::Verified, "{chk:#?}");
+    assert_eq!(chk.verifier, "ERC025");
+    // rails: every declared rail has a row with the ERC028 verdict
+    assert!(m.rows.iter().any(|r| r.id == "PowertreeDemo.rail.VIN" && r.status == TraceStatus::Verified));
+    // dangling links are findings
+    assert!(m.findings.iter().any(|f| f.starts_with("satisfies NOPE_1")), "{:#?}", m.findings);
+    assert!(m.findings.iter().any(|f| f.contains("'ghost' is not an instance")), "{:#?}", m.findings);
+    assert!(!m.clean());
+    let md = bhdl_synthesizer::trace_matrix::render_markdown(&m);
+    assert!(md.contains("| PWR_3V3 |") && md.contains("### Findings"), "{md}");
+}
