@@ -118,11 +118,17 @@ accessors, not from denying hierarchy.
 
 Accordingly, designer-owned composition is NOT a new construct:
 
-1. **One construct.** Entity bodies compose by plain instantiation —
-   vendor parts, designer compositions ("my 60A phase") and
-   placeholders all use `entity`. `generate if` (already parsed in
-   entity bodies) covers conditional contents. Vendor and designer
-   write the same language.
+1. **One construct** (implemented 9ba671c). An `entity … as design`
+   composes by plain body statements, lowered into a FIRM recipe on
+   the same expansion engine: no takeover, no gating (the designer
+   asked for exactly these children), children RECURSE via a fixpoint
+   (nesting; a self-reachable entity is a hard cycle error). Firm
+   children carry `composed_parent`. The `as design` declaration is
+   the gate at BOTH walks (analyzer lowering + connectivity's flat
+   body walk), so legacy body-carrying entities are untouched.
+   `generate if` covers conditional contents. Vendor and designer
+   write the same language; the firm/yieldable distinction is the one
+   idiom (point 4).
 2. **Hierarchical accessors** (implemented ca7ba78): `div.R_top.2`
    resolves through the instance path at any depth; the mangled flat
    name (`div_R_top`) remains the netlist identity, so refdes
