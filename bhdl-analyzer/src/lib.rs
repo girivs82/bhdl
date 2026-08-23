@@ -2163,6 +2163,90 @@ pub fn extract_expansion_recipes_with_overlay(
                     recipes.insert(entity_name, recipe);
                 }
             }
+
+            // ── PLAIN-BODY COMPOSITION (docs/spec/Expansion_Vs_Hierarchy.md,
+            // settled direction): an `entity … as design` may compose by
+            // plain body statements — FIRM children: no board takeover,
+            // no live-children gating, and children recurse (nesting).
+            // Gated on the DECLARED `as design` kind so legacy entities
+            // whose bodies carry statements (KiCad-imported sheets,
+            // processed by the module machinery) are never
+            // double-processed. Mixing a plain body with `expansion {}`
+            // keeps yieldable semantics for the whole recipe, stated.
+            if entity.declared_kind().as_deref() == Some("design") {
+                let entity_name = entity.name()
+                    .map(|t| t.text().to_string())
+                    .unwrap_or_default();
+                if !entity_name.is_empty() {
+                    let expansion_span = entity.expansion_block().map(|b| b.syntax().text_range());
+                    let body_stmts: Vec<_> = entity
+                        .syntax()
+                        .children()
+                        .filter(|n| {
+                            matches!(
+                                n.kind(),
+                                bhdl_ast::SyntaxKind::CONNECTION_STMT
+                                    | bhdl_ast::SyntaxKind::COMPONENT_INST
+                                    | bhdl_ast::SyntaxKind::ENTITY_INST
+                            ) && expansion_span.map(|r| !r.contains_range(n.text_range())).unwrap_or(true)
+                        })
+                        .collect();
+                    if !body_stmts.is_empty() {
+                        let mixed = recipes.contains_key(&entity_name);
+                        let mut recipe = recipes.remove(&entity_name).unwrap_or_else(|| {
+                            let mut r = ExpansionRecipe::new(entity_name.clone());
+                            if let Some(param_list) = entity.param_list() {
+                                for param_def in param_list.param_defs() {
+                                    if let Some(name) = param_def.name() {
+                                        if let Some(default_val) = param_def.default_value() {
+                                            r.param_defaults.insert(
+                                                name.text().to_string(),
+                                                default_val.syntax().text().to_string().trim().to_string(),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            for pin_def in entity.pins() {
+                                if let Some(pn) = pin_def.name() {
+                                    let ty = pin_def.pin_type().map(|t| t.text().to_string()).unwrap_or_else(|| "signal".to_string());
+                                    let dir = pin_def.direction().map(|t| t.text().to_string()).unwrap_or_else(|| "inout".to_string());
+                                    r.pin_info.insert(pn.text().to_string(), (ty, dir));
+                                }
+                            }
+                            r
+                        });
+                        if mixed {
+                            log::info!(
+                                "entity {entity_name}: plain body statements MIXED with expansion {{}} — yieldable semantics retained for the whole recipe (stated)"
+                            );
+                        } else {
+                            recipe.firm = true;
+                        }
+                        for stmt in &body_stmts {
+                            match stmt.kind() {
+                                bhdl_ast::SyntaxKind::CONNECTION_STMT => {
+                                    parse_expansion_connection_stmt(stmt, &mut recipe, &entity, &local_entity_attrs);
+                                }
+                                _ => {
+                                    if let Some(inst) = parse_expansion_component_inst(stmt, &local_entity_attrs) {
+                                        if !recipe.instances.iter().any(|i| i.name == inst.name) {
+                                            recipe.instances.push(inst);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if !recipe.instances.is_empty() {
+                            log::info!(
+                                "entity {entity_name}: FIRM plain-body recipe with {} child(ren)",
+                                recipe.instances.len()
+                            );
+                            recipes.insert(entity_name, recipe);
+                        }
+                    }
+                }
+            }
         }
     }
 

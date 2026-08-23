@@ -190,7 +190,12 @@ fn find_expansion_candidates(
         // instance is named {P}_{child} for another instance P whose
         // OWN recipe declares a child of that name. Children of
         // children never expand (same rule as the attribute skip).
-        let is_carried_child = netlist.instances.iter().any(|(pid, p)| {
+        // Composed (firm) children are EXEMPT from the carried-child
+        // inference: their recursion is the point of nesting, and in
+        // the elaborated round-trip the per-child idempotency skip
+        // already protects against re-minting grandchildren.
+        let is_composed_child = inst.attributes.contains_key("composed_parent");
+        let is_carried_child = !is_composed_child && netlist.instances.iter().any(|(pid, p)| {
             pid != inst_id
                 && inst.name.len() > p.name.len() + 1
                 && inst.name.starts_with(&p.name)
@@ -331,7 +336,13 @@ fn expand_one_instance(
     // Suppress exactly the children in the virtual pin's recipe-connected
     // component — unrelated mandatory support (decoupling on a supply pin)
     // still expands — and say loudly which parts were suppressed.
-    let takeovers = board_authored_output_takeover(netlist, cand);
+    // FIRM recipes (plain-body composition): the designer asked for
+    // exactly these children — no board takeover, no gating.
+    let takeovers = if cand.recipe.firm {
+        Vec::new()
+    } else {
+        board_authored_output_takeover(netlist, cand)
+    };
     let takeover_skipped: HashSet<String> = takeovers.iter()
         .flat_map(|t| t.children.iter().cloned())
         .collect();
@@ -435,10 +446,14 @@ fn expand_one_instance(
     //       instance shares a net with at least one other pin).
     // Otherwise the child is dropped, along with all connections
     // referring to it.
-    let live_children: HashSet<String> = compute_live_children(netlist, cand)
-        .difference(&takeover_skipped)
-        .cloned()
-        .collect();
+    let live_children: HashSet<String> = if cand.recipe.firm {
+        cand.recipe.instances.iter().map(|i| i.name.clone()).collect()
+    } else {
+        compute_live_children(netlist, cand)
+            .difference(&takeover_skipped)
+            .cloned()
+            .collect()
+    };
 
     if live_children.len() < cand.recipe.instances.len() {
         info!(
@@ -589,11 +604,20 @@ fn expand_one_instance(
         );
         attrs.push(("schematic_placement", placement));
 
-        // Propagate parent attributes
-        attrs.push(("expansion_parent", base.to_string()));
-        attrs.push(("expansion_role", expansion_role.to_string()));
-        attrs.push(("vpin_parent", base.to_string()));
-        attrs.push(("vpin_role", expansion_role.to_string()));
+        // Propagate parent attributes. FIRM children carry
+        // composed_parent (NOT expansion_parent) so the candidate
+        // filter does not block them — composition children RECURSE:
+        // a block instantiating a block (or a vendor part with its
+        // own yieldable recipe) expands on the next fixpoint round.
+        if cand.recipe.firm {
+            attrs.push(("composed_parent", base.to_string()));
+            attrs.push(("composed_role", expansion_role.to_string()));
+        } else {
+            attrs.push(("expansion_parent", base.to_string()));
+            attrs.push(("expansion_role", expansion_role.to_string()));
+            attrs.push(("vpin_parent", base.to_string()));
+            attrs.push(("vpin_role", expansion_role.to_string()));
+        }
         if let Some(intent) = parent_attrs.get("intent") {
             attrs.push(("intent", intent.clone()));
         }

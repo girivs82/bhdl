@@ -1491,3 +1491,80 @@ board AccessorDemo {
     let probe_net = pin_net("tp", "1").expect("probe wired");
     assert_eq!(child_net, probe_net, "accessor must land the probe on the child's net");
 }
+
+/// Plain-body composition: an `entity … as design` composes by PLAIN
+/// body statements — FIRM children (composed_parent marker, no
+/// takeover/gating), nesting via the fixpoint (a block instantiating
+/// a block), and a self-reachable entity is a hard cycle error.
+#[tokio::test]
+async fn plain_body_composition_firm_nested_and_cyclic() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let src = r#"
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+entity Inner(r: resistance = 1kΩ) as design {
+    pin A: signal in;
+    pin B: signal out virtual;
+    A -> r1: Res(r).1;
+    r1.2 -> B;
+}
+
+entity Outer() as design {
+    pin VIN: power in;
+    pin VOUT: signal out virtual;
+    pin GND: ground;
+    VIN -> stage: Inner(2kΩ).A;
+    stage.B -> VOUT;
+    VOUT -> r_load: Res(10kΩ).1;
+    r_load.2 -> GND;
+}
+
+board Composed {
+    power V5 = 5V @ 1A;
+    ground GND;
+    @V5 -> blk: Outer().VIN;
+    blk.GND -> @GND;
+}
+"#;
+    let pr = parse(src);
+    assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    assert!(analysis.expansion_recipes.get("Outer").map(|r| r.firm).unwrap_or(false), "Outer recipe is FIRM");
+    assert!(analysis.expansion_recipes.get("Inner").map(|r| r.firm).unwrap_or(false));
+    let mut gen = NetlistGenerator::new();
+    let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+    let names: Vec<String> = n.instances.iter().map(|(_, i)| i.name.clone()).collect();
+    // round 1: Outer's firm children; round 2: the nested Inner's child
+    assert!(names.iter().any(|x| x == "blk_stage"), "{names:?}");
+    assert!(names.iter().any(|x| x == "blk_r_load"), "{names:?}");
+    assert!(names.iter().any(|x| x == "blk_stage_r1"), "NESTED composition child: {names:?}");
+    // definition-scope symbol instances are TEMPLATES — they never
+    // expand into board-level junk (no bare stage_r1)
+    assert!(!names.iter().any(|x| x == "stage_r1"), "{names:?}");
+    // firm children carry composed_parent, never expansion_parent
+    let (_, child) = n.instances.iter().find(|(_, i)| i.name == "blk_r_load").unwrap();
+    assert_eq!(child.attributes.get("composed_parent").map(String::as_str), Some("blk"), "{:#?}", child.attributes);
+    assert!(!child.attributes.contains_key("expansion_parent"));
+
+    // cycle: an entity reachable from itself is a hard error
+    let cyc = r#"
+entity Loop() as design {
+    pin A: signal in;
+    A -> again: Loop().A;
+}
+board Cyc {
+    ground GND;
+    l: Loop();
+    l.A -> @GND;
+}
+"#;
+    let pr2 = parse(cyc);
+    assert!(pr2.errors().is_empty(), "{:?}", pr2.errors());
+    let sf2 = SourceFile::cast(pr2.syntax()).unwrap();
+    let analysis2 = analyze(&sf2);
+    let mut gen2 = NetlistGenerator::new();
+    let err = gen2.generate_from_ast_and_analysis(&sf2, &analysis2).await.expect_err("cycle must error");
+    assert!(format!("{err:#}").contains("cycle"), "{err:#}");
+}

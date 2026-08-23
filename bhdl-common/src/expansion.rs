@@ -32,6 +32,11 @@ pub struct ExpansionRecipe {
     /// the held instance so PnR can suppress its footprint — the
     /// socket carries the footprint the board actually solders.
     pub socket_pairings: HashMap<String, String>,
+    /// FIRM recipe (plain-body composition of an `as design` entity):
+    /// the designer asked for exactly these children — no board
+    /// takeover, no live-children gating; children recurse (nesting).
+    /// False = yieldable datasheet `expansion {}` semantics.
+    pub firm: bool,
 }
 
 /// A component instance to create during expansion.
@@ -85,6 +90,7 @@ impl ExpansionRecipe {
             param_defaults: HashMap::new(),
             pin_info: HashMap::new(),
             socket_pairings: HashMap::new(),
+            firm: false,
         }
     }
 }

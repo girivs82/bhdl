@@ -704,18 +704,40 @@ impl NetlistGenerator {
                 "Phase 4.5: running expansion interpreter ({} recipe(s) available)",
                 analysis.expansion_recipes.len()
             );
-            let results = crate::expansion_interpreter::expand_entity_instances_with_designs(
-                &mut self.netlist,
-                &analysis.expansion_recipes,
-                &analysis.design_recipes,
-                &analysis.entity_attribute_index,
-                &analysis.entity_param_names,
-                &analysis.entity_attr_param_refs,
-            );
-            info!(
-                "Phase 4.5: expansion produced {} expanded instance(s)",
-                results.len()
-            );
+            // FIXPOINT: firm (plain-body) composition children recurse —
+            // a block instantiating a block, or a vendor part whose own
+            // yieldable recipe then applies. Yieldable children carry
+            // expansion_parent and never re-candidate; expanded parents
+            // carry expansion_applied — so each round only processes
+            // genuinely new work, and a still-growing round 8 is a
+            // composition cycle.
+            const MAX_NESTING_ROUNDS: usize = 8;
+            let mut round = 0;
+            loop {
+                round += 1;
+                let before = self.netlist.instances.len();
+                let results = crate::expansion_interpreter::expand_entity_instances_with_designs(
+                    &mut self.netlist,
+                    &analysis.expansion_recipes,
+                    &analysis.design_recipes,
+                    &analysis.entity_attribute_index,
+                    &analysis.entity_param_names,
+                    &analysis.entity_attr_param_refs,
+                );
+                let grew = self.netlist.instances.len() > before;
+                info!(
+                    "Phase 4.5 round {round}: expansion produced {} expanded instance(s)",
+                    results.len()
+                );
+                if !grew {
+                    break;
+                }
+                if round >= MAX_NESTING_ROUNDS {
+                    anyhow::bail!(
+                        "composition nesting still growing after {MAX_NESTING_ROUNDS} rounds — an entity reachable from itself? (cycle in plain-body composition)"
+                    );
+                }
+            }
         }
 
         // Phase 4.52: replay deferred hierarchical-accessor
@@ -1132,6 +1154,21 @@ impl NetlistGenerator {
                 all_symbols.insert(name.clone(), symbol.clone());
             }
         }
+        // Template discriminator for plain-body composition: a symbol
+        // whose name is a CHILD of some FIRM recipe is the entity
+        // definition's own body statement leaking into the flat walk —
+        // a template artifact (the real children mint per-instantiation
+        // with prefixed names). Scoped precisely to `as design`
+        // entities: firm recipes exist for nothing else, so legacy
+        // boards are untouched. (A scope-based discriminator was tried
+        // and misfired: board instances of ELABORATED files live in a
+        // definition scope, and marking those broke round-trips.)
+        let firm_child_names: std::collections::HashSet<&str> = analysis
+            .expansion_recipes
+            .values()
+            .filter(|r| r.firm)
+            .flat_map(|r| r.instances.iter().map(|i| i.name.as_str()))
+            .collect();
         
         // Iterate name-sorted: all_symbols is a HashMap, and this loop's order
         // decides module/instance/pin creation order — hash order here made
@@ -1174,7 +1211,7 @@ impl NetlistGenerator {
                         // instead of every consumer re-deriving it by
                         // name-shape — is_template_stub() is the one
                         // place that judges.
-                        if name == type_name {
+                        if name == type_name || firm_child_names.contains(name.as_str()) {
                             if let Some(inst) = self.netlist.instances.get_mut(instance_id) {
                                 inst.attributes.insert("template".to_string(), "true".to_string());
                                 debug!("Marked definition-template instance '{}'", name);

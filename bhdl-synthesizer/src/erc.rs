@@ -36,6 +36,8 @@ struct NetPin {
     ptype: PinType,
     /// component_class attribute of the instance (level shifters, resistors).
     class: String,
+    /// Virtual pin — no physical copper; can never contend as a driver.
+    is_virtual: bool,
 }
 
 /// Resolve every net's members to (instance, pin, direction, type, class).
@@ -65,6 +67,7 @@ fn net_members(netlist: &Netlist) -> HashMap<NetId, Vec<NetPin>> {
                     .get("component_class")
                     .cloned()
                     .unwrap_or_default(),
+                is_virtual: pin.is_virtual,
             });
         }
         out.insert(net_id, v);
@@ -156,10 +159,11 @@ pub fn check_driver_conflicts(
         if !is_signal_net(netlist, *net_id) {
             continue;
         }
+        // Virtual pins have no copper — they cannot contend.
         let drivers: Vec<&NetPin> = pins
             .iter()
             .filter(|p| {
-                matches!(p.dir, PinDirection::Out)
+                !p.is_virtual && matches!(p.dir, PinDirection::Out)
                     && !matches!(p.ptype, PinType::Power | PinType::Ground)
             })
             .collect();

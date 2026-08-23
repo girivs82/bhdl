@@ -487,6 +487,17 @@ fn process_module_hierarchy(
     for item in ast.items() {
         match item {
             Item::Entity(entity) => {
+                // `entity … as design` bodies are COMPOSITION RECIPES:
+                // the analyzer lowers their statements into a FIRM
+                // expansion recipe that mints per-instantiation with
+                // prefixed names. Flat-processing the body here would
+                // double-process it — junk board-level instances wired
+                // to junk auto-nets. Legacy entities (KiCad sheets)
+                // keep the module walk.
+                if entity.declared_kind().as_deref() == Some("design") {
+                    debug!("Skipping flat body walk for design-kind entity (recipe-lowered)");
+                    continue;
+                }
                 if let Some(name) = entity.name() {
                     let entity_name = name.text().to_string();
                     if let Some(&module_id) = context.module_name_to_id.get(&entity_name) {
