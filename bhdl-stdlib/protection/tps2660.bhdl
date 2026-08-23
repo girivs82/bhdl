@@ -1,0 +1,136 @@
+// TPS2660 — TI 60 V, 2 A industrial eFuse with integrated reverse-input
+// polarity protection (SLVSDT6). Programmable overvoltage cutoff (OVP
+// pin), undervoltage lockout (UVLO pin) and current limit (ILIM pin).
+//
+// Two-layer library model (docs/spec/Requirements_And_Resolution.md §1):
+//   TPS2660        as part    — vendor truth: pins, package, the figures
+//                               this library has from the datasheet.
+//   Efuse_TPS2660  as design  — the designer's subcircuit, `impl
+//                               PreregStage`: derives the OVP and UVLO
+//                               dividers from the requirement's trip
+//                               points; the current-limit resistor is
+//                               NOT derived (see below).
+//
+// REAL-DATA PROVENANCE, stated:
+//   - input range 4.2 V … 55 V operating, 2 A, reverse input to −60 V:
+//     SLVSDT6 features / recommended operating conditions.
+//   - V_OVP / V_UVLO pin thresholds 1.2 V typ: SLVSDT6 electrical
+//     characteristics — recorded from the datasheet; RE-VERIFY against
+//     the datasheet revision at sign-off (the divider maths below hangs
+//     on it).
+//   - the ILIM resistor law (R_ILIM → I_LIM) is NOT in this library's
+//     data, so the block does not compute it: `r_ilim` is a REQUIRED
+//     constructor argument the designer takes from SLVSDT6 for their
+//     limit. That missing axis is why this block is a TEMPLATE
+//     (`supply_choosable = false`): the survey lists it, and the designer
+//     commits it with
+//       resolve fe = Efuse_TPS2660(r_ilim=<from the datasheet>);
+//
+// Pin subset: IN / OUT / GND / UVLO (SHDN) / OVP / ILIM / FLT. The
+// dV/dt, IMON and RTN-side details of the full pinout are not modelled.
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+
+// ── Vendor truth ────────────────────────────────────────────────────
+entity TPS2660() as part {
+    pin IN:   power in;
+    pin OUT:  power out;
+    pin GND:  ground;
+    pin UVLO: signal in;      // undervoltage lockout / enable (divider from IN)
+    pin OVP:  signal in;      // overvoltage cutoff threshold (divider from IN)
+    pin ILIM: signal inout;   // current-limit programming resistor to GND
+    pin FLT:  signal out;     // fault flag, open-drain active-low
+
+    attribute component_class = "protection_ic";
+    attribute manufacturer    = "Texas Instruments";
+    attribute part_number     = "TPS2660";
+    attribute vin_min         = 4.2V;    // SLVSDT6: operating input 4.2 V to 55 V
+    attribute vin_max         = 55V;
+    attribute output_current  = 2A;      // SLVSDT6: 2 A (maximum programmable current limit)
+    attribute reverse_polarity = true;   // SLVSDT6: reverse input polarity protection (to −60 V)
+    attribute threshold_v     = 1.2V;    // SLVSDT6: OVP / UVLO pin thresholds, 1.2 V typ — re-verify at sign-off
+}
+
+symbol TPS2660 {
+    left   { IN, UVLO, OVP }
+    right  { OUT, FLT, ILIM }
+    bottom { GND }
+}
+
+layout TPS2660 {
+    package HTSSOP-16;
+}
+
+// ── The designer's subcircuit ───────────────────────────────────────
+entity Efuse_TPS2660(
+    v_in:      voltage    = 12V,
+    i_out_max: current    = 1A,
+    ov_trip:   voltage    = 30V,     // cut off above this
+    uv_trip:   voltage    = 8V,      // hold off below this
+    r_ilim:    resistance,           // REQUIRED: from SLVSDT6 for your current limit (no law in this library)
+    r_bot:     resistance = 10kΩ,    // divider bottom resistor (both dividers)
+    c_out:     capacitance = 1µF
+) as design
+  // ENVELOPE: 2 A × 0.8 derating; SLVSDT6 input range; the trip points
+  // must bracket the nominal input.
+  where i_out_max <= 1.6A, v_in >= 4.2V, v_in <= 55V, ov_trip > v_in, uv_trip < v_in
+{
+    pin VIN:  power in;
+    pin VOUT: power out virtual;
+    pin FLT:  signal out;     // fault flag (open-drain) — optional for the board
+    pin GND:  ground;
+
+    attribute component_class  = "protection";
+    attribute topology         = "prereg";
+    attribute supply_choosable = false;   // TEMPLATE: r_ilim must come from the designer (see header)
+    attribute output_voltage   = v_in;    // pass-through
+    attribute v_in             = v_in;
+    attribute i_out_max        = i_out_max;
+    attribute output_current   = 2A;      // SLVSDT6
+    attribute vin_min          = 4.2V;
+    attribute vin_max          = 55V;
+    attribute ov_trip          = ov_trip; // promise = the divider below is sized to it
+    attribute uv_trip          = uv_trip;
+    attribute reverse_polarity = true;    // SLVSDT6
+
+    // Divider sizing: V_trip = V_th · (1 + R_top / R_bot)  ⇒
+    //   R_top = R_bot · (V_trip − V_th) / V_th,  V_th = 1.2 V (SLVSDT6)
+    // One binary op per const.
+    design {
+        const v_th  = 1.2;
+        const scale = self.r_bot / v_th;
+        const ov_d  = self.ov_trip - v_th;
+        r_ov_top    = ov_d * scale;
+        const uv_d  = self.uv_trip - v_th;
+        r_uv_top    = uv_d * scale;
+    }
+
+    u: TPS2660();
+    VIN -> u.IN;
+    u.GND -> GND;
+    u.OUT -> VOUT;
+    VOUT -> C_out: Cap(c_out).1; C_out.2 -> GND;
+    // OVP divider
+    VIN -> R_ov_top: Res(r_ov_top, tolerance = 1%).1; R_ov_top.2 -> u.OVP;
+    u.OVP -> R_ov_bot: Res(r_bot, tolerance = 1%).1; R_ov_bot.2 -> GND;
+    // UVLO divider
+    VIN -> R_uv_top: Res(r_uv_top, tolerance = 1%).1; R_uv_top.2 -> u.UVLO;
+    u.UVLO -> R_uv_bot: Res(r_bot, tolerance = 1%).1; R_uv_bot.2 -> GND;
+    // current limit — the designer's value
+    u.ILIM -> R_ilim: Res(r_ilim, tolerance = 1%).1; R_ilim.2 -> GND;
+    // fault flag: board-wired or left to the board
+    generate if (wired(FLT)) {
+        u.FLT -> FLT;
+    }
+}
+
+// The block SATISFIES PreregStage: the requirement's trip points are
+// conveyed straight into the divider sizing.
+impl PreregStage for Efuse_TPS2660 {
+    const vout    = v_in;
+    const i_max   = i_out_max;
+    const vin     = v_in;
+    const ov_trip = ov_trip;
+    const uv_trip = uv_trip;
+}

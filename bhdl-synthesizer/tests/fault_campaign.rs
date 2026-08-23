@@ -2433,12 +2433,41 @@ board PreDemo {{
     let r = resolve_stages(&board("vout=12V, i_max=2.6A, vin=12V"), &stdlib, &[]).unwrap().unwrap();
     assert!(r.resolutions[0].bound.is_none());
     assert!(r.resolutions[0].candidates[0].failures().iter().any(|f| f.contains("envelope") && f.contains("i_load <= 0.8 * i_rating")), "{:?}", r.resolutions[0].candidates[0].failures());
-    // protection the block does not provide: UNCHECKED, unresolved
+    // protection the passive block does not provide: UNCHECKED against it,
+    // unresolved (the eFuse is a TEMPLATE — listed, never auto-bound)
     for extra in ["reverse_polarity=\"true\"", "ov_trip=30V", "uv_trip=8V"] {
-        let r = resolve_stages(&board(&format!("vout=12V, i_max=2A, vin=12V, {extra}")), &stdlib, &[]).unwrap().unwrap();
+        let r = resolve_stages(&board(&format!("vout=12V, i_max=1A, vin=12V, {extra}")), &stdlib, &[]).unwrap().unwrap();
         assert!(r.resolutions[0].bound.is_none(), "{extra}");
         let gate = extra.split('=').next().unwrap();
-        assert!(r.resolutions[0].candidates[0].unchecked.contains(&gate.to_string()), "{extra}: {:#?}", r.resolutions[0].candidates[0]);
+        let passive = r.resolutions[0].candidates.iter().find(|c| c.block == "PassiveFrontEnd").unwrap();
+        assert!(passive.unchecked.contains(&gate.to_string()), "{extra}: {passive:#?}");
+        let efuse = r.resolutions[0].candidates.iter().find(|c| c.block == "Efuse_TPS2660").unwrap();
+        assert!(efuse.template && efuse.gates.iter().any(|g| g.0 == gate && g.2), "{extra}: {efuse:#?}");
         assert!(r.source.contains("fe: GenericPrereg("), "{}", r.source);
     }
+    // the eFuse TEMPLATE commits by override carrying r_ilim (the datasheet
+    // axis this library lacks); the requirement's trip points size the
+    // OVP / UVLO dividers against the 1.2 V threshold; the stamped
+    // requirement text carries no nested quotes
+    let src = board("vout=12V, i_max=1A, vin=12V, ov_trip=30V, uv_trip=8V, reverse_polarity=\"true\"")
+        .replacen("fe.GND -> @GND;", "fe.GND -> @GND; resolve fe = Efuse_TPS2660(r_ilim=16.5kΩ);", 1);
+    let r = resolve_stages(&src, &stdlib, &[]).unwrap().unwrap();
+    assert_eq!(r.resolutions[0].bound.as_deref(), Some("Efuse_TPS2660"));
+    assert_eq!(r.resolutions[0].basis, "override");
+    assert!(r.source.contains("reverse_polarity=true\""), "{}", r.source);
+    let pr = parse(&r.source);
+    assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+    let val = |name: &str| n.instances.values().find(|i| i.name == name).unwrap_or_else(|| panic!("{name}")).attributes.get("value").cloned().unwrap_or_default();
+    let ohms = |v: String| bhdl_synthesizer::stage_acceptance::parse_si(&v).unwrap();
+    assert!((ohms(val("fe_R_ov_top")) - 240e3).abs() / 240e3 < 0.03, "OVP top {}", val("fe_R_ov_top"));
+    assert!((ohms(val("fe_R_uv_top")) - 56.67e3).abs() / 56.67e3 < 0.03, "UVLO top {}", val("fe_R_uv_top"));
+    assert!((ohms(val("fe_R_ilim")) - 16.5e3).abs() < 1.0, "{}", val("fe_R_ilim"));
+    // ERC032 on the committed stage: same predicate, all declared → clean
+    let v = bhdl_synthesizer::erc::check_powertree_acceptance(&n, &analysis);
+    assert!(!v.iter().any(|x| x.description.contains("'fe'") && x.severity != bhdl_synthesizer::design_rule_checker::ViolationSeverity::Info), "{v:#?}");
+    assert!(!v.iter().any(|x| x.description.contains("'fe'") && x.description.contains("UNCHECKED")), "{v:#?}");
 }

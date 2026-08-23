@@ -308,9 +308,20 @@ Principles that fall out:
    the fuse rating, `ov_clamp = tvs_v`, and an input range BY
    CONSTRUCTION (0 V … the clamp point); it declares no cutoff, lockout
    or reverse-polarity protection, so a requirement stating one is
-   UNCHECKED against it and stays unresolved — the eFuse / ideal-diode
-   block to add is visible as missing coverage. Its envelope is the
-   fuse derating (`where i_load <= 0.8 * i_rating, v_in < tvs_v`).
+   UNCHECKED against it and stays unresolved. Its envelope is the fuse
+   derating (`where i_load <= 0.8 * i_rating, v_in < tvs_v`).
+   `Efuse_TPS2660` (`bhdl-stdlib/protection/tps2660.bhdl`, TI 60 V / 2 A
+   eFuse with reverse-input protection) promises `ov_trip`, `uv_trip`,
+   `reverse_polarity`, 4.2–55 V and 2 A, and sizes the OVP / UVLO
+   dividers from the requirement's trip points against the 1.2 V pin
+   threshold (provenance stated in the file; re-verify at sign-off).
+   The ILIM resistor law is NOT in this library's data, so the block
+   does not compute it: `r_ilim` is a REQUIRED argument — which makes
+   the block a TEMPLATE (listed, committed by `resolve fe =
+   Efuse_TPS2660(r_ilim=…)`); an instantiation without it is refused by
+   the constructor-arg validator (E0404). That is the Real-Data rule
+   applied to a block: a missing datasheet axis becomes a designer
+   argument, never a default.
    `BuckExtStage` (controller + external power stage; `phases` is part
    of the requirement) is the third interface; the power tree emits it
    for `BuckExternal` stages. Its only implementer is the generic

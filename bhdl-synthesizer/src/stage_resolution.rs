@@ -213,10 +213,12 @@ pub fn resolve_stages(
 
     for req in &reqs {
         let trait_def = &traits[&req.trait_name];
+        // (value quotes dropped: the text is itself stamped inside a quoted
+        // attribute; the acceptance parser trims quotes either way)
         let req_text = req
             .params
             .iter()
-            .map(|(k, v)| format!("{k}={v}"))
+            .map(|(k, v)| format!("{k}={}", v.trim().trim_matches('"')))
             .collect::<Vec<_>>()
             .join(", ");
         let override_block = overrides
