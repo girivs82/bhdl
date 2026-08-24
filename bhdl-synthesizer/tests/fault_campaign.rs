@@ -2806,7 +2806,11 @@ board BoostProbe {
     let emitted = splice_power_region(&src, &region).unwrap();
     let r = bhdl_synthesizer::stage_resolution::resolve_stages(&emitted, ws.join("bhdl-stdlib").as_path(), &[]).unwrap().unwrap();
     let u = r.resolutions.iter().find(|x| x.instance == "u_v12").unwrap();
-    assert!(u.bound.is_none() && u.candidates.is_empty(), "no BoostStage implementer yet: {u:#?}");
+    // Boost_TPS61022 is surveyed but its envelope refuses 12 V out
+    // (SLVSDX7D output setting range tops at 5.5 V) — stated near-miss
+    assert!(u.bound.is_none(), "{u:#?}");
+    let c = u.candidates.iter().find(|c| c.block == "Boost_TPS61022").expect("TPS61022 surveyed");
+    assert!(c.failures().iter().any(|f| f.contains("envelope") && f.contains("v_out <= 5.5V")), "{:?}", c.failures());
     assert!(r.source.contains("u_v12: GenericBoost("), "{}", r.source);
     // estimator: boost loss form — 0.3 A out, 5→12 V, 100 mΩ, 1 MHz, 20 ns:
     // I_in = 0.72, D = 0.583 → 0.030 + 12·0.72·0.02 = 0.203 W
@@ -2814,4 +2818,49 @@ board BoostProbe {
         "switching_regulator", Some(5.0), Some(12.0), Some(0.3), None, None, Some(0.1), Some(1.0e6), Some(20e-9),
     ).unwrap();
     assert!((p - (0.72_f64 * 0.72 * 0.1 * (1.0 - 5.0 / 12.0) + 12.0 * 0.72 * 1.0e6 * 20e-9)).abs() < 1e-9, "{p}");
+}
+
+/// Boost_TPS61022 (SLVSDX7D): the first BoostStage implementer.
+/// Resolves a 3.6 V → 5 V / 2 A requirement (survey-priced); the FB
+/// divider and C_out come from the datasheet equations; the VALLEY
+/// current envelope — the ratio-aware capability arithmetic — refuses
+/// the same output power from a 1.9 V input.
+#[tokio::test]
+async fn boost_tps61022_block() {
+    use bhdl_synthesizer::stage_resolution::resolve_stages;
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let stdlib = ws.join("bhdl-stdlib");
+    let board = |vin: &str| format!(r#"
+import {{ BoostStage }} from "bhdl-stdlib/power/stages.bhdl";
+import {{ Res }} from "bhdl-stdlib/passives/resistor.bhdl";
+board BoostReq {{
+    power VBAT = {vin} @ 4A;
+    port V5: power out = 5V @ 2A;
+    ground GND;
+    @VBAT -> u1: BoostStage(vout=5V, i_max=2A, vin={vin}).VIN;
+    u1.GND -> @GND; u1.VOUT -> @V5;
+    @V5 -> R_LOAD: Res(2.5Ω, wattage=20W).1; R_LOAD.2 -> @GND;
+}}
+"#);
+    let r = resolve_stages(&board("3.6V"), &stdlib, &[]).unwrap().unwrap();
+    assert_eq!(r.resolutions[0].bound.as_deref(), Some("Boost_TPS61022"), "{}", bhdl_synthesizer::stage_resolution::render_report(&r.resolutions[0]));
+    let pr = parse(&r.source);
+    assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+    let val = |name: &str| n.instances.values().find(|i| i.name == name).unwrap_or_else(|| panic!("{name}")).attributes.get("value").cloned().unwrap_or_default();
+    let si = |v: String| bhdl_synthesizer::stage_acceptance::parse_si(&v).unwrap();
+    // FB divider Eq. 4: (5/0.6 − 1)·100k = 733.3 kΩ (E96-snapped)
+    assert!((si(val("u1_R_top")) - 733.3e3).abs() / 733.3e3 < 0.02, "{}", val("u1_R_top"));
+    // C_out Eq. 8: 2·(1 − 3.6/5)/(1 MHz·50 mV) = 11.2 µF (snapped up)
+    assert!(si(val("u1_C_out")) >= 11.0e-6 && si(val("u1_C_out")) <= 16e-6, "{}", val("u1_C_out"));
+    assert!(n.instances.values().any(|i| i.name == "u1_u"), "the silicon materialised");
+    // deep ratio: 1.9 V → 5 V at 2 A puts the switch valley beyond
+    // 5.2 A (6.5 A min limit × 0.8) — refused with the arithmetic named
+    let r = resolve_stages(&board("1.9V"), &stdlib, &[]).unwrap().unwrap();
+    assert!(r.resolutions[0].bound.is_none());
+    assert!(r.resolutions[0].candidates[0].failures().iter().any(|f| f.contains("VALLEY current") && f.contains("5.2A")), "{:?}", r.resolutions[0].candidates[0].failures());
 }

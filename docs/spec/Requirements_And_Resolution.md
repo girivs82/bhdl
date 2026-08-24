@@ -340,10 +340,16 @@ Principles that fall out:
    for a feed RANGE that straddles the output (battery discharge across
    V_out): the straddle IS the requirement, so vin_min/vin_max must be
    stated — the tree carries one nominal feed voltage and never emits
-   it. Neither has an implementer yet: the survey says so (visible
-   missing coverage; a vendor boost block must promise its DELIVERABLE
-   output current at the ratio — its switch limit × V_in/V_out × η is
-   the vendor's arithmetic, never invented here).
+   it. `BoostStage` has its first implementer, `Boost_TPS61022`
+   (`bhdl-stdlib/power/tps61022.bhdl`, SLVSDX7D): its `where` envelope
+   carries the vendor's own ratio arithmetic — the switch VALLEY
+   current I_L(DC) − ΔI/2 = V_out·I_out/(V_in·η) − V_in·D/(2·L·f) must
+   stay under the 6.5 A minimum valley limit × 0.8 derating — so the
+   same 5 V / 2 A requirement resolves from a 3.6 V feed and is refused
+   from 1.9 V with that arithmetic named. `BuckBoostStage` still has no
+   implementer: the survey says so (visible missing coverage; a vendor
+   block must promise its DELIVERABLE output current at the ratio,
+   never have it invented here).
    `BuckExtStage` (controller + external power stage; `phases` is part
    of the requirement) is the third interface; the power tree emits it
    for `BuckExternal` stages. Its only implementer is the generic
@@ -500,7 +506,7 @@ UNCHECKED against a requirement that states it — never a pass.
 | `LdoStage` | `Ldo_NCP1117` | auto (5 V) | 1 A, 0…125 °C ambient (NCP grade), θ_JA 160 min-pad | vin range, noise, qual | — |
 | `LdoStage` | `LinearRegulator` (78xx class) | template | 40 µV class, headroom | i_max, vin range, temp, qual | class numbers |
 | `BuckExtStage` | `BuckController` | template | 1 phase; rating = the FETs' | vin range, noise, temp, qual | FETs + axes |
-| `BoostStage` | — (no implementer yet) | — | — | — | — |
+| `BoostStage` | `Boost_TPS61022` | auto | 3 A @ 3.6→5 V (94.7 %), 2.2–5.5 V out, 1.8 V startup floor, T_J ≤ 125 °C via θ_JA 108.2 | noise, qual | — |
 | `BuckBoostStage` | — (no implementer yet) | — | — | — | — |
 | `PreregStage` | `PassiveFrontEnd` (fuse + TVS) | auto | fuse rating, `ov_clamp`, 0 V … clamp point | ov_trip, uv_trip, reverse_polarity, temp, qual | — |
 | `PreregStage` | `Efuse_TPS2660` | template | 2 A, 4.2–55 V, `ov_trip`, `uv_trip`, `reverse_polarity`, T_J ≤ 150 °C via θ_JA 38.6 | ov_clamp, qual | `r_ilim` (ILIM law not in the library) |

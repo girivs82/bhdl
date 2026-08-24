@@ -1,0 +1,199 @@
+// TPS61022 — TI 8-A valley-current-limit synchronous boost converter,
+// VQFN-7 (RWU) (SLVSDX7D – JANUARY 2019 – REVISED JULY 2021).
+//
+// Two-layer library model (docs/spec/Requirements_And_Resolution.md §1),
+// the first BoostStage implementer:
+//   TPS61022       as part    — vendor truth: pins, package, datasheet
+//                               figures.
+//   Boost_TPS61022 as design  — the designer's subcircuit sized by the
+//                               SLVSDX7D §8.2.2 design procedure,
+//                               contract pins VIN / VOUT (virtual) / EN /
+//                               GND, `impl BoostStage`.
+//
+// REAL-DATA PROVENANCE (all SLVSDX7D):
+//   input 0.5–5.5 V (1.8 V minimum for START-UP); output setting range
+//   2.2–5.5 V; valley switch current limit 8 A typ / 6.5 A MIN; fSW 1 MHz
+//   (VIN > 1.5 V; 0.6 MHz below 1 V); RDS(on) HS 18 mΩ / LS 12 mΩ;
+//   IQ 27 µA (VOUT pin) + 0.9 µA (VIN pin); VREF 0.6 V typ (PWM);
+//   OVP 5.7 V typ; TJ −40…125 °C; θJA 108.2 / θJC 70.2 (RWU, standard
+//   JEDEC board — 50.9 on the EVM); inductor range 0.33–2.9 µH;
+//   94.7 % at VIN 3.6 V, VOUT 5 V, IOUT 3 A (the promise's condition).
+
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Ind } from "bhdl-stdlib/passives/inductor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+// ── Vendor truth ────────────────────────────────────────────────────
+entity TPS61022() as part {
+    pin VIN:  power in;
+    pin SW:   switch out;     // inductor node
+    pin VOUT: power out;      // boost output (also the OVP sense)
+    pin FB:   feedback in;    // 0.6 V reference divider
+    pin EN:   signal in;
+    pin MODE: signal in;      // PFM (low) / forced-PWM (high)
+    pin GND:  ground;
+
+    attribute component_class  = "regulator_ic";
+    attribute manufacturer     = "Texas Instruments";
+    attribute part_number      = "TPS61022";
+    attribute topology         = "boost";
+    attribute vin_min          = 0.5V;    // SLVSDX7D: input range 0.5 V to 5.5 V (start-up needs 1.8 V)
+    attribute vin_max          = 5.5V;
+    attribute vin_startup_min  = 1.8V;    // SLVSDX7D: minimum input voltage for start-up
+    attribute vout_min         = 2.2V;    // SLVSDX7D: output voltage setting range
+    attribute vout_max         = 5.5V;
+    attribute i_valley_limit   = 6.5A;    // SLVSDX7D: valley switch current limit, MINIMUM (8 A typ)
+    attribute output_current   = 3A;      // SLVSDX7D features: 94.7 % at VIN 3.6 V, VOUT 5 V, IOUT 3 A (condition stated)
+    attribute efficiency       = 94.7%;   // at that same operating point
+    attribute f_sw             = 1MHz;    // SLVSDX7D: VIN > 1.5 V (0.6 MHz below 1 V)
+    attribute rds_on           = 18mΩ;    // SLVSDX7D: high-side MOSFET (LS 12 mΩ)
+    attribute i_quiescent      = 27uA;    // SLVSDX7D: quiescent into VOUT pin (VIN pin 0.9 µA)
+    attribute feedback_voltage = 0.6V;    // SLVSDX7D: VREF at FB, PWM mode, 600 mV typ
+    attribute fb_equation      = "VOUT = {VREF}*(1 + {R1}/{R2})";
+    attribute ovp_v            = 5.7V;    // SLVSDX7D: output OVP threshold, typ
+    attribute tj_min           = -40degC; // SLVSDX7D §6.3: operating junction −40 °C to 125 °C
+    attribute tj_max           = 125degC;
+    attribute theta_ja         = 108.2degC/W; // SLVSDX7D §6.4, RWU (VQFN-7): RθJA — JEDEC-standard board metric (50.9 on the EVM)
+    attribute theta_jc         = 70.2degC/W;  // SLVSDX7D §6.4: RθJC
+}
+
+symbol TPS61022 {
+    left   { VIN, EN, MODE }
+    right  { SW, VOUT, FB }
+    bottom { GND }
+}
+
+layout TPS61022 {
+    package VQFN-7;
+}
+
+// ── The designer's subcircuit ───────────────────────────────────────
+entity Boost_TPS61022(
+    v_out:        voltage     = 5V,
+    i_out_max:    current     = 2A,
+    v_in:         voltage     = 3.6V,
+    f_sw:         frequency   = 1MHz,    // SLVSDX7D (VIN > 1.5 V)
+    l_value:      inductance  = 1µH,     // within the 0.33–2.9 µH design range (SLVSDX7D §8.2.2.2)
+    ripple_v:     voltage     = 50mV,    // output ripple budget
+    r_fb_bot:     resistance  = 100kΩ,   // R2 < 300 kΩ (SLVSDX7D §8.2.2.1)
+    c_in:         capacitance = 10µF
+) as design
+  // VALIDITY ENVELOPE (SLVSDX7D): output setting range; boost needs
+  // vout above vin; input within range AND above the 1.8 V start-up
+  // minimum (a rail that must start the converter, not just keep it
+  // running). The current envelope needs arithmetic → design { } below.
+  where v_out >= 2.2V, v_out <= 5.5V, v_out > v_in, v_in >= 1.8V, v_in <= 5.5V
+{
+    pin VIN:  power in;
+    pin VOUT: power out virtual;
+    pin EN:   signal in;
+    pin GND:  ground;
+
+    // Promises (SLVSDX7D) + exported operating point.
+    attribute component_class = "switching_regulator";
+    attribute topology        = "boost";
+    attribute output_voltage  = v_out;
+    attribute v_in            = v_in;
+    attribute i_out_max       = i_out_max;
+    attribute output_current  = 3A;       // at VIN 3.6 V / VOUT 5 V (SLVSDX7D features; condition stated)
+    attribute efficiency      = 94.7%;    // same point
+    attribute vin_min         = 1.8V;     // START-UP minimum — the block's honest floor (run-down to 0.5 V)
+    attribute vin_max         = 5.5V;
+    attribute f_sw            = f_sw;
+    attribute rds_on          = 18mΩ;
+    attribute i_quiescent     = 27uA;
+    attribute feedback_voltage = 0.6V;
+    attribute fb_equation     = "VOUT = {VREF}*(1 + {R1}/{R2})";
+    attribute tj_min          = -40degC;
+    attribute tj_max          = 125degC;
+    attribute theta_ja        = 108.2degC/W; // SLVSDX7D, RWU, JEDEC board metric
+    attribute theta_jc        = 70.2degC/W;
+
+    // Sizing (SLVSDX7D §8.2.2) + the CURRENT envelope. One binary op per
+    // const; SI base units.
+    design {
+        const vout = self.v_out;
+        const vin  = self.v_in;
+        // Inductor DC current Eq. 5: I_L(DC) = VOUT·IOUT / (VIN·η), with
+        // the datasheet's own guidance to use a LOW efficiency for
+        // margin — 0.80 here (conservative; the part's spot figure is
+        // 94.7 %).
+        const p_out   = vout * self.i_out_max;
+        const vin_eff = vin * 0.80;
+        const i_l_dc  = p_out / vin_eff;
+        // Ripple ΔI_L = VIN·D / (L·fSW), D = 1 − VIN/VOUT.
+        const ratio  = vin / vout;
+        const duty   = 1.0 - ratio;
+        const vd     = vin * duty;
+        const lf     = self.l_value * self.f_sw;
+        const d_il   = vd / lf;
+        const i_half = d_il / 2.0;
+        const i_peak = i_l_dc + i_half;
+        // ENVELOPE: the switch VALLEY current is I_L(DC) − ΔI/2; the
+        // datasheet limit is 6.5 A MINIMUM — derated ×0.8 per the
+        // power-tree policy. (Valley, not peak: SLVSDX7D §7.3.4 limits
+        // the valley.)
+        const i_valley = i_l_dc - i_half;
+        require i_valley <= 5.2
+            else "Boost_TPS61022 envelope: switch VALLEY current I_L(DC) − ΔI/2 exceeds 5.2A (6.5A minimum valley limit × 0.8 derating) — the requested output power is beyond this part at this ratio";
+        // Inductor: rated for the PEAK with the same 1.6× headroom the
+        // buck blocks use.
+        l_rated_current = i_peak * 1.6;
+        // C_OUT Eq. 8: I_OUT·D_max / (fSW·V_RIPPLE).
+        const co_n  = self.i_out_max * duty;
+        const co_d  = self.f_sw * self.ripple_v;
+        c_out_value = co_n / co_d;
+        // FB divider Eq. 4: R1 = (VOUT/VREF − 1)·R2, VREF = 0.6 V.
+        const vratio = vout / 0.6;
+        const rtop_f = vratio - 1.0;
+        r_top_value  = rtop_f * self.r_fb_bot;
+    }
+
+    // The application circuit (SLVSDX7D typical application) — FIRM.
+    u: TPS61022();
+    VIN -> u.VIN;
+    u.GND -> GND;
+    generate if (wired(EN)) {
+        EN -> u.EN;
+    } else {
+        VIN -> u.EN;
+    }
+    // MODE low = auto-PFM (the datasheet default application)
+    u.MODE -> GND;
+    VIN -> C_in: Cap(c_in).1; C_in.2 -> GND;
+    // boost topology: the inductor feeds the SW node from the input
+    VIN -> L_in: Ind(l_value, rated_current = l_rated_current).1; L_in.2 -> u.SW;
+    u.VOUT -> VOUT;
+    VOUT -> C_out: Cap(c_out_value).1; C_out.2 -> GND;
+    VOUT -> R_top: Res(r_top_value, tolerance = 1%, supply_profile = "grade").1; R_top.2 -> u.FB;
+    u.FB -> R_bot: Res(r_fb_bot, tolerance = 1%, supply_profile = "grade").1; R_bot.2 -> GND;
+
+    // §4 device-stress at the solved operating point: the boost forms —
+    // the inductor carries the INPUT current; the IC's own loss is
+    // conduction on I_in at D plus transitions swinging VOUT.
+    simulation {
+        stress {
+            const duty = 1 - vin / vout;
+            const i_in = vout * i_out / (vin * 0.8);
+            const d_il = vin * duty / (self.f_sw * L_in.value);
+            L_in.i_peak    = i_in + d_il / 2;
+            C_out.v_ripple = i_out * duty / (self.f_sw * C_out.value);
+            // conduction + quiescent only: SLVSDX7D states no switching
+            // transition time, so the transition loss is NOT modelled
+            // (stated) — the conservative η = 0.80 in i_in absorbs margin
+            self.p_diss    = i_in * i_in * self.rds_on * duty + vout * self.i_quiescent;
+        }
+    }
+}
+
+// The block SATISFIES BoostStage. The i_max acceptance gate reads the
+// promised output_current (3 A at the stated condition); the RATIO-aware
+// capability check is the valley-limit envelope above — the vendor's own
+// arithmetic, evaluated at the requirement's operating point.
+impl BoostStage for Boost_TPS61022 {
+    const vout  = v_out;
+    const i_max = i_out_max;
+    const vin   = v_in;
+}
+
+alias TPS61022_5V = Boost_TPS61022(5V);
