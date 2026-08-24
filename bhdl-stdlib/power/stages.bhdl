@@ -149,3 +149,48 @@ trait PreregStage {
     const qual: string;
     const asil: string;
 }
+
+// STEP-UP: the rail sits above its feed. Same vocabulary as BuckStage;
+// the acceptance i_max gate still reads the block's promised OUTPUT
+// current — a boost block must promise what it can DELIVER at the
+// requirement's ratio (its switch limit × vin/vout × η is the vendor's
+// arithmetic to state, not ours to invent).
+trait BoostStage {
+    pin VIN: power in;
+    pin VOUT: power out;
+    pin GND: ground;
+    const vout: voltage;
+    const i_max: current;
+    const vin: voltage;
+    const vin_min: voltage;         // optional; defaults to vin
+    const vin_max: voltage;         // optional; defaults to vin
+    const noise: voltage;           // optional
+    const efficiency_min: float;    // optional
+    const temp_min: temperature;
+    const temp_max: temperature;
+    const qual: string;
+    const asil: string;
+}
+
+// A feed RANGE that STRADDLES the output (battery discharge across
+// vout — the classic 3.0–4.2 V Li-ion to 3.3 V rail): neither a buck
+// nor a boost alone covers it. The requirement MUST state vin_min and
+// vin_max (that straddle IS the requirement); the power tree carries
+// only a nominal feed voltage and never emits this — noted in its
+// boost path, stated here.
+trait BuckBoostStage {
+    pin VIN: power in;
+    pin VOUT: power out;
+    pin GND: ground;
+    const vout: voltage;
+    const i_max: current;
+    const vin: voltage;
+    const vin_min: voltage;         // REQUIRED in practice: the straddle
+    const vin_max: voltage;         //   is the reason this stage exists
+    const noise: voltage;           // optional
+    const efficiency_min: float;    // optional
+    const temp_min: temperature;
+    const temp_max: temperature;
+    const qual: string;
+    const asil: string;
+}

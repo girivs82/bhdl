@@ -2970,7 +2970,7 @@ pub fn check_powertree_acceptance(
                 // survey says exactly why nothing bound
                 fix_suggestion: format!(
                     "no library block resolves this requirement (the ⚙ survey lists every candidate's near-miss): add or extend an `as design` block that `impl`s {}, or commit one by hand with `resolve {} = <Block>(…);` — a template block needs your datasheet / power-stage args there",
-                    match module_name.as_str() { "GenericLdo" => "LdoStage", "GenericBuckExt" => "BuckExtStage", "GenericPrereg" => "PreregStage", _ => "BuckStage" },
+                    match module_name.as_str() { "GenericLdo" => "LdoStage", "GenericBuckExt" => "BuckExtStage", "GenericPrereg" => "PreregStage", "GenericBoost" => "BoostStage", "GenericBuckBoost" => "BuckBoostStage", _ => "BuckStage" },
                     inst.name
                 ),
                 standard_reference: None,

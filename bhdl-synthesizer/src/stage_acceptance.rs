@@ -301,11 +301,19 @@ pub fn estimate_dissipation_w(
             Some((vin - vout).max(0.0) * i + vin * i_q_a.unwrap_or(0.0))
         }
         "switching_regulator" => {
-            // physics loss model first (the chooser's form), when declared
+            // physics loss model first (the chooser's form), when declared.
+            // BOOST (vout > vin): the switch carries the INPUT current
+            // I_in = I·V_out/V_in at duty D = 1 − V_in/V_out, and the
+            // transitions swing V_out. BUCK: conduction at D = V_out/V_in.
             if let (Some(vin), Some(vout), Some(rds), Some(f_sw), Some(t_sw)) =
                 (vin_v, vout_v, rds_on_ohm, f_sw_hz, t_sw_s)
             {
-                if vin > 0.0 {
+                if vin > 0.0 && vout > 0.0 {
+                    if vout > vin {
+                        let i_in = i * vout / vin;
+                        let duty = 1.0 - vin / vout;
+                        return Some(i_in * i_in * rds * duty + vout * i_in * f_sw * t_sw + vin * i_q_a.unwrap_or(0.0));
+                    }
                     let duty = vout / vin;
                     return Some(i * i * rds * duty + vin * i * f_sw * t_sw + vin * i_q_a.unwrap_or(0.0));
                 }

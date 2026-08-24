@@ -2758,3 +2758,60 @@ board PassThrough {{
     let tj = rows.iter().find(|r| r.refdes == "fe_u" && r.class == "junction temperature").expect("eFuse T_J row");
     assert!(tj.ripple.clone().unwrap_or_default().contains("× 38.6°C/W"), "{tj:?}");
 }
+
+/// STEP-UP: a rail above its feed gets a Boost stage (it used to fall
+/// silently into the buck path with duty > 1) — the switch carries the
+/// INPUT current I_out·V_out/V_in and the rating is derated against it;
+/// the tree emits a `BoostStage(...)` requirement (no implementer yet —
+/// honest placeholder); the estimator uses the boost loss form
+/// (conduction at D = 1 − Vin/Vout on the input current, transitions
+/// swing Vout); BuckBoostStage exists for straddling-feed requirements.
+#[tokio::test]
+async fn boost_topology_and_stage_interface() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    use bhdl_synthesizer::powertree::{emit_power_region, harvest_loads, propose_trees, splice_power_region, Topology};
+    let src = r#"
+entity Loady() {
+    pin 1: power in;
+    pin 2: ground;
+    attribute component_class = "ic";
+    domain VDD pins="1" v=12V tol=5% i_nom=0.2A i_max=0.3A
+        source="FIXTURE — boost probe";
+}
+board BoostProbe {
+    power VBAT = 5V @ 3A;
+    power V12 = 12V;
+    ground GND;
+    @V12 -> ldy: Loady().1;
+    ldy.2 -> @GND;
+}
+"#.to_string();
+    let pr = parse(&src);
+    assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.unwrap();
+    let h = harvest_loads(&n, &sf);
+    let opts = propose_trees(&h, "VBAT").expect("options");
+    let st = opts[0].stages.iter().find(|s| s.to == "V12").expect("V12 stage");
+    assert_eq!(st.topology, Topology::Boost, "{st:#?}");
+    // rating = the INPUT current 0.3·12/5 = 0.72 A, derated /0.8 = 0.9 A
+    assert!((st.required_rating_a - 0.9).abs() < 1e-9, "{st:#?}");
+    assert!(st.eff_basis.contains("INPUT current 0.72A"), "{st:#?}");
+    // emits a BoostStage requirement; resolves to the honest placeholder
+    let region = emit_power_region(&opts[0], "GND");
+    assert!(region.contains("BoostStage(vout=12V, i_max=0.3A, vin=5V)"), "{region}");
+    let emitted = splice_power_region(&src, &region).unwrap();
+    let r = bhdl_synthesizer::stage_resolution::resolve_stages(&emitted, ws.join("bhdl-stdlib").as_path(), &[]).unwrap().unwrap();
+    let u = r.resolutions.iter().find(|x| x.instance == "u_v12").unwrap();
+    assert!(u.bound.is_none() && u.candidates.is_empty(), "no BoostStage implementer yet: {u:#?}");
+    assert!(r.source.contains("u_v12: GenericBoost("), "{}", r.source);
+    // estimator: boost loss form — 0.3 A out, 5→12 V, 100 mΩ, 1 MHz, 20 ns:
+    // I_in = 0.72, D = 0.583 → 0.030 + 12·0.72·0.02 = 0.203 W
+    let p = bhdl_synthesizer::stage_acceptance::estimate_dissipation_w(
+        "switching_regulator", Some(5.0), Some(12.0), Some(0.3), None, None, Some(0.1), Some(1.0e6), Some(20e-9),
+    ).unwrap();
+    assert!((p - (0.72_f64 * 0.72 * 0.1 * (1.0 - 5.0 / 12.0) + 12.0 * 0.72 * 1.0e6 * 20e-9)).abs() < 1e-9, "{p}");
+}

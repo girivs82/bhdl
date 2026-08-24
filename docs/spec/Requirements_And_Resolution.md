@@ -330,6 +330,20 @@ Principles that fall out:
    FET's axes travel with the override and the block is a TEMPLATE
    (`resolve fe = IdealDiode_LM74700(fet="…", fet_id_max=…, …)`), with
    `where … i_out_max <= 0.8 * fet_id_max, fet_vds_max >= v_in`.
+   `BoostStage` (step-up: the rail sits ABOVE its feed) uses the same
+   vocabulary; the power tree now plans a Boost stage for such a rail
+   (it used to fall silently into the buck path with duty > 1) and
+   states the boost physics: the switch carries the INPUT current
+   I_out·V_out/V_in, the rating/derating are against that, and the
+   estimator's loss form is conduction at D = 1 − V_in/V_out on the
+   input current with transitions swinging V_out. `BuckBoostStage` is
+   for a feed RANGE that straddles the output (battery discharge across
+   V_out): the straddle IS the requirement, so vin_min/vin_max must be
+   stated — the tree carries one nominal feed voltage and never emits
+   it. Neither has an implementer yet: the survey says so (visible
+   missing coverage; a vendor boost block must promise its DELIVERABLE
+   output current at the ratio — its switch limit × V_in/V_out × η is
+   the vendor's arithmetic, never invented here).
    `BuckExtStage` (controller + external power stage; `phases` is part
    of the requirement) is the third interface; the power tree emits it
    for `BuckExternal` stages. Its only implementer is the generic
@@ -486,6 +500,8 @@ UNCHECKED against a requirement that states it — never a pass.
 | `LdoStage` | `Ldo_NCP1117` | auto (5 V) | 1 A, 0…125 °C ambient (NCP grade), θ_JA 160 min-pad | vin range, noise, qual | — |
 | `LdoStage` | `LinearRegulator` (78xx class) | template | 40 µV class, headroom | i_max, vin range, temp, qual | class numbers |
 | `BuckExtStage` | `BuckController` | template | 1 phase; rating = the FETs' | vin range, noise, temp, qual | FETs + axes |
+| `BoostStage` | — (no implementer yet) | — | — | — | — |
+| `BuckBoostStage` | — (no implementer yet) | — | — | — | — |
 | `PreregStage` | `PassiveFrontEnd` (fuse + TVS) | auto | fuse rating, `ov_clamp`, 0 V … clamp point | ov_trip, uv_trip, reverse_polarity, temp, qual | — |
 | `PreregStage` | `Efuse_TPS2660` | template | 2 A, 4.2–55 V, `ov_trip`, `uv_trip`, `reverse_polarity`, T_J ≤ 150 °C via θ_JA 38.6 | ov_clamp, qual | `r_ilim` (ILIM law not in the library) |
 | `PreregStage` | `IdealDiode_LM74700` | template | rating = the FET's, 3.2–65 V, `reverse_polarity`, AEC-Q100 grade 1 (−40…125 °C) | ov_clamp, ov_trip, uv_trip | pass FET + axes |

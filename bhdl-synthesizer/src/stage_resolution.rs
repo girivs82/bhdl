@@ -431,6 +431,8 @@ pub fn resolve_stages(
                     "LdoStage" => "GenericLdo",
                     "BuckExtStage" => "GenericBuckExt",
                     "PreregStage" => "GenericPrereg",
+                    "BoostStage" => "GenericBoost",
+                    "BuckBoostStage" => "GenericBuckBoost",
                     _ => "GenericBuck",
                 };
                 imports_needed.insert(generic.to_string(), "bhdl-stdlib/power/generic_regulators.bhdl".into());

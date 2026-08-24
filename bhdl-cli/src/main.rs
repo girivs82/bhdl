@@ -1975,6 +1975,7 @@ async fn run_powertree(
                         bhdl_synthesizer::powertree::Topology::Buck => "buck    ".cyan().to_string(),
                         bhdl_synthesizer::powertree::Topology::BuckExternal => format!("buck+ext {}φ", st.phases).blue().to_string(),
                         bhdl_synthesizer::powertree::Topology::Ldo => "LDO     ".magenta().to_string(),
+                        bhdl_synthesizer::powertree::Topology::Boost => "boost   ".green().to_string(),
                     };
                     println!(
                         "    {} {:>10} → {:<10} {:>5.2}V→{:<4.2}V  {:.3}A nom / {:.2}A max (part rating ≥ {:.2}A — 80% derate)  eff {:>5.1}% ({})  diss {:>5.0}mW  noise ≤ {:.0}µVrms  [{}]",

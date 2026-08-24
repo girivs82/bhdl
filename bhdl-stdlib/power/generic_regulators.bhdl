@@ -69,3 +69,27 @@ entity GenericPrereg(vin: voltage, vout: voltage, rated: current) {
     attribute topology = "prereg";
     attribute kicad_symbol = "Power_Protection:Generic";
 }
+
+entity GenericBoost(vin: voltage, vout: voltage, rated: current) {
+    pin VIN: power in;
+    pin VOUT: power out;
+    pin GND: ground;
+    attribute component_class = "regulator";
+    attribute vin_nom = vin;
+    attribute vout_nom = vout;
+    attribute i_rating = rated;
+    attribute topology = "boost";
+    attribute kicad_symbol = "Regulator_Switching:Generic";
+}
+
+entity GenericBuckBoost(vin: voltage, vout: voltage, rated: current) {
+    pin VIN: power in;
+    pin VOUT: power out;
+    pin GND: ground;
+    attribute component_class = "regulator";
+    attribute vin_nom = vin;
+    attribute vout_nom = vout;
+    attribute i_rating = rated;
+    attribute topology = "buck_boost";
+    attribute kicad_symbol = "Regulator_Switching:Generic";
+}

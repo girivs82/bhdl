@@ -336,6 +336,14 @@ fn stage_cost_units(topology: &Topology, rating_a: f64, phases: usize) -> f64 {
             x if x <= 5.0 => 6.0,
             _ => 9.0,
         },
+        // boost: same integrated-converter class as the buck bands (the
+        // rating is the SWITCH/input current, already reflected in
+        // rating_a by the caller)
+        Topology::Boost => match rating_a {
+            x if x <= 1.0 => 4.0,
+            x if x <= 5.0 => 6.0,
+            _ => 9.0,
+        },
         // controller (base + per-phase premium) + one power stage,
         // inductor and phase passives PER PHASE — cost scales with
         // current the way the board actually does (a 200A rail is
@@ -377,6 +385,13 @@ fn buck_eff_at(i_a: f64, vin: f64, vout: f64) -> f64 {
     (buck_eff_pct(i_a) - ratio_penalty_pct(vin, vout)).max(70.0)
 }
 
+/// Boost efficiency estimate: the buck current band minus the STEP-UP
+/// ratio penalty (vout/vin through the same penalty table — deep
+/// step-up runs a long duty cycle and high input current).
+fn boost_eff_at(i_a: f64, vin: f64, vout: f64) -> f64 {
+    (buck_eff_pct(i_a) - ratio_penalty_pct(vout, vin)).max(70.0)
+}
+
 /// External-stage efficiency with the same ratio penalty.
 fn ext_eff_at(vin: f64, vout: f64) -> f64 {
     (EXT_BUCK_EFF_PCT - ratio_penalty_pct(vin, vout)).max(70.0)
@@ -405,6 +420,10 @@ pub enum Topology {
     /// Controller + external power stages — high current, loss spread
     /// across discrete FETs.
     BuckExternal,
+    /// Integrated boost (step-up: the rail sits ABOVE its feed). The
+    /// switch carries the INPUT current I_out·V_out/V_in — ratings and
+    /// derating are stated against that, not the output current.
+    Boost,
     Ldo,
 }
 
@@ -816,6 +835,41 @@ pub fn propose_trees_with_policy(
                     r.net, input
                 ));
             }
+            // ── STEP-UP: the rail sits above its feed — neither a buck
+            // nor an LDO can make it. Boost stage; the switch current is
+            // the INPUT current I·V_out/V_in and the rating/derating are
+            // stated against it. (A feed RANGE straddling the rail —
+            // battery discharge across vout — needs a buck-boost: the
+            // harvest carries one nominal feed voltage, so that case is
+            // the requirement's to state via vin_min/vin_max on a
+            // BuckBoostStage; noted, not guessed.)
+            if r.voltage > rfeed_v + 1e-9 {
+                let i_in_max = max * r.voltage / rfeed_v;
+                let eff = boost_eff_at(nom, rfeed_v, r.voltage);
+                let p_out = r.voltage * nom;
+                stages.push(StagePlan {
+                    topology: Topology::Boost,
+                    from: rfeed.to_string(),
+                    to: r.net.clone(),
+                    vin: rfeed_v,
+                    vout: r.voltage,
+                    i_nom_a: nom,
+                    i_max_a: max,
+                    eff_pct: eff,
+                    eff_basis: format!(
+                        "estimate: conservative boost band at {nom:.2}A; step-up {:.1}:1 penalty {:.0}pt; switch carries the INPUT current {i_in_max:.2}A = I_out·V_out/V_in",
+                        r.voltage / rfeed_v,
+                        ratio_penalty_pct(r.voltage, rfeed_v)
+                    ),
+                    p_diss_w: p_out * (100.0 / eff - 1.0),
+                    noise_assumed_uvrms: BUCK_NOISE_FLOOR_UVRMS,
+                    serves: r.loads.clone(),
+                    cost_units: stage_cost_units(&Topology::Boost, i_in_max / CURRENT_DERATE, 1),
+                    phases: 1,
+                    required_rating_a: i_in_max / CURRENT_DERATE,
+                });
+                continue;
+            }
             let direct_ldo_diss = (rfeed_v - r.voltage) * max;
             if needs_ldo(r) {
                 if direct_ldo_diss <= LDO_DISS_BOUND_W && strategy != "efficiency" {
@@ -1072,7 +1126,7 @@ pub const EMIT_BEGIN: &str =
 pub const EMIT_END: &str = "// ── END GENERATED POWER TREE ──";
 
 /// The import the emitted region needs at file level.
-pub const EMIT_IMPORT: &str = "import { BuckStage, LdoStage, BuckExtStage, PreregStage } from \"bhdl-stdlib/power/stages.bhdl\";";
+pub const EMIT_IMPORT: &str = "import { BuckStage, LdoStage, BuckExtStage, PreregStage, BoostStage } from \"bhdl-stdlib/power/stages.bhdl\";";
 
 fn fmt_v(v: f64) -> String {
     format!("{v}V")
@@ -1130,12 +1184,13 @@ pub fn emit_power_region(option: &TreeOption, gnd: &str) -> String {
         // assumption where it is a real ceiling. Controller+external
         // stages and the prereg have no interface yet and stay generic.
         match st.topology {
-            Topology::Buck | Topology::Ldo | Topology::BuckExternal | Topology::Prereg => {
+            Topology::Buck | Topology::Ldo | Topology::BuckExternal | Topology::Prereg | Topology::Boost => {
                 let iface = match st.topology {
                     Topology::Buck => "BuckStage",
                     Topology::Ldo => "LdoStage",
                     Topology::BuckExternal => "BuckExtStage",
                     Topology::Prereg => "PreregStage",
+                    Topology::Boost => "BoostStage",
                 };
                 let noise = if st.topology == Topology::Ldo && st.noise_assumed_uvrms > 0.0 {
                     format!(", noise={:.0}uV", st.noise_assumed_uvrms)
