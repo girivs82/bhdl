@@ -26,7 +26,10 @@ entity GenericBuck(vin: voltage, vout: voltage, rated: current) {
     pin VIN: power in;
     pin VOUT: power out;
     pin GND: ground;
+    pin EN: signal in;    // optional (chain input) — placeholder accepts the wiring the tree emits
+    pin PG: signal out;   // optional (chain output)
     attribute component_class = "regulator";
+    attribute gated_pins = "EN,PG";
     attribute vin_nom = vin;
     attribute vout_nom = vout;
     attribute i_rating = rated;
@@ -38,7 +41,10 @@ entity GenericBuckExt(vin: voltage, vout: voltage, rated: current) {
     pin VIN: power in;
     pin VOUT: power out;
     pin GND: ground;
+    pin EN: signal in;    // optional (chain input) — placeholder accepts the wiring the tree emits
+    pin PG: signal out;   // optional (chain output)
     attribute component_class = "regulator";
+    attribute gated_pins = "EN,PG";
     attribute vin_nom = vin;
     attribute vout_nom = vout;
     attribute i_rating = rated;
@@ -50,7 +56,10 @@ entity GenericLdo(vin: voltage, vout: voltage, rated: current) {
     pin VIN: power in;
     pin VOUT: power out;
     pin GND: ground;
+    pin EN: signal in;    // optional (chain input) — placeholder accepts the wiring the tree emits
+    pin PG: signal out;   // optional (chain output)
     attribute component_class = "regulator";
+    attribute gated_pins = "EN,PG";
     attribute vin_nom = vin;
     attribute vout_nom = vout;
     attribute i_rating = rated;
@@ -62,6 +71,8 @@ entity GenericPrereg(vin: voltage, vout: voltage, rated: current) {
     pin VIN: power in;
     pin VOUT: power out;
     pin GND: ground;
+    pin EN: signal in;    // optional (chain input) — placeholder accepts the wiring the tree emits
+    pin PG: signal out;   // optional (chain output)
     attribute component_class = "protection";
     attribute vin_nom = vin;
     attribute vout_nom = vout;
@@ -74,7 +85,10 @@ entity GenericBoost(vin: voltage, vout: voltage, rated: current) {
     pin VIN: power in;
     pin VOUT: power out;
     pin GND: ground;
+    pin EN: signal in;    // optional (chain input) — placeholder accepts the wiring the tree emits
+    pin PG: signal out;   // optional (chain output)
     attribute component_class = "regulator";
+    attribute gated_pins = "EN,PG";
     attribute vin_nom = vin;
     attribute vout_nom = vout;
     attribute i_rating = rated;
@@ -86,7 +100,10 @@ entity GenericBuckBoost(vin: voltage, vout: voltage, rated: current) {
     pin VIN: power in;
     pin VOUT: power out;
     pin GND: ground;
+    pin EN: signal in;    // optional (chain input) — placeholder accepts the wiring the tree emits
+    pin PG: signal out;   // optional (chain output)
     attribute component_class = "regulator";
+    attribute gated_pins = "EN,PG";
     attribute vin_nom = vin;
     attribute vout_nom = vout;
     attribute i_rating = rated;

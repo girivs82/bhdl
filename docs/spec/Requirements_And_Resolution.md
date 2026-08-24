@@ -666,3 +666,39 @@ the rail is good (a REAL composition flaw the pairwise check blesses);
 large bulk + PG chain → clean. `sw_enabled` rails are excluded from
 the hardware timeline, stated. Exit is non-zero when any declared
 window fails.
+
+### 7.2 Toward the automatic PDN — EN/PG on the interfaces, auto-decouple
+
+The pieces of §1–§7.1 compose into a closed loop: plan the tree,
+resolve the regulators, synthesize the decap networks, size the bulk
+from the power-up timeline, synthesize the sequencing chains, verify —
+one emitted region. Two enablers land first:
+
+- **EN/PG contract pins on every stage interface** (and the Generic*
+  placeholders, `gated_pins`-exempt): a board — or the tree's chain
+  synthesizer — can wire an enable chain against the INTERFACE before
+  knowing the block. A block whose part has no PG simply cannot anchor
+  a PG chain (only `BuckBoost_TPS63020` exposes one today); the chain
+  synthesizer must fall back to rail-RC there.
+- **Auto-`decouple`** (`powertree::decouple_worklist`): every
+  instantiated domain declaring a Z(f) mask gets its `decouple`
+  statement emitted into the generated region — when the project names
+  its capacitor library, `requirements { decap_lib: "<path>"; }`,
+  because C/ESR/ESL are library DATA this repo never invents (the
+  `r_ilim` doctrine). Without `decap_lib` the worklist is a stated ⚠
+  gap; a hand-written `decouple` always wins. The emitted statement
+  runs through the normal decap synthesis inside `--emit`'s re-verify,
+  so an infeasible mask FAILS the emission loudly and restores the
+  board — the emission gate and the decap physics are one judgement.
+  Project keys are now WHITELISTED into stage requirements (`qual`,
+  `asil`, `temp_*`, `noise`, `efficiency_min`, `vin_*`) — other keys
+  (`decap_lib`, …) have their own consumers and no longer leak into
+  every requirement.
+
+Still ahead (the agreed plan): the chain synthesizer + bulk-sizing
+fixpoint in `--emit` (the powerup knee finding run backwards:
+C ≥ deficit·t_inrush/ΔV_allowed), load-step (EDP) axes feeding bulk
+sizing alongside the knee, and the full-system interaction simulation —
+the PWL engine's post-settle phase firing each domain's declared
+`step_a`/`step_rise` (and coincident sibling steps) to catch
+cross-regulation through shared feeds.

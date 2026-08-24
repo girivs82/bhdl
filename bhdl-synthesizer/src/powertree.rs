@@ -1126,6 +1126,58 @@ pub const EMIT_BEGIN: &str =
 pub const EMIT_END: &str = "// ── END GENERATED POWER TREE ──";
 
 /// The import the emitted region needs at file level.
+
+/// AUTO-DECOUPLE worklist (spec §7.2): every instantiated domain that
+/// declares a Z(f) mask needs a `decouple` statement for the decap
+/// synthesizer to size its network. The tree emits them itself when the
+/// project names its capacitor library —
+///   requirements { decap_lib: "path/to/decap_lib.bhdl"; }
+/// — because the library's C/ESR/ESL figures are DATA this repo does
+/// not invent (the tps2660 doctrine). Without `decap_lib` the worklist
+/// is a stated gap, never a silent omission. Domains that already have
+/// a hand-written `decouple` are skipped.
+pub fn decouple_worklist(
+    netlist: &Netlist,
+    sf: &SourceFile,
+    board_text: &str,
+) -> (Vec<String>, Vec<String>) {
+    let masked = crate::stage_resolution::mask_comments(board_text);
+    let decap_lib = crate::stage_resolution::scan_project_requirements(&masked)
+        .into_iter()
+        .find(|(k, _)| k == "decap_lib")
+        .map(|(_, v)| v.trim_matches('"').to_string());
+    let domains = crate::safety_model::entity_domain_map(&sf.syntax().clone());
+    let mut stmts = Vec::new();
+    let mut notes = Vec::new();
+    for (inst_id, inst) in netlist.instances.iter() {
+        if crate::is_template_stub(netlist, inst_id) {
+            continue;
+        }
+        let ety = netlist
+            .modules
+            .get(inst.definition)
+            .map(|m| m.name.clone())
+            .unwrap_or_default();
+        let Some((doms, _)) = domains.get(&ety) else { continue };
+        for d in doms {
+            if d.zmask.is_empty() {
+                continue;
+            }
+            let target = format!("{}.{}", inst.name, d.name);
+            if masked.contains(&format!("decouple {target}")) {
+                continue; // hand-written statement wins
+            }
+            match &decap_lib {
+                Some(lib) => stmts.push(format!("decouple {target} from \"{lib}\";")),
+                None => notes.push(format!(
+                    "{target} declares a Z(f) mask but no decap network is synthesized: name the project capacitor library — `requirements {{ decap_lib: \"<path>\"; }}` — and re-emit (C/ESR/ESL are library data, never invented here)"
+                )),
+            }
+        }
+    }
+    (stmts, notes)
+}
+
 pub const EMIT_IMPORT: &str = "import { BuckStage, LdoStage, BuckExtStage, PreregStage, BoostStage } from \"bhdl-stdlib/power/stages.bhdl\";";
 
 fn fmt_v(v: f64) -> String {

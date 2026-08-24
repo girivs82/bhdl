@@ -3189,3 +3189,56 @@ board KneeBoard {{
     );
     assert!(v33g > v50g, "PG chain must hold V33 until V50 is truly good");
 }
+
+/// Auto-decouple (spec §7.2): the power tree emits `decouple` for every
+/// zmask-declaring domain — when the project names its capacitor
+/// library. Without `decap_lib` the worklist is a STATED gap (C/ESR/ESL
+/// are library data, never invented); a hand-written statement wins.
+#[tokio::test]
+async fn powertree_auto_decouple_worklist() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let board = |req: &str, hand: &str| format!(r#"
+import {{ Ind }} from "bhdl-stdlib/passives/inductor.bhdl";
+entity PdnSoc() {{
+    pin 1: power in;
+    pin GND: ground;
+    domain VDD pins="1" v=3.3V i_nom=0.5A zmask="100kHz:200m 10MHz:200m" pdn_r=1m pdn_l=1n source="FIXTURE — autopdn probe";
+}}
+board AutoPdn {{
+    {req}
+    power VIN12 = 12V @ 3A;
+    power V33 = 3.3V @ 1A;
+    ground GND;
+    soc: PdnSoc();
+    @V33 -> l_feed: Ind(1µH).1; l_feed.2 -> soc.1; soc.GND -> @GND;
+    {hand}
+}}
+"#);
+    let run = |text: String| async move {
+        let pr = parse(&text);
+        assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+        let sf = SourceFile::cast(pr.syntax()).unwrap();
+        let analysis = analyze(&sf);
+        let mut gen = NetlistGenerator::new();
+        let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+        let (stmts, notes) = bhdl_synthesizer::powertree::decouple_worklist(&n, &sf, &text);
+        (stmts, notes)
+    };
+    // with the project library: the statement is emitted
+    let (stmts, notes) = run(board(r#"requirements { decap_lib: "./tests/circuits/realistic/decap_lib_fixture.bhdl"; }"#, "")).await;
+    assert_eq!(stmts.len(), 1, "{stmts:?} {notes:?}");
+    assert!(stmts[0].starts_with("decouple soc.VDD from \"./tests/circuits/realistic/decap_lib_fixture.bhdl\""), "{}", stmts[0]);
+    assert!(notes.is_empty(), "{notes:?}");
+    // without it: a stated gap, never silence
+    let (stmts, notes) = run(board("", "")).await;
+    assert!(stmts.is_empty());
+    assert!(notes.iter().any(|n| n.contains("soc.VDD") && n.contains("decap_lib") && n.contains("never invented")), "{notes:?}");
+    // a hand-written statement wins (no duplicate emission, no note)
+    let (stmts, notes) = run(board(
+        r#"requirements { decap_lib: "./tests/circuits/realistic/decap_lib_fixture.bhdl"; }"#,
+        r#"decouple soc.VDD from "./tests/circuits/realistic/decap_lib_fixture.bhdl" max_parts=4;"#,
+    )).await;
+    assert!(stmts.is_empty(), "{stmts:?}");
+    assert!(notes.is_empty(), "{notes:?}");
+}

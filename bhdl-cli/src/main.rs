@@ -2077,7 +2077,29 @@ async fn run_powertree(
                     .filter_map(|(_, nn)| nn.name.clone())
                     .max_by_key(|nm| (nm == "GND") as u8)
                     .ok_or_else(|| anyhow::anyhow!("--emit: the board has no ground net"))?;
-                let region = bhdl_synthesizer::powertree::emit_power_region(opt, &gnd);
+                let mut region = bhdl_synthesizer::powertree::emit_power_region(opt, &gnd);
+                // AUTO-DECOUPLE (spec §7.2): every zmask-declaring domain
+                // gets its `decouple` statement when the project names its
+                // capacitor library; without one the gap is STATED.
+                {
+                    let (stmts, notes) = bhdl_synthesizer::powertree::decouple_worklist(
+                        &netlist, source_file, input_content,
+                    );
+                    if !stmts.is_empty() {
+                        let block = format!(
+                            "\n    // decap networks (auto: domains declaring Z(f) masks)\n{}\n",
+                            stmts.iter().map(|s| format!("    {s}")).collect::<Vec<_>>().join("\n")
+                        );
+                        region = region.replace(
+                            bhdl_synthesizer::powertree::EMIT_END,
+                            &format!("{block}    {}", bhdl_synthesizer::powertree::EMIT_END),
+                        );
+                        println!("  auto-decouple: {} statement(s) emitted", stmts.len());
+                    }
+                    for n in &notes {
+                        println!("  ⚠ {n}");
+                    }
+                }
                 // splice into the ON-DISK text (input_content is the
                 // desugared form — never write that back)
                 let disk_raw = fs::read_to_string(input_path)?;

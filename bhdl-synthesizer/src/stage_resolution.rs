@@ -205,9 +205,16 @@ pub fn resolve_stages(
     // wins. Merged BEFORE evaluation so the stamped text, the lock and
     // ERC032 all see one requirement.
     if !project.is_empty() {
+        // Only STAGE axes merge into stage requirements. Other project
+        // keys (decap_lib, …) have their own consumers — leaking them
+        // here turns into unknown-arg noise on every requirement.
+        const STAGE_KEYS: &[&str] = &[
+            "qual", "asil", "temp_min", "temp_max", "noise", "efficiency_min",
+            "vin_min", "vin_max",
+        ];
         for r in reqs.iter_mut() {
             for (k, v) in &project {
-                if !r.params.iter().any(|(rk, _)| rk == k) {
+                if STAGE_KEYS.contains(&k.as_str()) && !r.params.iter().any(|(rk, _)| rk == k) {
                     r.params.push((k.clone(), v.clone()));
                 }
             }
@@ -800,7 +807,7 @@ fn entity_params_txt(src: &str, name: &str) -> Vec<(String, Option<String>)> {
 }
 
 /// Replace `// …` comment bodies with spaces (same length) so offsets hold.
-fn mask_comments(src: &str) -> String {
+pub(crate) fn mask_comments(src: &str) -> String {
     let mut out = String::with_capacity(src.len());
     for line in src.split_inclusive('\n') {
         if let Some(p) = line.find("//") {
@@ -971,7 +978,7 @@ fn scan_override_spans(masked: &str) -> Vec<(usize, usize, String, String, Vec<(
 }
 
 /// `requirements { key: value; … }` at board scope (comment-masked text).
-fn scan_project_requirements(masked: &str) -> Vec<(String, String)> {
+pub(crate) fn scan_project_requirements(masked: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
     let mut off = 0usize;
     while let Some(p) = masked[off..].find("requirements") {

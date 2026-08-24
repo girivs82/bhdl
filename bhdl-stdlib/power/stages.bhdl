@@ -57,6 +57,8 @@ trait BuckStage {
     pin VIN: power in;
     pin VOUT: power out;
     pin GND: ground;
+    pin EN: signal in;              // optional — the sequencing chain input (wired ⇒ used; unwired ⇒ the block self-enables)
+    pin PG: signal out;             // optional — power-good chain output (a block whose part has no PG cannot anchor a PG chain)
     const vout: voltage;            // regulated output
     const i_max: current;           // maximum load current (the block is derated against this)
     const vin: voltage;             // nominal input rail
@@ -76,6 +78,8 @@ trait LdoStage {
     pin VIN: power in;
     pin VOUT: power out;
     pin GND: ground;
+    pin EN: signal in;              // optional — the sequencing chain input (wired ⇒ used; unwired ⇒ the block self-enables)
+    pin PG: signal out;             // optional — power-good chain output (a block whose part has no PG cannot anchor a PG chain)
     const vout: voltage;
     const i_max: current;
     const vin: voltage;
@@ -104,6 +108,8 @@ trait BuckExtStage {
     pin VIN: power in;
     pin VOUT: power out;
     pin GND: ground;
+    pin EN: signal in;              // optional — the sequencing chain input (wired ⇒ used; unwired ⇒ the block self-enables)
+    pin PG: signal out;             // optional — power-good chain output (a block whose part has no PG cannot anchor a PG chain)
     const vout: voltage;
     const i_max: current;
     const vin: voltage;
@@ -135,6 +141,8 @@ trait PreregStage {
     pin VIN: power in;
     pin VOUT: power out;
     pin GND: ground;
+    pin EN: signal in;              // optional — the sequencing chain input (wired ⇒ used; unwired ⇒ the block self-enables)
+    pin PG: signal out;             // optional — power-good chain output (a block whose part has no PG cannot anchor a PG chain)
     const vout: voltage;
     const i_max: current;
     const vin: voltage;
@@ -159,6 +167,8 @@ trait BoostStage {
     pin VIN: power in;
     pin VOUT: power out;
     pin GND: ground;
+    pin EN: signal in;              // optional — the sequencing chain input (wired ⇒ used; unwired ⇒ the block self-enables)
+    pin PG: signal out;             // optional — power-good chain output (a block whose part has no PG cannot anchor a PG chain)
     const vout: voltage;
     const i_max: current;
     const vin: voltage;
@@ -182,6 +192,8 @@ trait BuckBoostStage {
     pin VIN: power in;
     pin VOUT: power out;
     pin GND: ground;
+    pin EN: signal in;              // optional — the sequencing chain input (wired ⇒ used; unwired ⇒ the block self-enables)
+    pin PG: signal out;             // optional — power-good chain output (a block whose part has no PG cannot anchor a PG chain)
     const vout: voltage;
     const i_max: current;
     const vin: voltage;
