@@ -3003,3 +3003,109 @@ board BuckBoostTmpl {
     let rv = bhdl_synthesizer::stage_acceptance::parse_si(&rt).unwrap();
     assert!((rv - 525e3).abs() / 525e3 < 0.02, "{rt}");
 }
+
+/// Power-up sequencing (ERC033): the domain contract carries any
+/// combination of slots, explicit after-edges with hard t_min, and
+/// sw-enabled rails; the netlist must IMPLEMENT it. The happy board
+/// satisfies a slot edge and an after-edge through one rail-RC chain
+/// (t = R·C·ln(Vs/(Vs−V_IH)) computed against t_min via the stage's
+/// en_vih) and states the sw_enabled rail as a firmware assumption;
+/// the variants break the chain (enable unwired) and shrink the C
+/// (delay below t_min) — both named with the arithmetic.
+#[tokio::test]
+async fn power_sequencing_contract_and_erc033() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let board = |c_del: &str, chain: bool| {
+        let chain_txt = if chain {
+            format!("@V50 -> R_del: Res(100kΩ).1; R_del.2 -> u3.EN;\n    u3.EN -> C_del: Cap({c_del}).1; C_del.2 -> @GND;")
+        } else {
+            String::new()
+        };
+        format!(r#"
+import {{ BuckBoost_TPS63020 }} from "bhdl-stdlib/power/tps63020.bhdl";
+import {{ LinearRegulator }} from "bhdl-stdlib/power/regulator.bhdl";
+import {{ Res }} from "bhdl-stdlib/passives/resistor.bhdl";
+import {{ Cap }} from "bhdl-stdlib/passives/capacitor.bhdl";
+entity SeqSoc() {{
+    pin 1: power in;
+    pin 2: power in;
+    pin 3: power in;
+    pin GND: ground;
+    domain VDD_CORE pins="1" v=5V i_max=1A slot=1 source="FIXTURE — seq probe";
+    domain VDD_AUX pins="2" v=3.3V i_max=0.5A slot=2 after="VDD_CORE" t_min=500us source="FIXTURE — seq probe";
+    domain VDD_DBG pins="3" v=1.8V i_max=50mA sw_enabled=true after="VDD_AUX" source="FIXTURE — seq probe";
+}}
+board SeqBoard {{
+    power VBAT = 3.6V @ 8A;
+    port V50: power out = 5V @ 1A;
+    port V33: power out = 3.3V @ 0.5A;
+    port V18: power out = 1.8V @ 100mA;
+    ground GND;
+    @VBAT -> u1: BuckBoost_TPS63020(v_out=5V, i_out_max=1A, v_in=3.6V, v_in_min=3.0V, v_in_max=4.2V).VIN;
+    u1.GND -> @GND; u1.VOUT -> @V50;
+    @VBAT -> u3: BuckBoost_TPS63020(v_out=3.3V, i_out_max=0.5A, v_in=3.6V, v_in_min=3.0V, v_in_max=4.2V).VIN;
+    u3.GND -> @GND; u3.VOUT -> @V33;
+    {chain_txt}
+    @V50 -> u2: LinearRegulator(1.8V).VIN;
+    u2.GND -> @GND; u2.VOUT -> @V18;
+    u2.EN -> R_pd: Res(100kΩ).1; R_pd.2 -> @GND;
+    soc: SeqSoc();
+    @V50 -> soc.1; @V33 -> soc.2; @V18 -> soc.3; soc.GND -> @GND;
+}}
+"#)
+    };
+    let build = |text: String| async move {
+        let pr = parse(&text);
+        assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+        let sf = SourceFile::cast(pr.syntax()).unwrap();
+        let analysis = analyze(&sf);
+        let mut gen = NetlistGenerator::new();
+        let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+        let v = bhdl_synthesizer::sequencing::check_power_sequencing(&n, &analysis);
+        (n, v)
+    };
+    use bhdl_synthesizer::design_rule_checker::ViolationSeverity;
+
+    // happy path: slot 1→2 and after+t_min both ride the V50→RC→EN
+    // chain (t = 1e5·22e-9·ln(5/3.8) = 604 µs ≥ 500 µs); sw_enabled is
+    // a stated firmware assumption, not an error
+    let (n, v) = build(board("22nF", true)).await;
+    let soc = n.instances.values().find(|i| i.name == "soc").expect("soc");
+    assert!(soc.attributes.contains_key("seqdom_VDD_CORE") && soc.attributes.contains_key("seqdom_VDD_AUX"), "contracts stamped: {:?}", soc.attributes.keys().collect::<Vec<_>>());
+    let errs: Vec<_> = v.iter().filter(|x| x.severity == ViolationSeverity::Error).collect();
+    assert!(errs.is_empty(), "happy board has sequencing errors: {errs:#?}");
+    assert!(v.iter().any(|x| x.severity == ViolationSeverity::Info && x.description.contains("sw_enabled") && x.description.contains("software assumption")), "{v:#?}");
+
+    // chain removed: the enable is unwired → the stage auto-enables and
+    // the declared ordering has no implementing mechanism
+    let (_n, v) = build(board("22nF", false)).await;
+    assert!(v.iter().any(|x| x.severity == ViolationSeverity::Error && x.description.contains("EN of 'u3' is unwired") && x.description.contains("auto-enables")), "{v:#?}");
+
+    // C shrunk: the RC crosses en_vih at 187 µs < the declared 500 µs
+    let (_n, v) = build(board("6.8nF", true)).await;
+    assert!(v.iter().any(|x| x.severity == ViolationSeverity::Error && x.description.contains("RC delay") && x.description.contains("t_min")), "{v:#?}");
+
+    // PG chain: u1's power-good drives u3's enable (the exposed
+    // contract PG), pulled up through the same RC — the chain is the
+    // mechanism, the RC still implements t_min
+    let (_n, v) = build(
+        board("22nF", true).replace(
+            "@V50 -> R_del:",
+            "u1.PG -> u3.EN;\n    @V50 -> R_del:",
+        ),
+    )
+    .await;
+    let errs: Vec<_> = v.iter().filter(|x| x.severity == ViolationSeverity::Error).collect();
+    assert!(errs.is_empty(), "PG-chain board has sequencing errors: {errs:#?}");
+
+    // PG chain ALONE (no RC) under a declared t_min: the chain is
+    // recognised as the mechanism, but the delay is unimplemented —
+    // this error text only fires when the PG chain was detected, so it
+    // is the non-vacuous proof of the PG mechanism
+    let (_n, v) = build(
+        board("22nF", false).replace("u3.GND -> @GND;", "u3.GND -> @GND; u1.PG -> u3.EN;"),
+    )
+    .await;
+    assert!(v.iter().any(|x| x.severity == ViolationSeverity::Error && x.description.contains("PG chain with no RC")), "{v:#?}");
+}

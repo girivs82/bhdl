@@ -67,7 +67,6 @@ async fn main() -> Result<()> {
     println!("   Diagnostics: {}", analysis_result.diagnostics.len());
     println!("   Power domains: {}", analysis_result.power_analysis.domains.len());
     println!("   Inferred components: {}", analysis_result.component_inference.inferred_components.len());
-    println!("   Power sequence steps: {}", analysis_result.power_sequencing.startup_sequence.len());
     
     // Show analysis results
     if !analysis_result.diagnostics.is_empty() {

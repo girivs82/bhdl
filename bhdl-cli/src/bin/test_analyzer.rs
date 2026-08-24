@@ -41,8 +41,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Power domains: {}", analysis_result.power_analysis.domains.len());
     println!("  Level shifters: {}", analysis_result.power_analysis.level_shifted_signals.len());
     println!("  Inferred components: {}", analysis_result.component_inference.get_inferred_components().len());
-    println!("  Startup sequence steps: {}", analysis_result.power_sequencing.startup_sequence.len());
-    println!("  Shutdown sequence steps: {}", analysis_result.power_sequencing.shutdown_sequence.len());
     
     // Show diagnostics
     if !analysis_result.diagnostics.is_empty() {
@@ -96,22 +94,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 comp.component_type,
                 value_str,
                 comp.confidence);
-        }
-    }
-    
-    // Show power sequencing
-    if !analysis_result.power_sequencing.startup_sequence.is_empty() {
-        println!("\n🔄 Power Startup Sequence:");
-        for (i, step) in analysis_result.power_sequencing.startup_sequence.iter().enumerate() {
-            if i >= 5 {
-                println!("  ... and {} more steps", analysis_result.power_sequencing.startup_sequence.len() - 5);
-                break;
-            }
-            println!("  {}. {:?} {} @ {:.1}ms delay", 
-                i + 1, 
-                step.action,
-                step.domain_name,
-                step.delay_ms);
         }
     }
     

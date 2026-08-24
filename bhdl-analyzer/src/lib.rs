@@ -20,7 +20,6 @@ mod pass3;
 mod pass4;
 pub mod power_analysis;
 pub mod component_inference;
-pub mod power_sequencing;
 pub mod component_library;
 pub mod attribute_extraction;
 pub mod spice_extraction;
@@ -44,7 +43,6 @@ use pass3::{visit_node_pass3_const_eval, Pass3Context};
 use pass4::{visit_node_pass4_bounds_checks, Pass4Context};
 use power_analysis::{analyze_power_domains, PowerAnalysisContext};
 use component_inference::ComponentInferenceContext;
-use power_sequencing::PowerSequenceGenerator;
 use attribute_analysis::AttributeAnalyzer;
 use flow_tracking::FlowTracker;
 use bhdl_common::IntentRegistry;
@@ -256,16 +254,13 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
         println!("Analyzer: No components need SPICE resolution");
     }
 
-    // Pass 7: Power Sequencing
-    println!("Analyzer: Starting Pass 7 - Power Sequencing...");
-    let mut power_sequencing = PowerSequenceGenerator::new();
-    generate_power_sequences(&mut power_sequencing, &power_context);
-    let startup_steps = power_sequencing.startup_sequence.len();
-    let shutdown_steps = power_sequencing.shutdown_sequence.len();
-    let sequencing_warnings = power_sequencing.warnings.len();
-    println!("Analyzer: Pass 7 complete. Startup steps: {}, Shutdown steps: {}, Warnings: {}", 
-             startup_steps, shutdown_steps, sequencing_warnings);
-    
+    // Pass 7 (Power Sequencing) RETIRED: the old generator invented its
+    // inputs (name-substring criticality, default delays) and nothing
+    // consumed its output. Sequencing is now a DECLARED domain contract
+    // (after=/slot=/sw_enabled) verified on the netlist by ERC033
+    // (bhdl-synthesizer sequencing.rs) — requirement/promise/verify,
+    // never generated from heuristics.
+
     // Pass 8: Attribute Analysis
     println!("Analyzer: Starting Pass 8 - Attribute Analysis...");
     let mut attribute_analyzer = AttributeAnalyzer::new();
@@ -490,14 +485,6 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
         ));
     }
 
-    // Convert power sequencing warnings to diagnostics
-    for warning in &power_sequencing.warnings {
-        diagnostics.push(types::Diagnostic::new(
-            format!("Power Sequencing: {}", warning),
-            rowan::TextRange::empty(rowan::TextSize::from(0)),
-        ));
-    }
-
 
     println!("Analysis finished. Found {} total diagnostics.", diagnostics.len());
 
@@ -509,7 +496,6 @@ pub fn analyze_with_base_path(source_file: &SourceFile, base_path: &std::path::P
         resolved_constants, // Move ownership
         power_analysis: power_context, // Move ownership
         component_inference, // Move ownership
-        power_sequencing, // Move ownership
         netlist: None, // Move ownership
         attribute_analysis, // Move ownership
         flow_tracker: flow_tracker_opt, // Move ownership
@@ -1479,37 +1465,7 @@ fn get_component_instance_name(node: &rowan::SyntaxNode<bhdl_parser::BhdlLanguag
         })
 }
 
-/// Generate power sequences based on power analysis
-fn generate_power_sequences(
-    power_sequencing: &mut PowerSequenceGenerator,
-    power_context: &PowerAnalysisContext,
-) {
-    use power_sequencing::PowerDomain as SeqPowerDomain;
 
-    // Convert power analysis domains to sequencing domains
-    for (name, power_domain) in &power_context.domains {
-        let seq_domain = SeqPowerDomain {
-            name: name.clone(),
-            voltage: power_domain.voltage,
-            max_current: power_domain.max_current,
-            enable_signal: power_domain.enable_signal.clone(),
-            good_signal: None, // Could be enhanced later
-            dependencies: power_domain.dependencies.clone(),
-            startup_delay_ms: power_domain.startup_delay_ms,
-            shutdown_delay_ms: 5.0, // Default shutdown delay
-            ramp_rate_v_per_ms: None, // Could be enhanced later
-            sequence_priority: power_domain.sequence_priority,
-            critical: name.contains("VCC") || name.contains("USB"), // Basic criticality heuristic
-        };
-        
-        power_sequencing.add_domain(seq_domain);
-    }
-
-    // Generate the sequences
-    if let Err(error) = power_sequencing.generate_sequences() {
-        power_sequencing.warnings.push(format!("Sequence generation error: {}", error));
-    }
-}
 
 /// Extract expansion recipes from all entity definitions in the source file.
 ///

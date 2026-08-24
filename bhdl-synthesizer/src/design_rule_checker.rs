@@ -275,6 +275,12 @@ impl DesignRuleChecker {
                 crate::erc::check_powertree_acceptance,
             ),
             (
+                "ERC033",
+                "Power sequencing",
+                "Declared rail power-up ordering (domain after=/slot=/sw_enabled) vs the netlist's implementing mechanism: missing/defeated enables and unmet t_min are Errors; unverifiable figures are stated UNCHECKED; sw_enabled rails are stated software assumptions (Info)",
+                crate::sequencing::check_power_sequencing,
+            ),
+            (
                 "ERC031",
                 "Feedback divider contradicts declared rail",
                 "Closed-loop output the placed FB divider programs (VREF·(1+Rtop/Rbot)) vs the rail's declared voltage — >10% apart is a shipped overvolt/undervolt (Error)",

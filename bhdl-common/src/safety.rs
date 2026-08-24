@@ -323,6 +323,30 @@ pub struct PowerDomain {
     /// policy is in force.
     #[serde(default)]
     pub always_on: bool,
+    /// Power-UP sequencing (the part's own sequencing table). Any
+    /// combination is valid: explicit edges (`after=` + optional hard
+    /// `t_min=`), slot numbers (`slot=` + optional `slot_t_min=` —
+    /// slot-N rails come up after ALL slot-N−1 rails), and
+    /// software-enabled rails (`sw_enabled=true` — firmware raises the
+    /// rail after boot; hardware must expose a signal-driven enable and
+    /// the ordering itself becomes a stated software assumption).
+    /// This domain must come up AFTER these sibling domains (names in
+    /// the same entity).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub seq_after: Vec<String>,
+    /// Hard minimum delay (s) from the `after` rails good to this
+    /// rail's enable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seq_t_min_s: Option<f64>,
+    /// Slot number in the part's power-up sequence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seq_slot: Option<u32>,
+    /// Minimum inter-slot delay (s) before this rail's slot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seq_slot_t_min_s: Option<f64>,
+    /// Firmware raises this rail after boot (see above).
+    #[serde(default)]
+    pub sw_enabled: bool,
     pub source: String,
 }
 

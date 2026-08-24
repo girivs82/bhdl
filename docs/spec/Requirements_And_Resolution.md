@@ -573,3 +573,56 @@ correcting the carried-over 500 kHz), NCP1117/D Rev. 17 (SOT-223 θ_JA
 (Topr −40…85, Pd 250 mW — no θ_JA or T_J in the datasheet, stated).
 The "Promises" column is what ERC032 re-checks on the flattened circuit
 every build.
+
+## 7. Power-up sequencing — requirement / promise / verify
+
+Sequencing is a DECLARED contract, never a generated heuristic (the old
+analyzer Pass 7 — name-substring criticality, invented default delays,
+output nobody consumed — is retired). The requirement lives on the
+load's `domain` contract, source-cited like every other axis, and any
+combination of the three spellings is valid:
+
+```bhdl
+domain VDD_CORE pins="1" v=0.8V i_max=2A slot=1              source="…";
+domain VDD_IO   pins="2" v=1.8V slot=2 slot_t_min=1ms        source="…";
+domain VDD_PHY  pins="3" v=1.2V after="VDD_CORE" t_min=500us source="…";
+domain VDD_AUX  pins="4" v=3.3V sw_enabled=true after="VDD_IO" source="…";
+```
+
+- `slot=N` — slot-N rails come up after ALL slot-(N−1) rails (the shape
+  SoC datasheets state their tables in); `slot_t_min` is the minimum
+  inter-slot delay before this rail's slot.
+- `after="A,B"` — explicit ordering edges; `t_min` is a hard minimum
+  delay on them.
+- `sw_enabled=true` — firmware raises the rail after boot. The hardware
+  obligation shrinks to "the enable IS software-reachable"; the
+  ordering itself is discharged to a STATED software assumption (Info,
+  including any declared order, for the bring-up code to honor).
+
+VERIFICATION is ERC033, on the flattened netlist (the contracts are
+stamped onto their instances as `seqdom_*` attributes at synthesis so
+the DRC-signature check can see them). Every edge `B after A` must be
+IMPLEMENTED by one of:
+
+- **PG chain** — B's supply-stage `EN` on the same net as A's stage
+  `PG` (the `BuckBoost_TPS63020` block exposes its part's PG, with the
+  Figure-7 pull-up, exactly for this);
+- **rail chain** — B's `EN` driven from rail A directly or through a
+  series R; with a C to ground the RC's enable-threshold crossing time
+  `t = R·C·ln(Vs/(Vs−V_IH))` is COMPUTED (V_IH from the stage's
+  `en_vih` datasheet attribute; Vs = the prerequisite domain's v_nom)
+  and checked against a declared `t_min`;
+- **sw_enabled** — B's `EN` on a Signal-class net (see above).
+
+A declared ordering with no mechanism — enable unwired (the stage
+auto-enables at power-in), or wired to something that is neither the
+PG nor the rail — is an Error naming the missing edge and the fix. A
+declared `t_min` with no timing element, or an RC that crosses too
+early, is an Error with the arithmetic. Missing `en_vih` is a stated
+UNCHECKED. A rail with no on-board supply stage cannot be sequenced by
+this board — stated Warning. One block driving BOTH rails of an edge is
+the multi-output-supply (PMIC) hook: it must PROMISE its built-in
+power-up order for the edge to pass; no block declares that promise
+yet, so today it is a stated UNCHECKED — this is the sequencing gate
+the aggregation post-step will use when merging per-rail stages into a
+PMIC.

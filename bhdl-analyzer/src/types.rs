@@ -5,7 +5,6 @@ use bhdl_parser::BhdlLanguage; // Needed for SyntaxNodePtr
 use crate::symbol_table::SymbolTable; // Use crate:: to refer to local module
 use crate::power_analysis::PowerAnalysisContext;
 use crate::component_inference::ComponentInferenceContext;
-use crate::power_sequencing::PowerSequenceGenerator;
 use crate::attribute_analysis::AttributeAnalysisResult;
 use crate::flow_tracking::FlowTracker;
 use crate::passes::SafetyAnalysisResult;
@@ -439,7 +438,6 @@ pub struct AnalysisResult {
     pub resolved_constants: ResolvedConstants,
     pub power_analysis: PowerAnalysisContext,
     pub component_inference: ComponentInferenceContext,
-    pub power_sequencing: PowerSequenceGenerator,
     pub netlist: Option<bhdl_netlist::Netlist>,
     pub attribute_analysis: AttributeAnalysisResult,
     pub flow_tracker: Option<FlowTracker>,
@@ -515,7 +513,6 @@ impl Default for AnalysisResult {
             resolved_constants: HashMap::new(),
             power_analysis: PowerAnalysisContext::new(),
             component_inference: ComponentInferenceContext::new(),
-            power_sequencing: PowerSequenceGenerator::new(),
             netlist: None,
             attribute_analysis: AttributeAnalysisResult {
                 attributes: HashMap::new(),

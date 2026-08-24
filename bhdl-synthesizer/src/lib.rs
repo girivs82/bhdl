@@ -51,6 +51,7 @@ pub mod trace_matrix;
 // Electrical rule checks — the real DRC content (driver conflicts,
 // diff-pair polarity, TX/RX crossing, voltage domains, I2C pull-ups).
 pub mod erc;
+pub mod sequencing;
 
 // T3 org-policy ERC plugins (BHDL_ERC_PLUGINS, JSON over stdio).
 pub mod erc_plugin;
@@ -843,6 +844,13 @@ impl NetlistGenerator {
         // (kicad_symbol/pkg/footprint) is a contradiction and a HARD
         // error — a design block has no body to solder.
         self.apply_entity_partness()?;
+
+        // Phase 4.65: stamp domain sequencing contracts onto their
+        // instances so the DRC-signature ERC033 check can verify the
+        // rail ordering on the flattened netlist.
+        if let Some(ast) = ast {
+            crate::sequencing::stamp_domain_seq(&mut self.netlist, ast);
+        }
 
         // Phase 4.7: decap-network synthesis from domain Z(f) masks
         // (`decouple <inst>.<domain> from "<lib>" ...;`). Runs after
@@ -2354,10 +2362,6 @@ impl NetlistGenerator {
             debug!("Power domain '{}': voltage={:?}, current={:?}", 
                    domain_name, domain_info.voltage, domain_info.max_current);
         }
-
-        // The power sequencing information is also valuable for semantic layout
-        let power_sequencer = &analysis.power_sequencing;
-        debug!("Power sequence has {} steps", power_sequencer.startup_sequence.len());
 
         Ok(())
     }

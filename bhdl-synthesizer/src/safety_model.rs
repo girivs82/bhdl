@@ -403,9 +403,25 @@ fn parse_domain_item(ename: &str, toks: &[String], d: &mut EntityData) {
                             pdn_l_h: henr("pdn_l"),
                             noise_uvrms: noise("noise"),
                             always_on: kv.get("always_on").map(|v| v == "true" || v == "1").unwrap_or(false),
+                            // Power-UP sequencing — any combination:
+                            // explicit edges, slots, sw-enabled.
+                            seq_after: kv
+                                .get("after")
+                                .map(|s| {
+                                    s.trim_matches('"')
+                                        .split(|c: char| c == ',' || c.is_whitespace())
+                                        .filter(|t| !t.is_empty())
+                                        .map(String::from)
+                                        .collect()
+                                })
+                                .unwrap_or_default(),
+                            seq_t_min_s: secs("t_min"),
+                            seq_slot: kv.get("slot").and_then(|v| v.parse::<u32>().ok()),
+                            seq_slot_t_min_s: secs("slot_t_min"),
+                            sw_enabled: kv.get("sw_enabled").map(|v| v == "true" || v == "1").unwrap_or(false),
                             source: src,
                         });
-                    
+
 }
 
 /// Entity-level safety data (spec §2.7), keyed by entity name.

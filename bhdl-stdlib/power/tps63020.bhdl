@@ -60,6 +60,7 @@ entity TPS63020() as part {
     attribute feedback_voltage = 0.5V;    // SLVS916I: VFB 495–505 mV
     attribute fb_equation      = "VOUT = {VREF}*(1 + {R1}/{R2})";
     attribute ovp_v            = 5.5V;    // SLVS916I: output overvoltage protection, MIN (7 V max)
+    attribute en_vih           = 1.2V;    // SLVS916I EC table: EN, PS/SYNC input high voltage, MIN
     attribute temp_min         = -40degC; // SLVS916I §6.3: operating free-air (ambient) −40 °C to 85 °C
     attribute temp_max         = 85degC;
     attribute tj_min           = -40degC; // SLVS916I §6.3: operating junction −40 °C to 125 °C
@@ -105,6 +106,7 @@ entity BuckBoost_TPS63020(
     pin VIN:  power in;
     pin VOUT: power out virtual;
     pin EN:   signal in;
+    pin PG:   signal out;     // power good (open-drain, Fig. 7 pull-up inside) — the sequencing chain output
     pin GND:  ground;
 
     // Promises (SLVS916I) + exported operating point.
@@ -122,6 +124,7 @@ entity BuckBoost_TPS63020(
     attribute i_quiescent     = 25uA;
     attribute feedback_voltage = 0.5V;
     attribute fb_equation     = "VOUT = {VREF}*(1 + {R1}/{R2})";
+    attribute en_vih          = 1.2V;     // SLVS916I EC table (EN input high, min) — the sequencing RC threshold
     attribute temp_min        = -40degC;  // SLVS916I ambient
     attribute temp_max        = 85degC;
     attribute tj_min          = -40degC;
@@ -194,8 +197,13 @@ entity BuckBoost_TPS63020(
     VOUT -> C_out: Cap(c_out).1; C_out.2 -> GND;
     VOUT -> R_top: Res(r_top_value, tolerance = 1%, supply_profile = "grade").1; R_top.2 -> u.FB;
     u.FB -> R_bot: Res(r_fb_bot, tolerance = 1%, supply_profile = "grade").1; R_bot.2 -> GND;
-    // PG pull-up per Figure 7 (open-drain; R3 = 1 MΩ)
+    // PG pull-up per Figure 7 (open-drain; R3 = 1 MΩ); the contract PG
+    // pin exposes it for power-up sequencing chains (next stage's EN)
     VOUT -> R_pg: Res(1MΩ).1; R_pg.2 -> u.PG;
+    generate if (wired(PG)) {
+        u.PG -> PG;
+    } else {
+    }
 
     // §4 device-stress at the solved operating point: worst case is the
     // boost corner at v_in_min (SLVS916I Eq. 2 note). In the 4-switch
