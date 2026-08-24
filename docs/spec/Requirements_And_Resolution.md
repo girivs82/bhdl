@@ -929,3 +929,37 @@ designer's lever, exactly like a template commit. The strict
 sequencing gate (built-in strobe order vs declared domain ordering)
 and the grouped `resolve`-commit land in a future increment, stated;
 ERC033's one-block-drives-both-rails hook is already waiting for it.
+
+## 9. The power-delivery report — `bhdl pdreport`
+
+The capstone deliverable: the document that convinces a power engineer
+the tool did its job. One markdown file (inline SVG curves), and every
+number in it was computed by the SAME pipeline that gates every build,
+or cited from a datasheet — the report renders, it never re-derives:
+
+1. **Power topology** — every stage, its bound block, topology class,
+   feed → rail, and the key datasheet figures (fSW, RDS(on), current
+   limits, θJA, η).
+2. **Requirement resolution** — every survey VERBATIM: each
+   candidate, each gate, the near-misses, the prices, the ranking
+   basis; plus the PMIC aggregation options (§8) when a set is
+   coverable.
+3. **Sizing** — the application-circuit values the blocks' `design{}`
+   procedures computed (dividers, inductors, banks), SI-formatted;
+   the symbolic derivations live in the cited block sources; the full
+   stress sign-off is `bhdl report`.
+4. **Simulated curves** — V(t) per rail from the PWL engine's actual
+   samples (waveform capture on the power-up, escalated-interaction,
+   input-loss and sleep runs), rendered as inline SVG with nominal
+   markers; every modeling approximation printed above them, stated.
+5. **Power-up** — the event timeline, per-rail good-times and sags,
+   the load-step table, the superposition screen with its
+   self-consistency verdict, and the findings verbatim.
+6. **Power-down and sleep** — both scenarios' timelines and findings.
+7. **Decap networks** — per `decouple`: the greedy commits with
+   worst-|Z|/mask after each, margin adds, single-open verification
+   counts, the final ratio.
+8. **Final PDN sanity** — the loop-stability envelope verdicts and
+   the resonance blind spots, stated.
+
+`bhdl pdreport [--output <file>]`, default `<input>.pd.md`.

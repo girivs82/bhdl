@@ -96,6 +96,28 @@ pub struct StepResponse {
     pub extra_demand_a: Vec<(String, f64)>,
 }
 
+/// One rail's sampled V(t) — the PD report's curve material.
+#[derive(Debug, Clone)]
+pub struct RailWave {
+    pub rail: String,
+    pub v_nom: f64,
+    pub points: Vec<(f64, f64)>,
+}
+
+fn waves_of(model: &Model, tr: &RunTrace) -> Vec<RailWave> {
+    model
+        .all_rails
+        .iter()
+        .enumerate()
+        .filter(|(_, (n, _))| !model.ideal_v.contains_key(n))
+        .map(|(i, (n, vn))| RailWave {
+            rail: model.net_label.get(n).cloned().unwrap_or_default(),
+            v_nom: *vn,
+            points: tr.samples.iter().map(|(t, vs)| (*t, vs[i])).collect(),
+        })
+        .collect()
+}
+
 #[derive(Debug, Default)]
 pub struct PowerupReport {
     pub notes: Vec<String>,
@@ -105,6 +127,8 @@ pub struct PowerupReport {
     pub steps: Vec<StepResponse>,
     /// Superposition screen lines (proof or flags) + escalation results.
     pub interactions: Vec<String>,
+    /// Captured V(t) per rail: (label, waves) per captured scenario.
+    pub waves: Vec<(String, Vec<RailWave>)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -273,6 +297,9 @@ struct RunTrace {
     sags: HashMap<NetId, Vec<(f64, f64, f64)>>,
     /// first crossing below 10 % of nominal (power-down tracking).
     t_down: HashMap<NetId, f64>,
+    /// sampled waveforms (t, V per rail in all_rails order) — captured
+    /// when the caller asks (the PD report's curves).
+    samples: Vec<(f64, Vec<f64>)>,
 }
 
 fn volt(v: &HashMap<NetId, f64>, n: NetId) -> f64 {
@@ -290,6 +317,7 @@ impl Model {
         forced_off: &[usize],
         load_override: Option<&HashMap<NetId, f64>>,
         track_down: bool,
+        capture: bool,
     ) -> RunTrace {
         let mut tr = RunTrace {
             events: Vec::new(),
@@ -299,6 +327,7 @@ impl Model {
             t_good: HashMap::new(),
             sags: HashMap::new(),
             t_down: HashMap::new(),
+            samples: Vec::new(),
         };
         let mut sag_open: HashMap<NetId, (f64, f64)> = HashMap::new();
         // rails already good at entry
@@ -527,6 +556,12 @@ impl Model {
                 state.v.insert(*en, nv);
             }
             state.t += dt;
+            if capture {
+                tr.samples.push((
+                    state.t,
+                    self.all_rails.iter().map(|(n, _)| volt(&state.v, *n)).collect(),
+                ));
+            }
             // record minima + good/sag + down
             for (n, vn) in &self.all_rails {
                 let cur = volt(&state.v, *n);
@@ -801,6 +836,10 @@ fn build_model(netlist: &Netlist, sf: &SourceFile, rep: &mut PowerupReport) -> (
 }
 
 pub fn simulate_powerup(netlist: &Netlist, sf: &SourceFile) -> PowerupReport {
+    simulate_powerup_opt(netlist, sf, false)
+}
+
+pub fn simulate_powerup_opt(netlist: &Netlist, sf: &SourceFile, capture: bool) -> PowerupReport {
     let mut rep = PowerupReport::default();
     let (model, mut state) = build_model(netlist, sf, &mut rep);
     rep.events.push(TimelineEvent {
@@ -812,7 +851,10 @@ pub fn simulate_powerup(netlist: &Netlist, sf: &SourceFile) -> PowerupReport {
     });
 
     // ── phase 1: the power-up timeline ──
-    let tr = model.run(&mut state, T_END, &[], true, &[], None, false);
+    let tr = model.run(&mut state, T_END, &[], true, &[], None, false, capture);
+    if capture {
+        rep.waves.push(("power-up".into(), waves_of(&model, &tr)));
+    }
     rep.events.extend(tr.events);
     let mut timelines: HashMap<NetId, RailTimeline> = model
         .all_rails
@@ -855,7 +897,7 @@ pub fn simulate_powerup(netlist: &Netlist, sf: &SourceFile) -> PowerupReport {
     let baseline_supply: Vec<f64> = {
         // one settle run with no stimulus records the steady supplies
         let mut st = settled.clone();
-        let tr = model.run(&mut st, settled.t + 1e-4, &[], false, &[], None, false);
+        let tr = model.run(&mut st, settled.t + 1e-4, &[], false, &[], None, false, false);
         tr.peak_supply
     };
     let mut responses: Vec<(usize, RunTrace)> = Vec::new();
@@ -865,7 +907,7 @@ pub fn simulate_powerup(netlist: &Netlist, sf: &SourceFile) -> PowerupReport {
             let mut st = settled.clone();
             let stim = stim_of(d, settled.t + 1e-5);
             let horizon = stim.end() + 2e-3;
-            let tr = model.run(&mut st, horizon, &[stim.clone()], false, &[], None, false);
+            let tr = model.run(&mut st, horizon, &[stim.clone()], false, &[], None, false, false);
             let rail = model.net_label.get(&d.net.unwrap()).cloned().unwrap_or_default();
             let settled_v = |n: NetId| volt(&settled.v, n);
             let self_droop = settled_v(d.net.unwrap()) - tr.min_v.get(&d.net.unwrap()).copied().unwrap_or(0.0);
@@ -988,7 +1030,10 @@ pub fn simulate_powerup(netlist: &Netlist, sf: &SourceFile) -> PowerupReport {
             let t0 = settled.t + 1e-5;
             let stims: Vec<Stim> = implicated.iter().map(|&di| stim_of(&model.dom_loads[di], t0)).collect();
             let horizon = stims.iter().map(|s| s.end()).fold(t0, f64::max) + 2e-3;
-            let tr = model.run(&mut st, horizon, &stims, false, &[], None, false);
+            let tr = model.run(&mut st, horizon, &stims, false, &[], None, false, capture);
+            if capture {
+                rep.waves.push(("coincident-steps".into(), waves_of(&model, &tr)));
+            }
             for e in &tr.events {
                 rep.interactions.push(format!("  {:>9.3}ms  {}", e.t * 1e3, e.text));
             }
@@ -1059,9 +1104,15 @@ pub struct PowerdownReport {
     pub input_loss: Vec<TimelineEvent>,
     pub sleep: Vec<TimelineEvent>,
     pub findings: Vec<Finding>,
+    /// Captured V(t) per scenario (the PD report's curves).
+    pub waves: Vec<(String, Vec<RailWave>)>,
 }
 
 pub fn simulate_powerdown(netlist: &Netlist, sf: &SourceFile) -> PowerdownReport {
+    simulate_powerdown_opt(netlist, sf, false)
+}
+
+pub fn simulate_powerdown_opt(netlist: &Netlist, sf: &SourceFile, capture: bool) -> PowerdownReport {
     let mut urep = PowerupReport::default();
     let (model, mut state) = build_model(netlist, sf, &mut urep);
     let mut rep = PowerdownReport::default();
@@ -1069,7 +1120,7 @@ pub fn simulate_powerdown(netlist: &Netlist, sf: &SourceFile) -> PowerdownReport
     rep.notes.push("rail DOWN threshold = 10% of nominal (stated)".into());
     rep.notes.push("sleep: domains without i_sleep keep drawing i_nom (stated)".into());
     // settle
-    let _ = model.run(&mut state, T_END, &[], true, &[], None, false);
+    let _ = model.run(&mut state, T_END, &[], true, &[], None, false, capture);
     let settled = state.clone();
     let t0 = settled.t;
     let horizon = t0 + 0.2;
@@ -1086,7 +1137,10 @@ pub fn simulate_powerdown(netlist: &Netlist, sf: &SourceFile) -> PowerdownReport
     for n in model.ideal_v.keys() {
         st.v.insert(*n, 0.0);
     }
-    let tr = model.run(&mut st, horizon, &[], false, &[], None, true);
+    let tr = model.run(&mut st, horizon, &[], false, &[], None, true, capture);
+    if capture {
+        rep.waves.push(("input-loss".into(), waves_of(&model, &tr)));
+    }
     rep.input_loss.push(TimelineEvent { t: t0, text: "input rails LOST (ideal → 0V)".into() });
     rep.input_loss.extend(tr.events.clone());
     let t_down = |tr: &RunTrace, d: &DomLoad| net_of(d).and_then(|n| tr.t_down.get(&n).copied());
@@ -1172,7 +1226,10 @@ pub fn simulate_powerdown(netlist: &Netlist, sf: &SourceFile) -> PowerdownReport
             }
         }
         let mut st = settled.clone();
-        let tr = model.run(&mut st, horizon, &[], false, &forced_off, Some(&sleep_loads), true);
+        let tr = model.run(&mut st, horizon, &[], false, &forced_off, Some(&sleep_loads), true, capture);
+        if capture {
+            rep.waves.push(("sleep-entry".into(), waves_of(&model, &tr)));
+        }
         rep.sleep.push(TimelineEvent { t: t0, text: format!(
             "SLEEP entry: firmware drops {}; loads at i_sleep (declared) / i_nom (stated)",
             dropped_nets.iter().map(|n| model.net_label.get(n).cloned().unwrap_or_default()).collect::<Vec<_>>().join(", ")

@@ -177,6 +177,18 @@ enum Commands {
     /// declaration.
     Powerdown {},
 
+    /// Generate the PROFESSIONAL power-delivery report (markdown with
+    /// inline SVG curves): topology, every selection with its survey,
+    /// the sizing the datasheet procedures produced, simulated V(t)
+    /// curves, power-up/down/sleep timelines and windows, decap
+    /// networks, and the final stability/resonance sanity. Written to
+    /// <input>.pd.md unless --output is given.
+    Pdreport {
+        /// Output path for the report markdown.
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+
     Powertree {
         /// Also dump the harvest + options as JSON to this path.
         #[arg(long)]
@@ -688,6 +700,41 @@ async fn main() -> Result<()> {
             if rep.findings.iter().any(|f| matches!(f.sev, bhdl_synthesizer::powerup::Sev::Error)) {
                 std::process::exit(1);
             }
+        }
+
+        Some(Commands::Pdreport { output }) => {
+            let netlist = verified_netlist(&source_file, &input_content, &cli.input, cli.no_elaborate).await?;
+            // resolutions come from the ORIGINAL disk text (the in-memory
+            // content was already rewritten by the pre-pass)
+            let stdlib = bhdl_common::import_search::locate_dir("bhdl-stdlib")
+                .unwrap_or_else(|| PathBuf::from("bhdl-stdlib"));
+            let disk = fs::read_to_string(&cli.input)?;
+            let desugared = match bhdl_synthesizer::supply_synthesis::desugar_supplies(&disk, &stdlib) {
+                Ok(Some(d)) => d.source,
+                _ => disk,
+            };
+            let resolutions = bhdl_synthesizer::stage_resolution::resolve_stages(&desugared, &stdlib, &[])
+                .ok()
+                .flatten()
+                .map(|r| r.resolutions)
+                .unwrap_or_default();
+            let aggregation = bhdl_synthesizer::aggregation::evaluate(&resolutions, &stdlib);
+            let up = bhdl_synthesizer::powerup::simulate_powerup_opt(&netlist, &source_file, true);
+            let down = bhdl_synthesizer::powerup::simulate_powerdown_opt(&netlist, &source_file, true);
+            let sanity = bhdl_synthesizer::powertree::final_pdn_sanity(&netlist, &source_file);
+            let board = cli.input.file_stem().and_then(|x| x.to_str()).unwrap_or("board").to_string();
+            let md = bhdl_synthesizer::pd_report::render(
+                &board, &netlist, &source_file, &resolutions, &aggregation, &up, &down, &sanity,
+            );
+            let out_path = output.unwrap_or_else(|| cli.input.with_extension("pd.md"));
+            fs::write(&out_path, &md)?;
+            println!(
+                "  {} power-delivery report → {} ({} bytes, {} curve set(s))",
+                "✓".green().bold(),
+                out_path.display(),
+                md.len(),
+                up.waves.len() + down.waves.len()
+            );
         }
 
         Some(Commands::Powertree { json, input, emit, prereg }) => {

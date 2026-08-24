@@ -54,6 +54,7 @@ pub mod erc;
 pub mod sequencing;
 pub mod powerup;
 pub mod aggregation;
+pub mod pd_report;
 
 // T3 org-policy ERC plugins (BHDL_ERC_PLUGINS, JSON over stdio).
 pub mod erc_plugin;
