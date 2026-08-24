@@ -819,3 +819,19 @@ With bulk and decap settled, `--emit` runs the FINAL PDN SANITY
   verification — their anti-resonances are UNPLACED, and the check
   says so by name; the close is selecting bulk from a characterized
   library.
+
+**Envelope-aware search (§7.5 addendum).** Instability appearing does
+not mean the designer must act — the fixpoint searches INSIDE the
+feasible interval itself. Bulk has a lower bound (the droop/knee
+physics, from the sim) and an upper bound (the stage's datasheet
+stability envelope, ÷1.2 effective, minus the fixed caps already on
+the rail): the doubling search is CLAMPED at that ceiling, and after
+the first pass it BISECTS down to the smallest sufficient bulk (the
+doubling overshoots by up to 2× — the 200 µs-burst probe now lands at
+660 µF instead of 704). Designer action is reserved for the one case
+the tool can prove: droop still failing AT the clamped ceiling means
+the feasible interval is EMPTY — capacitance cannot fix it — and the
+finding says so with both numbers and the remedies (split the rail,
+chain the load's enable, reduce the step, pick a stage with a wider
+envelope). The ×1.2 sanity ceiling check remains as the backstop for
+hand-authored bulk.

@@ -2113,7 +2113,13 @@ async fn run_powertree(
                 let mut converged: Option<String> = None;
                 let mut open_findings: Vec<String> = Vec::new();
                 let mut last_built: Option<(bhdl_netlist::Netlist, SourceFile)> = None;
-                for iter in 0..10 {
+                // bisection brackets: last FAILING and last PASSING bulk
+                // per rail, and a budget of bisection rounds
+                let mut bulk_fail: std::collections::BTreeMap<String, f64> = Default::default();
+                let mut bulk_pass: std::collections::BTreeMap<String, f64> = Default::default();
+                let mut bisect_left: std::collections::BTreeMap<String, u32> = Default::default();
+                let mut last_pass_text: Option<String> = None;
+                for iter in 0..16 {
                     let mut region = base_region.clone();
                     let mut extra = String::new();
                     if !chains.is_empty() {
@@ -2186,18 +2192,84 @@ async fn run_powertree(
                         .filter(|f| f.sev == bhdl_synthesizer::powerup::Sev::Error)
                         .collect();
                     if errs.is_empty() {
+                        // PASS. Bisect any rail whose bracket is still wide:
+                        // the doubling search overshoots by up to 2×, and an
+                        // oversized bank can cross the stage's stability
+                        // envelope — land at the SMALLEST passing bulk.
+                        let mut bisected = false;
+                        for (r, c) in bulk.iter_mut() {
+                            let lo = bulk_fail.get(r).copied().unwrap_or(0.0);
+                            if *c - lo > (lo * 0.25).max(10e-6) && bisect_left.get(r).copied().unwrap_or(0) < 3 {
+                                bulk_pass.insert(r.clone(), *c);
+                                *c = (lo + *c) / 2.0;
+                                *bisect_left.entry(r.clone()).or_insert(0) += 1;
+                                bisected = true;
+                            }
+                        }
+                        if bisected {
+                            println!(
+                                "  fixpoint iteration {iter}: PASS — bisecting toward the smallest sufficient bulk ({})",
+                                bulk.iter().map(|(r, c)| format!("{r}={:.0}µF", c * 1e6)).collect::<Vec<_>>().join(", ")
+                            );
+                            last_pass_text = Some(new_text);
+                            continue;
+                        }
                         converged = Some(new_text);
                         println!("  {} power-up timeline + interaction screen clean (iteration {iter})", "✓".green());
                         last_built = Some((netlist2, re_sf));
                         break;
                     }
+                    // FAIL. Bump each implicated rail INSIDE its feasible
+                    // interval: the datasheet stability envelope is the
+                    // ceiling (÷1.2 effective, minus the fixed caps already
+                    // on the rail). A rail already AT its ceiling and still
+                    // failing has a provably EMPTY interval — capacitance
+                    // cannot fix it, and the finding says so with both
+                    // numbers.
+                    let envelope = bhdl_synthesizer::powertree::rail_cap_envelope(&netlist2);
                     let mut bumped = false;
+                    let mut empty_interval: Vec<String> = Vec::new();
                     for f in &errs {
                         if let Some(r) = &f.rail {
-                            let e = bulk.entry(r.clone()).or_insert(0.0);
-                            *e = if *e <= 0.0 { 22e-6 } else { *e * 2.0 };
+                            // a mid-bisection failure tightens the bracket
+                            // back toward the known-passing value
+                            if let Some(pass) = bulk_pass.get(r).copied() {
+                                let cur = bulk.get(r).copied().unwrap_or(0.0);
+                                bulk_fail.insert(r.clone(), cur);
+                                bulk.insert(r.clone(), (cur + pass) / 2.0);
+                                bumped = true;
+                                continue;
+                            }
+                            let cur = bulk.get(r).copied().unwrap_or(0.0);
+                            let ceiling = envelope.get(r).and_then(|(fixed, _, max)| {
+                                max.map(|m| (m / 1.2 - fixed).max(0.0))
+                            });
+                            let next = {
+                                let raw = if cur <= 0.0 { 22e-6 } else { cur * 2.0 };
+                                match ceiling {
+                                    Some(cl) => raw.min(cl),
+                                    None => raw,
+                                }
+                            };
+                            if next <= cur + 1e-12 {
+                                let (fixed, _, max) = envelope.get(r).cloned().unwrap_or((0.0, None, None));
+                                empty_interval.push(format!(
+                                    "{}: still failing at bulk {:.0}µF, but the stage's stability envelope caps the rail at {:.0}µF effective ({:.0}µF fixed already on it) — the feasible interval is EMPTY: capacitance cannot fix this (split the rail, chain the load's enable, reduce the step, or pick a stage with a wider envelope): {}",
+                                    r, cur * 1e6, max.unwrap_or(0.0) * 1e6, fixed * 1e6, f.text
+                                ));
+                                continue;
+                            }
+                            bulk_fail.insert(r.clone(), cur);
+                            bulk.insert(r.clone(), next);
                             bumped = true;
                         }
+                    }
+                    if !empty_interval.is_empty() {
+                        open_findings.extend(empty_interval);
+                        // keep the best passing text if one exists, else this one
+                        converged = Some(last_pass_text.clone().unwrap_or(new_text));
+                        last_built = Some((netlist2, re_sf));
+                        break;
                     }
                     if bumped {
                         println!(

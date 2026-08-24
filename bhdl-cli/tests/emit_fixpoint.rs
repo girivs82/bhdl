@@ -58,3 +58,52 @@ board AutoLoop {
     // stated finding — never silently absorbed
     assert!(text.contains("NOT closable by bulk"), "the open finding was absorbed:\n{}", text.lines().rev().take(20).collect::<Vec<_>>().join("\n"));
 }
+
+/// The envelope-aware search (§7.5): the fixpoint stays INSIDE the
+/// stage's datasheet stability envelope — and when the droop still
+/// fails at the clamped ceiling, the feasible interval is provably
+/// EMPTY and the finding says so with both numbers and the remedies.
+#[test]
+fn emit_fixpoint_empty_interval_is_named() {
+    let root = workspace_root();
+    let dir = std::env::temp_dir().join("bhdl_emit_empty_interval_test");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // the 900 µs burst needs more bulk than the TPS61022's 1000 µF
+    // effective envelope admits
+    let board = r#"
+entity BigSoc() {
+    pin 1: power in;
+    pin GND: ground;
+    domain VDD_MAIN pins="1" v=5V i_nom=200mA i_max=1A step=4.5A rise=10us dur=900us droop_max=2% source="FIXTURE — empty-interval probe";
+}
+board BigBoard {
+    power VBAT = 3.6V @ 10A;
+    port V50: power out = 5V @ 5A;
+    ground GND;
+    soc: BigSoc();
+    @V50 -> soc.1; soc.GND -> @GND;
+}
+"#;
+    let f = dir.join("big.bhdl");
+    std::fs::write(&f, board).unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_bhdl-cli"));
+    cmd.current_dir(&dir)
+        .env_remove("BHDL_LIB_PATH")
+        .args(["-I", root.to_str().unwrap()])
+        .arg(&f)
+        .args(["powertree", "--input", "VBAT", "--emit", "1"]);
+    let out = cmd.output().expect("spawn bhdl-cli");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        text.contains("feasible interval is EMPTY") && text.contains("stability envelope caps the rail"),
+        "empty interval not named:\n{}",
+        text.lines().rev().take(20).collect::<Vec<_>>().join("\n")
+    );
+    // and the search never exceeded the clamp (no runaway bulk value)
+    assert!(!text.contains("1408µF") && !text.contains("2816µF"), "search escaped the envelope:\n{text}");
+}

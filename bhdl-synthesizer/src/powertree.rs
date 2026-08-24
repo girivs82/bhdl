@@ -1482,6 +1482,62 @@ pub fn final_pdn_sanity(netlist: &Netlist, _sf: &SourceFile) -> Vec<String> {
     out
 }
 
+
+/// Per-rail capacitance envelope for the bulk-sizing search: the fixed
+/// (non-`seqbulk_`) nominal capacitance already on the rail and the
+/// driving stage's datasheet stability bounds. The fixpoint uses this
+/// to search INSIDE the feasible interval instead of doubling past the
+/// ceiling — designer action is reserved for a provably EMPTY interval.
+pub fn rail_cap_envelope(
+    netlist: &Netlist,
+) -> std::collections::HashMap<String, (f64, Option<f64>, Option<f64>)> {
+    use bhdl_netlist::types::{InstanceId, NetId};
+    let mut pin_net: std::collections::HashMap<(InstanceId, String), NetId> = Default::default();
+    for pi in netlist.pin_instances.values() {
+        let (Some(net), Some(p)) = (pi.net, netlist.pins.get(pi.pin_def)) else { continue };
+        pin_net.insert((pi.instance, p.name.clone()), net);
+    }
+    let attr_si = |i: InstanceId, k: &str| -> Option<f64> {
+        netlist.instances.get(i).and_then(|x| x.attributes.get(k)).and_then(|v| crate::stage_acceptance::parse_si(v))
+    };
+    let module_of = |i: InstanceId| -> String {
+        netlist.modules.get(netlist.instances.get(i).map(|x| x.definition).unwrap_or_default()).map(|m| m.name.clone()).unwrap_or_default()
+    };
+    let net_class = |n: NetId| netlist.nets.get(n).map(|x| x.net_class.clone());
+    let mut fixed_c: std::collections::HashMap<NetId, f64> = Default::default();
+    for (i, inst) in netlist.instances.iter() {
+        if !matches!(module_of(i).as_str(), "Cap" | "Capacitor") || inst.name.starts_with("seqbulk_") {
+            continue;
+        }
+        let (Some(n1), Some(n2)) = (pin_net.get(&(i, "1".to_string())), pin_net.get(&(i, "2".to_string()))) else { continue };
+        let Some(v) = attr_si(i, "value") else { continue };
+        for (a, b) in [(n1, n2), (n2, n1)] {
+            if net_class(*b) == Some(bhdl_netlist::types::NetClass::Ground)
+                && net_class(*a) != Some(bhdl_netlist::types::NetClass::Ground)
+            {
+                *fixed_c.entry(*a).or_default() += v;
+            }
+        }
+    }
+    let mut out: std::collections::HashMap<String, (f64, Option<f64>, Option<f64>)> = Default::default();
+    for (i, _inst) in netlist.instances.iter() {
+        if attr_si(i, "output_voltage").is_none() {
+            continue;
+        }
+        let Some(vout) = pin_net.get(&(i, "VOUT".to_string())) else { continue };
+        let Some(rail) = netlist.nets.get(*vout).and_then(|x| x.name.clone()) else { continue };
+        out.insert(
+            rail,
+            (
+                fixed_c.get(vout).copied().unwrap_or(0.0),
+                attr_si(i, "c_out_eff_min").or_else(|| attr_si(i, "c_out_min")),
+                attr_si(i, "c_out_eff_max"),
+            ),
+        );
+    }
+    out
+}
+
 pub const EMIT_IMPORT: &str = "import { BuckStage, LdoStage, BuckExtStage, PreregStage, BoostStage } from \"bhdl-stdlib/power/stages.bhdl\";";
 
 fn fmt_v(v: f64) -> String {
