@@ -1103,6 +1103,37 @@ fn enforce_lockfile(
     Ok(())
 }
 
+/// The two text pre-passes every CLI input gets (supply desugaring +
+/// requirement resolution), applied to board TEXT a command reads from
+/// DISK because its board is a different file than the input — the
+/// safety sidecar, and powertree's regenerate-strip. Without this, a
+/// sidecar/stripped board carrying `supply` statements or stage
+/// requirement instantiations synthesizes RAW ("Undefined component
+/// type: LdoStage") — a board must build identically no matter which
+/// command reaches it. Returns the transformed text and its parse.
+fn preprocess_board_text(text: String, path: &Path) -> Result<(SourceFile, String)> {
+    let text = match bhdl_synthesizer::supply_synthesis::desugar_supplies(
+        &text,
+        &bhdl_common::import_search::locate_dir("bhdl-stdlib")
+            .unwrap_or_else(|| PathBuf::from("bhdl-stdlib")),
+    ) {
+        Ok(Some(d)) => d.source,
+        Ok(None) => text,
+        Err(e) => anyhow::bail!("supply synthesis error in {}: {e:#}", path.display()),
+    };
+    let text = resolve_stage_requirements(&text, path, None, false)?;
+    let pr = parse(&text);
+    if !pr.errors().is_empty() {
+        anyhow::bail!(
+            "{}: parse errors after the text pre-passes: {}",
+            path.display(),
+            pr.errors().iter().map(|e| e.message.clone()).collect::<Vec<_>>().join("; ")
+        );
+    }
+    let sf = SourceFile::cast(pr.syntax()).context("failed to cast to SourceFile")?;
+    Ok((sf, text))
+}
+
 /// Requirement resolution pre-pass (docs/spec/Requirements_And_Resolution.md
 /// §3) — see the module docs of `bhdl_synthesizer::stage_resolution`.
 /// Runs on source TEXT before the main parse; prints the survey; records
@@ -1863,12 +1894,14 @@ async fn run_powertree(
         match bhdl_synthesizer::powertree::strip_power_region(&disk) {
             Some(stripped) => {
                 println!("  existing generated power region stripped for replanning (regenerate-and-diff)");
-                let pr = parse(&stripped);
-                if !pr.errors().is_empty() {
-                    anyhow::bail!("board without its generated region does not parse: {:?}", pr.errors());
-                }
-                stripped_holder = stripped;
-                reparsed_holder = SourceFile::cast(pr.syntax()).unwrap();
+                // the stripped text is the hand-authored board straight
+                // from disk — re-apply the text pre-passes so its own
+                // `supply` statements / stage requirements resolve
+                // exactly as on a fresh build
+                let (sf, txt) = preprocess_board_text(stripped, input_path)
+                    .context("board without its generated region does not build")?;
+                stripped_holder = txt;
+                reparsed_holder = sf;
                 (&reparsed_holder, stripped_holder.as_str())
             }
             None => (source_file, input_content),
@@ -2498,14 +2531,18 @@ async fn run_safety(
 
     // Synthesize the board through the default verified pipeline. The
     // board may be a DIFFERENT file than the input (safety sidecar
-    // importing the board) — its text comes from disk in that case.
-    let analysis = analyze(&board_source);
-    let board_content = if board_path == *source_path {
-        input_content.to_string()
+    // importing the board) — its text comes from disk in that case and
+    // gets the SAME two text pre-passes (supply desugar + requirement
+    // resolution) the CLI input got, so the analysis and the netlist
+    // see the resolved blocks, not raw requirement instantiations.
+    let (board_source, board_content) = if board_path == *source_path {
+        (board_source, input_content.to_string())
     } else {
-        fs::read_to_string(&board_path)
-            .with_context(|| format!("read board file {}", board_path.display()))?
+        let raw = fs::read_to_string(&board_path)
+            .with_context(|| format!("read board file {}", board_path.display()))?;
+        preprocess_board_text(raw, &board_path)?
     };
+    let analysis = analyze(&board_source);
     let netlist = verified_netlist(&board_source, &board_content, &board_path, no_elaborate)
         .await
         .context("Failed to synthesize netlist for safety analysis")?;

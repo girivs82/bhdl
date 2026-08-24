@@ -272,7 +272,14 @@ Principles that fall out:
    `Generic*` placeholder with `powertree_rating_required_a` stamped
    (ERC032 every build) and the near-misses printed. Bindings live in
    `bhdl.lock` `[[stage]]` keyed by (board, instance); `--locked` fails
-   on a changed binding. The power tree now EMITS `BuckStage(...)` /
+   on a changed binding. The pre-passes are UNIVERSAL: they run on the
+   CLI input before command dispatch, AND on board text a command reads
+   from DISK because its board is a different file than the input — the
+   safety sidecar and powertree's regenerate-strip both route through
+   `preprocess_board_text` (supply desugar + requirement resolution +
+   parse), so a board builds identically no matter which command
+   reaches it (they used to parse raw disk text and die with
+   "Undefined component type: LdoStage" on a requirements-style board). The power tree now EMITS `BuckStage(...)` /
    `LdoStage(...)` requirements (controller+external stages and the
    prereg have no interface yet and stay `Generic*`). Synthesis refuses
    an unresolved trait instantiation (it used to build an empty stub).
