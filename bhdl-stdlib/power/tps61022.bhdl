@@ -55,6 +55,8 @@ entity TPS61022() as part {
     attribute ss_i_initial     = 700mA;   // SLVSDX7D §7.3.2: output-capacitor charge current while VOUT < 0.4 V
     attribute ss_v_full        = 0.4V;    // SLVSDX7D §7.3.2: above this the charge is capability-limited
     attribute t_ss             = 700us;   // SLVSDX7D EC: EN → regulation, VIN 2.5 V, VOUT 5 V, 30 µF eff, no load (condition stated)
+    attribute c_out_eff_min    = 20µF;    // SLVSDX7D EC: effective output capacitance range, 1.5 A < IOUT < 3 A (loop stability)
+    attribute c_out_eff_max    = 1000µF;  // SLVSDX7D EC: same row, MAX
     attribute tj_min           = -40degC; // SLVSDX7D §6.3: operating junction −40 °C to 125 °C
     attribute tj_max           = 125degC;
     attribute theta_ja         = 108.2degC/W; // SLVSDX7D §6.4, RWU (VQFN-7): RθJA — JEDEC-standard board metric (50.9 on the EVM)
@@ -112,6 +114,8 @@ entity Boost_TPS61022(
     attribute ss_i_initial    = 700mA;    // SLVSDX7D §7.3.2 (charge current below 0.4 V)
     attribute ss_v_full       = 0.4V;
     attribute i_valley_limit  = 6.5A;     // SLVSDX7D minimum — the power-up simulator reads it on the instance
+    attribute c_out_eff_min   = 20µF;     // SLVSDX7D EC (loop-stability envelope, condition stated on the part)
+    attribute c_out_eff_max   = 1000µF;
     attribute tj_min          = -40degC;
     attribute tj_max          = 125degC;
     attribute theta_ja        = 108.2degC/W; // SLVSDX7D, RWU, JEDEC board metric

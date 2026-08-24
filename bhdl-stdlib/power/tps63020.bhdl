@@ -64,6 +64,8 @@ entity TPS63020() as part {
     attribute ss_i_initial     = 400mA;   // SLVS916I §7.4.1: soft-start average current limit ramps from 400 mA
     attribute ss_v_full        = 1.2V;    // SLVS916I §7.4.1: nominal current limit once VOUT ≈ 1.2 V (no timer)
     attribute pg_on_regulation = "true";  // SLVS916I §7.3.4: PG monitors the current loop — LOW while current-limited
+    attribute c_out_min        = 44µF;    // SLVS916I Table 1: 2×22 µF nominal at 1.5 µH (tolerance/DC-bias derate anticipated by the table's own footnote)
+    // no c_out_max: SLVS916I §8.2.2.3 — "There is also no upper limit for the output capacitance value."
     attribute temp_min         = -40degC; // SLVS916I §6.3: operating free-air (ambient) −40 °C to 85 °C
     attribute temp_max         = 85degC;
     attribute tj_min           = -40degC; // SLVS916I §6.3: operating junction −40 °C to 125 °C
@@ -132,6 +134,7 @@ entity BuckBoost_TPS63020(
     attribute ss_v_full       = 1.2V;     // SLVS916I §7.4.1 (nominal limit above this VOUT)
     attribute i_sw_avg_limit  = 3.5A;     // SLVS916I EC (min) — the power-up simulator reads it on the instance
     attribute pg_on_regulation = "true";  // SLVS916I §7.3.4: PG is low while the current loop is at its limit
+    attribute c_out_min       = 44µF;     // SLVS916I Table 1 (nominal; derate footnote applies) — no upper limit per §8.2.2.3
     attribute temp_min        = -40degC;  // SLVS916I ambient
     attribute temp_max        = 85degC;
     attribute tj_min          = -40degC;

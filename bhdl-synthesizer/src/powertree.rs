@@ -1160,7 +1160,10 @@ pub fn decouple_worklist(
             .unwrap_or_default();
         let Some((doms, _)) = domains.get(&ety) else { continue };
         for d in doms {
-            if d.zmask.is_empty() {
+            // a domain with step+droop_max derives its own AUTO-MASK
+            // (spec §7.5) even without a declared zmask
+            let has_step_mask = d.step_a.is_some() && d.droop_max_pct.is_some();
+            if d.zmask.is_empty() && !has_step_mask {
                 continue;
             }
             let target = format!("{}.{}", inst.name, d.name);
@@ -1170,7 +1173,7 @@ pub fn decouple_worklist(
             match &decap_lib {
                 Some(lib) => stmts.push(format!("decouple {target} from \"{lib}\";")),
                 None => notes.push(format!(
-                    "{target} declares a Z(f) mask but no decap network is synthesized: name the project capacitor library — `requirements {{ decap_lib: \"<path>\"; }}` — and re-emit (C/ESR/ESL are library data, never invented here)"
+                    "{target} declares a Z(f) mask (or step/droop_max) but no decap network is synthesized: name the project capacitor library — `requirements {{ decap_lib: \"<path>\"; }}` — and re-emit (C/ESR/ESL are library data, never invented here)"
                 )),
             }
         }
@@ -1374,6 +1377,109 @@ pub fn synthesize_seq_chains(netlist: &Netlist, sf: &SourceFile, gnd: &str) -> C
     }
     plan.wiring.sort();
     plan
+}
+
+
+/// FINAL PDN SANITY (spec §7.5) — run after bulk + decap have settled:
+///
+/// - LOOP STABILITY: each stage's total output capacitance (its own
+///   C_out, decap network, fixpoint bulk — everything on the rail)
+///   against the block's DATASHEET stability envelope
+///   (`c_out_eff_min`/`c_out_eff_max`, e.g. TPS61022's 20–1000 µF
+///   effective; `c_out_min` for parts stating only a floor). The
+///   comparison honors the effective-vs-nominal gap the datasheets
+///   themselves state: nominal×0.5 must clear the min (DC-bias/
+///   tolerance derate), nominal×1.2 must clear the max. A stage
+///   declaring no envelope is a stated UNCHECKED.
+/// - RESONANCE: capacitors on the swept rail with NO declared ESR/ESL
+///   (fixpoint bulk, block application-circuit caps) are swept as
+///   IDEAL by the decap verification — their anti-resonances with the
+///   characterized network are UNCHECKED and SAY SO (the close: pick
+///   bulk from a characterized library).
+pub fn final_pdn_sanity(netlist: &Netlist, _sf: &SourceFile) -> Vec<String> {
+    use bhdl_netlist::types::{InstanceId, NetId};
+    let mut out = Vec::new();
+    let mut pin_net: std::collections::HashMap<(InstanceId, String), NetId> = Default::default();
+    for pi in netlist.pin_instances.values() {
+        let (Some(net), Some(p)) = (pi.net, netlist.pins.get(pi.pin_def)) else { continue };
+        pin_net.insert((pi.instance, p.name.clone()), net);
+    }
+    let attr = |i: InstanceId, k: &str| -> Option<String> {
+        netlist.instances.get(i).and_then(|x| x.attributes.get(k).cloned())
+    };
+    let attr_si = |i: InstanceId, k: &str| -> Option<f64> {
+        attr(i, k).and_then(|v| crate::stage_acceptance::parse_si(&v))
+    };
+    let module_of = |i: InstanceId| -> String {
+        netlist.modules.get(netlist.instances.get(i).map(|x| x.definition).unwrap_or_default()).map(|m| m.name.clone()).unwrap_or_default()
+    };
+    let net_class = |n: NetId| netlist.nets.get(n).map(|x| x.net_class.clone());
+    // caps per net: (nominal sum, uncharacterized instances)
+    let mut cap_sum: std::collections::HashMap<NetId, f64> = Default::default();
+    let mut uncharacterized: std::collections::HashMap<NetId, Vec<String>> = Default::default();
+    for (i, inst) in netlist.instances.iter() {
+        if !matches!(module_of(i).as_str(), "Cap" | "Capacitor") {
+            continue;
+        }
+        let (Some(n1), Some(n2)) = (
+            pin_net.get(&(i, "1".to_string())),
+            pin_net.get(&(i, "2".to_string())),
+        ) else { continue };
+        let Some(v) = attr_si(i, "value") else { continue };
+        for (a, b) in [(n1, n2), (n2, n1)] {
+            if net_class(*b) == Some(bhdl_netlist::types::NetClass::Ground)
+                && net_class(*a) != Some(bhdl_netlist::types::NetClass::Ground)
+            {
+                *cap_sum.entry(*a).or_default() += v;
+                if attr_si(i, "esr").is_none() || attr_si(i, "esl").is_none() {
+                    uncharacterized.entry(*a).or_default().push(format!("{} ({:.0}µF)", inst.name, v * 1e6));
+                }
+            }
+        }
+    }
+    for (i, inst) in netlist.instances.iter() {
+        let Some(_vt) = attr_si(i, "output_voltage") else { continue };
+        let Some(vout) = pin_net.get(&(i, "VOUT".to_string())) else { continue };
+        let total = cap_sum.get(vout).copied().unwrap_or(0.0);
+        let rail = netlist.nets.get(*vout).and_then(|x| x.name.clone()).unwrap_or_default();
+        let min_eff = attr_si(i, "c_out_eff_min").or_else(|| attr_si(i, "c_out_min"));
+        let max_eff = attr_si(i, "c_out_eff_max");
+        match (min_eff, max_eff) {
+            (None, None) => out.push(format!(
+                "STABILITY UNCHECKED: '{}' declares no output-capacitance envelope (c_out_eff_min/max) — the {:.0}µF on {} cannot be judged against the loop (declare the datasheet range)",
+                inst.name, total * 1e6, rail
+            )),
+            (mn, mx) => {
+                if let Some(mn) = mn {
+                    // worst-case effective = nominal × 0.5 (DC bias/tolerance,
+                    // the datasheets' own derate guidance — stated)
+                    if total * 0.5 < mn {
+                        out.push(format!(
+                            "STABILITY: '{}' on {}: {:.0}µF nominal ⇒ ~{:.0}µF worst-case effective (×0.5 derate, stated) < the datasheet minimum {:.0}µF — under the loop-stability floor",
+                            inst.name, rail, total * 1e6, total * 0.5e6, mn * 1e6
+                        ));
+                    }
+                }
+                if let Some(mx) = mx {
+                    if total * 1.2 > mx {
+                        out.push(format!(
+                            "STABILITY: '{}' on {}: {:.0}µF nominal ⇒ up to {:.0}µF effective (×1.2, stated) > the datasheet maximum {:.0}µF — beyond the loop-stability envelope (the bulk fixpoint or decap network overshot; reduce bulk or split the rail)",
+                            inst.name, rail, total * 1e6, total * 1.2e6, mx * 1e6
+                        ));
+                    }
+                }
+            }
+        }
+        if let Some(unc) = uncharacterized.get(vout) {
+            out.push(format!(
+                "RESONANCE UNCHECKED on {}: {} carry no declared ESR/ESL — swept as IDEAL, their anti-resonances with the characterized network are unplaced (select bulk from a characterized library to close; stated)",
+                rail,
+                unc.join(", ")
+            ));
+        }
+    }
+    out.sort();
+    out
 }
 
 pub const EMIT_IMPORT: &str = "import { BuckStage, LdoStage, BuckExtStage, PreregStage, BoostStage } from \"bhdl-stdlib/power/stages.bhdl\";";

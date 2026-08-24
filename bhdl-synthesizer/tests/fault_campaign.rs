@@ -3364,3 +3364,47 @@ board ChainBoard {
     let plan = bhdl_synthesizer::powertree::synthesize_seq_chains(&n, &sf, "GND");
     assert!(plan.wiring.is_empty(), "{:?}", plan.wiring);
 }
+
+/// Final PDN sanity (§7.5): loop stability against the DATASHEET
+/// envelope (TPS61022: 20–1000 µF effective) and the resonance blind
+/// spot (uncharacterized caps swept as ideal). The over-bulked board —
+/// exactly what a runaway fixpoint would produce — is flagged with the
+/// derated arithmetic; the sane board passes with only the stated
+/// resonance UNCHECKED.
+#[tokio::test]
+async fn final_pdn_sanity_stability_and_resonance() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let board = |bulk: &str| format!(r#"
+import {{ Boost_TPS61022 }} from "bhdl-stdlib/power/tps61022.bhdl";
+import {{ Cap }} from "bhdl-stdlib/passives/capacitor.bhdl";
+board SanityBoard {{
+    power VBAT = 3.6V @ 8A;
+    port V50: power out = 5V @ 2A;
+    ground GND;
+    @VBAT -> u1: Boost_TPS61022(v_out=5V, i_out_max=2A, v_in=3.6V).VIN;
+    u1.GND -> @GND; u1.VOUT -> @V50;
+    @V50 -> C_bulk: Cap({bulk}).1; C_bulk.2 -> @GND;
+}}
+"#);
+    let run = |text: String| async move {
+        let pr = parse(&text);
+        assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+        let sf = SourceFile::cast(pr.syntax()).unwrap();
+        let analysis = analyze(&sf);
+        let mut gen = NetlistGenerator::new();
+        let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+        bhdl_synthesizer::powertree::final_pdn_sanity(&n, &sf)
+    };
+    // 2200 µF nominal → ×1.2 effective > the 1000 µF datasheet max
+    let out = run(board("2200µF")).await;
+    assert!(out.iter().any(|l| l.starts_with("STABILITY:") && l.contains("1000µF") && l.contains("×1.2")), "{out:#?}");
+    // 100 µF: inside the envelope both ways; only the stated resonance
+    // blind spot remains (bare caps carry no ESR/ESL)
+    let out = run(board("100µF")).await;
+    assert!(!out.iter().any(|l| l.starts_with("STABILITY:")), "{out:#?}");
+    assert!(out.iter().any(|l| l.contains("RESONANCE UNCHECKED") && l.contains("C_bulk")), "{out:#?}");
+    // 30 µF nominal → ×0.5 worst-case effective (15+6 µF... total 36·0.5=18) < the 20 µF floor
+    let out = run(board("24µF")).await;
+    assert!(out.iter().any(|l| l.starts_with("STABILITY:") && l.contains("minimum") && l.contains("×0.5")), "{out:#?}");
+}

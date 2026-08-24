@@ -258,7 +258,15 @@ fn worst_ratio(
     let circ = conv
         .convert(netlist)
         .map_err(|e| format!("decouple: SPICE conversion failed: {e}"))?;
-    let (freqs, z) = bhdl_spice::ac::run_ac_impedance(&circ, rail_net, 100e3, 50e6, 20)
+    // the sweep floor follows the mask's lowest breakpoint (the
+    // auto-mask can sit below 100 kHz when a stage declares its f_c)
+    let f_start = dom
+        .zmask
+        .iter()
+        .map(|(f, _)| *f)
+        .fold(100e3_f64, f64::min)
+        .max(100.0);
+    let (freqs, z) = bhdl_spice::ac::run_ac_impedance(&circ, rail_net, f_start, 50e6, 20)
         .map_err(|e| format!("decouple: impedance sweep failed: {e}"))?;
     let budget = |f: f64| -> f64 {
         let r = dom.pdn_r_ohm.unwrap_or(0.0);
@@ -348,6 +356,38 @@ fn remove_instance(netlist: &mut Netlist, name: &str) {
 
 /// Run every `decouple` statement against the synthesized netlist.
 /// Hard error on infeasibility or a failed margin verification.
+
+/// The supplying stage's declared control crossover (`f_c`) for the
+/// rails a load instance hangs on — None when no stage declares one
+/// (the usual case today; absence is a stated gap, never a default).
+fn stage_fc(netlist: &Netlist, inst_name: &str) -> Option<f64> {
+    let inst_id = netlist.instances.iter().find(|(_, i)| i.name == inst_name).map(|(id, _)| id)?;
+    let mut inst_nets: Vec<bhdl_netlist::types::NetId> = Vec::new();
+    for pi in netlist.pin_instances.values() {
+        if pi.instance == inst_id {
+            if let Some(n) = pi.net {
+                inst_nets.push(n);
+            }
+        }
+    }
+    for pi in netlist.pin_instances.values() {
+        let Some(n) = pi.net else { continue };
+        if !inst_nets.contains(&n) {
+            continue;
+        }
+        let Some(p) = netlist.pins.get(pi.pin_def) else { continue };
+        if !p.name.starts_with("VOUT") {
+            continue;
+        }
+        if let Some(inst) = netlist.instances.get(pi.instance) {
+            if let Some(fc) = inst.attributes.get("f_c").and_then(|v| crate::stage_acceptance::parse_si(v)) {
+                return Some(fc);
+            }
+        }
+    }
+    None
+}
+
 pub fn run_decap_synthesis(
     netlist: &mut Netlist,
     sf: &SourceFile,
@@ -404,9 +444,53 @@ pub fn run_decap_synthesis(
                     stmt.instance, stmt.domain
                 )
             })?;
+        // AUTO-MASK (spec §7.5): a domain that declares `step` and
+        // `droop_max` has already stated its low-frequency target
+        // impedance — Z = droop_max/step, flat across the step's
+        // spectral band [1/(2π·(dur+2·rise)) … 1/(π·rise)]. DERIVED,
+        // never invented. Below the supplying stage's control
+        // crossover the REGULATOR carries the step; no block declares
+        // `f_c` yet, so without one the auto-mask applies only from
+        // the 100 kHz sweep floor up, and the sub-crossover region is
+        // a NAMED UNCHECKED gap — never a silent pass, and never an
+        // absurd caps-only demand at hundreds of Hz.
+        let mut dom = dom;
+        if let (Some(step), Some(droop_pct)) = (dom.step_a, dom.droop_max_pct) {
+            if step > 0.0 {
+                let z = droop_pct / 100.0 * dom.v_nom / step;
+                let rise = dom.step_rise_s.unwrap_or(1e-6);
+                let durs = dom.step_dur_s.unwrap_or(1e-4);
+                let f_hi = 1.0 / (std::f64::consts::PI * rise);
+                let f_lo_step = 1.0 / (2.0 * std::f64::consts::PI * (durs + 2.0 * rise));
+                let f_c = stage_fc(netlist, &stmt.instance);
+                let f_lo = match f_c {
+                    Some(fc) => f_lo_step.max(fc),
+                    None => f_lo_step.max(100e3),
+                };
+                if f_hi > f_lo {
+                    for &(f, zz) in &[(f_lo, z), (f_hi, z)] {
+                        let declared = mask_at(&dom.zmask, f);
+                        if declared.map(|d| zz < d).unwrap_or(true) {
+                            dom.zmask.push((f, zz));
+                        }
+                    }
+                    dom.zmask.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+                    info!(
+                        "decouple {}.{}: AUTO-MASK {:.1}mΩ = droop_max/step across {:.0}–{:.0} kHz (derived from the domain's own declaration)",
+                        stmt.instance, stmt.domain, z * 1e3, f_lo / 1e3, f_hi / 1e3
+                    );
+                }
+                if f_c.is_none() && f_lo_step < 100e3 {
+                    info!(
+                        "decouple {}.{}: step content below 100 kHz ({:.2} kHz–) is the REGULATOR's — its control crossover is undeclared, so that region is UNCHECKED (declare `attribute f_c = <datasheet>` on the stage block to close it)",
+                        stmt.instance, stmt.domain, f_lo_step / 1e3
+                    );
+                }
+            }
+        }
         if dom.zmask.len() < 2 {
             return Err(format!(
-                "decouple {}.{}: the domain declares no usable zmask (need ≥2 breakpoints) — nothing to synthesize against",
+                "decouple {}.{}: the domain declares no usable zmask (need ≥2 breakpoints) and no step/droop_max to derive one — nothing to synthesize against",
                 stmt.instance, stmt.domain
             ));
         }
@@ -414,7 +498,6 @@ pub fn run_decap_synthesis(
         // budget floor, single-open verification) sees the tightened
         // mask, so the synthesized network carries z_margin headroom
         // against layout parasitics this sweep does not model.
-        let mut dom = dom;
         if stmt.z_margin_pct > 0.0 {
             let k = 1.0 + stmt.z_margin_pct / 100.0;
             for bp in dom.zmask.iter_mut() {

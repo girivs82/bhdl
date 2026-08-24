@@ -779,3 +779,43 @@ stage's capability converges at 2 chain wires + 704 µF on the burst
 rail in 3 iterations, with the Generic-placeholder ordering finding
 correctly left open (its resolver survey names exactly why nothing
 bound: the 30 µV noise requirement rejects every non-promising LDO).
+
+### 7.5 Load-derived bulk (auto-mask) + the final PDN sanity check
+
+Startup is only one master of bulk sizing — the LOAD is the other.
+A domain that declares `step` and `droop_max` has already stated its
+low-frequency target impedance: Z = droop_max/step, flat across the
+step's spectral band [1/(2π·(dur+2·rise)) … 1/(π·rise)]. The decap
+synthesizer now derives that AUTO-MASK (tighten-only merged with any
+declared zmask; a step/droop domain with NO zmask still gets a
+`decouple` in the auto worklist) and sizes the network from the REAL
+capacitor library — so linear-regime bulk becomes orderable parts
+with characterized ESR/ESL, not an abstract farad count. Below the
+supplying stage's control crossover the REGULATOR carries the step;
+no block declares `f_c` yet, so the auto-mask applies from the
+100 kHz sweep floor up and the sub-crossover region is a NAMED
+UNCHECKED gap (`attribute f_c = <datasheet>` closes it — the sweep
+floor follows the mask down when it is declared). Never a silent
+pass, never an absurd caps-only demand at hundreds of Hz. The two
+sizers compose: auto-mask/decap handles the linear regime with real
+parts, the powerup fixpoint handles the clamp regime, and the loop
+re-runs powerup after decap so more bulk cannot silently worsen the
+upstream inrush.
+
+With bulk and decap settled, `--emit` runs the FINAL PDN SANITY
+(`powertree::final_pdn_sanity`), on either exit path:
+
+- **Loop stability**: each stage's total output capacitance against
+  its DATASHEET envelope — `c_out_eff_min`/`c_out_eff_max`
+  (TPS61022: 20–1000 µF effective, SLVSDX7D EC) or `c_out_min`
+  (TPS63020: 44 µF per Table 1; §8.2.2.3 states no upper limit) —
+  honoring the effective-vs-nominal gap the datasheets themselves
+  state: nominal×0.5 must clear the floor, nominal×1.2 the ceiling.
+  A runaway fixpoint IS catchable: the 900 µs-burst probe drove bulk
+  to 2816 µF and was flagged at 3386 µF effective > 1000 µF. No
+  declared envelope = stated UNCHECKED.
+- **Resonance**: capacitors with no declared ESR/ESL (fixpoint bulk,
+  block application caps) are swept as IDEAL by the decap
+  verification — their anti-resonances are UNPLACED, and the check
+  says so by name; the close is selecting bulk from a characterized
+  library.

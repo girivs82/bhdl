@@ -2112,6 +2112,7 @@ async fn run_powertree(
                 let mut bulk: std::collections::BTreeMap<String, f64> = Default::default();
                 let mut converged: Option<String> = None;
                 let mut open_findings: Vec<String> = Vec::new();
+                let mut last_built: Option<(bhdl_netlist::Netlist, SourceFile)> = None;
                 for iter in 0..10 {
                     let mut region = base_region.clone();
                     let mut extra = String::new();
@@ -2187,6 +2188,7 @@ async fn run_powertree(
                     if errs.is_empty() {
                         converged = Some(new_text);
                         println!("  {} power-up timeline + interaction screen clean (iteration {iter})", "✓".green());
+                        last_built = Some((netlist2, re_sf));
                         break;
                     }
                     let mut bumped = false;
@@ -2209,7 +2211,22 @@ async fn run_powertree(
                     // surface the findings — design work, not an emission bug
                     open_findings = errs.iter().map(|f| f.text.clone()).collect();
                     converged = Some(new_text);
+                    last_built = Some((netlist2, re_sf));
                     break;
+                }
+                // FINAL PDN SANITY (spec §7.5): with bulk + decap settled
+                // (either exit path), judge each stage's total output
+                // capacitance against its datasheet loop-stability
+                // envelope, and name the resonance blind spots
+                // (uncharacterized caps swept as ideal).
+                if let Some((nl, sf2)) = &last_built {
+                    for l in bhdl_synthesizer::powertree::final_pdn_sanity(nl, sf2) {
+                        if l.starts_with("STABILITY:") {
+                            open_findings.push(l);
+                        } else {
+                            println!("  sanity: {l}");
+                        }
+                    }
                 }
                 let Some(final_text) = converged else {
                     anyhow::bail!(
