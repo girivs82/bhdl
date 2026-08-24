@@ -3306,3 +3306,61 @@ board StepBoard {{
     assert!(!rep.interactions.iter().any(|l| l.contains("SIMULTANEOUSLY")));
     assert!(rep.findings.iter().all(|f| f.sev != Sev::Error), "{:#?}", rep.findings);
 }
+
+/// Chain synthesis (§7.4): for a declared ordering whose target stage
+/// has an unwired enable, the synthesizer emits the mechanism — PG
+/// chain when the prerequisite's bound block exposes PG (C sized from
+/// t_min against the detected pull-up and the target's en_vih), and a
+/// hand-wired enable always wins.
+#[tokio::test]
+async fn seq_chain_synthesis_pg_and_rc() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    // both rails driven by BuckBoost_TPS63020 (PG + en_vih exposed):
+    // the PG-chain branch with a t_min-sized C
+    let text = r#"
+import { BuckBoost_TPS63020 } from "bhdl-stdlib/power/tps63020.bhdl";
+entity ChainSoc() {
+    pin 1: power in;
+    pin 2: power in;
+    pin GND: ground;
+    domain VDD_A pins="1" v=5V i_nom=100mA slot=1 source="FIXTURE — chain probe";
+    domain VDD_B pins="2" v=3.3V i_nom=100mA slot=2 slot_t_min=1ms source="FIXTURE — chain probe";
+}
+board ChainBoard {
+    power VBAT = 3.6V @ 8A;
+    port V50: power out = 5V @ 1A;
+    port V33: power out = 3.3V @ 1A;
+    ground GND;
+    @VBAT -> u1: BuckBoost_TPS63020(v_out=5V, i_out_max=1A, v_in=3.6V, v_in_min=3.0V, v_in_max=4.2V).VIN;
+    u1.GND -> @GND; u1.VOUT -> @V50;
+    @VBAT -> u2: BuckBoost_TPS63020(v_out=3.3V, i_out_max=0.5A, v_in=3.6V, v_in_min=3.0V, v_in_max=4.2V).VIN;
+    u2.GND -> @GND; u2.VOUT -> @V33;
+    soc: ChainSoc();
+    @V50 -> soc.1; @V33 -> soc.2; soc.GND -> @GND;
+}
+"#;
+    let pr = parse(text);
+    assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+    let plan = bhdl_synthesizer::powertree::synthesize_seq_chains(&n, &sf, "GND");
+    assert!(plan.wiring.iter().any(|w| w == "u1.PG -> u2.EN;"), "{:?}", plan.wiring);
+    // slot_t_min=1ms against the internal 1MΩ pull-up and en_vih 1.2V:
+    // C = 1e-3 / (1e6·ln(5/3.8)) = 3.64 nF
+    let c_line = plan.wiring.iter().find(|w| w.starts_with("u2.EN -> seqc_")).expect("delay C sized");
+    let c_val: f64 = c_line.split("Cap(").nth(1).unwrap().split(')').next().unwrap().parse().unwrap();
+    assert!((c_val - 3.64e-9).abs() / 3.64e-9 < 0.05, "{c_line}");
+    // hand-wired enable wins: wire u2.EN and nothing is synthesized
+    let hand = text.replace("soc: ChainSoc();", "@VBAT -> u2.EN;\n    soc: ChainSoc();");
+    let pr = parse(&hand);
+    assert!(pr.errors().is_empty());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+    let plan = bhdl_synthesizer::powertree::synthesize_seq_chains(&n, &sf, "GND");
+    assert!(plan.wiring.is_empty(), "{:?}", plan.wiring);
+}

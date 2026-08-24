@@ -1178,6 +1178,204 @@ pub fn decouple_worklist(
     (stmts, notes)
 }
 
+
+/// AUTO-SYNTHESIZED sequencing chains (spec §7.4): for every declared
+/// ordering edge whose target rail is driven by a stage with an UNWIRED
+/// enable, emit the implementing mechanism:
+///
+/// - PG chain when every prerequisite stage exposes a PG contract pin
+///   (open-drain wired-AND; the pull-up lives inside the PG block);
+///   a declared t_min adds a C sized against the detected pull-up R
+///   and the target's `en_vih`: C = t_min / (R·ln(Vs/(Vs−V_IH)));
+/// - rail-RC fallback otherwise: 100 kΩ series (a sizing choice,
+///   stated — it also limits current into the EN clamp) from the
+///   FIRST prerequisite rail, C from t_min the same way (10 nF benign
+///   default without one, stated); multiple prerequisites fall back to
+///   the first + a note — the power-up timeline verifies the rest;
+/// - sw_enabled rails are skipped with a note (firmware owns them).
+///
+/// A hand-wired enable always wins (the stage is skipped). Everything
+/// emitted here is verified by ERC033 and the `powerup` timeline — the
+/// generator and the checkers share one arithmetic.
+pub struct ChainPlan {
+    pub wiring: Vec<String>,
+    pub notes: Vec<String>,
+}
+
+pub fn synthesize_seq_chains(netlist: &Netlist, sf: &SourceFile, gnd: &str) -> ChainPlan {
+    use bhdl_netlist::types::{InstanceId, NetId};
+    let mut plan = ChainPlan { wiring: Vec::new(), notes: Vec::new() };
+
+    let mut pin_net: std::collections::HashMap<(InstanceId, String), NetId> = Default::default();
+    let mut net_members: std::collections::HashMap<NetId, Vec<(InstanceId, String)>> = Default::default();
+    for pi in netlist.pin_instances.values() {
+        let (Some(net), Some(p)) = (pi.net, netlist.pins.get(pi.pin_def)) else { continue };
+        pin_net.insert((pi.instance, p.name.clone()), net);
+        net_members.entry(net).or_default().push((pi.instance, p.name.clone()));
+    }
+    let attr_si = |i: InstanceId, k: &str| -> Option<f64> {
+        netlist.instances.get(i).and_then(|x| x.attributes.get(k)).and_then(|v| crate::stage_acceptance::parse_si(v))
+    };
+    let net_label = |n: NetId| -> Option<String> { netlist.nets.get(n).and_then(|x| x.name.clone()) };
+    let module_of = |i: InstanceId| -> String {
+        netlist.modules.get(netlist.instances.get(i).map(|x| x.definition).unwrap_or_default()).map(|m| m.name.clone()).unwrap_or_default()
+    };
+    let supply_stage = |net: NetId| -> Option<InstanceId> {
+        net_members.get(&net)?.iter().find_map(|(i, pin)| {
+            if !pin.starts_with("VOUT") { return None; }
+            let has = netlist.instances.get(*i).map(|x| x.attributes.contains_key("stage_requirement") || x.attributes.contains_key("output_voltage")).unwrap_or(false);
+            has.then_some(*i)
+        })
+    };
+    // does the instance's MODULE declare a PG contract pin? (existence,
+    // not wiring — the chain synthesizer is about to wire it)
+    let mut module_pins: std::collections::HashMap<bhdl_netlist::types::ModuleId, Vec<String>> = Default::default();
+    for p in netlist.pins.values() {
+        module_pins.entry(p.module).or_default().push(p.name.clone());
+    }
+    let has_pg = |i: InstanceId| -> bool {
+        netlist
+            .instances
+            .get(i)
+            .map(|x| module_pins.get(&x.definition).map(|ps| ps.iter().any(|p| p == "PG")).unwrap_or(false))
+            .unwrap_or(false)
+    };
+    // the PG pull-up R: the block's own application-circuit child
+    // (`<stage>_R_pg`, Fig. 7); 1 MΩ assumed with a note otherwise
+    let pullup_r_of = |aname: &str| -> Option<f64> {
+        netlist
+            .instances
+            .iter()
+            .find(|(_, x)| x.name == format!("{aname}_R_pg"))
+            .and_then(|(i, _)| attr_si(i, "value"))
+    };
+
+    let domains = crate::safety_model::entity_domain_map(&sf.syntax().clone());
+    // per target stage: prerequisite rails + the tightest hard delay
+    struct Edge { prereq_nets: Vec<NetId>, t_min: Option<f64> }
+    let mut per_stage: std::collections::HashMap<InstanceId, Edge> = Default::default();
+    for (i, inst) in netlist.instances.iter() {
+        let ety = module_of(i);
+        let Some((doms, _)) = domains.get(&ety) else { continue };
+        let net_of = |name: &str| -> Option<NetId> {
+            doms.iter().find(|d| d.name == name).and_then(|d| d.pins.first()).and_then(|p| pin_net.get(&(i, p.clone())).copied())
+        };
+        // slot pairs within this instance
+        let mut slots: Vec<u32> = doms.iter().filter_map(|d| d.seq_slot).collect();
+        slots.sort_unstable();
+        slots.dedup();
+        for d in doms {
+            if d.sw_enabled {
+                if !d.seq_after.is_empty() || d.seq_slot.is_some() {
+                    plan.notes.push(format!("{}.{} is sw_enabled — no hardware chain synthesized; wire its stage's EN to your control signal (firmware owns the ordering, stated)", inst.name, d.name));
+                }
+                continue;
+            }
+            let mut prereqs: Vec<NetId> = Vec::new();
+            let mut t_min = d.seq_t_min_s;
+            for a in &d.seq_after {
+                if let Some(n) = net_of(a) { prereqs.push(n); }
+            }
+            if let Some(slot) = d.seq_slot {
+                if let Some(pos) = slots.iter().position(|s| *s == slot) {
+                    if pos > 0 {
+                        let prev = slots[pos - 1];
+                        for a in doms.iter().filter(|x| x.seq_slot == Some(prev)) {
+                            if let Some(n) = net_of(&a.name) { prereqs.push(n); }
+                        }
+                        t_min = t_min.or(d.seq_slot_t_min_s);
+                    }
+                }
+            }
+            if prereqs.is_empty() { continue; }
+            let Some(bnet) = d.pins.first().and_then(|p| pin_net.get(&(i, p.clone())).copied()) else { continue };
+            let Some(stage_b) = supply_stage(bnet) else { continue };
+            // hand-wired enable wins
+            if pin_net.contains_key(&(stage_b, "EN".to_string())) {
+                continue;
+            }
+            prereqs.retain(|n| *n != bnet);
+            if prereqs.is_empty() { continue; }
+            let e = per_stage.entry(stage_b).or_insert(Edge { prereq_nets: Vec::new(), t_min: None });
+            e.prereq_nets.extend(prereqs);
+            e.t_min = match (e.t_min, t_min) { (Some(a), Some(b)) => Some(a.max(b)), (a, b) => a.or(b) };
+        }
+    }
+
+    for (stage_b, edge) in per_stage {
+        let bname = netlist.instances.get(stage_b).map(|x| x.name.clone()).unwrap_or_default();
+        let mut prereqs = edge.prereq_nets.clone();
+        prereqs.sort();
+        prereqs.dedup();
+        let vih = attr_si(stage_b, "en_vih");
+        let stages_a: Vec<(NetId, Option<InstanceId>, bool)> = prereqs
+            .iter()
+            .map(|n| {
+                let sa = supply_stage(*n);
+                let pg = sa.map(has_pg).unwrap_or(false);
+                (*n, sa, pg)
+            })
+            .collect();
+        let all_pg = !stages_a.is_empty() && stages_a.iter().all(|(_, _, pg)| *pg);
+        let mk_c = |r: f64, vs: f64, note_ctx: &str, plan: &mut ChainPlan| -> Option<f64> {
+            let t_min = edge.t_min?;
+            let Some(vih) = vih else {
+                plan.notes.push(format!("{note_ctx}: t_min declared but '{bname}' has no en_vih — the delay C is NOT sized (UNCHECKED, stated; ERC033 says so too)"));
+                return None;
+            };
+            if vs <= vih {
+                plan.notes.push(format!("{note_ctx}: pull source {vs:.2}V ≤ en_vih {vih:.2}V — no crossing, C not sized"));
+                return None;
+            }
+            Some(t_min / (r * (vs / (vs - vih)).ln()))
+        };
+        if all_pg {
+            for (n, sa, _) in &stages_a {
+                let aname = sa.and_then(|s| netlist.instances.get(s)).map(|x| x.name.clone()).unwrap_or_default();
+                plan.wiring.push(format!("{aname}.PG -> {bname}.EN;"));
+                let _ = n;
+            }
+            if edge.t_min.is_some() {
+                // C against the FIRST prerequisite's internal pull-up
+                let (n0, sa0, _) = &stages_a[0];
+                let aname0 = sa0.and_then(|s| netlist.instances.get(s)).map(|x| x.name.clone()).unwrap_or_default();
+                let r = pullup_r_of(&aname0).unwrap_or_else(|| {
+                    plan.notes.push(format!("PG chain into {bname}: pull-up R not detected — 1MΩ assumed (stated)"));
+                    1e6
+                });
+                let vs = netlist
+                    .instances
+                    .iter()
+                    .find_map(|(i, _)| (supply_stage(*n0) == Some(i)).then(|| attr_si(i, "output_voltage")).flatten())
+                    .unwrap_or(0.0);
+                if let Some(c) = mk_c(r, vs, &format!("PG chain into {bname}"), &mut plan) {
+                    plan.wiring.push(format!("{bname}.EN -> seqc_{lb}: Cap({c:.3e}).1; seqc_{lb}.2 -> @{gnd};", lb = bname.to_lowercase()));
+                }
+            }
+            if stages_a.len() > 1 {
+                plan.notes.push(format!("{bname}: {} prerequisite PGs wired-AND onto EN (open-drain — any failing prerequisite holds it off)", stages_a.len()));
+            }
+        } else {
+            let (n0, _, _) = &stages_a[0];
+            let Some(rail) = net_label(*n0) else { continue };
+            let r = 1e5;
+            plan.wiring.push(format!("@{rail} -> seqr_{lb}: Res(100kΩ).1; seqr_{lb}.2 -> {bname}.EN;", lb = bname.to_lowercase()));
+            let vs = netlist
+                .instances
+                .iter()
+                .find_map(|(i, _)| (supply_stage(*n0) == Some(i)).then(|| attr_si(i, "output_voltage")).flatten())
+                .unwrap_or(0.0);
+            let c = mk_c(r, vs, &format!("rail-RC into {bname}"), &mut plan).unwrap_or(1e-8);
+            plan.wiring.push(format!("{bname}.EN -> seqc_{lb}: Cap({c:.3e}).1; seqc_{lb}.2 -> @{gnd};", lb = bname.to_lowercase()));
+            if stages_a.len() > 1 {
+                plan.notes.push(format!("{bname}: {} prerequisites but not all expose PG — single-prerequisite rail-RC from '{rail}' (stated); the power-up timeline verifies the full ordering", stages_a.len()));
+            }
+        }
+    }
+    plan.wiring.sort();
+    plan
+}
+
 pub const EMIT_IMPORT: &str = "import { BuckStage, LdoStage, BuckExtStage, PreregStage, BoostStage } from \"bhdl-stdlib/power/stages.bhdl\";";
 
 fn fmt_v(v: f64) -> String {

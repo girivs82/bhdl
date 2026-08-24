@@ -2100,43 +2100,137 @@ async fn run_powertree(
                         println!("  ⚠ {n}");
                     }
                 }
-                // splice into the ON-DISK text (input_content is the
-                // desugared form — never write that back)
+                // CONVERGENCE LOOP (spec §7.4): the emission is built
+                // IN MEMORY — stages + decouple, then the sequencing
+                // chains discovered from the first resolved build, then
+                // bulk capacitance sized by the power-up/interaction
+                // fixpoint — and written to disk only once, converged.
                 let disk_raw = fs::read_to_string(input_path)?;
                 let disk = bhdl_synthesizer::powertree::strip_power_region(&disk_raw).unwrap_or(disk_raw.clone());
-                let new_text = bhdl_synthesizer::powertree::splice_power_region(&disk, &region)
-                    .map_err(|e| anyhow::anyhow!("{e}"))?;
-                fs::write(input_path, &new_text)?;
-                println!(
-                    "\n  emitted option [{n}] \"{}\" into {} ({} stage(s) as requirement instantiations)",
-                    opt.label, input_path.display(), opt.stages.len()
-                );
-                // GATE: the modified board must still build through the
-                // verified pipeline — restore the original on failure.
-                // The emitted stages are REQUIREMENT instantiations, so
-                // the resolver pre-pass runs here exactly as it does on
-                // a fresh build.
-                let new_text = resolve_stage_requirements(&new_text, input_path, None, false)?;
-                let re_pr = parse(&new_text);
-                let verdict: Result<()> = if re_pr.errors().is_empty() {
+                let base_region = region;
+                let mut chains: Vec<String> = Vec::new();
+                let mut bulk: std::collections::BTreeMap<String, f64> = Default::default();
+                let mut converged: Option<String> = None;
+                let mut open_findings: Vec<String> = Vec::new();
+                for iter in 0..10 {
+                    let mut region = base_region.clone();
+                    let mut extra = String::new();
+                    if !chains.is_empty() {
+                        extra.push_str("\n    // sequencing chains (auto: declared domain ordering — verified by ERC033 + `bhdl powerup`)\n");
+                        for c in &chains {
+                            extra.push_str(&format!("    {c}\n"));
+                        }
+                    }
+                    if !bulk.is_empty() {
+                        extra.push_str("\n    // bulk (sized by the power-up/interaction fixpoint — the sim is the sizing oracle)\n");
+                        for (r, c) in &bulk {
+                            extra.push_str(&format!(
+                                "    @{r} -> seqbulk_{lr}: Cap({:.0}µF).1; seqbulk_{lr}.2 -> @{gnd};\n",
+                                c * 1e6,
+                                lr = r.to_lowercase()
+                            ));
+                        }
+                    }
+                    if !extra.is_empty() {
+                        region = region.replace(
+                            bhdl_synthesizer::powertree::EMIT_END,
+                            &format!("{extra}    {}", bhdl_synthesizer::powertree::EMIT_END),
+                        );
+                    }
+                    let new_text = bhdl_synthesizer::powertree::splice_power_region(&disk, &region)
+                        .map_err(|e| anyhow::anyhow!("{e}"))?;
+                    let resolved = resolve_stage_requirements(&new_text, input_path, None, false)?;
+                    let re_pr = parse(&resolved);
+                    if !re_pr.errors().is_empty() {
+                        let failed = input_path.with_extension("emit.failed.bhdl");
+                        let _ = fs::write(&failed, &resolved);
+                        anyhow::bail!(
+                            "--emit iteration {iter}: parse errors ({}); failing text at {} — this is a powertree emission bug, report it",
+                            re_pr.errors().iter().map(|e| e.message.clone()).collect::<Vec<_>>().join("; "),
+                            failed.display()
+                        );
+                    }
                     let re_sf = SourceFile::cast(re_pr.syntax()).unwrap();
-                    verified_netlist(&re_sf, &new_text, input_path, no_elaborate).await.map(|_| ())
-                } else {
-                    Err(anyhow::anyhow!(
-                        "parse errors: {}",
-                        re_pr.errors().iter().map(|e| e.message.clone()).collect::<Vec<_>>().join("; ")
-                    ))
-                };
-                if let Err(e) = verdict {
-                    fs::write(input_path, &disk_raw)?;
-                    // keep the failing text for diagnosis (same convention
-                    // as the elaboration gate's `<input>.failed.bhdl`)
-                    let failed = input_path.with_extension("emit.failed.bhdl");
-                    let _ = fs::write(&failed, &new_text);
-                    eprintln!("  failing text kept at {}", failed.display());
+                    let netlist2 = match verified_netlist(&re_sf, &resolved, input_path, no_elaborate).await {
+                        Ok(nl) => nl,
+                        Err(e) => {
+                            let failed = input_path.with_extension("emit.failed.bhdl");
+                            let _ = fs::write(&failed, &new_text);
+                            eprintln!("  failing text kept at {}", failed.display());
+                            anyhow::bail!(
+                                "--emit iteration {iter}: the emitted board FAILED to build — original file untouched; this is a powertree emission bug, report it\n  cause: {e:#}"
+                            );
+                        }
+                    };
+                    // sequencing chains: discovered once from the first
+                    // RESOLVED build (PG exposure / en_vih come from the
+                    // bound blocks, not the requirements)
+                    if iter == 0 {
+                        let plan = bhdl_synthesizer::powertree::synthesize_seq_chains(&netlist2, &re_sf, &gnd);
+                        for note in &plan.notes {
+                            println!("  seq: {note}");
+                        }
+                        if !plan.wiring.is_empty() {
+                            println!("  seq: {} chain wire(s) synthesized", plan.wiring.len());
+                            chains = plan.wiring;
+                            continue;
+                        }
+                    }
+                    // the sizing oracle: the power-up timeline + the
+                    // load-step interaction screen
+                    let rep = bhdl_synthesizer::powerup::simulate_powerup(&netlist2, &re_sf);
+                    let errs: Vec<&bhdl_synthesizer::powerup::Finding> = rep
+                        .findings
+                        .iter()
+                        .filter(|f| f.sev == bhdl_synthesizer::powerup::Sev::Error)
+                        .collect();
+                    if errs.is_empty() {
+                        converged = Some(new_text);
+                        println!("  {} power-up timeline + interaction screen clean (iteration {iter})", "✓".green());
+                        break;
+                    }
+                    let mut bumped = false;
+                    for f in &errs {
+                        if let Some(r) = &f.rail {
+                            let e = bulk.entry(r.clone()).or_insert(0.0);
+                            *e = if *e <= 0.0 { 22e-6 } else { *e * 2.0 };
+                            bumped = true;
+                        }
+                    }
+                    if bumped {
+                        println!(
+                            "  fixpoint iteration {iter}: {} finding(s) → bulk now {}",
+                            errs.len(),
+                            bulk.iter().map(|(r, c)| format!("{r}={:.0}µF", c * 1e6)).collect::<Vec<_>>().join(", ")
+                        );
+                        continue;
+                    }
+                    // not closable by bulk: keep the (valid) emission and
+                    // surface the findings — design work, not an emission bug
+                    open_findings = errs.iter().map(|f| f.text.clone()).collect();
+                    converged = Some(new_text);
+                    break;
+                }
+                let Some(final_text) = converged else {
                     anyhow::bail!(
-                        "--emit: the emitted board FAILED to re-verify — original file restored; this is a powertree emission bug, report it\n  cause: {e:#}"
+                        "--emit: the bulk-sizing fixpoint did not converge in 10 iterations (bulk reached {}) — the findings are not closable by capacitance; original file untouched",
+                        bulk.iter().map(|(r, c)| format!("{r}={:.0}µF", c * 1e6)).collect::<Vec<_>>().join(", ")
                     );
+                };
+                fs::write(input_path, &final_text)?;
+                println!(
+                    "\n  emitted option [{n}] \"{}\" into {} ({} stage(s){}{})",
+                    opt.label,
+                    input_path.display(),
+                    opt.stages.len(),
+                    if chains.is_empty() { String::new() } else { format!(", {} chain wire(s)", chains.len()) },
+                    if bulk.is_empty() { String::new() } else { format!(", bulk: {}", bulk.iter().map(|(r, c)| format!("{r}={:.0}µF", c * 1e6)).collect::<Vec<_>>().join(", ")) },
+                );
+                if !open_findings.is_empty() {
+                    println!("  {} {} finding(s) NOT closable by bulk — designer action needed:", "⚠".yellow().bold(), open_findings.len());
+                    for f in &open_findings {
+                        println!("    ✗ {f}");
+                    }
                 }
                 println!("  {} emitted board re-verified through the full pipeline", "✓".green().bold());
                 println!("  buck/LDO stages are BuckStage/LdoStage requirements — resolved to library blocks at build time (bhdl.lock); `resolve <inst> = <Block>;` pins one by hand; unresolved stays Generic* under ERC032");

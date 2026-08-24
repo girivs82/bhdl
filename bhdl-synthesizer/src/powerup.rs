@@ -59,6 +59,10 @@ pub enum Sev {
 pub struct Finding {
     pub sev: Sev,
     pub text: String,
+    /// The rail whose CAPACITANCE is implicated (a sag/droop the
+    /// bulk-sizing fixpoint can act on); None for ordering/window
+    /// findings that more bulk cannot fix.
+    pub rail: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -773,7 +777,7 @@ pub fn simulate_powerup(netlist: &Netlist, sf: &SourceFile) -> PowerupReport {
     for &di in &stepping {
         let d = &model.dom_loads[di];
         if d.step_rise_s.is_none() || d.step_dur_s.is_none() {
-            rep.findings.push(Finding { sev: Sev::Warning, text: format!("{}.{}: step={}A declared without rise/dur — 1µs rise / 100µs dur ASSUMED (stated); declare the datasheet figures", d.owner, d.name, d.step_a.unwrap_or(0.0)) });
+            rep.findings.push(Finding { rail: None, sev: Sev::Warning, text: format!("{}.{}: step={}A declared without rise/dur — 1µs rise / 100µs dur ASSUMED (stated); declare the datasheet figures", d.owner, d.name, d.step_a.unwrap_or(0.0)) });
         }
     }
     let stim_of = |d: &DomLoad, t0: f64| Stim {
@@ -827,7 +831,8 @@ pub fn simulate_powerup(netlist: &Netlist, sf: &SourceFile) -> PowerupReport {
                 extra_demand_a: extra,
             });
             if droop_ok == Some(false) {
-                rep.findings.push(Finding { sev: Sev::Error, text: format!("{}.{}: SELF step droop {:.0}mV exceeds declared droop_max {:.0}% of {:.2}V ({:.0}mV) — with its OWN step alone", d.owner, d.name, self_droop * 1e3, d.droop_max_pct.unwrap_or(0.0), d.v_nom, d.droop_max_pct.unwrap_or(0.0) / 100.0 * d.v_nom * 1e3) });
+                let rail_lbl = model.net_label.get(&d.net.unwrap()).cloned();
+                rep.findings.push(Finding { rail: rail_lbl, sev: Sev::Error, text: format!("{}.{}: SELF step droop {:.0}mV exceeds declared droop_max {:.0}% of {:.2}V ({:.0}mV) — with its OWN step alone", d.owner, d.name, self_droop * 1e3, d.droop_max_pct.unwrap_or(0.0), d.v_nom, d.droop_max_pct.unwrap_or(0.0) / 100.0 * d.v_nom * 1e3) });
             }
             responses.push((di, tr));
         }
@@ -940,7 +945,7 @@ pub fn simulate_powerup(netlist: &Netlist, sf: &SourceFile) -> PowerupReport {
                     ((1.0 - GOOD_FRAC) * vn, "good threshold (stated)")
                 };
                 if droop > bound + 1e-9 {
-                    rep.findings.push(Finding { sev: Sev::Error, text: format!(
+                    rep.findings.push(Finding { rail: Some(lbl.clone()), sev: Sev::Error, text: format!(
                         "INTERACTION: coincident steps ({}) droop rail {lbl} by {:.0}mV — over its {basis} {:.0}mV (the per-domain screen predicted the violation; the joint nonlinear run confirms it{})",
                         names.join(" + "), droop * 1e3, bound * 1e3,
                         if tr.cc_entered.is_empty() { String::new() } else { format!("; stages entered current limit: {}", tr.cc_entered.iter().map(|&k| model.stages[k].name.clone()).collect::<Vec<_>>().join(", ")) }
@@ -975,13 +980,13 @@ fn verify_windows(model: &Model, timelines: &HashMap<NetId, RailTimeline>, rep: 
     for d in &model.dom_loads {
         if d.sw {
             if !d.after.is_empty() || d.slot.is_some() {
-                rep.findings.push(Finding { sev: Sev::Info, text: format!("{}.{}: firmware-enabled — not in the hardware timeline (stated); its windows are firmware's", d.owner, d.name) });
+                rep.findings.push(Finding { rail: None, sev: Sev::Info, text: format!("{}.{}: firmware-enabled — not in the hardware timeline (stated); its windows are firmware's", d.owner, d.name) });
             }
             continue;
         }
         let Some(tl_b) = tl_of(d.net) else { continue };
         let Some(tg_b) = tl_b.t_good else {
-            rep.findings.push(Finding { sev: Sev::Error, text: format!("{}.{}: rail '{}' never reached {:.0}% of {:.2}V within {:.0}ms", d.owner, d.name, tl_b.net, GOOD_FRAC * 100.0, tl_b.v_nom, T_END * 1e3) });
+            rep.findings.push(Finding { rail: None, sev: Sev::Error, text: format!("{}.{}: rail '{}' never reached {:.0}% of {:.2}V within {:.0}ms", d.owner, d.name, tl_b.net, GOOD_FRAC * 100.0, tl_b.v_nom, T_END * 1e3) });
             continue;
         };
         for aname in &d.after {
@@ -990,16 +995,16 @@ fn verify_windows(model: &Model, timelines: &HashMap<NetId, RailTimeline>, rep: 
             let Some(tg_a) = tl_a.t_good else { continue };
             let dt = tg_b - tg_a;
             if dt < -1e-9 {
-                rep.findings.push(Finding { sev: Sev::Error, text: format!("{}.{} good at {:.3}ms BEFORE {} good at {:.3}ms — declared after={}", d.owner, d.name, tg_b * 1e3, aname, tg_a * 1e3, aname) });
+                rep.findings.push(Finding { rail: None, sev: Sev::Error, text: format!("{}.{} good at {:.3}ms BEFORE {} good at {:.3}ms — declared after={}", d.owner, d.name, tg_b * 1e3, aname, tg_a * 1e3, aname) });
             }
             if let Some(tmin) = d.t_min {
                 if dt + 1e-9 < tmin {
-                    rep.findings.push(Finding { sev: Sev::Error, text: format!("{}.{}: good {:.3}ms after {} — declared t_min {:.3}ms not met on the TIMELINE", d.owner, d.name, dt * 1e3, aname, tmin * 1e3) });
+                    rep.findings.push(Finding { rail: None, sev: Sev::Error, text: format!("{}.{}: good {:.3}ms after {} — declared t_min {:.3}ms not met on the TIMELINE", d.owner, d.name, dt * 1e3, aname, tmin * 1e3) });
                 }
             }
             if let Some(tmax) = d.t_max {
                 if dt > tmax + 1e-9 {
-                    rep.findings.push(Finding { sev: Sev::Error, text: format!("{}.{}: good {:.3}ms after {} — exceeds the declared t_max window {:.3}ms (delays COMPOSE: see the sag events)", d.owner, d.name, dt * 1e3, aname, tmax * 1e3) });
+                    rep.findings.push(Finding { rail: None, sev: Sev::Error, text: format!("{}.{}: good {:.3}ms after {} — exceeds the declared t_max window {:.3}ms (delays COMPOSE: see the sag events)", d.owner, d.name, dt * 1e3, aname, tmax * 1e3) });
                 }
             }
         }
@@ -1021,10 +1026,10 @@ fn verify_windows(model: &Model, timelines: &HashMap<NetId, RailTimeline>, rep: 
                     let Some(tg_a) = tl_a.t_good else { continue };
                     let open = tg_a + b.slot_t_min.unwrap_or(0.0);
                     if tg_b + 1e-9 < open {
-                        rep.findings.push(Finding { sev: Sev::Error, text: format!("{}: slot {} rail {} good at {:.3}ms before slot {} complete at {:.3}ms{}", owner, cur, b.name, tg_b * 1e3, prev, open * 1e3, b.slot_t_min.map(|x| format!(" (incl. slot_t_min {:.3}ms)", x * 1e3)).unwrap_or_default()) });
+                        rep.findings.push(Finding { rail: None, sev: Sev::Error, text: format!("{}: slot {} rail {} good at {:.3}ms before slot {} complete at {:.3}ms{}", owner, cur, b.name, tg_b * 1e3, prev, open * 1e3, b.slot_t_min.map(|x| format!(" (incl. slot_t_min {:.3}ms)", x * 1e3)).unwrap_or_default()) });
                     }
                     if let Some(&(s0, s1, vmin)) = tl_a.sags.iter().find(|(s0, s1, _)| tg_b >= *s0 && tg_b <= *s1) {
-                        rep.findings.push(Finding { sev: Sev::Error, text: format!(
+                        rep.findings.push(Finding { rail: Some(tl_a.net.clone()), sev: Sev::Error, text: format!(
                             "{}: slot {} rail {} went good at {:.3}ms WHILE slot-{} rail {} was sagged below good ({:.3}–{:.3}ms, min {:.2}V) — the knee re-opened the slot; more bulk capacitance on '{}' (or a PG-chained enable) closes it",
                             owner, cur, b.name, tg_b * 1e3, prev, a.name, s0 * 1e3, s1 * 1e3, vmin, tl_a.net
                         ) });

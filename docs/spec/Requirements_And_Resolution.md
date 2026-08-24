@@ -742,3 +742,40 @@ smaller bursts earns the linear-region proof with zero joint runs.
 Genuinely periodic burst patterns (frame cadences) would want a
 repetition axis on the contract; peak alignment is conservative for
 them meanwhile (stated).
+
+### 7.4 The emission convergence loop — chains synthesized, bulk sized
+
+`powertree --emit` is now a closed loop, built IN MEMORY and written
+to disk once, converged: stages + auto-`decouple` (§7.2), then the
+SEQUENCING CHAINS discovered from the first resolved build (PG
+exposure and `en_vih` come from the BOUND blocks, not the
+requirements), then BULK sized by the fixpoint whose oracle is the
+`powerup` engine itself (§7.1/§7.3).
+
+- **Chain synthesis** (`powertree::synthesize_seq_chains`): for every
+  declared ordering edge whose target stage has an unwired enable —
+  a hand-wired enable always wins — emit the mechanism: PG chain when
+  every prerequisite's bound block exposes a PG contract pin
+  (open-drain wired-AND; the pull-up lives inside the PG block's own
+  application circuit, detected by its `_R_pg` child, 1 MΩ assumed
+  with a note otherwise), with a declared t_min adding
+  C = t_min / (R·ln(Vs/(Vs−V_IH))); rail-RC fallback otherwise
+  (100 kΩ series — a stated sizing choice that also limits current
+  into the EN clamp — 10 nF benign default without a t_min). Multiple
+  prerequisites without full PG coverage fall back to the first + a
+  note; everything emitted is verified by ERC033 and the timeline —
+  generator and checkers share one arithmetic.
+- **Bulk fixpoint**: run `powerup` (timeline + interaction screen);
+  every Error finding carrying a structured rail attribution bumps
+  that rail's bulk (22 µF seed, doubling); iterate to clean, max 10.
+  Findings with NO rail attribution are NOT closable by capacitance
+  (an ordering flaw, a Generic placeholder whose `en_vih` cannot be
+  known): the emission is kept — it builds — and the findings stay
+  OPEN and printed as designer action, never silently absorbed. A
+  non-converging fixpoint refuses the emission entirely.
+
+Verified live: a slot-ordered SoC with a 4.5 A burst over the boost
+stage's capability converges at 2 chain wires + 704 µF on the burst
+rail in 3 iterations, with the Generic-placeholder ordering finding
+correctly left open (its resolver survey names exactly why nothing
+bound: the 30 µV noise requirement rejects every non-promising LDO).
