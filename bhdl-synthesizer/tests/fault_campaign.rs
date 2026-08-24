@@ -3171,7 +3171,8 @@ board KneeBoard {{
     let rep = run(board(false, false)).await;
     let v50 = rep.rails.iter().find(|r| r.net == "V50").unwrap();
     assert!(!v50.sags.is_empty(), "no sag simulated: {:#?}", rep.events);
-    assert!(rep.events.iter().any(|e| e.text.contains("SAG begins") && e.text.contains("inrush") && e.text.contains("reflected")), "{:#?}", rep.events);
+    assert!(rep.events.iter().any(|e| e.text.contains("CURRENT LIMIT") && e.text.contains("demand") && e.text.contains("capability")), "{:#?}", rep.events);
+    assert!(rep.events.iter().any(|e| e.text.contains("SAG begins")), "{:#?}", rep.events);
     assert!(rep.findings.iter().any(|f| f.sev == Sev::Error && f.text.contains("WHILE slot-1 rail") && f.text.contains("sagged below good")), "{:#?}", rep.findings);
 
     // arm 2: big bulk slows the rise; the RC threshold fires early and
@@ -3241,4 +3242,67 @@ board AutoPdn {{
     )).await;
     assert!(stmts.is_empty(), "{stmts:?}");
     assert!(notes.is_empty(), "{notes:?}");
+}
+
+/// Load-step interactions (§7.3): per-domain runs + peak-aligned
+/// superposition screen with the SELF-CONSISTENCY gate. Two bursty
+/// domains share one supply: each burst alone stays under the stage
+/// limit (linear, zero droop — regulation holds), but the summed
+/// demand crosses it, so superposition is invalid BY ITS OWN
+/// ARITHMETIC — the screen names the stage and escalates the
+/// implicated pair to a simultaneous nonlinear run, which confirms
+/// current-limit entry and a droop over the declared droop_max.
+/// Smaller bursts: the screen PROVES the linear region and the N
+/// per-domain runs are the worst case (proof, not approximation).
+#[tokio::test]
+async fn load_step_superposition_screen_and_escalation() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let board = |step: &str| format!(r#"
+import {{ BuckBoost_TPS63020 }} from "bhdl-stdlib/power/tps63020.bhdl";
+import {{ Cap }} from "bhdl-stdlib/passives/capacitor.bhdl";
+entity StepSoc() {{
+    pin 1: power in;
+    pin 2: power in;
+    pin 3: power in;
+    pin GND: ground;
+    domain VDD_IO  pins="1" v=5V i_nom=150mA source="FIXTURE — steps probe";
+    domain VDD_CPU pins="2" v=5V i_nom=50mA step={step} rise=10us dur=500us droop_max=3% source="FIXTURE — steps probe";
+    domain VDD_GPU pins="3" v=5V i_nom=50mA step={step} rise=10us dur=500us droop_max=3% source="FIXTURE — steps probe";
+}}
+board StepBoard {{
+    power VBAT = 3.6V @ 8A;
+    port V50: power out = 5V @ 3A;
+    ground GND;
+    @VBAT -> u1: BuckBoost_TPS63020(v_out=5V, i_out_max=1.5A, v_in=3.6V, v_in_min=3.4V, v_in_max=4.2V).VIN;
+    u1.GND -> @GND; u1.VOUT -> @V50;
+    @V50 -> C_bulk: Cap(200µF).1; C_bulk.2 -> @GND;
+    soc: StepSoc();
+    @V50 -> soc.1; @V50 -> soc.2; @V50 -> soc.3; soc.GND -> @GND;
+}}
+"#);
+    let run = |text: String| async move {
+        let pr = parse(&text);
+        assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+        let sf = SourceFile::cast(pr.syntax()).unwrap();
+        let analysis = analyze(&sf);
+        let mut gen = NetlistGenerator::new();
+        let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+        bhdl_synthesizer::powerup::simulate_powerup(&n, &sf)
+    };
+    use bhdl_synthesizer::powerup::Sev;
+
+    // coincidence crosses the limit: screen flags → escalation confirms
+    let rep = run(board("1.2A")).await;
+    assert_eq!(rep.steps.len(), 2, "{:#?}", rep.steps);
+    assert!(rep.steps.iter().all(|s| s.extra_demand_a.iter().any(|(n, a)| n == "u1" && (*a - 1.2).abs() < 0.1)), "{:#?}", rep.steps);
+    assert!(rep.interactions.iter().any(|l| l.contains("superposition invalid") && l.contains("u1")), "{:#?}", rep.interactions);
+    assert!(rep.interactions.iter().any(|l| l.contains("SIMULTANEOUSLY")), "{:#?}", rep.interactions);
+    assert!(rep.findings.iter().any(|f| f.sev == Sev::Error && f.text.contains("INTERACTION") && f.text.contains("current limit") && f.text.contains("droop_max")), "{:#?}", rep.findings);
+
+    // smaller bursts: the self-consistency PROOF, no escalation
+    let rep = run(board("0.9A")).await;
+    assert!(rep.interactions.iter().any(|l| l.contains("SELF-CONSISTENT") && l.contains("proof, not approximation")), "{:#?}", rep.interactions);
+    assert!(!rep.interactions.iter().any(|l| l.contains("SIMULTANEOUSLY")));
+    assert!(rep.findings.iter().all(|f| f.sev != Sev::Error), "{:#?}", rep.findings);
 }

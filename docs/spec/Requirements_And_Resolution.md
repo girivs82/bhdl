@@ -702,3 +702,43 @@ sizing alongside the knee, and the full-system interaction simulation —
 the PWL engine's post-settle phase firing each domain's declared
 `step_a`/`step_rise` (and coincident sibling steps) to catch
 cross-regulation through shared feeds.
+
+### 7.3 Load-step interactions — superposition with a self-consistency gate
+
+Once the tree is built, the domains pull power in their own patterns —
+steady draws (I/O), load steps, bursts. Fire them one at a time and
+superimpose, or simulate simultaneously? BOTH, in an order that makes
+superposition's validity checkable from its own result:
+
+1. **Per-domain runs** (N cheap sims): each domain's declared
+   trapezoid (`step`/`rise`/`dur`) fired ALONE from the settled
+   operating point; recorded per run: self-droop, coupling onto every
+   sibling rail, and the extra peak demand imposed on every stage.
+   In-regulation (small-signal) droop is the Z(f)/decap domain's
+   business — mask-verified in §arc-(c); this engine models droop
+   where LIMITS engage.
+2. **Peak-aligned superposition screen** (conservative, like
+   worst-case timing): sum the contributions; check every stage's
+   summed demand against its current limit and every rail's summed
+   droop against the tightest declared `droop_max` (good-threshold
+   fallback, stated). **The self-consistency gate**: if no summed
+   demand crosses a limit, no clamp ever engaged, the system provably
+   stayed linear, and the superposition IS the worst case — proof,
+   not approximation. The report says so in those words.
+3. **Escalation**: a crossed limit means superposition is invalid AT
+   THAT POINT BY ITS OWN ARITHMETIC — the screen is the pruning
+   oracle. The implicated domains (only those) are fired
+   SIMULTANEOUSLY through the same nonlinear engine, which handles
+   the limit clamps and the constant-power input reflection
+   (I_in = P/V_in, negative incremental resistance) natively; the
+   joint run's actual droop and current-limit entries become the
+   findings, fully attributed ("coincident steps A + B droop rail X
+   by 501 mV over its declared 150 mV; u1 entered current limit").
+
+The regression (`load_step_superposition_screen_and_escalation`): two
+bursts that individually stay under the shared stage's limit and
+jointly cross it — flagged, escalated, confirmed; the same board with
+smaller bursts earns the linear-region proof with zero joint runs.
+Genuinely periodic burst patterns (frame cadences) would want a
+repetition axis on the contract; peak alignment is conservative for
+them meanwhile (stated).
