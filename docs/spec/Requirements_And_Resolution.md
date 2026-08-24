@@ -346,10 +346,16 @@ Principles that fall out:
    current I_L(DC) − ΔI/2 = V_out·I_out/(V_in·η) − V_in·D/(2·L·f) must
    stay under the 6.5 A minimum valley limit × 0.8 derating — so the
    same 5 V / 2 A requirement resolves from a 3.6 V feed and is refused
-   from 1.9 V with that arithmetic named. `BuckBoostStage` still has no
-   implementer: the survey says so (visible missing coverage; a vendor
-   block must promise its DELIVERABLE output current at the ratio,
-   never have it invented here).
+   from 1.9 V with that arithmetic named. `BuckBoostStage` has
+   `BuckBoost_TPS63020` (`bhdl-stdlib/power/tps63020.bhdl`, SLVS916I):
+   the impl BINDS `vin_min`/`vin_max`, so the requirement's straddle is
+   conveyed into the ctor and the envelope — the datasheet's Eq. 1/2
+   average-switch-current arithmetic, evaluated at v_in_min where the
+   boost ratio is worst — runs at the requirement's own operating
+   point: IOUT/(η·(1−D)) ≤ 2.8 A (3.5 A minimum average limit × 0.8),
+   with the datasheet's own η = 0.9 assumption. A Li-ion straddle
+   (2.5–4.2 V) across 3.3 V resolves; a 1.8 V floor boosting to 5 V at
+   2 A is refused with the arithmetic named.
    `BuckExtStage` (controller + external power stage; `phases` is part
    of the requirement) is the third interface; the power tree emits it
    for `BuckExternal` stages. Its only implementer is the generic
@@ -507,7 +513,7 @@ UNCHECKED against a requirement that states it — never a pass.
 | `LdoStage` | `LinearRegulator` (78xx class) | template | 40 µV class, headroom | i_max, vin range, temp, qual | class numbers |
 | `BuckExtStage` | `BuckController` | template | 1 phase; rating = the FETs' | vin range, noise, temp, qual | FETs + axes |
 | `BoostStage` | `Boost_TPS61022` | auto | 3 A @ 3.6→5 V (94.7 %), 2.2–5.5 V out, 1.8 V startup floor, T_J ≤ 125 °C via θ_JA 108.2 | noise, qual | — |
-| `BuckBoostStage` | — (no implementer yet) | — | — | — | — |
+| `BuckBoostStage` | `BuckBoost_TPS63020` | auto | 2 A boost mode (4 A buck), 1.8–5.5 V in, 1.2–5.5 V out, −40…85 °C ambient + T_J ≤ 125 °C via θ_JA 41.8 | noise, qual | — |
 | `PreregStage` | `PassiveFrontEnd` (fuse + TVS) | auto | fuse rating, `ov_clamp`, 0 V … clamp point | ov_trip, uv_trip, reverse_polarity, temp, qual | — |
 | `PreregStage` | `Efuse_TPS2660` | template | 2 A, 4.2–55 V, `ov_trip`, `uv_trip`, `reverse_polarity`, T_J ≤ 150 °C via θ_JA 38.6 | ov_clamp, qual | `r_ilim` (ILIM law not in the library) |
 | `PreregStage` | `IdealDiode_LM74700` | template | rating = the FET's, 3.2–65 V, `reverse_polarity`, AEC-Q100 grade 1 (−40…125 °C) | ov_clamp, ov_trip, uv_trip | pass FET + axes |

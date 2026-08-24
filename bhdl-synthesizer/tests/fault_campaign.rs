@@ -2864,3 +2864,55 @@ board BoostReq {{
     assert!(r.resolutions[0].bound.is_none());
     assert!(r.resolutions[0].candidates[0].failures().iter().any(|f| f.contains("VALLEY current") && f.contains("5.2A")), "{:?}", r.resolutions[0].candidates[0].failures());
 }
+
+/// BuckBoost_TPS63020 (SLVS916I): the first BuckBoostStage implementer.
+/// The requirement's STRADDLE (vin_min/vin_max) is conveyed into the
+/// ctor via the impl bindings, so the envelope — the datasheet's Eq. 1/2
+/// average-switch-current arithmetic at v_in_min — runs at the
+/// requirement's own worst boost ratio. A Li-ion straddle across 3.3 V
+/// resolves; a 1.8 V floor boosting to 5 V at 2 A is refused with the
+/// arithmetic named.
+#[tokio::test]
+async fn buckboost_tps63020_block() {
+    use bhdl_synthesizer::stage_resolution::resolve_stages;
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let stdlib = ws.join("bhdl-stdlib");
+    let board = |vout: &str, imax: &str, vmin: &str| format!(r#"
+import {{ BuckBoostStage }} from "bhdl-stdlib/power/stages.bhdl";
+import {{ Res }} from "bhdl-stdlib/passives/resistor.bhdl";
+board BuckBoostReq {{
+    power VBAT = 3.6V @ 3A;
+    port VRAIL: power out = {vout} @ {imax};
+    ground GND;
+    @VBAT -> u1: BuckBoostStage(vout={vout}, i_max={imax}, vin=3.6V, vin_min={vmin}, vin_max=4.2V).VIN;
+    u1.GND -> @GND; u1.VOUT -> @VRAIL;
+    @VRAIL -> R_LOAD: Res(2.2Ω, wattage=10W).1; R_LOAD.2 -> @GND;
+}}
+"#);
+    // Li-ion straddle across 3.3 V: 2.5–4.2 V in, 1.5 A out — resolves
+    let r = resolve_stages(&board("3.3V", "1.5A", "2.5V"), &stdlib, &[]).unwrap().unwrap();
+    assert_eq!(r.resolutions[0].bound.as_deref(), Some("BuckBoost_TPS63020"), "{}", bhdl_synthesizer::stage_resolution::render_report(&r.resolutions[0]));
+    let pr = parse(&r.source);
+    assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+    let val = |name: &str| n.instances.values().find(|i| i.name == name).unwrap_or_else(|| panic!("{name}")).attributes.get("value").cloned().unwrap_or_default();
+    let si = |v: String| bhdl_synthesizer::stage_acceptance::parse_si(&v).unwrap();
+    // FB divider Eq. 3: 180k·(3.3/0.5 − 1) = 1.008 MΩ — the datasheet's
+    // own Table 3 row (3.3 V → 1 MΩ / 180 kΩ), E-series-snapped
+    assert!((si(val("u1_R_top")) - 1.008e6).abs() / 1.008e6 < 0.02, "{}", val("u1_R_top"));
+    // inductor between the two bridge legs; VINA bypass present
+    assert!(n.instances.values().any(|i| i.name == "u1_L_bb"), "single inductor");
+    assert!(n.instances.values().any(|i| i.name == "u1_C_a"), "VINA bypass");
+    assert!(n.instances.values().any(|i| i.name == "u1_R_pg"), "PG pull-up (Figure 7)");
+    // deep straddle: 1.8 V floor boosting to 5 V at 2 A — average switch
+    // current 2/(0.9·0.36) = 6.2 A, beyond 2.8 A (3.5 A min × 0.8)
+    let r = resolve_stages(&board("5V", "2A", "1.8V"), &stdlib, &[]).unwrap().unwrap();
+    assert!(r.resolutions[0].bound.is_none());
+    let c = r.resolutions[0].candidates.iter().find(|c| c.block == "BuckBoost_TPS63020").expect("surveyed");
+    assert!(c.failures().iter().any(|f| f.contains("AVERAGE switch current") && f.contains("2.8A")), "{:?}", c.failures());
+    assert!(r.source.contains("GenericBuckBoost("), "{}", r.source);
+}

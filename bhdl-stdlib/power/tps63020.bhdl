@@ -1,0 +1,233 @@
+// TPS63020 — TI single-inductor 4-switch buck-boost converter with 4-A
+// switches, VSON-14 (DSJ) (SLVS916I – JULY 2010 – REVISED OCTOBER 2019).
+//
+// Two-layer library model (docs/spec/Requirements_And_Resolution.md §1),
+// the first BuckBoostStage implementer:
+//   TPS63020           as part   — vendor truth: pins, package, datasheet
+//                                  figures.
+//   BuckBoost_TPS63020 as design — the designer's subcircuit sized by the
+//                                  SLVS916I §8.2.2 design procedure,
+//                                  contract pins VIN / VOUT (virtual) /
+//                                  EN / GND, `impl BuckBoostStage`.
+//
+// REAL-DATA PROVENANCE (all SLVS916I):
+//   input 1.8–5.5 V (UVLO 1.4–1.6 V falling); output adjustable
+//   1.2–5.5 V (VFB 500 mV); AVERAGE switch current limit 4 A typ /
+//   3.5 A MIN (dynamically REDUCED below VIN 2.3 V — no curve given, not
+//   modelled, stated); output current 2 A in boost mode / 4 A in buck
+//   mode (§8.1; front page: 2 A at VOUT 3.3 V for VIN > 2.5 V);
+//   fSW 2.2–2.6 MHz, 2.4 MHz typ; RDS(on) 50 mΩ HS and 50 mΩ LS;
+//   IQ 25 µA (VIN+VINA) + 5 µA (VOUT); OVP 5.5–7 V; OTP 140 °C;
+//   TA −40…85 °C ambient AND TJ −40…125 °C recommended (abs max 150);
+//   θJA 41.8 / θJC(top) 47 / θJC(bot) 3.6 (DSJ VSON-14);
+//   L = 1–2.2 µH (1 or 1.5 µH for 1.5–2 A loads); Eq. 1/2 boost duty +
+//   peak current with the datasheet's own η = 0.9 assumption; inductor
+//   saturation 20 % above the calculated peak; C_out recommended
+//   3×22 µF nominal (no sizing equation given — recommended value).
+
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Ind } from "bhdl-stdlib/passives/inductor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+// ── Vendor truth ────────────────────────────────────────────────────
+entity TPS63020() as part {
+    pin VIN:     power in;    // power stage supply (pins 10, 11)
+    pin VINA:    power in;    // control stage supply
+    pin L1:      switch out;  // inductor connection, input side
+    pin L2:      switch in;   // inductor connection, output side
+    pin VOUT:    power out;   // buck-boost output (pins 4, 5)
+    pin FB:      feedback in; // 500 mV reference divider
+    pin EN:      signal in;   // must not be left open
+    pin PS_SYNC: signal in;   // power-save (0 enabled / 1 disabled / sync clock), must not be left open
+    pin PG:      signal out;  // power good, open-drain, can be left open
+    pin GND:     ground;      // control/logic ground
+    pin PGND:    ground;      // power ground (join to GND at one point)
+
+    attribute component_class  = "regulator_ic";
+    attribute manufacturer     = "Texas Instruments";
+    attribute part_number      = "TPS63020";
+    attribute topology         = "buck_boost";
+    attribute vin_min          = 1.8V;    // SLVS916I §6.3 recommended supply at VIN, VINA
+    attribute vin_max          = 5.5V;
+    attribute vout_min         = 1.2V;    // SLVS916I features: adjustable output range
+    attribute vout_max         = 5.5V;
+    attribute i_sw_avg_limit   = 3.5A;    // SLVS916I: AVERAGE switch current limit, MINIMUM (4 A typ, 4.5 A max; reduced below VIN 2.3 V)
+    attribute output_current   = 2A;      // SLVS916I §8.1: up to 2 A in BOOST mode (4 A in buck; front page: 2 A at VOUT 3.3 V, VIN > 2.5 V)
+    attribute f_sw             = 2.4MHz;  // SLVS916I EC table: 2.2–2.6 MHz (Eq. 2 text quotes 2.5 MHz typical)
+    attribute rds_on           = 50mΩ;    // SLVS916I: high-side switch (low-side also 50 mΩ)
+    attribute rds_on_ls        = 50mΩ;
+    attribute i_quiescent      = 25uA;    // SLVS916I: VIN+VINA quiescent, typ (50 µA max; VOUT pin adds 5 µA)
+    attribute feedback_voltage = 0.5V;    // SLVS916I: VFB 495–505 mV
+    attribute fb_equation      = "VOUT = {VREF}*(1 + {R1}/{R2})";
+    attribute ovp_v            = 5.5V;    // SLVS916I: output overvoltage protection, MIN (7 V max)
+    attribute temp_min         = -40degC; // SLVS916I §6.3: operating free-air (ambient) −40 °C to 85 °C
+    attribute temp_max         = 85degC;
+    attribute tj_min           = -40degC; // SLVS916I §6.3: operating junction −40 °C to 125 °C
+    attribute tj_max           = 125degC;
+    attribute theta_ja         = 41.8degC/W; // SLVS916I §6.4, DSJ (VSON-14): RθJA — JEDEC-standard board metric
+    attribute theta_jc         = 47degC/W;   // SLVS916I §6.4: RθJC(top) (RθJC(bot) 3.6 via the thermal pad)
+}
+
+symbol TPS63020 {
+    left   { VIN, VINA, EN, PS_SYNC }
+    right  { L1, L2, VOUT, FB, PG }
+    bottom { GND, PGND }
+}
+
+layout TPS63020 {
+    package VSON-14;
+}
+
+// ── The designer's subcircuit ───────────────────────────────────────
+entity BuckBoost_TPS63020(
+    v_out:        voltage     = 3.3V,
+    i_out_max:    current     = 1.5A,
+    v_in:         voltage     = 3.6V,    // nominal feed (one-cell Li-ion)
+    v_in_min:     voltage     = 2.5V,    // the STRADDLE — worst boost ratio is here
+    v_in_max:     voltage     = 4.2V,
+    f_sw:         frequency   = 2.4MHz,  // SLVS916I EC table typ
+    l_value:      inductance  = 1.5µH,   // SLVS916I §8.2.2: 1 or 1.5 µH for 1.5–2 A loads (≥ 1 µH always)
+    r_fb_bot:     resistance  = 180kΩ,   // SLVS916I §8.2.3: R2 in the range of 200 kΩ (Table 3 uses 180 kΩ)
+    c_out:        capacitance = 66µF,    // SLVS916I §8.2.2.3 recommended nominal 3×22 µF (no sizing equation given)
+    c_in:         capacitance = 10µF     // SLVS916I §8.2.2.4 recommended
+) as design
+  // VALIDITY ENVELOPE (SLVS916I): adjustable output range; the whole
+  // feed range inside the recommended supply range. The straddle itself
+  // is NOT required — the part regulates above, below, or equal — but
+  // the CURRENT envelope (arithmetic → design { } below) is evaluated
+  // at v_in_min, where the boost ratio is worst (SLVS916I note under
+  // Eq. 2: "the calculation must be done for the minimum input voltage
+  // in boost mode").
+  where v_out >= 1.2V, v_out <= 5.5V,
+        v_in_min >= 1.8V, v_in_max <= 5.5V, v_in_min < v_in_max,
+        v_in >= v_in_min, v_in <= v_in_max
+{
+    pin VIN:  power in;
+    pin VOUT: power out virtual;
+    pin EN:   signal in;
+    pin GND:  ground;
+
+    // Promises (SLVS916I) + exported operating point.
+    attribute component_class = "switching_regulator";
+    attribute topology        = "buck_boost";
+    attribute output_voltage  = v_out;
+    attribute v_in            = v_in;
+    attribute i_out_max       = i_out_max;
+    attribute output_current  = 2A;       // BOOST-mode capability (SLVS916I §8.1; buck mode reaches 4 A — the straddle's promise is the boost side)
+    attribute vin_min         = 1.8V;     // SLVS916I recommended supply range
+    attribute vin_max         = 5.5V;
+    attribute f_sw            = f_sw;
+    attribute rds_on          = 50mΩ;
+    attribute rds_on_ls       = 50mΩ;
+    attribute i_quiescent     = 25uA;
+    attribute feedback_voltage = 0.5V;
+    attribute fb_equation     = "VOUT = {VREF}*(1 + {R1}/{R2})";
+    attribute temp_min        = -40degC;  // SLVS916I ambient
+    attribute temp_max        = 85degC;
+    attribute tj_min          = -40degC;
+    attribute tj_max          = 125degC;
+    attribute theta_ja        = 41.8degC/W; // SLVS916I, DSJ, JEDEC board metric
+    attribute theta_jc        = 47degC/W;
+
+    // Sizing (SLVS916I §8.2.2) + the CURRENT envelope, evaluated at
+    // v_in_min (worst boost ratio). One binary op per const; SI base
+    // units.
+    design {
+        const vout   = self.v_out;
+        const vin_lo = self.v_in_min;
+        // Boost duty at minimum input, Eq. 1: D = (VOUT − VIN)/VOUT.
+        // For a buck-only range (vin_lo > vout) this goes negative and
+        // the boost forms below relax toward i_out/η — the buck side is
+        // covered by the 4 A buck capability, above the 2 A promise.
+        const vdiff = vout - vin_lo;
+        const duty  = vdiff / vout;
+        // Average inductor (= switch) current, Eq. 2 first term:
+        // I = IOUT / (η·(1 − D)), with the datasheet's own η = 0.9
+        // assumption ("use the number from the efficiency curves or 0.9
+        // as an assumption").
+        const inv_d  = 1.0 - duty;
+        const eta_d  = inv_d * 0.9;
+        const i_l_dc = self.i_out_max / eta_d;
+        // ENVELOPE: the current limit is on the AVERAGE switch current —
+        // 3.5 A MINIMUM (4 A typ), derated ×0.8 per the power-tree
+        // policy. (Below VIN 2.3 V the dynamic current limit reduces it
+        // further — SLVS916I gives no curve, so that region is simply
+        // part of the refusal margin, stated.)
+        require i_l_dc <= 2.8
+            else "BuckBoost_TPS63020 envelope: AVERAGE switch current IOUT/(η·(1−D)) at v_in_min exceeds 2.8A (3.5A minimum average switch limit × 0.8 derating) — the requested output power is beyond this part at this ratio";
+        // Ripple ΔI_L = VIN·D / (L·fSW) at v_in_min; peak Eq. 2.
+        const vd     = vin_lo * duty;
+        const lf     = self.l_value * self.f_sw;
+        const d_il   = vd / lf;
+        const i_half = d_il / 2.0;
+        const i_peak = i_l_dc + i_half;
+        // Inductor saturation: 20 % above the calculated peak
+        // (SLVS916I §8.2.2.2 — the datasheet's own headroom figure).
+        l_rated_current = i_peak * 1.2;
+        // FB divider Eq. 3: R1 = R2·(VOUT/VFB − 1), VFB = 500 mV.
+        const vratio = vout / 0.5;
+        const rtop_f = vratio - 1.0;
+        r_top_value  = rtop_f * self.r_fb_bot;
+    }
+
+    // The application circuit (SLVS916I Figure 7) — FIRM.
+    u: TPS63020();
+    VIN -> u.VIN;
+    VIN -> u.VINA;
+    u.GND  -> GND;
+    u.PGND -> GND;   // single-point join per SLVS916I §7.1
+    generate if (wired(EN)) {
+        EN -> u.EN;
+    } else {
+        VIN -> u.EN;
+    }
+    // PS/SYNC low = power-save enabled (the datasheet application
+    // curves' default; must not be left open)
+    u.PS_SYNC -> GND;
+    VIN -> C_in: Cap(c_in).1; C_in.2 -> GND;
+    // VINA bypass: 0.1 µF recommended, must not exceed 0.22 µF
+    // (SLVS916I §8.2.2.5)
+    VIN -> C_a: Cap(100nF).1; C_a.2 -> GND;
+    // single-inductor 4-switch topology: L between the two bridge legs
+    u.L1 -> L_bb: Ind(l_value, rated_current = l_rated_current).1; L_bb.2 -> u.L2;
+    u.VOUT -> VOUT;
+    VOUT -> C_out: Cap(c_out).1; C_out.2 -> GND;
+    VOUT -> R_top: Res(r_top_value, tolerance = 1%, supply_profile = "grade").1; R_top.2 -> u.FB;
+    u.FB -> R_bot: Res(r_fb_bot, tolerance = 1%, supply_profile = "grade").1; R_bot.2 -> GND;
+    // PG pull-up per Figure 7 (open-drain; R3 = 1 MΩ)
+    VOUT -> R_pg: Res(1MΩ).1; R_pg.2 -> u.PG;
+
+    // §4 device-stress at the solved operating point: worst case is the
+    // boost corner at v_in_min (SLVS916I Eq. 2 note). In the 4-switch
+    // bridge the inductor current always flows through TWO switches
+    // (one per leg), so conduction is I_L²·(RDS_HS + RDS_LS).
+    simulation {
+        stress {
+            const duty = (vout - self.v_in_min) / vout;
+            const i_l  = i_out / ((1 - duty) * 0.9);
+            const d_il = self.v_in_min * duty / (self.f_sw * L_bb.value);
+            L_bb.i_peak    = i_l + d_il / 2;
+            C_out.v_ripple = i_out * duty / (self.f_sw * C_out.value);
+            // conduction (two switches in the path) + quiescent only:
+            // SLVS916I states no switching transition time, so the
+            // transition loss is NOT modelled (stated) — the η = 0.9 in
+            // i_l carries the datasheet's own margin
+            self.p_diss    = i_l * i_l * (self.rds_on + self.rds_on_ls) + self.v_in_min * self.i_quiescent;
+        }
+    }
+}
+
+// The block SATISFIES BuckBoostStage. Binding vin_min/vin_max conveys
+// the requirement's STRADDLE into the ctor, so the envelope arithmetic
+// above runs at the requirement's own worst boost ratio — the vendor's
+// Eq. 1/2, never invented here. The i_max acceptance gate reads the
+// promised output_current (2 A, the boost-mode side of the straddle).
+impl BuckBoostStage for BuckBoost_TPS63020 {
+    const vout    = v_out;
+    const i_max   = i_out_max;
+    const vin     = v_in;
+    const vin_min = v_in_min;
+    const vin_max = v_in_max;
+}
+
+alias TPS63020_3V3 = BuckBoost_TPS63020(3.3V);
