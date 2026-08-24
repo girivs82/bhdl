@@ -835,3 +835,21 @@ finding says so with both numbers and the remedies (split the rail,
 chain the load's enable, reduce the step, pick a stage with a wider
 envelope). The ×1.2 sanity ceiling check remains as the backstop for
 hand-authored bulk.
+
+**Ceramic derating on the SIZING side (§7.5 addendum 2).** A
+ceramics-only reliability policy means the bank's effective
+capacitance lives in the vendors' stated tolerance band (−50 %/+20 %,
+SLVS916I Table-1 footnote). The design must hold at EVERY point of
+that band, so the two bounds compose as a robust criterion on the
+NOMINAL value: nominal ∈ [2 × physics-need, envelope-max ÷ 1.2].
+Fixpoint bulk (`seqbulk_*`) therefore enters the simulation at ×0.5
+nominal — the sized bank meets the droop with worst-case derated
+ceramics by construction — while the ceiling check keeps ×1.2. The
+operating point the search lands on is exactly the requested one:
+the LOWER bound plus the derating margin, moved up only as far as
+the droop physics demands and never past the stability envelope. A
+spec that fits at nominal but not across the band now honestly
+reports an EMPTY interval (the 200 µs/4.5 A/2 % probe does; at 3 %
+it converges to 660 µF nominal = 330 µF guaranteed effective).
+Refinement path: a characterized MLCC library with per-part DC-bias
+data replaces the ×0.5 class factor with each part's own curve.

@@ -553,6 +553,7 @@ fn build_model(netlist: &Netlist, sf: &SourceFile, rep: &mut PowerupReport) -> (
     rep.notes.push(format!("switcher input reflection I_in = I_out·V_out/(V_in·η), η from block else {DEFAULT_ETA} (stated)"));
     rep.notes.push("sw_enabled rails are firmware's — excluded from the hardware timeline (stated)".into());
     rep.notes.push("load steps are trapezoids from the domain's declared step/rise/dur; peak-aligned superposition screen with self-consistency gate; flagged sets escalate to a simultaneous run (stated)".into());
+    rep.notes.push("fixpoint bulk (seqbulk_*) simulated at \u{d7}0.5 nominal \u{2014} worst-case effective per the vendors' own derate guidance; the emitted nominal carries the ceramic DC-bias margin by construction (stated)".into());
 
     let mut pin_net: HashMap<(InstanceId, String), NetId> = HashMap::new();
     for pi in netlist.pin_instances.values() {
@@ -585,9 +586,17 @@ fn build_model(netlist: &Netlist, sf: &SourceFile, rep: &mut PowerupReport) -> (
             pin_net.get(&(i, "2".to_string())),
         ) else { continue };
         let Some(v) = attr_si(i, "value") else { continue };
+        // fixpoint bulk (ceramics-only reliability policy) enters the
+        // simulation at WORST-CASE EFFECTIVE capacitance: x0.5 nominal,
+        // the vendors' own DC-bias/tolerance derate guidance (SLVS916I
+        // Table-1 footnote states -50 %) - so the sized bank still meets
+        // the droop with real, derated ceramics. Other capacitors enter
+        // at nominal (their values came from datasheet procedures that
+        // carry their own margins - stated).
+        let v_eff = if _inst.name.starts_with("seqbulk_") { v * 0.5 } else { v };
         for (a, b) in [(n1, n2), (n2, n1)] {
             if net_class(*b) == Some(NetClass::Ground) && net_class(*a) != Some(NetClass::Ground) {
-                *cap_on_net.entry(*a).or_default() += v;
+                *cap_on_net.entry(*a).or_default() += v_eff;
             }
         }
     }
