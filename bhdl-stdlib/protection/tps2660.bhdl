@@ -49,6 +49,8 @@ entity TPS2660() as part {
     attribute vin_max         = 55V;
     attribute output_current  = 2A;      // SLVSDG2G: 2 A (maximum programmable current limit)
     attribute reverse_polarity = true;   // SLVSDG2G: reverse input polarity protection (to −60 V)
+    attribute rds_on          = 150mΩ;   // SLVSDG2G: IN→OUT total ON resistance, 150 mΩ typ at TJ 25 °C (210 at 85 °C, 80–250 over range)
+    attribute i_quiescent     = 300uA;   // SLVSDG2G: IQ(ON) supply current, 300 µA typ (enabled)
     attribute threshold_v     = 1.2V;    // SLVSDG2G: OVP / UVLO pin thresholds, 1.2 V typ — re-verify at sign-off
     // Operating JUNCTION range per the datasheet — recorded for thermal
     // sign-off. The datasheet states no ambient range, so the stage
@@ -62,6 +64,15 @@ entity TPS2660() as part {
     // (FMEDA / pin FMA) available to aid a safety design. That is NOT an
     // ASIL capability claim, so `asil_capable` is deliberately undeclared.
     attribute functional_safety = "capable — documentation available (SLVSDG2G features)";
+
+    // §4 device-stress: the eFuse die carries BOTH the pass-FET conduction
+    // (internal FET, I²·R_ON) and the supply current — one die, one θ_JA,
+    // and the FIT model's T_J input.
+    simulation {
+        stress {
+            self.p_diss = i_out * i_out * self.rds_on + vin * self.i_quiescent;
+        }
+    }
 }
 
 symbol TPS2660 {
@@ -105,6 +116,8 @@ entity Efuse_TPS2660(
     attribute ov_trip          = ov_trip; // promise = the divider below is sized to it
     attribute uv_trip          = uv_trip;
     attribute reverse_polarity = true;    // SLVSDG2G
+    attribute rds_on           = 150mΩ;   // SLVSDG2G (internal pass FET — the estimator's protection arm uses it)
+    attribute i_quiescent      = 300uA;   // SLVSDG2G
     attribute tj_min           = -40degC;    // SLVSDG2G (junction; thermal path via θ_JA)
     attribute tj_max           = 150degC;
     attribute theta_ja         = 38.6degC/W; // SLVSDG2G, PWP, JEDEC board metric

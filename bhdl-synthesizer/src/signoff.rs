@@ -321,6 +321,62 @@ fn recover_switcher_ops(
             },
         ));
     }
+
+    // ── PASS-THROUGH stages (prereg: eFuse, ideal diode, passive front
+    // end): V_out == V_in, so the buck-shaped recovery above never finds
+    // them, yet their stress models (controller quiescent, internal /
+    // external pass-FET I²·R) need an operating point. The stage's rail
+    // is the one it touches; i_out is that rail's declared `@ I` budget.
+    // f_sw = 0 marks the op as non-switching — stability skips those.
+    for inst in netlist.instances.values() {
+        let module = netlist.modules.get(inst.definition);
+        if module.map(|m| m.name == inst.name).unwrap_or(false) {
+            continue; // abstract module-def phantoms
+        }
+        let ent = module.and_then(|m| entity_attrs.get(&m.name));
+        let get = |k: &str| {
+            inst.attributes
+                .get(k)
+                .or_else(|| module.and_then(|m| m.attributes.get(k)))
+                .or_else(|| ent.and_then(|e| e.get(k)))
+        };
+        let topo = get("topology").map(String::as_str).unwrap_or("");
+        let class = get("component_class").map(String::as_str).unwrap_or("");
+        if topo != "prereg" && class != "protection" && class != "protection_ic" {
+            continue;
+        }
+        if ops.iter().any(|(n, _)| n == &inst.name) {
+            continue;
+        }
+        let touched = touching.get(&inst.name).map(Vec::as_slice).unwrap_or(&[]);
+        let Some(v) = touched
+            .iter()
+            .map(|(v, _)| *v)
+            .fold(None::<f64>, |acc, v| Some(acc.map_or(v, |a| a.max(v))))
+            .filter(|v| *v > 0.0)
+        else {
+            continue;
+        };
+        let i_out = touched
+            .iter()
+            .filter(|(tv, _)| near(*tv, v))
+            .filter_map(|(_, i)| *i)
+            .fold(None::<f64>, |acc, i| Some(acc.map_or(i, |a| a.max(i))));
+        ops.push((
+            inst.name.clone(),
+            SwitcherOp {
+                v_in: v,
+                v_out: v,
+                i_out,
+                f_sw: 0.0,
+                duty: 1.0,
+                ripple_ratio: None,
+                loop_k: None,
+                loop_ratio: None,
+                v_ref: None,
+            },
+        ));
+    }
     ops
 }
 
@@ -640,6 +696,7 @@ pub fn compute_stability(
 ) -> Vec<StageStability> {
     recover_switcher_ops(netlist, entity_attrs)
         .into_iter()
+        .filter(|(_, op)| op.f_sw > 0.0) // pass-through ops carry no loop
         .map(|(stage, op)| {
             let v_out = op.v_out;
             let outcome = compute_stage_stability(netlist, net_voltages, &op);

@@ -173,6 +173,10 @@ entity BuckController(
             // rows gated against each FET's own power_rating
             M_hs.p_diss = i_out * i_out * self.fet_rds_on * duty + vin * i_out * self.f_sw * self.t_sw;
             M_ls.p_diss = i_out * i_out * self.fet_rds_on * (1 - duty);
+            // the controller die itself: quiescent (gate-drive charge not
+            // modelled — no Qg data on the class template) — the FIT
+            // model's T_J input for THIS die
+            self.p_diss = vin * self.i_quiescent;
         }
         check {
             require connected(FB)

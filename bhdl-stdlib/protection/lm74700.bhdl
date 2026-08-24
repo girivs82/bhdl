@@ -44,6 +44,7 @@ entity LM74700() as part {
     attribute vin_min          = 3.2V;    // SNOSD17G: operating input 3.2 V to 65 V
     attribute vin_max          = 65V;
     attribute reverse_polarity = true;    // SNOSD17G: reverse input protection to −65 V
+    attribute i_quiescent      = 80uA;    // SNOSD17G: operating quiescent current, 80 µA typ (130 max), EN = high
     attribute qualification    = "AEC-Q100";   // the -Q1 suffix: automotive grade (SNOSD17G)
     attribute temp_min         = -40degC; // SNOSD17G features: AEC-Q100 grade 1, "−40°C to +125°C ambient operating temperature range"
     attribute temp_max         = 125degC;
@@ -54,6 +55,15 @@ entity LM74700() as part {
     // "Functional Safety-Capable — documentation available": NOT an ASIL
     // capability claim; `asil_capable` is deliberately undeclared.
     attribute functional_safety = "capable — documentation available (SNOSD17G features)";
+
+    // §4 device-stress: the CONTROLLER DIE's own dissipation — small next
+    // to the FET's, but the FIT model needs this die's T_J (through its
+    // own θ_JA), not the FET's.
+    simulation {
+        stress {
+            self.p_diss = vin * self.i_quiescent;
+        }
+    }
 }
 
 symbol LM74700 {
@@ -105,6 +115,7 @@ entity IdealDiode_LM74700(
     // conducts continuously, D = 1) — the estimator's protection arm
     // computes the stage dissipation as I²·rds_on from this
     attribute rds_on           = fet_rds_on;
+    attribute i_quiescent      = 80uA;        // SNOSD17G (the controller die)
     attribute qualification    = "AEC-Q100";  // the controller; the FET's grade is the designer's
     attribute temp_min         = -40degC; // SNOSD17G grade 1 (ambient) — the controller; the FET's range is the designer's
     attribute temp_max         = 125degC;

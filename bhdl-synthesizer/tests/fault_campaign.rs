@@ -2717,4 +2717,44 @@ async fn fet_loss_model_for_controller_and_ideal_diode() {
         "protection", Some(12.0), Some(12.0), Some(8.0), None, None, Some(0.0023), None, None,
     );
     assert!((p.unwrap() - 64.0 * 0.0023).abs() < 1e-9);
+
+    // ── PASS-THROUGH op recovery: an eFuse stage (V_out == V_in) now gets
+    // an operating point from the rail it touches (i_out = the rail's
+    // `@ I` budget), so its die stress row (internal FET I²·R_ON +
+    // quiescent) and the ideal-diode FET / controller rows are MEASURED.
+    let src = r#"
+import {{ PreregStage }} from "bhdl-stdlib/power/stages.bhdl";
+import {{ Res }} from "bhdl-stdlib/passives/resistor.bhdl";
+board PassThrough {{
+    power VIN = 12V @ 1A;
+    port V_PROT: power out = 12V @ 1A;
+    ground GND;
+    @VIN -> fe: PreregStage(vout=12V, i_max=1A, vin=12V, ov_trip=30V, uv_trip=8V).VIN;
+    fe.GND -> @GND; fe.VOUT -> @V_PROT;
+    resolve fe = Efuse_TPS2660(r_ilim=16.5kΩ);
+    @V_PROT -> R_LOAD: Res(12Ω, wattage=20W).1; R_LOAD.2 -> @GND;
+}}
+"#.replace("{{", "{").replace("}}", "}");
+    let ws2 = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let r = bhdl_synthesizer::stage_resolution::resolve_stages(&src, ws2.join("bhdl-stdlib").as_path(), &[]).unwrap().unwrap();
+    let pr = parse(&r.source);
+    assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+    let rows = bhdl_synthesizer::signoff::compute_signoff(
+        &n,
+        &std::collections::HashMap::new(),
+        &std::collections::HashMap::new(),
+        &std::collections::HashMap::new(),
+        &analysis.entity_attribute_index,
+        &analysis.stress_recipes,
+    );
+    // 1 A through 150 mΩ + 12 V × 300 µA = 0.150 + 0.0036 ≈ 0.154 W
+    let die = rows.iter().find(|r| r.refdes == "fe_u" && r.axis == "P").unwrap_or_else(|| panic!("eFuse die P row: {:?}", rows.iter().map(|r| (&r.refdes, r.axis)).collect::<Vec<_>>()));
+    assert!((die.stress.unwrap() - 0.1536).abs() < 0.002, "{die:?}");
+    // and its junction-temperature row through the datasheet θ_JA 38.6
+    let tj = rows.iter().find(|r| r.refdes == "fe_u" && r.class == "junction temperature").expect("eFuse T_J row");
+    assert!(tj.ripple.clone().unwrap_or_default().contains("× 38.6°C/W"), "{tj:?}");
 }
