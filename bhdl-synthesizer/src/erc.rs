@@ -3012,6 +3012,8 @@ pub fn check_powertree_acceptance(
                 a("i_quiescent"),
                 inst.attributes.get("efficiency").and_then(|v| crate::stage_acceptance::parse_efficiency(v)),
                 a("rds_on"),
+                a("f_sw").or_else(|| a("switching_frequency")),
+                a("t_sw"),
             );
         }
         // vin is the TREE's business (it chose the source rail) — not

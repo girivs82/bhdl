@@ -273,10 +273,16 @@ pub fn check(req: &StageRequirement, p: &StagePromises) -> Vec<Gate> {
 }
 
 /// The stage's dissipation at an operating point, from the block's
-/// class and promises: linear → (Vin − Vout)·I + Vin·Iq; switching →
-/// (1 − η)/η · Vout · I (η = the declared efficiency, else none);
-/// pass-through (prereg) → I²·R_on when rds_on is declared, else none.
+/// class and promises:
+/// - linear → (Vin − Vout)·I + Vin·Iq;
+/// - switching → the SAME physics loss model the `supply` chooser rates
+///   candidates with: I²·R_ds·D + Vin·I·f_sw·t_sw + Vin·Iq (conduction
+///   at the duty cycle + switching transitions + quiescent), when the
+///   part declares rds_on/f_sw/t_sw; else the declared-efficiency
+///   fallback (1 − η)/η · Vout · I, which lumps every loss into η;
+/// - pass-through (prereg) → I²·R_on when rds_on is declared.
 /// `None` when the figures to compute it are not declared.
+#[allow(clippy::too_many_arguments)]
 pub fn estimate_dissipation_w(
     class: &str,
     vin_v: Option<f64>,
@@ -285,6 +291,8 @@ pub fn estimate_dissipation_w(
     i_q_a: Option<f64>,
     efficiency: Option<f64>,
     rds_on_ohm: Option<f64>,
+    f_sw_hz: Option<f64>,
+    t_sw_s: Option<f64>,
 ) -> Option<f64> {
     let i = i_a?;
     match class {
@@ -293,6 +301,15 @@ pub fn estimate_dissipation_w(
             Some((vin - vout).max(0.0) * i + vin * i_q_a.unwrap_or(0.0))
         }
         "switching_regulator" => {
+            // physics loss model first (the chooser's form), when declared
+            if let (Some(vin), Some(vout), Some(rds), Some(f_sw), Some(t_sw)) =
+                (vin_v, vout_v, rds_on_ohm, f_sw_hz, t_sw_s)
+            {
+                if vin > 0.0 {
+                    let duty = vout / vin;
+                    return Some(i * i * rds * duty + vin * i * f_sw * t_sw + vin * i_q_a.unwrap_or(0.0));
+                }
+            }
             let (vout, eta) = (vout_v?, efficiency?);
             if eta <= 0.0 { return None; }
             Some((1.0 - eta) / eta * vout * i)

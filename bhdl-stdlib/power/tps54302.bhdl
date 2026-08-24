@@ -93,6 +93,11 @@ entity TPS54302() as part {
     // without the bootstrap cap (SLVSDG6C 7.3.1). The VALUE rule lives on
     // the block (it names the block's child).
     simulation {
+        // the IC's own dissipation (conduction + switching + quiescent) —
+        // feeds the junction-temperature sign-off row through θ_JA
+        stress {
+            self.p_diss = i_out * i_out * self.rds_on * (vout / vin) + vin * i_out * self.f_sw * self.t_sw + vin * self.i_quiescent;
+        }
         check {
             require connected(BOOT) else "BOOT needs the 100nF bootstrap cap to SW/PH (datasheet 7.3.1) — the high-side FET cannot drive without it";
         }

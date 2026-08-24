@@ -676,6 +676,8 @@ fn evaluate_candidate(imp: &StageImpl, req: &StageRequirement, trait_def: &Stage
                 si("i_quiescent"),
                 promises.efficiency,
                 si("rds_on"),
+                si("f_sw").or_else(|| si("switching_frequency")),
+                si("t_sw"),
             );
         }
         for g in check(&sreq, &promises) {

@@ -50,6 +50,18 @@ entity AP63205(
     attribute t_sw            = t_sw;
     attribute i_quiescent     = i_quiescent;
     attribute power_rating    = 1.1W;     // class estimate ((125−25)°C / ~90 °C/W) — consistent with the datasheet θJA 89
+    // §4 device-stress IP: the IC's OWN dissipation at the solved
+    // operating point — conduction at the duty cycle + switching
+    // transitions + quiescent (the same physics loss model the supply
+    // chooser and the resolver's thermal gate use). Feeds the
+    // junction-temperature sign-off row through θ_JA. Needs the rail's
+    // declared `@ I` load; without it the recipe skips (UNCHECKED).
+    simulation {
+        stress {
+            self.p_diss = i_out * i_out * self.rds_on * (vout / vin) + vin * i_out * self.f_sw * self.t_sw + vin * self.i_quiescent;
+        }
+    }
+
 }
 
 symbol AP63205 {

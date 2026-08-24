@@ -103,6 +103,18 @@ entity TPS54331 as part {
     // of the FB relation (datasheet Eq. 1).
     attribute feedback_voltage  = 0.8V;
     attribute fb_equation       = "VOUT = {VREF}*(1 + {R1}/{R2})";
+
+    // §4 device-stress IP: the IC's OWN dissipation at the solved
+    // operating point — conduction at the duty cycle + switching
+    // transitions + quiescent (the same physics loss model the supply
+    // chooser and the resolver's thermal gate use). Feeds the
+    // junction-temperature sign-off row through θ_JA. Needs the rail's
+    // declared `@ I` load; without it the recipe skips (UNCHECKED).
+    simulation {
+        stress {
+            self.p_diss = i_out * i_out * self.rds_on * (vout / vin) + vin * i_out * self.f_sw * self.t_sw + vin * self.i_quiescent;
+        }
+    }
 }
 
 symbol TPS54331 {

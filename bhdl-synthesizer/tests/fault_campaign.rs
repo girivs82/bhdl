@@ -2029,19 +2029,23 @@ board ExtDemo {{
     //     SLVS839H / SLVSDG6C) and declare θ_JA + T_J,max, so an ambient
     //     requirement is met THERMALLY at the requirement's dissipation:
     //     0.5 A at 60 °C → T_J ≈ 96 / 86 °C ≤ 150 passes; 2 A at 85 °C on the
-    //     JEDEC board → 229 / 188 °C refused. AP63205 is AMBIENT-rated
-    //     (DS41326: TA −40…85 °C) and passes 60 °C directly.
+    //     JEDEC board at 125 °C ambient exceeds T_J,max. AP63205 is
+    //     AMBIENT-rated (DS41326: TA −40…85 °C) and passes 60 °C directly.
     let r = resolve_stages(&board("vout=5V, i_max=0.5A, vin=12V, temp_max=60degC", ""), &stdlib, &[]).unwrap().unwrap();
     assert!(r.resolutions[0].bound.is_some(), "{}", bhdl_synthesizer::stage_resolution::render_report(&r.resolutions[0]));
     let c331 = r.resolutions[0].candidates.iter().find(|c| c.block == "Buck_TPS54331").unwrap();
     let tg = c331.gates.iter().find(|g| g.0 == "temp_max").unwrap();
-    assert!(tg.2 && tg.1.contains("thermal: T_J = 60°C + 0.309W × 116.3°C/W = 95.9°C"), "{tg:?}");
+    // the IC's own physics loss (I²·R_ds·D + V·I·f_sw·t_sw + V·Iq), not
+    // the whole-stage η estimate: 0.119 W at 0.5 A
+    assert!(tg.2 && tg.1.contains("thermal: T_J = 60°C + 0.119W × 116.3°C/W = 73.8°C"), "{tg:?}");
     let c205 = r.resolutions[0].candidates.iter().find(|c| c.block == "Buck_AP63205").unwrap();
     assert!(c205.gates.iter().any(|g| g.0 == "temp_max" && g.2 && g.1.contains("temp_max 85°C ≥ required 60°C")), "{c205:#?}");
-    let r = resolve_stages(&board("vout=5V, i_max=2A, vin=12V, temp_max=85degC", ""), &stdlib, &[]).unwrap().unwrap();
-    assert!(r.resolutions[0].bound.is_none(), "2 A at 85 °C exceeds T_J,max on the JEDEC board: {}", bhdl_synthesizer::stage_resolution::render_report(&r.resolutions[0]));
+    // 2 A at 85 °C PASSES with the IC's own physics loss (~0.46 W → 139 °C);
+    // at 125 °C ambient the same loss exceeds T_J,max — refused
+    let r = resolve_stages(&board("vout=5V, i_max=2A, vin=12V, temp_max=125degC", ""), &stdlib, &[]).unwrap().unwrap();
+    assert!(r.resolutions[0].bound.is_none(), "2 A at 125 °C exceeds T_J,max on the JEDEC board: {}", bhdl_synthesizer::stage_resolution::render_report(&r.resolutions[0]));
     let c331 = r.resolutions[0].candidates.iter().find(|c| c.block == "Buck_TPS54331").unwrap();
-    assert!(c331.gates.iter().any(|g| g.0 == "temp_max" && !g.2 && g.1.contains("228.7°C ≤ T_J,max 150°C")), "{c331:#?}");
+    assert!(c331.gates.iter().any(|g| g.0 == "temp_max" && !g.2 && g.1.contains("≤ T_J,max 150°C")), "{c331:#?}");
     let r = resolve_stages(&board("vout=5V, i_max=2A, vin=12V, qual=\"AEC-Q100\"", ""), &stdlib, &[]).unwrap().unwrap();
     assert!(r.resolutions[0].bound.is_none());
     assert!(r.resolutions[0].candidates.iter().all(|c| c.unchecked.contains(&"qual".to_string())), "no stdlib part declares a qualification");
