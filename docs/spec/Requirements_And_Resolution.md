@@ -887,3 +887,45 @@ The probe chain is honest end-to-end: no path → "never discharged"
 with the fix; a 40 Ω bleed meets the window but the `down_before`
 ordering is STILL violated (the heavy-loaded prerequisite dies in
 1 ms) with both times named; dropping the ordering is clean.
+
+## 8. Multi-output supplies (PMICs) — aggregation as a post-step
+
+Per-rail resolution runs FIRST, exactly as §3 defines: one stage per
+rail, independently surveyed, priced, bound. THEN the aggregation
+post-step (`bhdl_synthesizer::aggregation`) asks the question a
+per-rail greedy survey structurally cannot see: could one multi-output
+part cover a SET of these requirements? (A PMIC loses to a $0.40 buck
+on every individual rail and wins on the set.)
+
+A multi-output block declares its capability table as DATA:
+
+```bhdl
+attribute pmic_outputs = "DCDC1:buck:1.8V:1.2A,DCDC2:buck:1.1V:1.2A,…";
+attribute pmic_seq     = "LDO1,DCDC1,LDO2,LDO3,LDO4,DCDC2|DCDC3";
+attribute pmic_seq_dly = "1ms-10ms";
+```
+
+Fixed voltages are the HONEST model of an OTP part: the ordered
+TPS65217B boots at the B-variant defaults; changing them is an I2C
+runtime act, not a board-design one. The first implementer is
+`Pmic_TPS65217B` (`bhdl-stdlib/power/tps65217.bhdl`, SLVSB64I): three
+1.2 A bucks + LDO1/2 (100 mA) + LS1/2-as-LDO3/4 (200 mA), per-rail
+application circuits wired-gated (an unused rail carries no parts),
+θJA 30.4, and the factory-fixed strobe sequencer — the sequencing a
+covered rail set inherits FOR FREE. Scope stated in the file: the
+charger/power-path, WLED and I2C subsystems are not modeled.
+
+The evaluation: each resolved requirement matches an unused output
+when the fixed voltage equals the requirement's vout (within 2 %, the
+accuracy class), the derated current (i_max/0.8) fits the output's
+rating, and the input rail lies in the PMIC's range. Greedy
+assignment; the report prints the cover, the honest leftovers, the
+REAL price comparison (PMIC silicon via the supplier provider vs the
+Σ of the displaced bound discretes — the probe's verdict: TPS65217B
+$2.50 vs $0.70 of discretes, "the discretes win on silicon; the PMIC
+may still win on area/BOM-lines/sequencing"), and the built-in
+power-up order. NOTHING is auto-bound: aggregation is REPORTED — the
+designer's lever, exactly like a template commit. The strict
+sequencing gate (built-in strobe order vs declared domain ordering)
+and the grouped `resolve`-commit land in a future increment, stated;
+ERC033's one-block-drives-both-rails hook is already waiting for it.

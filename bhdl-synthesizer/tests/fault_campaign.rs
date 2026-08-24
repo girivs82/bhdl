@@ -3478,3 +3478,79 @@ board DownBoard {{
     let errs: Vec<_> = rep.findings.iter().filter(|f| f.sev == Sev::Error).collect();
     assert!(errs.is_empty(), "{errs:#?}");
 }
+
+/// PMIC aggregation (§8): per-rail resolution first, then the
+/// post-step asks whether one multi-output part covers the SET —
+/// reported with coverage, price comparison and the built-in
+/// sequencing, never auto-bound. The TPS65217B (B-variant OTP rails)
+/// covers a 1.8 V buck + 1.1 V buck + 3.3 V LDO; a 5 V rail is
+/// honestly left over. Direct instantiation gates per-rail circuits.
+#[tokio::test]
+async fn pmic_aggregation_reports_the_cover() {
+    use bhdl_synthesizer::stage_resolution::resolve_stages;
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let stdlib = ws.join("bhdl-stdlib");
+    let board = r#"
+import { BuckStage, LdoStage, BoostStage } from "bhdl-stdlib/power/stages.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+board PmicBoard {
+    power VSYS = 3.7V @ 5A;
+    port V18: power out = 1.8V @ 0.8A;
+    port V11: power out = 1.1V @ 0.9A;
+    port V33: power out = 3.3V @ 80mA;
+    port V50: power out = 5V @ 1A;
+    ground GND;
+    @VSYS -> u1: BuckStage(vout=1.8V, i_max=0.8A, vin=3.7V).VIN;
+    u1.GND -> @GND; u1.VOUT -> @V18;
+    @VSYS -> u2: BuckStage(vout=1.1V, i_max=0.9A, vin=3.7V).VIN;
+    u2.GND -> @GND; u2.VOUT -> @V11;
+    @VSYS -> u3: LdoStage(vout=3.3V, i_max=80mA, vin=3.7V).VIN;
+    u3.GND -> @GND; u3.VOUT -> @V33;
+    @VSYS -> u4: BoostStage(vout=5V, i_max=1A, vin=3.7V).VIN;
+    u4.GND -> @GND; u4.VOUT -> @V50;
+    @V50 -> R_LOAD: Res(5Ω, wattage=10W).1; R_LOAD.2 -> @GND;
+}
+"#;
+    let r = resolve_stages(board, &stdlib, &[]).unwrap().unwrap();
+    let lines = bhdl_synthesizer::aggregation::evaluate(&r.resolutions, &stdlib);
+    let all = lines.join("\n");
+    assert!(all.contains("Pmic_TPS65217B covers 3 of 4 rails"), "{all}");
+    assert!(all.contains("u1 → DCDC1") && all.contains("u2 → DCDC2") && all.contains("u3 → LDO2"), "{all}");
+    assert!(all.contains("not covered: u4"), "{all}");
+    assert!(all.contains("built-in power-up order: LDO1,DCDC1,LDO2"), "{all}");
+    assert!(all.contains("never auto-bound"), "{all}");
+
+    // direct instantiation: only the used rails' application circuits
+    // materialize (wired-gated) — 2 bucks + 1 LDO here
+    let direct = r#"
+import { Pmic_TPS65217B } from "bhdl-stdlib/power/tps65217.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+board PmicDirect {
+    power VSYS = 3.7V @ 5A;
+    port V18: power out = 1.8V @ 0.8A;
+    port V11: power out = 1.1V @ 0.9A;
+    port V33: power out = 3.3V @ 80mA;
+    ground GND;
+    pm: Pmic_TPS65217B();
+    @VSYS -> pm.VIN;
+    pm.GND -> @GND;
+    pm.VOUT_DCDC1 -> @V18;
+    pm.VOUT_DCDC2 -> @V11;
+    pm.VOUT_LDO2 -> @V33;
+    @V18 -> R1: Res(2.25Ω, wattage=2W).1; R1.2 -> @GND;
+    @V11 -> R2: Res(1.25Ω, wattage=2W).1; R2.2 -> @GND;
+    @V33 -> R3: Res(42Ω, wattage=1W).1; R3.2 -> @GND;
+}
+"#;
+    let pr = parse(direct);
+    assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+    let inds = n.instances.values().filter(|i| i.name.starts_with("pm_L_dc")).count();
+    assert_eq!(inds, 2, "only the two used bucks carry inductors");
+    assert!(n.instances.values().any(|i| i.name == "pm_C_l2"), "LDO2 cap present");
+    assert!(!n.instances.values().any(|i| i.name == "pm_L_dc3" || i.name == "pm_C_l1"), "unused rails carry no circuit");
+}

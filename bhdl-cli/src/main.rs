@@ -1220,6 +1220,16 @@ fn resolve_stage_requirements(
                     });
                 }
             }
+            // PMIC AGGREGATION post-step (spec §8): per-rail resolution
+            // first, then ask whether one multi-output part covers the
+            // SET — reported, never auto-bound.
+            for l in bhdl_synthesizer::aggregation::evaluate(
+                &r.resolutions,
+                &bhdl_common::import_search::locate_dir("bhdl-stdlib")
+                    .unwrap_or_else(|| PathBuf::from("bhdl-stdlib")),
+            ) {
+                println!("  {} {}", "⧉".cyan(), l);
+            }
             new_lock.sort_by(|a, b| (&a.board, &a.instance).cmp(&(&b.board, &b.instance)));
             if let Some(lp) = &stage_lock_path {
                 if new_lock != locked_stages && !locked_flag {

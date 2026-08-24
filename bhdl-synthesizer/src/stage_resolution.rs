@@ -738,6 +738,14 @@ fn evaluate_candidate(imp: &StageImpl, req: &StageRequirement, trait_def: &Stage
 /// The part a block instantiates: the first `<name>: <Entity>(` body
 /// statement whose entity is declared `as part` in the same file (or
 /// the conventional `u:` child).
+/// The `part_number` of the silicon a block instantiates (aggregation
+/// uses it to price a PMIC's silicon).
+pub(crate) fn block_part_number(text: &str, block: &str) -> Option<String> {
+    block_part_instance(text, block)
+        .and_then(|part| crate::supply_synthesis::entity_attrs_txt(text, &part).get("part_number").cloned())
+        .filter(|p| !p.is_empty())
+}
+
 fn block_part_instance(text: &str, block: &str) -> Option<String> {
     let at = find_entity_decl(text, block)?;
     let tail = &text[at..];

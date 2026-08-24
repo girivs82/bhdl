@@ -1,0 +1,165 @@
+// TPS65217B — TI single-chip PMIC (AM335x-class companion), VQFN-48
+// (SLVSB64I – NOVEMBER 2011 – REVISED MARCH 2018).
+//
+// The first MULTI-OUTPUT supply block (docs/spec/
+// Requirements_And_Resolution.md §8): one part covers a SET of rails,
+// with the power-up sequencing BUILT IN (factory-programmed strobes).
+// The aggregation post-step evaluates it against a board's resolved
+// per-rail requirements.
+//
+// SCOPE, STATED: this model covers the REGULATOR subsystem — the three
+// bucks, LDO1/LDO2, and LS1/LS2 configured as LDOs (the B variant's
+// shipping configuration). The charger/power-path, WLED driver, I2C
+// interface and housekeeping pins are NOT MODELED here (they are real
+// pins on the real package; a layout-grade model must add them).
+// Output voltages are OTP/I2C-programmed — the ordered TPS65217B BOOTS
+// at the B-variant defaults below, so this block declares FIXED rails
+// (the honest model of an OTP part; adjusting them is an I2C runtime
+// act, not a board-design one).
+//
+// REAL-DATA PROVENANCE (all SLVSB64I, TPS65217B column):
+//   SYS/BAT supply 2.75–5.5 V; DCDC VIN range 2.7–5.8 V.
+//   DCDC1/2/3 (bucks): 1.2 A each, ILIMIT 1.6 A typ, fSW 2.25 MHz,
+//   rDS(on) 170/120 mΩ, VFB 600 mV, tSS 750 µs (5→95 %, no load),
+//   passive discharge 250 Ω when disabled, L 1.5–2.2 µH,
+//   COUT 10–22 µF ceramic (ESR ~20 mΩ), IQ ~15 µA/converter.
+//   B defaults: DCDC1 = 1.8 V, DCDC2 = 1.1 V, DCDC3 = 1.1 V.
+//   LDO1/LDO2: 100 mA ACTIVE, VDO 200 mV @ 100 mA, discharge 430 Ω,
+//   COUT 2.2 µF; B defaults LDO1 = 1.8 V, LDO2 = 3.3 V.
+//   LS1/LS2 as LDO3/LDO4 (B): 200 mA, B defaults 3.3 V.
+//   POWER-UP SEQUENCE (B, factory-fixed): LDO1 (strobe 15) → DCDC1
+//   (1) → LDO2 (2) → LDO3 (3) → LDO4 (4) → DCDC2 + DCDC3 (5), with
+//   1–10 ms programmable inter-strobe delays; the power-up order is
+//   OTP-fixed in practice (SEQx registers reset on SLEEP/OFF/RESET).
+//   Thermal: θJA 30.4 / θJC(top) 16.4 (VQFN-48 RSL); characterized
+//   −40…105 °C.
+
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Ind } from "bhdl-stdlib/passives/inductor.bhdl";
+
+// ── Vendor truth (regulator subsystem; scope stated above) ──────────
+entity TPS65217B() as part {
+    pin SYS:    power in;     // system rail (power-path output / supply)
+    pin L1:     switch out;   // DCDC1 inductor node
+    pin L2:     switch out;   // DCDC2 inductor node
+    pin L3:     switch out;   // DCDC3 inductor node
+    pin VDCDC1: power out;    // DCDC1 output sense
+    pin VDCDC2: power out;
+    pin VDCDC3: power out;
+    pin VLDO1:  power out;
+    pin VLDO2:  power out;
+    pin VLDO3:  power out;    // LS1 configured as LDO3 (B: 200 mA)
+    pin VLDO4:  power out;    // LS2 configured as LDO4 (B: 200 mA)
+    pin PWR_EN: signal in;    // pull high to start the power-up sequence
+    pin GND:    ground;
+
+    attribute component_class  = "pmic";
+    attribute manufacturer     = "Texas Instruments";
+    attribute part_number      = "TPS65217B";
+    attribute vin_min          = 2.75V;   // SLVSB64I recommended: supply voltage BAT/SYS
+    attribute vin_max          = 5.5V;
+    attribute f_sw             = 2.25MHz; // SLVSB64I: fixed-frequency bucks
+    attribute i_sw_limit       = 1.6A;    // SLVSB64I: DCDC current limit, typ
+    attribute rds_on           = 170mΩ;   // SLVSB64I: buck HS (LS 120 mΩ)
+    attribute t_ss             = 750us;   // SLVSB64I: buck soft-start, 5→95 %
+    attribute r_discharge      = 250Ω;    // SLVSB64I: buck passive discharge when disabled (LDO 430 Ω)
+    attribute i_quiescent      = 15uA;    // SLVSB64I: per converter, typ
+    attribute temp_min         = -40degC; // SLVSB64I: characterized range (ambient)
+    attribute temp_max         = 105degC;
+    attribute theta_ja         = 30.4degC/W; // SLVSB64I §7.4, VQFN-48 RSL
+    attribute theta_jc         = 16.4degC/W;
+}
+
+symbol TPS65217B {
+    left   { SYS, PWR_EN }
+    right  { L1, VDCDC1, L2, VDCDC2, L3, VDCDC3, VLDO1, VLDO2, VLDO3, VLDO4 }
+    bottom { GND }
+}
+
+layout TPS65217B {
+    package VQFN-48;
+}
+
+// ── The designer's subcircuit ───────────────────────────────────────
+// Contract: VIN + one pin per rail (wired ⇒ used; an unused rail
+// carries no application circuit) + PWR_EN (the sequencer trigger) +
+// GND. Rails are the B-variant OTP defaults — FIXED.
+entity Pmic_TPS65217B(
+    l_value: inductance  = 2.2µH,   // SLVSB64I EC: L 1.5–2.2 µH per buck
+    c_buck:  capacitance = 22µF,    // SLVSB64I EC: COUT 10–22 µF ceramic per buck
+    c_ldo:   capacitance = 2.2µF    // SLVSB64I EC: LDO output capacitor
+) as design {
+    pin VIN:        power in;
+    pin VOUT_DCDC1: power out virtual;  // 1.8 V, 1.2 A (B default)
+    pin VOUT_DCDC2: power out virtual;  // 1.1 V, 1.2 A
+    pin VOUT_DCDC3: power out virtual;  // 1.1 V, 1.2 A
+    pin VOUT_LDO1:  power out virtual;  // 1.8 V, 100 mA
+    pin VOUT_LDO2:  power out virtual;  // 3.3 V, 100 mA
+    pin VOUT_LDO3:  power out virtual;  // 3.3 V, 200 mA (LS1 as LDO)
+    pin VOUT_LDO4:  power out virtual;  // 3.3 V, 200 mA (LS2 as LDO)
+    pin PWR_EN:     signal in;
+    pin GND:        ground;
+
+    attribute component_class = "pmic";
+    attribute vin_min         = 2.75V;
+    attribute vin_max         = 5.5V;
+    attribute temp_min        = -40degC;
+    attribute temp_max        = 105degC;
+    attribute theta_ja        = 30.4degC/W;
+    attribute theta_jc        = 16.4degC/W;
+    attribute i_quiescent     = 15uA;
+    // MACHINE-READABLE output capability table (the aggregation
+    // post-step's input): name:topology:fixed-voltage:rated-current,
+    // B-variant OTP defaults (SLVSB64I device-comparison table + EC).
+    attribute pmic_outputs = "DCDC1:buck:1.8V:1.2A,DCDC2:buck:1.1V:1.2A,DCDC3:buck:1.1V:1.2A,LDO1:ldo:1.8V:0.1A,LDO2:ldo:3.3V:0.1A,LDO3:ldo:3.3V:0.2A,LDO4:ldo:3.3V:0.2A";
+    // Built-in power-up SEQUENCE promise (B, factory-fixed strobes;
+    // '|' groups rails sharing a strobe): the sequencing gate the
+    // aggregation evaluation reports against declared domain ordering.
+    attribute pmic_seq     = "LDO1,DCDC1,LDO2,LDO3,LDO4,DCDC2|DCDC3";
+    attribute pmic_seq_dly = "1ms-10ms"; // SLVSB64I: programmable inter-strobe delay range
+
+    u: TPS65217B();
+    VIN -> u.SYS;
+    u.GND -> GND;
+    PWR_EN -> u.PWR_EN;
+
+    // per-rail application circuit, only where the board uses the rail
+    generate if (wired(VOUT_DCDC1)) {
+        u.L1 -> L_dc1: Ind(l_value, rated_current = 1.6A).1; L_dc1.2 -> VOUT_DCDC1;
+        u.VDCDC1 -> VOUT_DCDC1;
+        VOUT_DCDC1 -> C_dc1: Cap(c_buck).1; C_dc1.2 -> GND;
+    } else {
+    }
+    generate if (wired(VOUT_DCDC2)) {
+        u.L2 -> L_dc2: Ind(l_value, rated_current = 1.6A).1; L_dc2.2 -> VOUT_DCDC2;
+        u.VDCDC2 -> VOUT_DCDC2;
+        VOUT_DCDC2 -> C_dc2: Cap(c_buck).1; C_dc2.2 -> GND;
+    } else {
+    }
+    generate if (wired(VOUT_DCDC3)) {
+        u.L3 -> L_dc3: Ind(l_value, rated_current = 1.6A).1; L_dc3.2 -> VOUT_DCDC3;
+        u.VDCDC3 -> VOUT_DCDC3;
+        VOUT_DCDC3 -> C_dc3: Cap(c_buck).1; C_dc3.2 -> GND;
+    } else {
+    }
+    generate if (wired(VOUT_LDO1)) {
+        u.VLDO1 -> VOUT_LDO1;
+        VOUT_LDO1 -> C_l1: Cap(c_ldo).1; C_l1.2 -> GND;
+    } else {
+    }
+    generate if (wired(VOUT_LDO2)) {
+        u.VLDO2 -> VOUT_LDO2;
+        VOUT_LDO2 -> C_l2: Cap(c_ldo).1; C_l2.2 -> GND;
+    } else {
+    }
+    generate if (wired(VOUT_LDO3)) {
+        u.VLDO3 -> VOUT_LDO3;
+        VOUT_LDO3 -> C_l3: Cap(c_ldo).1; C_l3.2 -> GND;
+    } else {
+    }
+    generate if (wired(VOUT_LDO4)) {
+        u.VLDO4 -> VOUT_LDO4;
+        VOUT_LDO4 -> C_l4: Cap(c_ldo).1; C_l4.2 -> GND;
+    } else {
+    }
+}
