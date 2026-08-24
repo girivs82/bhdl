@@ -959,7 +959,12 @@ or cited from a datasheet — the report renders, it never re-derives:
 7. **Decap networks** — per `decouple`: the greedy commits with
    worst-|Z|/mask after each, margin adds, single-open verification
    counts, the final ratio.
-8. **Final PDN sanity** — the loop-stability envelope verdicts and
+8. **Stress sign-off** — the SOLVED margins table embedded (§7.5 of
+   the report): the same DC solve and margin computation
+   `bhdl report --simulate` runs, rating ÷ derated stress per axis,
+   junction rows composing P·θJA against the datasheet T_J; a
+   non-converging solve is STATED, never silent.
+9. **Final PDN sanity** — the loop-stability envelope verdicts and
    the resonance blind spots, stated.
 
 `bhdl pdreport [--output <file>]`, default `<input>.pd.md`.

@@ -145,6 +145,7 @@ pub fn render(
     up: &PowerupReport,
     down: &PowerdownReport,
     sanity: &[String],
+    signoff: Option<&str>,
 ) -> String {
     let mut out = String::new();
     out.push_str(&format!(
@@ -336,6 +337,18 @@ pub fn render(
         }
     }
 
+    // ── 7.5 the solved stress sign-off (the margins table) ──
+    match signoff {
+        Some(txt) => {
+            out.push_str("\n## 7.5 Stress sign-off — solved margins per part\n\nThe same DC solve and margin computation `bhdl report --simulate`\nruns (rating ÷ derated stress per axis; junction rows compose\nP·θJA against the datasheet T_J):\n\n```\n");
+            out.push_str(txt);
+            out.push_str("```\n");
+        }
+        None => {
+            out.push_str("\n## 7.5 Stress sign-off\n\n- ⚠ the DC solve did not converge for this board — margins UNCOMPUTED (stated, never silent); run `bhdl report --simulate` after fixing the operating point\n");
+        }
+    }
+
     // ── 8. final sanity ──
     out.push_str("\n## 8. Final PDN sanity (loop stability, resonance)\n\n");
     if sanity.is_empty() {
@@ -344,6 +357,6 @@ pub fn render(
     for l in sanity {
         out.push_str(&format!("- {l}\n"));
     }
-    out.push_str("\n---\n*Sequencing mechanisms are verified by ERC033 on every build; the stress sign-off table (voltage/current/power/junction margins per part) is `bhdl report`.*\n");
+    out.push_str("\n---\n*Sequencing mechanisms are verified by ERC033 on every build.*\n");
     out
 }

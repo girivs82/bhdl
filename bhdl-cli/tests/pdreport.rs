@@ -53,6 +53,7 @@ board RepBoard {
         "## 4. Simulated curves",
         "## 5. Power-up timeline",
         "## 6. Power-down and sleep",
+        "## 7.5 Stress sign-off",
         "## 8. Final PDN sanity",
         "<svg xmlns=",
         "BuckBoost_TPS63020",

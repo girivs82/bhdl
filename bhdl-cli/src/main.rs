@@ -723,8 +723,12 @@ async fn main() -> Result<()> {
             let down = bhdl_synthesizer::powerup::simulate_powerdown_opt(&netlist, &source_file, true);
             let sanity = bhdl_synthesizer::powertree::final_pdn_sanity(&netlist, &source_file);
             let board = cli.input.file_stem().and_then(|x| x.to_str()).unwrap_or("board").to_string();
+            // the solved stress sign-off (same flow as `bhdl report`)
+            let analysis2 = analyze(&source_file);
+            let signoff = solved_signoff_text(&netlist, &analysis2);
             let md = bhdl_synthesizer::pd_report::render(
                 &board, &netlist, &source_file, &resolutions, &aggregation, &up, &down, &sanity,
+                signoff.as_deref(),
             );
             let out_path = output.unwrap_or_else(|| cli.input.with_extension("pd.md"));
             fs::write(&out_path, &md)?;
@@ -2405,6 +2409,84 @@ async fn run_powertree(
         }
     }
     Ok(())
+}
+
+
+/// The solved sign-off report text (the same flow `bhdl report
+/// --simulate` runs: SPICE conversion, input-draw DC solve,
+/// annotation, DC-short voltage re-derivation, margin rows) — for
+/// embedding in the PD report. None when the solve fails (stated by
+/// the caller, never silent).
+fn solved_signoff_text(
+    netlist: &Netlist,
+    analysis: &bhdl_analyzer::AnalysisResult,
+) -> Option<String> {
+    let mut conv = NetlistToSpiceConverter::new();
+    conv.set_model_overrides(bhdl_synthesizer::model_evaluator::evaluate_model_overrides(
+        netlist,
+        &analysis.model_recipes,
+        &analysis.entity_attribute_index,
+    ));
+    let circuit = conv.convert(netlist).ok()?;
+    let circuit_ref = match bhdl_spice::input_draw::solve_dc_with_input_draws(circuit.clone(), &regulator_hints(netlist)) {
+        Ok((_, final_circuit)) => final_circuit,
+        Err(_) => circuit.clone(),
+    };
+    let result = bhdl_spice::GlacierDcSolver::new().solve(circuit_ref.clone()).ok()?;
+    let ann = build_simulation_annotations(&result, &circuit_ref);
+    let mut sv = ann.net_voltages.clone();
+    for _ in 0..8 {
+        let pairs: Vec<(String, String)> = circuit_ref
+            .branches()
+            .filter(|(_, b)| {
+                b.component_type == "Inductor" || (b.component_type == "Resistor" && b.value < 1.0)
+            })
+            .filter_map(|(e, _)| {
+                let (a, b) = circuit_ref.branch_nodes(e)?;
+                Some((
+                    circuit_ref.get_node_name(a)?.to_string(),
+                    circuit_ref.get_node_name(b)?.to_string(),
+                ))
+            })
+            .collect();
+        let mut changed = false;
+        for (na, nb) in pairs {
+            match (sv.get(&na).copied(), sv.get(&nb).copied()) {
+                (Some(v), None) => {
+                    sv.insert(nb, v);
+                    changed = true;
+                }
+                (None, Some(v)) => {
+                    sv.insert(na, v);
+                    changed = true;
+                }
+                _ => {}
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    for (e, b) in circuit_ref.branches() {
+        if b.component_type == "VoltageSource"
+            && b.metadata.get(bhdl_spice::META_DECOMPOSITION_ROLE).map(|r| r.as_str()) == Some("vout")
+        {
+            if let Some((a, _)) = circuit_ref.branch_nodes(e) {
+                if let Some(name) = circuit_ref.get_node_name(a) {
+                    sv.entry(name.to_string()).or_insert(b.value);
+                }
+            }
+        }
+    }
+    let rows = bhdl_synthesizer::signoff::compute_signoff(
+        netlist,
+        &sv,
+        &ann.instance_power,
+        &ann.instance_currents,
+        &analysis.entity_attribute_index,
+        &analysis.stress_recipes,
+    );
+    bhdl_synthesizer::signoff::format_signoff_report(&rows)
 }
 
 /// Print powertree drift findings — the anti-silent-rot gate: loads
