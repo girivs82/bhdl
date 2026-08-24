@@ -101,11 +101,34 @@ entity IdealDiode_LM74700(
     attribute vin_min          = 3.2V;        // SNOSD17G
     attribute vin_max          = 65V;
     attribute reverse_polarity = true;        // SNOSD17G
+    // the pass RESISTANCE of the stage is the FET's (an ideal diode
+    // conducts continuously, D = 1) — the estimator's protection arm
+    // computes the stage dissipation as I²·rds_on from this
+    attribute rds_on           = fet_rds_on;
     attribute qualification    = "AEC-Q100";  // the controller; the FET's grade is the designer's
     attribute temp_min         = -40degC; // SNOSD17G grade 1 (ambient) — the controller; the FET's range is the designer's
     attribute temp_max         = 125degC;
     attribute theta_ja         = 189.8degC/W; // SNOSD17G, DBV, JEDEC board metric (the controller's own die; the FET dissipates the load)
     attribute functional_safety = "capable — documentation available (SNOSD17G)";
+
+    // FET conduction power at the stage's load — the hard physical
+    // bound (the sign-off applies the ×2 derate + 1.2× margin policy on
+    // the measured row below).
+    design {
+        const i2    = self.i_out_max * self.i_out_max;
+        const p_fet = i2 * self.fet_rds_on;
+        require p_fet <= self.fet_p_rating
+            else "IdealDiode_LM74700: FET conduction I²·R_ds exceeds fet_p_rating — pick a bigger FET (the heat is in the FET, not the controller)";
+    }
+
+    // §4 device-stress: the PASS FET's own dissipation (D = 1) — the
+    // sign-off's P and junction-temperature rows land on the FET child,
+    // whose power_rating/theta_ja are the designer's FET axes.
+    simulation {
+        stress {
+            M.p_diss = i_out * i_out * self.fet_rds_on;
+        }
+    }
 
     u: LM74700();
     VIN -> u.ANODE;

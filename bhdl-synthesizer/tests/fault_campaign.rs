@@ -2666,3 +2666,55 @@ board TjDemo {{
     assert!(matches!(tj.verdict, bhdl_synthesizer::signoff::Verdict::UnderMargin), "{tj:?}");
     assert!((tj.rating.unwrap() - 40.0).abs() < 1e-6 && (tj.stress.unwrap() - 35.7).abs() < 0.5, "{tj:?}");
 }
+
+/// The FET loss model on external-stage topologies: BuckController's
+/// stress assigns each FET its own dissipation (HS conduction·D +
+/// switching; LS conduction·(1−D)) so the sign-off P rows land on the
+/// FET children against THEIR power_rating; the design envelope refuses
+/// a FET whose rating the computed dissipation exceeds; the ideal-diode
+/// block declares its pass resistance (D = 1) so the estimator computes
+/// the stage's heat as I²·R_ds.
+#[tokio::test]
+async fn fet_loss_model_for_controller_and_ideal_diode() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let src = std::fs::read_to_string(ws.join("tests/circuits/realistic/buck_controller_ext_fets.bhdl")).unwrap();
+    let pr = parse(&src);
+    assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+    let rows = bhdl_synthesizer::signoff::compute_signoff(
+        &n,
+        &std::collections::HashMap::new(),
+        &std::collections::HashMap::new(),
+        &std::collections::HashMap::new(),
+        &analysis.entity_attribute_index,
+        &analysis.stress_recipes,
+    );
+    // 24 V → 5 V at 5 A (D = 0.208): HS = 25·2.3mΩ·D + 24·5·300k·30n
+    // = 0.012 + 1.08 ≈ 1.092 W vs 42 W; LS = 25·2.3mΩ·(1−D) ≈ 0.046 W
+    let hs = rows.iter().find(|r| r.refdes == "u1_M_hs" && r.axis == "P").unwrap_or_else(|| panic!("HS P row: {:?}", rows.iter().map(|r| (&r.refdes, r.axis)).collect::<Vec<_>>()));
+    assert!((hs.stress.unwrap() - 1.092).abs() < 0.02, "{hs:?}");
+    assert!((hs.rating.unwrap() - 42.0).abs() < 1e-6 && matches!(hs.verdict, bhdl_synthesizer::signoff::Verdict::SignedOff), "{hs:?}");
+    let ls = rows.iter().find(|r| r.refdes == "u1_M_ls" && r.axis == "P").expect("LS P row");
+    assert!((ls.stress.unwrap() - 25.0 * 0.0023 * (1.0 - 5.0 / 24.0)).abs() < 0.005, "{ls:?}");
+
+    // envelope refusal: same stage with a 0.5 W FET rating — the HS
+    // dissipation (~1.11 W) exceeds it, the block refuses to build
+    let shrunk = src.replace("fet_p_rating=42W", "fet_p_rating=0.5W");
+    let pr = parse(&shrunk);
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let e = gen.generate_from_ast_and_analysis(&sf, &analysis).await.err().expect("undersized FET must refuse");
+    assert!(format!("{e:#}").contains("high-side FET dissipation") && format!("{e:#}").contains("exceeds fet_p_rating"), "{e:#}");
+
+    // ideal diode: the estimator computes the stage heat as I²·R_ds from
+    // the block's declared pass resistance (protection arm, D = 1)
+    let p = bhdl_synthesizer::stage_acceptance::estimate_dissipation_w(
+        "protection", Some(12.0), Some(12.0), Some(8.0), None, None, Some(0.0023), None, None,
+    );
+    assert!((p.unwrap() - 64.0 * 0.0023).abs() < 1e-9);
+}

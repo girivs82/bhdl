@@ -41,6 +41,7 @@ entity BuckController(
     v_in:         voltage    = 24V,      // nominal input for sizing
     i_out_max:    current    = 5A,       // rated load the stage is sized for
     f_sw:         frequency  = 300kHz,
+    t_sw:         time       = 30ns,     // SW transition class for the switching-loss term
     v_ref:        voltage    = 0.8V,     // FB reference (datasheet)
     i_quiescent:  current    = 4mA,
     ripple_ratio: float      = 0.35,     // ΔI_L / I_out
@@ -92,7 +93,7 @@ entity BuckController(
     // The conduction/switching loss axes come from the CHOSEN FETs — the
     // stage's rds_on is the FETs', not the controller's.
     attribute rds_on          = fet_rds_on;
-    attribute t_sw            = 30ns;
+    attribute t_sw            = t_sw;
     attribute ripple_ratio    = ripple_ratio;
 
     // Same proven buck sizing forms as LM2596 (one binary op per const).
@@ -118,6 +119,23 @@ entity BuckController(
         const co_d0 = self.f_sw * self.ripple_v;
         const co_d  = co_d0 * 8.0;
         c_out_value = d_il / co_d;
+
+        // FET power bound (hard physical limit; ×2 derate + 1.2× margin
+        // policy is the sign-off's): HS = conduction at D + switching
+        // transitions, LS = conduction at 1−D.
+        const i2      = self.i_out_max * self.i_out_max;
+        const p_cond  = i2 * self.fet_rds_on;
+        const p_sw0   = self.v_in * self.i_out_max;
+        const p_sw1   = p_sw0 * self.f_sw;
+        const p_sw    = p_sw1 * self.t_sw;
+        const p_hs0   = p_cond * duty;
+        const p_hs    = p_hs0 + p_sw;
+        require p_hs <= self.fet_p_rating
+            else "BuckController: high-side FET dissipation (I²·R_ds·D + V·I·f_sw·t_sw) exceeds fet_p_rating — pick a bigger FET or lower f_sw";
+        const inv_duty = 1.0 - duty;
+        const p_ls     = p_cond * inv_duty;
+        require p_ls <= self.fet_p_rating
+            else "BuckController: low-side FET dissipation (I²·R_ds·(1−D)) exceeds fet_p_rating — pick a bigger FET";
 
         // FB divider: R_top = R_bot·(V_OUT − V_REF)/V_REF.
         const vov     = vout - self.feedback_voltage;
@@ -150,6 +168,11 @@ entity BuckController(
             const d_il = (vin - vout) * duty / (self.f_sw * L_out.value);
             L_out.i_peak   = i_out + d_il / 2;
             C_out.v_ripple = d_il / (8 * self.f_sw * C_out.value);
+            // the power stage's heat is in the FETs: HS conduction at D
+            // + switching transitions; LS conduction at 1−D — measured
+            // rows gated against each FET's own power_rating
+            M_hs.p_diss = i_out * i_out * self.fet_rds_on * duty + vin * i_out * self.f_sw * self.t_sw;
+            M_ls.p_diss = i_out * i_out * self.fet_rds_on * (1 - duty);
         }
         check {
             require connected(FB)

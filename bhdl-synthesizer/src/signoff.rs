@@ -1037,7 +1037,7 @@ fn stress_overrides(
         }
 
         // `self.<param>` ← the entity's declared attributes (numeric ones).
-        let self_params: HashMap<String, f64> = entity_attrs
+        let mut self_params: HashMap<String, f64> = entity_attrs
             .get(entity)
             .map(|m| {
                 m.iter()
@@ -1045,6 +1045,15 @@ fn stress_overrides(
                     .collect()
             })
             .unwrap_or_default();
+        // The INSTANCE attributes carry the resolved constructor args
+        // (phase 4.4: params + defaults stamped by name) — overlay them so
+        // `self.<param>` resolves too (`self.fet_rds_on`, `self.t_sw`),
+        // and a per-instance override beats the entity literal.
+        for (k, v) in &inst.attributes {
+            if let Some(n) = parse_si(v) {
+                self_params.insert(k.clone(), n);
+            }
+        }
 
         // This instance's expansion children: local name → full refdes.
         let prefix = format!("{}_", inst.name);
