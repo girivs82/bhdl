@@ -168,6 +168,15 @@ enum Commands {
     /// non-zero when a declared window fails on the timeline.
     Powerup {},
 
+    /// Simulate the board's POWER-DOWN and SLEEP transitions: input
+    /// loss (banks discharge through their own loads — C·V/I physics;
+    /// declared down_before orderings and down_t_max windows verified
+    /// on the timeline) and sleep entry (firmware drops the sleep_off
+    /// rails; i_sleep loads; dropped-rail discharge times reported,
+    /// surviving rails must hold good). Exits non-zero on a violated
+    /// declaration.
+    Powerdown {},
+
     Powertree {
         /// Also dump the harvest + options as JSON to this path.
         #[arg(long)]
@@ -667,6 +676,15 @@ async fn main() -> Result<()> {
             let netlist = verified_netlist(&source_file, &input_content, &cli.input, cli.no_elaborate).await?;
             let rep = bhdl_synthesizer::powerup::simulate_powerup(&netlist, &source_file);
             print!("{}", bhdl_synthesizer::powerup::render(&rep));
+            if rep.findings.iter().any(|f| matches!(f.sev, bhdl_synthesizer::powerup::Sev::Error)) {
+                std::process::exit(1);
+            }
+        }
+
+        Some(Commands::Powerdown {}) => {
+            let netlist = verified_netlist(&source_file, &input_content, &cli.input, cli.no_elaborate).await?;
+            let rep = bhdl_synthesizer::powerup::simulate_powerdown(&netlist, &source_file);
+            print!("{}", bhdl_synthesizer::powerup::render_down(&rep));
             if rep.findings.iter().any(|f| matches!(f.sev, bhdl_synthesizer::powerup::Sev::Error)) {
                 std::process::exit(1);
             }

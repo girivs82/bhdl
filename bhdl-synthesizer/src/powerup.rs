@@ -194,6 +194,10 @@ struct DomLoad {
     step_rise_s: Option<f64>,
     step_dur_s: Option<f64>,
     droop_max_pct: Option<f64>,
+    i_sleep: Option<f64>,
+    sleep_off: bool,
+    down_before: Vec<String>,
+    down_t_max: Option<f64>,
 }
 
 /// A trapezoidal load-step stimulus on a net.
@@ -239,6 +243,9 @@ struct Model {
     ideal_v: HashMap<NetId, f64>,
     cap_on_net: HashMap<NetId, f64>,
     static_load: HashMap<NetId, f64>,
+    /// rail→GND resistive conductance (bleed resistors, resistive
+    /// loads): I = V·G, recomputed each interval.
+    res_load_g: HashMap<NetId, f64>,
     en_rc: HashMap<NetId, EnRc>,
     all_rails: Vec<(NetId, f64)>,
     dom_loads: Vec<DomLoad>,
@@ -264,6 +271,8 @@ struct RunTrace {
     /// good/sag bookkeeping (power-up phase only cares).
     t_good: HashMap<NetId, f64>,
     sags: HashMap<NetId, Vec<(f64, f64, f64)>>,
+    /// first crossing below 10 % of nominal (power-down tracking).
+    t_down: HashMap<NetId, f64>,
 }
 
 fn volt(v: &HashMap<NetId, f64>, n: NetId) -> f64 {
@@ -272,7 +281,16 @@ fn volt(v: &HashMap<NetId, f64>, n: NetId) -> f64 {
 
 impl Model {
     /// Advance `state` to `t_end` (or settle) under `stims`.
-    fn run(&self, state: &mut State, t_end: f64, stims: &[Stim], track_good: bool) -> RunTrace {
+    fn run(
+        &self,
+        state: &mut State,
+        t_end: f64,
+        stims: &[Stim],
+        track_good: bool,
+        forced_off: &[usize],
+        load_override: Option<&HashMap<NetId, f64>>,
+        track_down: bool,
+    ) -> RunTrace {
         let mut tr = RunTrace {
             events: Vec::new(),
             min_v: self.all_rails.iter().map(|(n, _)| (*n, volt(&state.v, *n))).collect(),
@@ -280,6 +298,7 @@ impl Model {
             cc_entered: Vec::new(),
             t_good: HashMap::new(),
             sags: HashMap::new(),
+            t_down: HashMap::new(),
         };
         let mut sag_open: HashMap<NetId, (f64, f64)> = HashMap::new();
         // rails already good at entry
@@ -293,7 +312,10 @@ impl Model {
         let load_at = |net: NetId, t: f64, v: &HashMap<NetId, f64>| -> f64 {
             let mut i = 0.0;
             if volt(v, net) > 0.0 {
-                i += self.static_load.get(&net).copied().unwrap_or(0.0);
+                i += load_override
+                    .map(|m| m.get(&net).copied().unwrap_or(0.0))
+                    .unwrap_or_else(|| self.static_load.get(&net).copied().unwrap_or(0.0));
+                i += volt(v, net) * self.res_load_g.get(&net).copied().unwrap_or(0.0);
                 for s in stims {
                     if s.net == net {
                         i += s.at(t);
@@ -325,11 +347,17 @@ impl Model {
             }
             // stage enable + coarse mode
             for (k, s) in self.stages.iter().enumerate() {
-                let enabled = match s.en {
+                let enabled = !forced_off.contains(&k) && match s.en {
                     None => {
                         let vin_v = volt(&state.v, s.vin);
                         s.en_vih.map(|vih| vin_v >= vih).unwrap_or(vin_v > 0.0)
                     }
+                    // an EN net with NO discoverable pull source (no
+                    // rail-R, no PG) is a FIRMWARE signal: treated as
+                    // raised (firmware turned the rail on) unless this
+                    // scenario forces the stage off — the sw_enabled
+                    // semantics (stated)
+                    Some(en) if !self.en_rc.contains_key(&en) => volt(&state.v, s.vin) > 0.0,
                     Some(en) => {
                         let ev = en_v.get(&en).copied().unwrap_or_else(|| volt(&state.v, en));
                         s.en_vih.map(|vih| ev >= vih).unwrap_or(ev > 0.0)
@@ -441,7 +469,7 @@ impl Model {
                     if r.abs() > 1e-9 {
                         dt = dt.min(HOLD_FRAC * vn / r.abs());
                         let cur = volt(&state.v, *n);
-                        for bp in [GOOD_FRAC * vn, *vn] {
+                        for bp in [GOOD_FRAC * vn, *vn, 0.1 * vn] {
                             if (cur < bp && *r > 0.0) || (cur > bp && *r < 0.0) {
                                 let tx = (bp - cur) / r;
                                 if tx > 1e-12 {
@@ -499,11 +527,15 @@ impl Model {
                 state.v.insert(*en, nv);
             }
             state.t += dt;
-            // record minima + good/sag
+            // record minima + good/sag + down
             for (n, vn) in &self.all_rails {
                 let cur = volt(&state.v, *n);
                 let e = tr.min_v.entry(*n).or_insert(cur);
                 *e = e.min(cur);
+                if track_down && cur <= 0.1 * vn + 1e-9 && !tr.t_down.contains_key(n) {
+                    tr.t_down.insert(*n, state.t);
+                    tr.events.push(TimelineEvent { t: state.t, text: format!("{} DOWN ({:.2}V ≤ 10% of {:.2}V)", self.net_label.get(n).cloned().unwrap_or_default(), cur, vn) });
+                }
                 if !track_good || self.ideal_v.contains_key(n) {
                     continue;
                 }
@@ -663,6 +695,10 @@ fn build_model(netlist: &Netlist, sf: &SourceFile, rep: &mut PowerupReport) -> (
                 step_rise_s: d.step_rise_s,
                 step_dur_s: d.step_dur_s,
                 droop_max_pct: d.droop_max_pct,
+                i_sleep: d.i_sleep_a,
+                sleep_off: d.sleep_off,
+                down_before: d.seq_down_before.clone(),
+                down_t_max: d.seq_down_t_max_s,
             });
         }
     }
@@ -670,6 +706,26 @@ fn build_model(netlist: &Netlist, sf: &SourceFile, rep: &mut PowerupReport) -> (
     for d in &dom_loads {
         if let Some(n) = d.net {
             *static_load.entry(n).or_default() += d.i_nom;
+        }
+    }
+    // rail→GND resistors (bleeds, resistive loads): conductance sum
+    let mut res_load_g: HashMap<NetId, f64> = HashMap::new();
+    for (i, _inst) in netlist.instances.iter() {
+        if !matches!(module_of(i).as_str(), "Res" | "Resistor") {
+            continue;
+        }
+        let (Some(n1), Some(n2)) = (
+            pin_net.get(&(i, "1".to_string())),
+            pin_net.get(&(i, "2".to_string())),
+        ) else { continue };
+        let Some(r) = attr_si(i, "value") else { continue };
+        if r <= 0.0 {
+            continue;
+        }
+        for (a, b) in [(n1, n2), (n2, n1)] {
+            if net_class(*b) == Some(NetClass::Ground) && net_class(*a) != Some(NetClass::Ground) {
+                *res_load_g.entry(*a).or_default() += 1.0 / r;
+            }
         }
     }
 
@@ -739,7 +795,7 @@ fn build_model(netlist: &Netlist, sf: &SourceFile, rep: &mut PowerupReport) -> (
     }
     let modes = vec![Mode::Off; stages.len()];
     (
-        Model { stages, ideal_v, cap_on_net, static_load, en_rc, all_rails, dom_loads, net_label },
+        Model { stages, ideal_v, cap_on_net, static_load, res_load_g, en_rc, all_rails, dom_loads, net_label },
         State { t: 0.0, v, modes },
     )
 }
@@ -756,7 +812,7 @@ pub fn simulate_powerup(netlist: &Netlist, sf: &SourceFile) -> PowerupReport {
     });
 
     // ── phase 1: the power-up timeline ──
-    let tr = model.run(&mut state, T_END, &[], true);
+    let tr = model.run(&mut state, T_END, &[], true, &[], None, false);
     rep.events.extend(tr.events);
     let mut timelines: HashMap<NetId, RailTimeline> = model
         .all_rails
@@ -799,7 +855,7 @@ pub fn simulate_powerup(netlist: &Netlist, sf: &SourceFile) -> PowerupReport {
     let baseline_supply: Vec<f64> = {
         // one settle run with no stimulus records the steady supplies
         let mut st = settled.clone();
-        let tr = model.run(&mut st, settled.t + 1e-4, &[], false);
+        let tr = model.run(&mut st, settled.t + 1e-4, &[], false, &[], None, false);
         tr.peak_supply
     };
     let mut responses: Vec<(usize, RunTrace)> = Vec::new();
@@ -809,7 +865,7 @@ pub fn simulate_powerup(netlist: &Netlist, sf: &SourceFile) -> PowerupReport {
             let mut st = settled.clone();
             let stim = stim_of(d, settled.t + 1e-5);
             let horizon = stim.end() + 2e-3;
-            let tr = model.run(&mut st, horizon, &[stim.clone()], false);
+            let tr = model.run(&mut st, horizon, &[stim.clone()], false, &[], None, false);
             let rail = model.net_label.get(&d.net.unwrap()).cloned().unwrap_or_default();
             let settled_v = |n: NetId| volt(&settled.v, n);
             let self_droop = settled_v(d.net.unwrap()) - tr.min_v.get(&d.net.unwrap()).copied().unwrap_or(0.0);
@@ -932,7 +988,7 @@ pub fn simulate_powerup(netlist: &Netlist, sf: &SourceFile) -> PowerupReport {
             let t0 = settled.t + 1e-5;
             let stims: Vec<Stim> = implicated.iter().map(|&di| stim_of(&model.dom_loads[di], t0)).collect();
             let horizon = stims.iter().map(|s| s.end()).fold(t0, f64::max) + 2e-3;
-            let tr = model.run(&mut st, horizon, &stims, false);
+            let tr = model.run(&mut st, horizon, &stims, false, &[], None, false);
             for e in &tr.events {
                 rep.interactions.push(format!("  {:>9.3}ms  {}", e.t * 1e3, e.text));
             }
@@ -976,6 +1032,232 @@ pub fn simulate_powerup(netlist: &Netlist, sf: &SourceFile) -> PowerupReport {
     };
     rep.events.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap());
     rep
+}
+
+
+/// Power-DOWN / SLEEP timelines (spec §7.6) — the same PWL engine run
+/// backwards, in two scenarios:
+///
+/// A. INPUT LOSS: the ideal input rails drop to 0 at t0; stages lose
+///    VIN and turn off (load-disconnect per their datasheets), so each
+///    output bank discharges through ITS OWN static loads — the
+///    discharge physics is C·V/I_load, and a lightly-loaded rail
+///    bleeds SLOWLY (the classic reason discharge paths exist).
+///    Declared `down_before` orderings and `down_t_max` windows are
+///    verified on the simulated down-times (10 % of nominal, stated).
+///
+/// B. SLEEP ENTRY: firmware drops the `sleep_off` rails (their stages
+///    forced off — which requires a SIGNAL-driven enable, checked) and
+///    every domain draws its `i_sleep` (declared; others keep i_nom,
+///    stated). Dropped rails' discharge times are reported — a µA
+///    sleep load bleeding a big bank for tens of ms is exactly the
+///    re-entry hazard to see — and rails that STAY must hold good
+///    through the transition (a disturbed survivor is an Error).
+#[derive(Debug, Default)]
+pub struct PowerdownReport {
+    pub notes: Vec<String>,
+    pub input_loss: Vec<TimelineEvent>,
+    pub sleep: Vec<TimelineEvent>,
+    pub findings: Vec<Finding>,
+}
+
+pub fn simulate_powerdown(netlist: &Netlist, sf: &SourceFile) -> PowerdownReport {
+    let mut urep = PowerupReport::default();
+    let (model, mut state) = build_model(netlist, sf, &mut urep);
+    let mut rep = PowerdownReport::default();
+    rep.notes = urep.notes.clone();
+    rep.notes.push("rail DOWN threshold = 10% of nominal (stated)".into());
+    rep.notes.push("sleep: domains without i_sleep keep drawing i_nom (stated)".into());
+    // settle
+    let _ = model.run(&mut state, T_END, &[], true, &[], None, false);
+    let settled = state.clone();
+    let t0 = settled.t;
+    let horizon = t0 + 0.2;
+
+    let net_of = |d: &DomLoad| d.net;
+    let by_name: HashMap<(String, String), &DomLoad> = model
+        .dom_loads
+        .iter()
+        .map(|d| ((d.owner.clone(), d.name.clone()), d))
+        .collect();
+
+    // ── scenario A: input loss ──
+    let mut st = settled.clone();
+    for n in model.ideal_v.keys() {
+        st.v.insert(*n, 0.0);
+    }
+    let tr = model.run(&mut st, horizon, &[], false, &[], None, true);
+    rep.input_loss.push(TimelineEvent { t: t0, text: "input rails LOST (ideal → 0V)".into() });
+    rep.input_loss.extend(tr.events.clone());
+    let t_down = |tr: &RunTrace, d: &DomLoad| net_of(d).and_then(|n| tr.t_down.get(&n).copied());
+    for d in &model.dom_loads {
+        let Some(n) = net_of(d) else { continue };
+        let lbl = model.net_label.get(&n).cloned().unwrap_or_default();
+        let td = t_down(&tr, d);
+        if td.is_none() && (!d.down_before.is_empty() || d.down_t_max.is_some()) {
+            rep.findings.push(Finding { rail: Some(lbl.clone()), sev: Sev::Error, text: format!(
+                "{}.{}: rail '{}' never discharged below 10% within {:.0}ms of input loss — its load cannot bleed the bank; a declared down ordering/window cannot be met without a discharge path (bleed R / discharge FET)",
+                d.owner, d.name, lbl, (horizon - t0) * 1e3
+            ) });
+            continue;
+        }
+        if let (Some(td), Some(tmax)) = (td, d.down_t_max) {
+            if td - t0 > tmax + 1e-9 {
+                rep.findings.push(Finding { rail: Some(lbl.clone()), sev: Sev::Error, text: format!(
+                    "{}.{}: down at {:.3}ms after input loss — exceeds the declared down_t_max {:.3}ms (bank {:.0}µF vs load; add a discharge path)",
+                    d.owner, d.name, (td - t0) * 1e3, tmax * 1e3,
+                    net_of(d).and_then(|n| model.cap_on_net.get(&n)).copied().unwrap_or(0.0) * 1e6
+                ) });
+            }
+        }
+        for bname in &d.down_before {
+            let Some(b) = by_name.get(&(d.owner.clone(), bname.clone())) else {
+                rep.findings.push(Finding { rail: None, sev: Sev::Error, text: format!(
+                    "{}.{}: down_before=\"{}\" names no sibling domain",
+                    d.owner, d.name, bname
+                ) });
+                continue;
+            };
+            match (td, t_down(&tr, b)) {
+                (Some(ta), Some(tb)) if ta > tb + 1e-9 => {
+                    rep.findings.push(Finding { rail: Some(lbl.clone()), sev: Sev::Error, text: format!(
+                        "{}.{}: down at {:.3}ms AFTER {} down at {:.3}ms — declared down_before={} violated on input loss (the lighter-loaded bank outlives; add a discharge path to '{}')",
+                        d.owner, d.name, (ta - t0) * 1e3, bname, (tb - t0) * 1e3, bname, lbl
+                    ) });
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // ── scenario B: sleep entry ──
+    // rails dropped in sleep: any attached domain declares sleep_off;
+    // a conflict (another domain on the same rail stays) is an Error.
+    let mut dropped_nets: Vec<NetId> = Vec::new();
+    for d in model.dom_loads.iter().filter(|d| d.sleep_off) {
+        let Some(n) = net_of(d) else { continue };
+        if model
+            .dom_loads
+            .iter()
+            .any(|o| !o.sleep_off && net_of(o) == Some(n))
+        {
+            rep.findings.push(Finding { rail: model.net_label.get(&n).cloned(), sev: Sev::Error, text: format!(
+                "{}.{}: declares sleep_off but another domain on rail '{}' stays — one net cannot both drop and survive sleep (split the rails)",
+                d.owner, d.name, model.net_label.get(&n).cloned().unwrap_or_default()
+            ) });
+            continue;
+        }
+        if !dropped_nets.contains(&n) {
+            dropped_nets.push(n);
+        }
+    }
+    let mut forced_off: Vec<usize> = Vec::new();
+    for n in &dropped_nets {
+        let Some(k) = model.stages.iter().position(|s| s.vout == *n) else { continue };
+        // firmware must be able to drop it: signal-driven enable
+        let sig_en = model.stages[k].en.map(|_en| true).unwrap_or(false);
+        if !sig_en {
+            rep.findings.push(Finding { rail: model.net_label.get(n).cloned(), sev: Sev::Error, text: format!(
+                "sleep_off rail '{}': its stage '{}' has an UNWIRED enable (auto-on) — firmware cannot drop it; wire EN to a control signal",
+                model.net_label.get(n).cloned().unwrap_or_default(), model.stages[k].name
+            ) });
+        }
+        forced_off.push(k);
+    }
+    if !dropped_nets.is_empty() || model.dom_loads.iter().any(|d| d.i_sleep.is_some()) {
+        let mut sleep_loads: HashMap<NetId, f64> = HashMap::new();
+        for d in &model.dom_loads {
+            if let Some(n) = net_of(d) {
+                *sleep_loads.entry(n).or_default() += d.i_sleep.unwrap_or(d.i_nom);
+            }
+        }
+        let mut st = settled.clone();
+        let tr = model.run(&mut st, horizon, &[], false, &forced_off, Some(&sleep_loads), true);
+        rep.sleep.push(TimelineEvent { t: t0, text: format!(
+            "SLEEP entry: firmware drops {}; loads at i_sleep (declared) / i_nom (stated)",
+            dropped_nets.iter().map(|n| model.net_label.get(n).cloned().unwrap_or_default()).collect::<Vec<_>>().join(", ")
+        ) });
+        rep.sleep.extend(tr.events.clone());
+        for n in &dropped_nets {
+            let lbl = model.net_label.get(n).cloned().unwrap_or_default();
+            let load: f64 = sleep_loads.get(n).copied().unwrap_or(0.0);
+            match tr.t_down.get(n) {
+                Some(td) => rep.sleep.push(TimelineEvent { t: *td, text: format!(
+                    "{} discharged in {:.1}ms at its {:.0}µA sleep load ({:.0}µF bank) — the re-entry latency; add a bleed if it matters",
+                    lbl, (td - t0) * 1e3, load * 1e6, model.cap_on_net.get(n).copied().unwrap_or(0.0) * 1e6
+                ) }),
+                None => rep.findings.push(Finding { rail: Some(lbl.clone()), sev: Sev::Warning, text: format!(
+                    "sleep: dropped rail '{}' had not discharged below 10% within {:.0}ms at its {:.0}µA sleep load — re-entry from sleep will see a half-charged bank (stated; add a bleed if the SoC requires a clean restart)",
+                    lbl, (horizon - t0) * 1e3, load * 1e6
+                ) }),
+            }
+        }
+        // survivors must hold good through the transition
+        for (n, vn) in &model.all_rails {
+            if model.ideal_v.contains_key(n) || dropped_nets.contains(n) {
+                continue;
+            }
+            let min = tr.min_v.get(n).copied().unwrap_or(0.0);
+            if min < GOOD_FRAC * vn - 1e-9 {
+                rep.findings.push(Finding { rail: model.net_label.get(n).cloned(), sev: Sev::Error, text: format!(
+                    "sleep transition disturbed surviving rail '{}': min {:.2}V < {:.0}% of {:.2}V — the drop of {} couples through the shared feed",
+                    model.net_label.get(n).cloned().unwrap_or_default(), min, GOOD_FRAC * 100.0, vn,
+                    dropped_nets.iter().map(|x| model.net_label.get(x).cloned().unwrap_or_default()).collect::<Vec<_>>().join(", ")
+                ) });
+            }
+        }
+        // down ordering among dropped rails, sleep scenario
+        for d in model.dom_loads.iter().filter(|d| d.sleep_off) {
+            for bname in &d.down_before {
+                let Some(b) = by_name.get(&(d.owner.clone(), bname.clone())) else { continue };
+                if !b.sleep_off { continue; }
+                if let (Some(ta), Some(tb)) = (t_down(&tr, d), t_down(&tr, b)) {
+                    if ta > tb + 1e-9 {
+                        rep.findings.push(Finding { rail: net_of(d).and_then(|n| model.net_label.get(&n).cloned()), sev: Sev::Error, text: format!(
+                            "sleep: {}.{} down at {:.3}ms AFTER {} at {:.3}ms — declared down_before violated in the sleep transition",
+                            d.owner, d.name, (ta - t0) * 1e3, bname, (tb - t0) * 1e3
+                        ) });
+                    }
+                }
+            }
+        }
+    }
+    rep.input_loss.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap());
+    rep.sleep.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap());
+    rep
+}
+
+/// Render the power-down report for the CLI.
+pub fn render_down(rep: &PowerdownReport) -> String {
+    let mut s = String::new();
+    s.push_str("Power-down / sleep timelines (piecewise-linear event simulation)\n\n  model:\n");
+    for n in &rep.notes {
+        s.push_str(&format!("    - {n}\n"));
+    }
+    s.push_str("\n  scenario A — input loss:\n");
+    for e in &rep.input_loss {
+        s.push_str(&format!("    {:>9.3}ms  {}\n", e.t * 1e3, e.text));
+    }
+    if !rep.sleep.is_empty() {
+        s.push_str("\n  scenario B — sleep entry:\n");
+        for e in &rep.sleep {
+            s.push_str(&format!("    {:>9.3}ms  {}\n", e.t * 1e3, e.text));
+        }
+    }
+    if rep.findings.is_empty() {
+        s.push_str("\n  ✓ every declared down ordering and window holds\n");
+    } else {
+        s.push_str("\n  findings:\n");
+        for f in &rep.findings {
+            let tag = match f.sev {
+                Sev::Error => "✗",
+                Sev::Warning => "⚠",
+                Sev::Info => "ℹ",
+            };
+            s.push_str(&format!("    {tag} {}\n", f.text));
+        }
+    }
+    s
 }
 
 /// Window verification (order / t_min / t_max / slots) on the timeline.

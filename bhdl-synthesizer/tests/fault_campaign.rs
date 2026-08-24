@@ -3408,3 +3408,73 @@ board SanityBoard {{
     let out = run(board("24µF")).await;
     assert!(out.iter().any(|l| l.starts_with("STABILITY:") && l.contains("minimum") && l.contains("×0.5")), "{out:#?}");
 }
+
+/// Power-down / sleep timelines (§7.6): input loss discharges each
+/// bank through ITS OWN loads (C·V/I physics — a lightly-loaded rail
+/// outlives a heavy one), and sleep entry drops the sleep_off rails at
+/// their i_sleep draw. Declared down orderings/windows are verified on
+/// the simulated down-times; the missing-discharge-path case is named
+/// with the fix.
+#[tokio::test]
+async fn powerdown_and_sleep_timelines() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let board = |bleed: &str, tmax: &str| format!(r#"
+import {{ BuckBoost_TPS63020 }} from "bhdl-stdlib/power/tps63020.bhdl";
+import {{ Res }} from "bhdl-stdlib/passives/resistor.bhdl";
+import {{ Cap }} from "bhdl-stdlib/passives/capacitor.bhdl";
+entity DownSoc() {{
+    pin 1: power in;
+    pin 2: power in;
+    pin GND: ground;
+    domain VDD_CORE pins="1" v=5V i_nom=300mA i_sleep=50mA source="FIXTURE — pdown probe";
+    domain VDD_AUX pins="2" v=3.3V i_nom=5mA i_sleep=2uA sleep_off=true down_before="VDD_CORE" down_t_max={tmax} source="FIXTURE — pdown probe";
+}}
+board DownBoard {{
+    power VBAT = 3.6V @ 8A;
+    port V50: power out = 5V @ 1A;
+    port V33: power out = 3.3V @ 0.5A;
+    ground GND;
+    @VBAT -> u1: BuckBoost_TPS63020(v_out=5V, i_out_max=1A, v_in=3.6V, v_in_min=3.0V, v_in_max=4.2V).VIN;
+    u1.GND -> @GND; u1.VOUT -> @V50;
+    @VBAT -> u2: BuckBoost_TPS63020(v_out=3.3V, i_out_max=0.3A, v_in=3.6V, v_in_min=3.0V, v_in_max=4.2V).VIN;
+    u2.GND -> @GND; u2.VOUT -> @V33;
+    @V33 -> C_big: Cap(470µF).1; C_big.2 -> @GND;
+    {bleed}
+    u2.EN -> R_pd: Res(100kΩ).1; R_pd.2 -> @GND;
+    soc: DownSoc();
+    @V50 -> soc.1; @V33 -> soc.2; soc.GND -> @GND;
+}}
+"#);
+    let run = |text: String| async move {
+        let pr = parse(&text);
+        assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+        let sf = SourceFile::cast(pr.syntax()).unwrap();
+        let analysis = analyze(&sf);
+        let mut gen = NetlistGenerator::new();
+        let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+        bhdl_synthesizer::powerup::simulate_powerdown(&n, &sf)
+    };
+    use bhdl_synthesizer::powerup::Sev;
+
+    // no discharge path: the 536 µF bank at 5 mA cannot bleed within
+    // the horizon — Error naming the fix; sleep re-entry hazard stated
+    let rep = run(board("", "20ms")).await;
+    assert!(rep.findings.iter().any(|f| f.sev == Sev::Error && f.text.contains("never discharged") && f.text.contains("discharge path")), "{:#?}", rep.findings);
+    assert!(rep.findings.iter().any(|f| f.sev == Sev::Warning && f.text.contains("re-entry") && f.text.contains("2µA")), "{:#?}", rep.findings);
+
+    // 40 Ω bleed: V33 down within its window — but the heavy-loaded
+    // V50 dies in ~1 ms, so down_before=VDD_CORE is STILL violated,
+    // with both times named (physics, not vacuity)
+    let rep = run(board("@V33 -> R_bleed: Res(40Ω, wattage=1W).1; R_bleed.2 -> @GND;", "100ms")).await;
+    assert!(rep.findings.iter().any(|f| f.sev == Sev::Error && f.text.contains("down_before=VDD_CORE violated") && f.text.contains("AFTER")), "{:#?}", rep.findings);
+    assert!(!rep.findings.iter().any(|f| f.text.contains("never discharged")), "{:#?}", rep.findings);
+    // sleep entry: the bleed shortens the re-entry latency, reported
+    assert!(rep.sleep.iter().any(|e| e.text.contains("discharged in") && e.text.contains("re-entry")), "{:#?}", rep.sleep);
+
+    // ordering dropped: clean
+    let text = board("@V33 -> R_bleed: Res(40Ω, wattage=1W).1; R_bleed.2 -> @GND;", "100ms").replace(r#"down_before="VDD_CORE" "#, "");
+    let rep = run(text).await;
+    let errs: Vec<_> = rep.findings.iter().filter(|f| f.sev == Sev::Error).collect();
+    assert!(errs.is_empty(), "{errs:#?}");
+}

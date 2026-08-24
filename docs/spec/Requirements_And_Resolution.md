@@ -853,3 +853,37 @@ reports an EMPTY interval (the 200 µs/4.5 A/2 % probe does; at 3 %
 it converges to 660 µF nominal = 330 µF guaranteed effective).
 Refinement path: a characterized MLCC library with per-part DC-bias
 data replaces the ×0.5 class factor with each part's own curve.
+
+### 7.6 Power-down and sleep — the timeline run backwards
+
+The same PWL engine, two scenarios (`bhdl powerdown`):
+
+- **Input loss**: the ideal input rails drop to 0; stages lose VIN and
+  turn off (load-disconnect per their datasheets), so each output bank
+  discharges through ITS OWN loads — C·V/I physics, where a
+  lightly-loaded rail OUTLIVES a heavy one (the classic reason
+  discharge paths exist). Declared `down_before` orderings and
+  `down_t_max` windows (new domain axes, with `i_sleep` and
+  `sleep_off`) are verified on the simulated down-times (10 % of
+  nominal, stated). A bank that cannot bleed within the horizon under
+  a declared ordering/window is an Error naming the fix (bleed R /
+  discharge FET); the engine now models rail→GND resistors as real
+  conductances, so the fix is SIMULATABLE — the probe's 536 µF bank
+  needs ~40 Ω to meet a 100 ms window (τ·ln10), which is exactly why
+  real designs switch the discharge with a FET instead of burning a
+  passive bleed.
+- **Sleep entry**: firmware drops the `sleep_off` rails (their stages
+  forced off — requires a signal-driven enable, checked; an EN net
+  with no discoverable pull source is treated as a FIRMWARE signal,
+  raised by default, stated); every domain draws its `i_sleep`
+  (others keep i_nom, stated). Dropped-rail discharge times are
+  reported — a 2 µA sleep load bleeding a 536 µF bank for 48 ms is
+  the re-entry latency to see — and rails that STAY must hold good
+  through the transition (a disturbed survivor is an Error). A rail
+  carrying both a `sleep_off` domain and a staying one is an Error
+  (split the rails).
+
+The probe chain is honest end-to-end: no path → "never discharged"
+with the fix; a 40 Ω bleed meets the window but the `down_before`
+ordering is STILL violated (the heavy-loaded prerequisite dies in
+1 ms) with both times named; dropping the ordering is clean.

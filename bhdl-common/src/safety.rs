@@ -352,6 +352,24 @@ pub struct PowerDomain {
     /// Firmware raises this rail after boot (see above).
     #[serde(default)]
     pub sw_enabled: bool,
+    /// Draw in the SLEEP state (A). Discharge physics: a dropped
+    /// rail's fall time is C·V/I_load in the TARGET state — a
+    /// nearly-unloaded rail bleeds slowly, which is why discharge
+    /// paths exist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub i_sleep_a: Option<f64>,
+    /// This rail is DROPPED in sleep (firmware lowers its enable —
+    /// requires a signal-driven EN, checked).
+    #[serde(default)]
+    pub sleep_off: bool,
+    /// Power-DOWN ordering: this domain must be down BEFORE these
+    /// sibling domains.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub seq_down_before: Vec<String>,
+    /// Maximum time (s) from the power-down trigger to this rail
+    /// fully down.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seq_down_t_max_s: Option<f64>,
     pub source: String,
 }
 

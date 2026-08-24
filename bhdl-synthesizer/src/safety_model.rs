@@ -327,7 +327,7 @@ fn parse_domain_item(ename: &str, toks: &[String], d: &mut EntityData) {
                             mults.iter().find(|(s2, _)| suf.eq_ignore_ascii_case(s2)).map(|(_, m)| num * m)
                         };
                         let volts = |k: &str| unit(kv.get(k), &[("V", 1.0), ("mV", 1e-3)]);
-                        let amps = |k: &str| unit(kv.get(k), &[("A", 1.0), ("mA", 1e-3)]);
+                        let amps = |k: &str| unit(kv.get(k), &[("A", 1.0), ("mA", 1e-3), ("uA", 1e-6), ("µA", 1e-6), ("nA", 1e-9)]);
                         let pct = |k: &str| unit(kv.get(k), &[("%", 1.0)]);
                         let ohms = |k: &str| unit(kv.get(k), &[("m", 1e-3), ("mΩ", 1e-3), ("Ω", 1.0), ("u", 1e-6), ("uΩ", 1e-6)]);
                         let henr = |k: &str| unit(kv.get(k), &[("n", 1e-9), ("nH", 1e-9), ("p", 1e-12), ("pH", 1e-12), ("u", 1e-6), ("uH", 1e-6)]);
@@ -420,6 +420,19 @@ fn parse_domain_item(ename: &str, toks: &[String], d: &mut EntityData) {
                             seq_slot: kv.get("slot").and_then(|v| v.parse::<u32>().ok()),
                             seq_slot_t_min_s: secs("slot_t_min"),
                             sw_enabled: kv.get("sw_enabled").map(|v| v == "true" || v == "1").unwrap_or(false),
+                            i_sleep_a: amps("i_sleep"),
+                            sleep_off: kv.get("sleep_off").map(|v| v == "true" || v == "1").unwrap_or(false),
+                            seq_down_before: kv
+                                .get("down_before")
+                                .map(|s| {
+                                    s.trim_matches('"')
+                                        .split(|c: char| c == ',' || c.is_whitespace())
+                                        .filter(|t| !t.is_empty())
+                                        .map(String::from)
+                                        .collect()
+                                })
+                                .unwrap_or_default(),
+                            seq_down_t_max_s: secs("down_t_max"),
                             source: src,
                         });
 
