@@ -3109,3 +3109,83 @@ board SeqBoard {{
     .await;
     assert!(v.iter().any(|x| x.severity == ViolationSeverity::Error && x.description.contains("PG chain with no RC")), "{v:#?}");
 }
+
+/// Power-up TIMELINE simulation (`bhdl powerup`): the knee. A
+/// downstream stage's inrush, reflected through the topology, exceeds
+/// the upstream stage's capability; the deficit drains the upstream
+/// bulk and the rail sags below good while the downstream rail comes
+/// up — a slot violation no pairwise check can see. Three arms:
+/// 1. undersized bulk + RC enable → KNEE → slot re-opened (Error);
+/// 2. big bulk + RC enable → the rail rises SLOWLY, the RC threshold
+///    (1.2 V) fires long before the rail is good → order violation —
+///    a REAL composition flaw the pairwise ERC033 check blesses;
+/// 3. big bulk + PG chain (PG released only in regulation) → clean.
+#[tokio::test]
+async fn powerup_timeline_catches_the_knee() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let board = |bulk: bool, pg: bool| {
+        let bulk_txt = if bulk { "@V50 -> C_bulk: Cap(1000µF).1; C_bulk.2 -> @GND;" } else { "" };
+        let pg_txt = if pg { "u1.PG -> u3.EN;" } else { "" };
+        format!(r#"
+import {{ BuckBoost_TPS63020 }} from "bhdl-stdlib/power/tps63020.bhdl";
+import {{ Res }} from "bhdl-stdlib/passives/resistor.bhdl";
+import {{ Cap }} from "bhdl-stdlib/passives/capacitor.bhdl";
+entity KneeSoc() {{
+    pin 1: power in;
+    pin 2: power in;
+    pin GND: ground;
+    domain VDD_CORE pins="1" v=5V i_nom=300mA slot=1 source="FIXTURE — knee probe";
+    domain VDD_AUX pins="2" v=3.3V i_nom=100mA slot=2 source="FIXTURE — knee probe";
+}}
+board KneeBoard {{
+    power VBAT = 3.6V @ 8A;
+    port V50: power out = 5V @ 2A;
+    port V33: power out = 3.3V @ 1A;
+    ground GND;
+    @VBAT -> u1: BuckBoost_TPS63020(v_out=5V, i_out_max=1A, v_in=3.6V, v_in_min=3.0V, v_in_max=4.2V).VIN;
+    u1.GND -> @GND; u1.VOUT -> @V50;
+    @V50 -> u3: BuckBoost_TPS63020(v_out=3.3V, i_out_max=0.5A, v_in=5V, v_in_min=4.5V, v_in_max=5.5V).VIN;
+    u3.GND -> @GND; u3.VOUT -> @V33;
+    {pg_txt}
+    @V50 -> R_del: Res(100kΩ).1; R_del.2 -> u3.EN;
+    u3.EN -> C_del: Cap(22nF).1; C_del.2 -> @GND;
+    {bulk_txt}
+    soc: KneeSoc();
+    @V50 -> soc.1; @V33 -> soc.2; soc.GND -> @GND;
+}}
+"#)
+    };
+    let run = |text: String| async move {
+        let pr = parse(&text);
+        assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+        let sf = SourceFile::cast(pr.syntax()).unwrap();
+        let analysis = analyze(&sf);
+        let mut gen = NetlistGenerator::new();
+        let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+        bhdl_synthesizer::powerup::simulate_powerup(&n, &sf)
+    };
+    use bhdl_synthesizer::powerup::Sev;
+
+    // arm 1: the knee — V50 sags below good while V33 comes up
+    let rep = run(board(false, false)).await;
+    let v50 = rep.rails.iter().find(|r| r.net == "V50").unwrap();
+    assert!(!v50.sags.is_empty(), "no sag simulated: {:#?}", rep.events);
+    assert!(rep.events.iter().any(|e| e.text.contains("SAG begins") && e.text.contains("inrush") && e.text.contains("reflected")), "{:#?}", rep.events);
+    assert!(rep.findings.iter().any(|f| f.sev == Sev::Error && f.text.contains("WHILE slot-1 rail") && f.text.contains("sagged below good")), "{:#?}", rep.findings);
+
+    // arm 2: big bulk slows the rise; the RC threshold fires early and
+    // AUX beats CORE — a real ordering violation from composition
+    let rep = run(board(true, false)).await;
+    assert!(rep.findings.iter().any(|f| f.sev == Sev::Error && f.text.contains("before slot 1 complete")), "{:#?}", rep.findings);
+
+    // arm 3: PG chain (released only in regulation) + bulk → clean
+    let rep = run(board(true, true)).await;
+    let errs: Vec<_> = rep.findings.iter().filter(|f| f.sev == Sev::Error).collect();
+    assert!(errs.is_empty(), "PG-chained board has timeline errors: {errs:#?}");
+    let (v50g, v33g) = (
+        rep.rails.iter().find(|r| r.net == "V50").unwrap().t_good.unwrap(),
+        rep.rails.iter().find(|r| r.net == "V33").unwrap().t_good.unwrap(),
+    );
+    assert!(v33g > v50g, "PG chain must hold V33 until V50 is truly good");
+}

@@ -52,6 +52,7 @@ pub mod trace_matrix;
 // diff-pair polarity, TX/RX crossing, voltage domains, I2C pull-ups).
 pub mod erc;
 pub mod sequencing;
+pub mod powerup;
 
 // T3 org-policy ERC plugins (BHDL_ERC_PLUGINS, JSON over stdio).
 pub mod erc_plugin;

@@ -157,6 +157,17 @@ enum Commands {
     /// declarations is the degenerate case: useful for architecture /
     /// thermal planning, never a gate. The option calculator consumes
     /// this harvest (next increment).
+    /// Simulate the board's POWER-UP as a piecewise-linear event
+    /// timeline: stages as current-limited sources with their
+    /// datasheet soft-start behavior, loads as domain currents, bulk
+    /// capacitance summed from the real instances. Catches the KNEE —
+    /// a downstream inrush exceeding an upstream stage's capability
+    /// sags the rail out of regulation and delays (or re-orders) the
+    /// declared sequencing windows (order, t_min, t_max, slots), which
+    /// pairwise checks cannot see because delays COMPOSE. Exits
+    /// non-zero when a declared window fails on the timeline.
+    Powerup {},
+
     Powertree {
         /// Also dump the harvest + options as JSON to this path.
         #[arg(long)]
@@ -650,6 +661,15 @@ async fn main() -> Result<()> {
 
         Some(Commands::Elaborate { output }) => {
             run_elaborate(&source_file, &input_content, &cli.input, output).await?;
+        }
+
+        Some(Commands::Powerup {}) => {
+            let netlist = verified_netlist(&source_file, &input_content, &cli.input, cli.no_elaborate).await?;
+            let rep = bhdl_synthesizer::powerup::simulate_powerup(&netlist, &source_file);
+            print!("{}", bhdl_synthesizer::powerup::render(&rep));
+            if rep.findings.iter().any(|f| matches!(f.sev, bhdl_synthesizer::powerup::Sev::Error)) {
+                std::process::exit(1);
+            }
         }
 
         Some(Commands::Powertree { json, input, emit, prereg }) => {

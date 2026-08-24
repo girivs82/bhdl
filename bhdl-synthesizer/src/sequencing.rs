@@ -59,7 +59,7 @@ pub fn stamp_domain_seq(netlist: &mut Netlist, sf: &SourceFile) {
             let ety = netlist.modules.get(inst.definition).map(|m| m.name.clone())?;
             let (doms, _) = domains.get(&ety)?;
             let any_seq = doms.iter().any(|d| {
-                !d.seq_after.is_empty() || d.seq_slot.is_some() || d.sw_enabled
+                !d.seq_after.is_empty() || d.seq_slot.is_some() || d.sw_enabled || d.seq_t_max_s.is_some()
             });
             if !any_seq {
                 return None;
@@ -78,6 +78,9 @@ pub fn stamp_domain_seq(netlist: &mut Netlist, sf: &SourceFile) {
                 }
                 if let Some(t) = d.seq_t_min_s {
                     v.push_str(&format!(";t_min={t}"));
+                }
+                if let Some(t) = d.seq_t_max_s {
+                    v.push_str(&format!(";t_max={t}"));
                 }
                 if let Some(s) = d.seq_slot {
                     v.push_str(&format!(";slot={s}"));

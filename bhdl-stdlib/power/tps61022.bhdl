@@ -51,6 +51,10 @@ entity TPS61022() as part {
     attribute feedback_voltage = 0.6V;    // SLVSDX7D: VREF at FB, PWM mode, 600 mV typ
     attribute fb_equation      = "VOUT = {VREF}*(1 + {R1}/{R2})";
     attribute ovp_v            = 5.7V;    // SLVSDX7D: output OVP threshold, typ
+    attribute en_vih           = 1.2V;    // SLVSDX7D §7.3.2: EN above 1.2 V enables (below 0.4 V disables)
+    attribute ss_i_initial     = 700mA;   // SLVSDX7D §7.3.2: output-capacitor charge current while VOUT < 0.4 V
+    attribute ss_v_full        = 0.4V;    // SLVSDX7D §7.3.2: above this the charge is capability-limited
+    attribute t_ss             = 700us;   // SLVSDX7D EC: EN → regulation, VIN 2.5 V, VOUT 5 V, 30 µF eff, no load (condition stated)
     attribute tj_min           = -40degC; // SLVSDX7D §6.3: operating junction −40 °C to 125 °C
     attribute tj_max           = 125degC;
     attribute theta_ja         = 108.2degC/W; // SLVSDX7D §6.4, RWU (VQFN-7): RθJA — JEDEC-standard board metric (50.9 on the EVM)
@@ -104,6 +108,10 @@ entity Boost_TPS61022(
     attribute i_quiescent     = 27uA;
     attribute feedback_voltage = 0.6V;
     attribute fb_equation     = "VOUT = {VREF}*(1 + {R1}/{R2})";
+    attribute en_vih          = 1.2V;     // SLVSDX7D §7.3.2
+    attribute ss_i_initial    = 700mA;    // SLVSDX7D §7.3.2 (charge current below 0.4 V)
+    attribute ss_v_full       = 0.4V;
+    attribute i_valley_limit  = 6.5A;     // SLVSDX7D minimum — the power-up simulator reads it on the instance
     attribute tj_min          = -40degC;
     attribute tj_max          = 125degC;
     attribute theta_ja        = 108.2degC/W; // SLVSDX7D, RWU, JEDEC board metric

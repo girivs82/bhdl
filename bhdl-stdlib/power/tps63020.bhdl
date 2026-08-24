@@ -61,6 +61,9 @@ entity TPS63020() as part {
     attribute fb_equation      = "VOUT = {VREF}*(1 + {R1}/{R2})";
     attribute ovp_v            = 5.5V;    // SLVS916I: output overvoltage protection, MIN (7 V max)
     attribute en_vih           = 1.2V;    // SLVS916I EC table: EN, PS/SYNC input high voltage, MIN
+    attribute ss_i_initial     = 400mA;   // SLVS916I §7.4.1: soft-start average current limit ramps from 400 mA
+    attribute ss_v_full        = 1.2V;    // SLVS916I §7.4.1: nominal current limit once VOUT ≈ 1.2 V (no timer)
+    attribute pg_on_regulation = "true";  // SLVS916I §7.3.4: PG monitors the current loop — LOW while current-limited
     attribute temp_min         = -40degC; // SLVS916I §6.3: operating free-air (ambient) −40 °C to 85 °C
     attribute temp_max         = 85degC;
     attribute tj_min           = -40degC; // SLVS916I §6.3: operating junction −40 °C to 125 °C
@@ -125,6 +128,10 @@ entity BuckBoost_TPS63020(
     attribute feedback_voltage = 0.5V;
     attribute fb_equation     = "VOUT = {VREF}*(1 + {R1}/{R2})";
     attribute en_vih          = 1.2V;     // SLVS916I EC table (EN input high, min) — the sequencing RC threshold
+    attribute ss_i_initial    = 400mA;    // SLVS916I §7.4.1 (soft-start current-limit ramp origin)
+    attribute ss_v_full       = 1.2V;     // SLVS916I §7.4.1 (nominal limit above this VOUT)
+    attribute i_sw_avg_limit  = 3.5A;     // SLVS916I EC (min) — the power-up simulator reads it on the instance
+    attribute pg_on_regulation = "true";  // SLVS916I §7.3.4: PG is low while the current loop is at its limit
     attribute temp_min        = -40degC;  // SLVS916I ambient
     attribute temp_max        = 85degC;
     attribute tj_min          = -40degC;

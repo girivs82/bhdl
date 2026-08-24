@@ -626,3 +626,43 @@ power-up order for the edge to pass; no block declares that promise
 yet, so today it is a stated UNCHECKED — this is the sequencing gate
 the aggregation post-step will use when merging per-rail stages into a
 PMIC.
+
+### 7.1 The power-up timeline — `bhdl powerup`
+
+The pairwise ERC033 check verifies each edge's MECHANISM; it cannot
+verify the TIMELINE, because delays compose and because sources have
+finite CAPACITY. The canonical miss: a downstream stage enables, its
+inrush (charging its output bank at the soft-start/current limit,
+reflected through the topology into input current) exceeds the
+upstream stage's capability, the upstream stage goes constant-current
+and the deficit drains the upstream bulk — the rail SAGS below good
+(the knee), thresholds stretch or un-cross, and the accumulated delay
+walks a rail into the next slot's window.
+
+`bhdl powerup` simulates exactly this as a piecewise-linear event
+timeline — deliberately NOT SPICE: every source is a current-limited
+PWL source (soft-start behavior from datasheet-cited attributes:
+`ss_i_initial`/`ss_v_full`, e.g. TPS63020's 400 mA-until-1.2 V ramp,
+TPS61022's 700 mA-below-0.4 V), every load a constant domain current,
+every net its summed real capacitance — so per interval every rail's
+dV/dt is constant and event times are exact (EN-RC nodes use the
+exponential crossing formula against the interval-held source;
+intervals additionally capped at 2 % rail movement). PG semantics are
+modeled from the datasheet: TPS63020's PG monitors the CURRENT loop
+(`pg_on_regulation`), so a PG-chained stage automatically waits out an
+upstream knee. Modeling choices that are approximations are printed in
+the report header, stated.
+
+The declared windows (order, `t_min`, the new `t_max` — SoC latch-up
+windows only a timeline can check — and slots incl. `slot_t_min`) are
+verified against the simulated good-times; a slot-N rail going good
+WHILE a slot-(N−1) rail is sagged below good is the knee finding, with
+the arithmetic (demand vs capability, the reflected inrush culprit,
+the bank size) and the fix (more bulk, or a PG-chained enable) named.
+The three-arm regression (`powerup_timeline_catches_the_knee`):
+undersized bulk + RC enable → knee → slot re-opened; large bulk + RC
+enable → the rail rises SLOWLY and the RC threshold fires long before
+the rail is good (a REAL composition flaw the pairwise check blesses);
+large bulk + PG chain → clean. `sw_enabled` rails are excluded from
+the hardware timeline, stated. Exit is non-zero when any declared
+window fails.

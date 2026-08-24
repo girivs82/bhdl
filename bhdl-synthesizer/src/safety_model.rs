@@ -416,6 +416,7 @@ fn parse_domain_item(ename: &str, toks: &[String], d: &mut EntityData) {
                                 })
                                 .unwrap_or_default(),
                             seq_t_min_s: secs("t_min"),
+                            seq_t_max_s: secs("t_max"),
                             seq_slot: kv.get("slot").and_then(|v| v.parse::<u32>().ok()),
                             seq_slot_t_min_s: secs("slot_t_min"),
                             sw_enabled: kv.get("sw_enabled").map(|v| v == "true" || v == "1").unwrap_or(false),

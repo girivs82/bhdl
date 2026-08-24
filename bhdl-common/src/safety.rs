@@ -338,6 +338,11 @@ pub struct PowerDomain {
     /// rail's enable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seq_t_min_s: Option<f64>,
+    /// Hard MAXIMUM delay (s) — the rail must follow within this window
+    /// (SoC latch-up windows). Pairwise checks cannot verify it
+    /// (delays COMPOSE along the chain); the power-up timeline does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seq_t_max_s: Option<f64>,
     /// Slot number in the part's power-up sequence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seq_slot: Option<u32>,
