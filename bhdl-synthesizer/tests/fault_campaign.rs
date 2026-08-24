@@ -2862,7 +2862,8 @@ board BoostReq {{
     // 5.2 A (6.5 A min limit × 0.8) — refused with the arithmetic named
     let r = resolve_stages(&board("1.9V"), &stdlib, &[]).unwrap().unwrap();
     assert!(r.resolutions[0].bound.is_none());
-    assert!(r.resolutions[0].candidates[0].failures().iter().any(|f| f.contains("VALLEY current") && f.contains("5.2A")), "{:?}", r.resolutions[0].candidates[0].failures());
+    let c = r.resolutions[0].candidates.iter().find(|c| c.block == "Boost_TPS61022").expect("surveyed");
+    assert!(c.failures().iter().any(|f| f.contains("VALLEY current") && f.contains("5.2A")), "{:?}", c.failures());
 }
 
 /// BuckBoost_TPS63020 (SLVS916I): the first BuckBoostStage implementer.
@@ -2915,4 +2916,90 @@ board BuckBoostReq {{
     let c = r.resolutions[0].candidates.iter().find(|c| c.block == "BuckBoost_TPS63020").expect("surveyed");
     assert!(c.failures().iter().any(|f| f.contains("AVERAGE switch current") && f.contains("2.8A")), "{:?}", c.failures());
     assert!(r.source.contains("GenericBuckBoost("), "{}", r.source);
+}
+
+/// Boost/buck-boost CLASS templates (regulator.bhdl): capability axes
+/// are REQUIRED designer arguments (the tps2660 r_ilim doctrine — no
+/// invented class defaults), the envelope checks the switch PEAK
+/// current (conservative under every vendor limit convention), and the
+/// override args must actually REACH the envelope — this test pins the
+/// self_namespace fix (conveyed/override values for required,
+/// default-less params were silently dropped, so the envelope
+/// evaluated against nothing).
+#[tokio::test]
+async fn boost_buckboost_class_templates() {
+    use bhdl_synthesizer::stage_resolution::resolve_stages;
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let stdlib = ws.join("bhdl-stdlib");
+    let board = |resolve_stmt: &str| format!(r#"
+import {{ BoostStage }} from "bhdl-stdlib/power/stages.bhdl";
+import {{ Res }} from "bhdl-stdlib/passives/resistor.bhdl";
+board BoostTmpl {{
+    power VBAT = 5V @ 4A;
+    port V12: power out = 12V @ 0.5A;
+    ground GND;
+    @VBAT -> u1: BoostStage(vout=12V, i_max=0.5A, vin=5V).VIN;
+    u1.GND -> @GND; u1.VOUT -> @V12;
+    @V12 -> R_LOAD: Res(24Ω, wattage=10W).1; R_LOAD.2 -> @GND;
+    {resolve_stmt}
+}}
+"#);
+    // no resolve: the template is LISTED but never auto-bound
+    let r = resolve_stages(&board(""), &stdlib, &[]).unwrap().unwrap();
+    assert!(r.resolutions[0].bound.is_none());
+    let t = r.resolutions[0].candidates.iter().find(|c| c.block == "BoostRegulator").expect("template surveyed");
+    assert!(t.template, "listed as template");
+    // committed with the designer's class numbers: the required
+    // (default-less) args reach the envelope and the divider math
+    let r = resolve_stages(&board("resolve u1 = BoostRegulator(i_sw_limit=4A, f_sw=1.2MHz, rds_on=80mΩ, i_quiescent=100µA, vref=1.245V);"), &stdlib, &[]).unwrap().unwrap();
+    assert_eq!(r.resolutions[0].bound.as_deref(), Some("BoostRegulator"), "{}", bhdl_synthesizer::stage_resolution::render_report(&r.resolutions[0]));
+    let pr = parse(&r.source);
+    assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+    let val = |name: &str| n.instances.values().find(|i| i.name == name).unwrap_or_else(|| panic!("{name}")).attributes.get("value").cloned().unwrap_or_default();
+    let si = |v: String| bhdl_synthesizer::stage_acceptance::parse_si(&v).unwrap();
+    // divider from the OVERRIDE vref: (12/1.245 − 1)·100k = 863.9 kΩ
+    assert!((si(val("u1_R_top")) - 863.9e3).abs() / 863.9e3 < 0.02, "{}", val("u1_R_top"));
+    assert!(n.instances.values().any(|i| i.name == "u1_L"), "boost inductor");
+    // under-sized class numbers: the PEAK envelope refuses, arithmetic
+    // named — a hard error at resolve time (peak 1.59 A > 1 A × 0.8)
+    let e = resolve_stages(&board("resolve u1 = BoostRegulator(i_sw_limit=1A, f_sw=1.2MHz, rds_on=80mΩ, i_quiescent=100µA, vref=1.245V);"), &stdlib, &[]).unwrap_err();
+    assert!(e.to_string().contains("PEAK current") && e.to_string().contains("i_sw_limit"), "{e}");
+
+    // buck-boost template on the straddle BuckBoost_TPS63020 refuses
+    // (1.8 V floor boosting to 5 V at 2 A): committed with a beefier
+    // class part — peak 6.34 A ≤ 10 A × 0.8
+    let bb = r#"
+import { BuckBoostStage } from "bhdl-stdlib/power/stages.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+board BuckBoostTmpl {
+    power VBAT = 3.6V @ 8A;
+    port V50: power out = 5V @ 2A;
+    ground GND;
+    @VBAT -> u1: BuckBoostStage(vout=5V, i_max=2A, vin=3.6V, vin_min=1.8V, vin_max=4.2V).VIN;
+    u1.GND -> @GND; u1.VOUT -> @V50;
+    @V50 -> R_LOAD: Res(2.5Ω, wattage=20W).1; R_LOAD.2 -> @GND;
+    resolve u1 = BuckBoostRegulator(i_sw_limit=10A, f_sw=1.5MHz, rds_on=30mΩ, rds_on_ls=30mΩ, i_quiescent=50µA, vref=0.8V);
+}
+"#;
+    let r = resolve_stages(bb, &stdlib, &[]).unwrap().unwrap();
+    assert_eq!(r.resolutions[0].bound.as_deref(), Some("BuckBoostRegulator"), "{}", bhdl_synthesizer::stage_resolution::render_report(&r.resolutions[0]));
+    // the vendor block's own refusal stays visible in the survey
+    let v = r.resolutions[0].candidates.iter().find(|c| c.block == "BuckBoost_TPS63020").expect("vendor surveyed");
+    assert!(v.failures().iter().any(|f| f.contains("AVERAGE switch current")), "{:?}", v.failures());
+    let pr = parse(&r.source);
+    assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+    assert!(n.instances.values().any(|i| i.name == "u1_L_bb"), "single inductor between the legs");
+    // divider from the override vref: (5/0.8 − 1)·100k = 525 kΩ
+    let rt = n.instances.values().find(|i| i.name == "u1_R_top").unwrap().attributes.get("value").cloned().unwrap();
+    let rv = bhdl_synthesizer::stage_acceptance::parse_si(&rt).unwrap();
+    assert!((rv - 525e3).abs() / 525e3 < 0.02, "{rt}");
 }

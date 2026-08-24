@@ -524,12 +524,17 @@ fn rel_stdlib_path(file: &Path, stdlib_root: &Path) -> String {
 /// v_ref value; literals as written) — what synthesis stamps on an
 /// instance.
 fn self_namespace(entity_text: &str, block: &str, params: &[(String, String)]) -> HashMap<String, String> {
-    let mut all: HashMap<String, String> = entity_params_txt(entity_text, block)
-        .into_iter()
-        .filter_map(|(n, d)| d.map(|d| (n, d)))
+    let decl = entity_params_txt(entity_text, block);
+    let mut all: HashMap<String, String> = decl
+        .iter()
+        .filter_map(|(n, d)| d.clone().map(|d| (n.clone(), d)))
         .collect();
     for (k, v) in params {
-        if all.contains_key(k) {
+        // overlay onto every DECLARED param — including required
+        // (default-less) ones. Gating on the defaults map silently
+        // dropped a conveyed/override value for a required param, so a
+        // template whose envelope reads it evaluated against nothing.
+        if decl.iter().any(|(n, _)| n == k) {
             all.insert(k.clone(), v.clone());
         }
     }

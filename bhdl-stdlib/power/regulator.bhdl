@@ -1,4 +1,5 @@
-// CLASS TEMPLATES for linear and buck regulators — v2.0 compatible.
+// CLASS TEMPLATES for linear, buck, boost and buck-boost regulators —
+// v2.0 compatible.
 //
 // Two-layer library model (docs/spec/Requirements_And_Resolution.md §1),
 // the TEMPLATE variant (cf. buck_controller.bhdl): these describe a
@@ -201,3 +202,289 @@ impl BuckStage for BuckRegulator {
 // No LM2596 datasheet part exists in this library yet.
 alias LM2596_5V  = BuckRegulator(5V);
 alias LM2596_3V3 = BuckRegulator(3.3V);
+
+// ── Boost (integrated switch, class template) ───────────────────────
+//
+// Unlike the LM2596-class buck above, no canonical boost part lends the
+// class its figures — so the CAPABILITY axes are REQUIRED designer
+// arguments (the tps2660 `r_ilim` doctrine: a number this library does
+// not have never becomes a default). Commit one with the part's own
+// datasheet numbers:
+//
+//   resolve u1 = BoostRegulator(i_sw_limit=4A, f_sw=1.2MHz,
+//                               rds_on=80mΩ, i_quiescent=100µA,
+//                               vref=0.6V);
+//
+// The envelope compares the switch PEAK current (I_L(DC) + ΔI/2)
+// against i_sw_limit × 0.8: peak ≥ average ≥ valley, so the check is
+// conservative whichever convention the part's limit uses (a vendor
+// block — Boost_TPS61022 — encodes its part's own convention instead).
+entity BoostRegulatorIc(
+    v_out:       voltage,
+    f_sw:        frequency,
+    rds_on:      resistance,
+    i_quiescent: current,
+    vref:        voltage
+) as part {
+    pin VIN:  power in;
+    pin SW:   switch out;
+    pin VOUT: power out;
+    pin FB:   feedback in;
+    pin EN:   signal in;
+    pin GND:  ground;
+
+    attribute component_class = "regulator_ic";
+    attribute template        = "class";
+    attribute topology        = "boost";
+    attribute output_voltage  = v_out;
+    attribute f_sw            = f_sw;
+    attribute rds_on          = rds_on;
+    attribute i_quiescent     = i_quiescent;
+    attribute feedback_voltage = vref;
+}
+
+entity BoostRegulator(
+    v_out:       voltage     = 5V,
+    i_out_max:   current     = 1A,
+    v_in:        voltage     = 3.3V,
+    i_sw_limit:  current,               // REQUIRED: the part's switch current limit (any convention — checked at PEAK)
+    f_sw:        frequency,             // REQUIRED
+    rds_on:      resistance,            // REQUIRED
+    i_quiescent: current,               // REQUIRED
+    vref:        voltage,               // REQUIRED: the part's FB reference
+    eta:         float       = 0.9,     // assumption (vendor design-procedure practice); override with the part's curve figure
+    l_value:     inductance  = 4.7µH,   // sizing choice, not a class claim — the envelope re-checks the ripple it implies
+    ripple_v:    voltage     = 50mV,
+    r_fb_bot:    resistance  = 100kΩ,
+    c_in:        capacitance = 10µF
+) as design
+  where v_out > v_in
+{
+    pin VIN:  power in;
+    pin VOUT: power out virtual;
+    pin EN:   signal in;
+    pin GND:  ground;
+
+    attribute component_class  = "switching_regulator";
+    attribute supply_choosable = false;    // TEMPLATE: listed, never auto-bound — class numbers come from the designer
+    attribute topology         = "boost";
+    attribute output_voltage   = v_out;
+    attribute v_in             = v_in;
+    attribute i_out_max        = i_out_max;
+    attribute f_sw             = f_sw;
+    attribute rds_on           = rds_on;
+    attribute i_quiescent      = i_quiescent;
+    attribute feedback_voltage = vref;
+    attribute fb_equation      = "VOUT = {VREF}*(1 + {R1}/{R2})";
+
+    // Boost sizing + the CURRENT envelope. One binary op per const;
+    // SI base units.
+    design {
+        const vout = self.v_out;
+        const vin  = self.v_in;
+        // I_L(DC) = VOUT·IOUT / (VIN·η)
+        const p_out   = vout * self.i_out_max;
+        const vin_eff = vin * self.eta;
+        const i_l_dc  = p_out / vin_eff;
+        // ΔI_L = VIN·D / (L·fSW), D = 1 − VIN/VOUT
+        const ratio  = vin / vout;
+        const duty   = 1.0 - ratio;
+        const vd     = vin * duty;
+        const lf     = self.l_value * self.f_sw;
+        const d_il   = vd / lf;
+        const i_half = d_il / 2.0;
+        const i_peak = i_l_dc + i_half;
+        // ENVELOPE: PEAK against the designer-supplied limit × 0.8 —
+        // conservative for peak-, average- and valley-limited parts.
+        const i_cap = self.i_sw_limit * 0.8;
+        require i_peak <= i_cap
+            else "BoostRegulator envelope: switch PEAK current I_L(DC) + ΔI/2 exceeds i_sw_limit × 0.8 derating — the requested output power is beyond this class instantiation at this ratio";
+        l_rated_current = i_peak * 1.2;
+        // C_OUT = IOUT·D / (fSW·V_RIPPLE)
+        const co_n  = self.i_out_max * duty;
+        const co_d  = self.f_sw * self.ripple_v;
+        c_out_value = co_n / co_d;
+        // FB divider: R1 = (VOUT/VREF − 1)·R2
+        const vratio = vout / self.vref;
+        const rtop_f = vratio - 1.0;
+        r_top_value  = rtop_f * self.r_fb_bot;
+    }
+
+    u: BoostRegulatorIc(v_out, f_sw, rds_on, i_quiescent, vref);
+    VIN -> u.VIN;
+    u.GND -> GND;
+    generate if (wired(EN)) {
+        EN -> u.EN;
+    } else {
+        VIN -> u.EN;
+    }
+    VIN -> C_in: Cap(c_in).1; C_in.2 -> GND;
+    VIN -> L: Ind(l_value, rated_current = l_rated_current).1; L.2 -> u.SW;
+    u.VOUT -> VOUT;
+    VOUT -> C_out: Cap(c_out_value).1; C_out.2 -> GND;
+    VOUT -> R_top: Res(r_top_value, tolerance = 1%, supply_profile = "grade").1; R_top.2 -> u.FB;
+    u.FB -> R_bot: Res(r_fb_bot, tolerance = 1%, supply_profile = "grade").1; R_bot.2 -> GND;
+
+    simulation {
+        stress {
+            const duty = 1 - vin / vout;
+            const i_in = vout * i_out / (vin * self.eta);
+            const d_il = vin * duty / (self.f_sw * L.value);
+            L.i_peak       = i_in + d_il / 2;
+            C_out.v_ripple = i_out * duty / (self.f_sw * C_out.value);
+            // conduction + quiescent only: a class states no switching
+            // transition time (stated) — η in i_in carries the margin
+            self.p_diss    = i_in * i_in * self.rds_on * duty + vout * self.i_quiescent;
+        }
+    }
+}
+
+impl BoostStage for BoostRegulator {
+    const vout  = v_out;
+    const i_max = i_out_max;
+    const vin   = v_in;
+}
+
+// ── Buck-boost (single-inductor 4-switch, class template) ───────────
+//
+// Same doctrine: capability axes REQUIRED, envelope evaluated at
+// v_in_min (the worst boost ratio — the straddle's binding corner) with
+// the PEAK-current check. The impl binds vin_min/vin_max, so a
+// BuckBoostStage requirement's straddle is conveyed into the ctor and
+// the envelope runs at the requirement's own operating point.
+entity BuckBoostRegulatorIc(
+    v_out:       voltage,
+    f_sw:        frequency,
+    rds_on:      resistance,
+    rds_on_ls:   resistance,
+    i_quiescent: current,
+    vref:        voltage
+) as part {
+    pin VIN:  power in;
+    pin L1:   switch out;     // inductor connection, input side
+    pin L2:   switch in;      // inductor connection, output side
+    pin VOUT: power out;
+    pin FB:   feedback in;
+    pin EN:   signal in;
+    pin GND:  ground;
+
+    attribute component_class = "regulator_ic";
+    attribute template        = "class";
+    attribute topology        = "buck_boost";
+    attribute output_voltage  = v_out;
+    attribute f_sw            = f_sw;
+    attribute rds_on          = rds_on;
+    attribute rds_on_ls       = rds_on_ls;
+    attribute i_quiescent     = i_quiescent;
+    attribute feedback_voltage = vref;
+}
+
+entity BuckBoostRegulator(
+    v_out:       voltage     = 3.3V,
+    i_out_max:   current     = 1A,
+    v_in:        voltage     = 3.6V,
+    v_in_min:    voltage,               // REQUIRED: the straddle — worst boost ratio is here
+    v_in_max:    voltage,               // REQUIRED
+    i_sw_limit:  current,               // REQUIRED: the part's switch current limit (any convention — checked at PEAK)
+    f_sw:        frequency,             // REQUIRED
+    rds_on:      resistance,            // REQUIRED: high-side
+    rds_on_ls:   resistance,            // REQUIRED: low-side
+    i_quiescent: current,               // REQUIRED
+    vref:        voltage,               // REQUIRED: the part's FB reference
+    eta:         float       = 0.9,     // assumption (vendor design-procedure practice); override with the part's curve figure
+    l_value:     inductance  = 2.2µH,   // sizing choice, not a class claim
+    ripple_v:    voltage     = 50mV,
+    r_fb_bot:    resistance  = 100kΩ,
+    c_in:        capacitance = 10µF
+) as design
+  where v_in_min < v_in_max, v_in >= v_in_min, v_in <= v_in_max
+{
+    pin VIN:  power in;
+    pin VOUT: power out virtual;
+    pin EN:   signal in;
+    pin GND:  ground;
+
+    attribute component_class  = "switching_regulator";
+    attribute supply_choosable = false;    // TEMPLATE: listed, never auto-bound — class numbers come from the designer
+    attribute topology         = "buck_boost";
+    attribute output_voltage   = v_out;
+    attribute v_in             = v_in;
+    attribute i_out_max        = i_out_max;
+    attribute f_sw             = f_sw;
+    attribute rds_on           = rds_on;
+    attribute rds_on_ls        = rds_on_ls;
+    attribute i_quiescent      = i_quiescent;
+    attribute feedback_voltage = vref;
+    attribute fb_equation      = "VOUT = {VREF}*(1 + {R1}/{R2})";
+
+    // Sizing + the CURRENT envelope at v_in_min (worst boost ratio).
+    // For a buck-only range (v_in_min > v_out) the duty goes negative
+    // and the forms relax — the check still holds at PEAK. One binary
+    // op per const; SI base units.
+    design {
+        const vout   = self.v_out;
+        const vin_lo = self.v_in_min;
+        const vdiff = vout - vin_lo;
+        const duty  = vdiff / vout;
+        // I_L = IOUT / (η·(1 − D))
+        const inv_d  = 1.0 - duty;
+        const eta_d  = inv_d * self.eta;
+        const i_l_dc = self.i_out_max / eta_d;
+        // ΔI_L = VIN·D / (L·fSW) at v_in_min
+        const vd     = vin_lo * duty;
+        const lf     = self.l_value * self.f_sw;
+        const d_il   = vd / lf;
+        const i_half = d_il / 2.0;
+        const i_peak = i_l_dc + i_half;
+        // ENVELOPE: PEAK against the designer-supplied limit × 0.8.
+        const i_cap = self.i_sw_limit * 0.8;
+        require i_peak <= i_cap
+            else "BuckBoostRegulator envelope: switch PEAK current at v_in_min exceeds i_sw_limit × 0.8 derating — the requested output power is beyond this class instantiation at this ratio";
+        l_rated_current = i_peak * 1.2;
+        // C_OUT = IOUT·D / (fSW·V_RIPPLE) — the boost-corner form
+        const co_n  = self.i_out_max * duty;
+        const co_d  = self.f_sw * self.ripple_v;
+        c_out_value = co_n / co_d;
+        // FB divider: R1 = (VOUT/VREF − 1)·R2
+        const vratio = vout / self.vref;
+        const rtop_f = vratio - 1.0;
+        r_top_value  = rtop_f * self.r_fb_bot;
+    }
+
+    u: BuckBoostRegulatorIc(v_out, f_sw, rds_on, rds_on_ls, i_quiescent, vref);
+    VIN -> u.VIN;
+    u.GND -> GND;
+    generate if (wired(EN)) {
+        EN -> u.EN;
+    } else {
+        VIN -> u.EN;
+    }
+    VIN -> C_in: Cap(c_in).1; C_in.2 -> GND;
+    // single-inductor 4-switch topology: L between the two bridge legs
+    u.L1 -> L_bb: Ind(l_value, rated_current = l_rated_current).1; L_bb.2 -> u.L2;
+    u.VOUT -> VOUT;
+    VOUT -> C_out: Cap(c_out_value).1; C_out.2 -> GND;
+    VOUT -> R_top: Res(r_top_value, tolerance = 1%, supply_profile = "grade").1; R_top.2 -> u.FB;
+    u.FB -> R_bot: Res(r_fb_bot, tolerance = 1%, supply_profile = "grade").1; R_bot.2 -> GND;
+
+    simulation {
+        stress {
+            const duty = (vout - self.v_in_min) / vout;
+            const i_l  = i_out / ((1 - duty) * self.eta);
+            const d_il = self.v_in_min * duty / (self.f_sw * L_bb.value);
+            L_bb.i_peak    = i_l + d_il / 2;
+            C_out.v_ripple = i_out * duty / (self.f_sw * C_out.value);
+            // two switches always in the H-bridge path; no switching
+            // term (a class states no transition time — stated)
+            self.p_diss    = i_l * i_l * (self.rds_on + self.rds_on_ls) + self.v_in_min * self.i_quiescent;
+        }
+    }
+}
+
+impl BuckBoostStage for BuckBoostRegulator {
+    const vout    = v_out;
+    const i_max   = i_out_max;
+    const vin     = v_in;
+    const vin_min = v_in_min;
+    const vin_max = v_in_max;
+}

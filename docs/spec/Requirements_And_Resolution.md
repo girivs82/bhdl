@@ -388,6 +388,23 @@ Principles that fall out:
    (the TI µA7805 itself is `Ldo_LM7805`). Nothing in the regulator
    library is a migration-era conflated entity any more except
    `BuckController`'s yieldable takeover recipe, kept by design.
+   `BoostRegulator` / `BuckBoostRegulator` (same file) extend the class-
+   template set to the step-up topologies — with one doctrine shift: no
+   canonical part lends these classes their figures, so the CAPABILITY
+   axes (`i_sw_limit`, `f_sw`, `rds_on`[+`_ls`], `i_quiescent`, `vref`;
+   the buck-boost also `v_in_min`/`v_in_max`) are REQUIRED designer
+   arguments — the `r_ilim` doctrine, never an invented class default.
+   Their envelope checks the switch PEAK current (I_L(DC) + ΔI/2 ≤
+   i_sw_limit × 0.8): peak ≥ average ≥ valley, so the check is
+   conservative whichever convention the designer's part uses — a
+   vendor block encodes its part's own convention instead
+   (`Boost_TPS61022` valley, `BuckBoost_TPS63020` average). Landing
+   them flushed a resolver silent-drop: `self_namespace` only overlaid
+   conveyed/override values onto params that HAD defaults, so a
+   required (default-less) param never reached the envelope — the
+   template evaluated against nothing (`Efuse_TPS2660`'s required
+   `r_ilim` never tripped it because no envelope reads it). Fixed:
+   overlay onto every DECLARED param.
    Envelope spelling (landed): `entity X(…) as design where i_out_max <=
    2.4A, v_in >= 3.5V, v_in <= 28V { … }` — each comparison is lowered
    to a `require` at the front of the block's plain `design { }` (created
@@ -513,7 +530,9 @@ UNCHECKED against a requirement that states it — never a pass.
 | `LdoStage` | `LinearRegulator` (78xx class) | template | 40 µV class, headroom | i_max, vin range, temp, qual | class numbers |
 | `BuckExtStage` | `BuckController` | template | 1 phase; rating = the FETs' | vin range, noise, temp, qual | FETs + axes |
 | `BoostStage` | `Boost_TPS61022` | auto | 3 A @ 3.6→5 V (94.7 %), 2.2–5.5 V out, 1.8 V startup floor, T_J ≤ 125 °C via θ_JA 108.2 | noise, qual | — |
+| `BoostStage` | `BoostRegulator` (class) | template | PEAK-current envelope only | i_max, vin range, noise, temp, qual | class numbers (required args) |
 | `BuckBoostStage` | `BuckBoost_TPS63020` | auto | 2 A boost mode (4 A buck), 1.8–5.5 V in, 1.2–5.5 V out, −40…85 °C ambient + T_J ≤ 125 °C via θ_JA 41.8 | noise, qual | — |
+| `BuckBoostStage` | `BuckBoostRegulator` (class) | template | PEAK-current envelope at v_in_min only | i_max, vin range, noise, temp, qual | class numbers (required args) |
 | `PreregStage` | `PassiveFrontEnd` (fuse + TVS) | auto | fuse rating, `ov_clamp`, 0 V … clamp point | ov_trip, uv_trip, reverse_polarity, temp, qual | — |
 | `PreregStage` | `Efuse_TPS2660` | template | 2 A, 4.2–55 V, `ov_trip`, `uv_trip`, `reverse_polarity`, T_J ≤ 150 °C via θ_JA 38.6 | ov_clamp, qual | `r_ilim` (ILIM law not in the library) |
 | `PreregStage` | `IdealDiode_LM74700` | template | rating = the FET's, 3.2–65 V, `reverse_polarity`, AEC-Q100 grade 1 (−40…125 °C) | ov_clamp, ov_trip, uv_trip | pass FET + axes |
