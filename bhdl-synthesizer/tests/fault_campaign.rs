@@ -3554,3 +3554,73 @@ board PmicDirect {
     assert!(n.instances.values().any(|i| i.name == "pm_C_l2"), "LDO2 cap present");
     assert!(!n.instances.values().any(|i| i.name == "pm_L_dc3" || i.name == "pm_C_l1"), "unused rails carry no circuit");
 }
+
+/// Grouped PMIC commit + the strict sequencing gate (§8.1):
+/// `resolve u1,u2,u3 = Pmic_TPS65217B;` collapses three per-rail
+/// requirements into ONE multi-output block (endpoints remapped,
+/// PWR_EN tied, mapping stamped), and ERC033 verifies declared domain
+/// ordering against the PMIC's PROMISED strobe order + delay range:
+/// guaranteed-met = promise-based pass; unachievable t_min = Error
+/// with the arithmetic; contradicted order = Error with the strobes.
+#[tokio::test]
+async fn pmic_grouped_commit_and_strict_seq_gate() {
+    use bhdl_synthesizer::stage_resolution::resolve_stages;
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let stdlib = ws.join("bhdl-stdlib");
+    let board = |dom18: &str, dom33: &str| format!(r#"
+import {{ BuckStage, LdoStage }} from "bhdl-stdlib/power/stages.bhdl";
+import {{ Res }} from "bhdl-stdlib/passives/resistor.bhdl";
+entity SeqSoc2() {{
+    pin 1: power in;
+    pin 2: power in;
+    pin GND: ground;
+    domain VDD18 pins="1" v=1.8V i_nom=100mA {dom18} source="FIXTURE — strict gate probe";
+    domain VDD33 pins="2" v=3.3V i_nom=50mA {dom33} source="FIXTURE — strict gate probe";
+}}
+board PmicCommit {{
+    power VSYS = 3.7V @ 5A;
+    port V18: power out = 1.8V @ 0.8A;
+    port V33: power out = 3.3V @ 80mA;
+    ground GND;
+    @VSYS -> u1: BuckStage(vout=1.8V, i_max=0.8A, vin=3.7V).VIN;
+    u1.GND -> @GND; u1.VOUT -> @V18;
+    @VSYS -> u3: LdoStage(vout=3.3V, i_max=80mA, vin=3.7V).VIN;
+    u3.GND -> @GND; u3.VOUT -> @V33;
+    soc: SeqSoc2();
+    @V18 -> soc.1; @V33 -> soc.2; soc.GND -> @GND;
+    resolve u1, u3 = Pmic_TPS65217B;
+}}
+"#);
+    let run = |text: String| async move {
+        let r = resolve_stages(&text, &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("bhdl-stdlib"), &[]).unwrap().unwrap();
+        assert!(r.group_commits.iter().any(|l| l.contains("GROUPED COMMIT") && l.contains("u1→DCDC1") && l.contains("u3→LDO2")), "{:#?}", r.group_commits);
+        let pr = parse(&r.source);
+        assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+        let sf = SourceFile::cast(pr.syntax()).unwrap();
+        let analysis = analyze(&sf);
+        let mut gen = NetlistGenerator::new();
+        let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+        let v = bhdl_synthesizer::sequencing::check_power_sequencing(&n, &analysis);
+        (n, v)
+    };
+    use bhdl_synthesizer::design_rule_checker::ViolationSeverity;
+
+    // guaranteed: 0.5 ms ≤ 1 strobe × 1 ms minimum delay — the promise
+    // covers the declaration, a promise-based pass (Info)
+    let (n, v) = run(board("", r#"after="VDD18" t_min=500us"#)).await;
+    assert!(n.instances.values().any(|i| i.name == "u1_u"), "one PMIC materialized");
+    assert!(!n.instances.values().any(|i| i.name.starts_with("u3_")), "u3 collapsed into the PMIC");
+    assert!(v.iter().any(|x| x.severity == ViolationSeverity::Info && x.description.contains("inherited from") && x.description.contains("guaranteed")), "{v:#?}");
+    assert!(!v.iter().any(|x| x.severity == ViolationSeverity::Error), "{v:#?}");
+
+    // unachievable: t_min 15 ms > 1 strobe × 10 ms max — Error with
+    // the arithmetic
+    let (_n, v) = run(board("", r#"after="VDD18" t_min=15ms"#)).await;
+    assert!(v.iter().any(|x| x.severity == ViolationSeverity::Error && x.description.contains("maximum achievable spacing")), "{v:#?}");
+
+    // contradicted: VDD18 (DCDC1, strobe 2) declared after VDD33
+    // (LDO2, strobe 3) — the promise contradicts, Error with strobes
+    let (_n, v) = run(board(r#"after="VDD33""#, "")).await;
+    assert!(v.iter().any(|x| x.severity == ViolationSeverity::Error && x.description.contains("CONTRADICTS") && x.description.contains("strobe")), "{v:#?}");
+}

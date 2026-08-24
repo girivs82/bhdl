@@ -963,3 +963,40 @@ or cited from a datasheet — the report renders, it never re-derives:
    the resonance blind spots, stated.
 
 `bhdl pdreport [--output <file>]`, default `<input>.pd.md`.
+
+### 8.1 The grouped commit and the strict sequencing gate
+
+Aggregation becomes COMMITTABLE:
+
+```bhdl
+resolve u1, u2, u3 = Pmic_TPS65217B;
+```
+
+A text transform (the resolver's discipline), applied before per-rail
+scanning: every named instance's requirement must match an unused PMIC
+output (the same gates as the §8 report — a miss is a HARD ERROR
+naming the requirement, the output table, and why); the first
+instance's requirement instantiation becomes the PMIC block, the
+others' statements are removed, every endpoint reference is remapped
+(`uk.VOUT` → `<first>.VOUT_<output>`; VIN/GND coalesce — duplicate
+identical connections are benign), `PWR_EN` is tied to the feed rail
+when unwired (the sequencer starts with the supply, stated), and the
+requirement→output mapping is stamped (`pmic_committed`). A per-rail
+`EN`/`PG` reference under a grouped commit is a hard error: the
+SEQUENCER owns the enables. A grouped commit takes a bare block name —
+the rails are OTP-fixed, there are no ctor args to pass.
+
+**The strict sequencing gate** (ERC033's same-instance hook, upgraded):
+for an ordering edge whose BOTH rails one block drives, the block's
+promised strobe order (`pmic_seq`) is checked — a contradicted order
+is an Error naming both strobes ("rails cannot be re-strobed at board
+level; reassign the outputs"), and timing composes against the
+promised inter-strobe delay RANGE (`pmic_seq_dly`): t_min guaranteed
+even at the minimum delay = a promise-based PASS (Info, "inherited
+from the built-in sequencer"); t_min beyond the maximum achievable
+spacing (strobes × max delay) = Error with the arithmetic; inside the
+programmable window = stated UNCHECKED ("depends on the PROGRAMMED
+delays — verify the OTP/firmware DLYx values"). The power-up engine
+idealizes a PMIC's output rails at their promised voltages (internal
+sequencer/soft-start not modeled — stated in the report header);
+ERC033's promise check is the sequencing authority for them.

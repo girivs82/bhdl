@@ -1250,6 +1250,9 @@ fn resolve_stage_requirements(
         &locked_stages,
     ) {
         Ok(Some(r)) => {
+            for l in &r.group_commits {
+                println!("  {} {}", "⧉".cyan().bold(), l);
+            }
             let mut new_lock: Vec<bhdl_common::library::LockedStage> = locked_stages
                 .iter()
                 .filter(|l| !r.resolutions.iter().any(|x| x.board == l.board && x.instance == l.instance))

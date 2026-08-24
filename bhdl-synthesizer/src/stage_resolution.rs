@@ -156,6 +156,10 @@ pub struct StageResolution {
 pub struct ResolvedSource {
     pub source: String,
     pub resolutions: Vec<StageResolution>,
+    /// Grouped PMIC commit report lines (spec §8.1), when the board
+    /// carried `resolve a, b, … = Pmic_X;`.
+    #[allow(dead_code)]
+    pub group_commits: Vec<String>,
 }
 
 /// Fast gate so ordinary boards pay nothing.
@@ -174,6 +178,15 @@ pub fn resolve_stages(
     if !source_has_stage_requirement(source) {
         return Ok(None);
     }
+    // GROUPED PMIC COMMITS (spec §8.1) transform the text FIRST: the
+    // covered requirements disappear into one multi-output block, the
+    // rest resolve per-rail as usual.
+    let (source_owned, group_commits) = match crate::aggregation::apply_group_overrides(source, stdlib_root) {
+        Ok(Some((s2, notes))) => (s2, notes),
+        Ok(None) => (source.to_string(), Vec::new()),
+        Err(e) => bail!("{e}"),
+    };
+    let source: &str = &source_owned;
     let mut files = Vec::new();
     collect_bhdl(stdlib_root, &mut files);
     files.sort();
@@ -222,6 +235,11 @@ pub fn resolve_stages(
     }
     let overrides = scan_overrides(&masked);
     if reqs.is_empty() && overrides.is_empty() {
+        // a full-group commit leaves no per-rail requirements — the
+        // TRANSFORMED source must still reach the pipeline
+        if !group_commits.is_empty() {
+            return Ok(Some(ResolvedSource { source: source.to_string(), resolutions: Vec::new(), group_commits }));
+        }
         return Ok(None);
     }
     for (inst, _, _) in &overrides {
@@ -513,7 +531,7 @@ pub fn resolve_stages(
         out.insert_str(insert_at, &import_lines);
     }
 
-    Ok(Some(ResolvedSource { source: out, resolutions }))
+    Ok(Some(ResolvedSource { source: out, resolutions, group_commits }))
 }
 
 fn req_value(req: &StageRequirement, key: &str) -> Option<String> {

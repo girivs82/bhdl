@@ -698,6 +698,25 @@ fn build_model(netlist: &Netlist, sf: &SourceFile, rep: &mut PowerupReport) -> (
 
     let harvest = crate::powertree::harvest_loads(netlist, sf);
     let mut ideal_v: HashMap<NetId, f64> = HashMap::new();
+    // multi-output supplies (PMICs): the PWL engine does not model the
+    // internal sequencer/soft-start yet — their output rails enter as
+    // IDEAL at the promised voltages, STATED; the built-in ordering is
+    // verified by ERC033 against the pmic_seq promise instead.
+    for (i, inst) in netlist.instances.iter() {
+        let Some(tbl) = attr(i, "pmic_outputs") else { continue };
+        rep.notes.push(format!(
+            "multi-output supply '{}' idealized (internal sequencer/soft-start not modeled — stated; ERC033 verifies its pmic_seq promise)",
+            inst.name
+        ));
+        for e in tbl.trim_matches('"').split(',') {
+            let p: Vec<&str> = e.split(':').collect();
+            if p.len() != 4 { continue; }
+            let Some(v) = crate::stage_acceptance::parse_si(p[2]) else { continue };
+            if let Some(n) = pin_net.get(&(i, format!("VOUT_{}", p[0]))) {
+                ideal_v.insert(*n, v);
+            }
+        }
+    }
     let stage_out: Vec<NetId> = stages.iter().map(|s| s.vout).collect();
     for r in &harvest.rails {
         if let Some((nid, _)) = netlist.nets.iter().find(|(_, n)| n.name.as_deref() == Some(r.net.as_str())) {

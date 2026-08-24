@@ -172,8 +172,15 @@ pub fn check_power_sequencing(
                 return None;
             }
             let has_identity = attr(*i, "stage_requirement").is_some()
-                || attr(*i, "output_voltage").is_some();
+                || attr(*i, "output_voltage").is_some()
+                || attr(*i, "pmic_outputs").is_some();
             has_identity.then_some(*i)
+        })
+    };
+    // which of a multi-output supply's outputs drives this net
+    let pmic_output_on = |i: InstanceId, net: NetId| -> Option<String> {
+        net_members.get(&net)?.iter().find_map(|(j, pin)| {
+            (*j == i).then(|| pin.strip_prefix("VOUT_").map(String::from)).flatten()
         })
     };
     // A two-terminal instance's OTHER pin's net (for R/C tracing):
@@ -390,17 +397,80 @@ pub fn check_power_sequencing(
             };
             let stage_a = supply_stage(net_a);
             // one block drives both rails: a multi-output supply — the
-            // PMIC promise hook. No block declares one yet: stated.
+            // STRICT sequencing gate (spec §8.1). The block's promised
+            // built-in order (`pmic_seq`, the datasheet strobe table)
+            // is checked; timing uses the promised inter-strobe delay
+            // RANGE (`pmic_seq_dly`) — guaranteed-met passes, cannot-
+            // be-met fails, depends-on-programmed-delays is a stated
+            // UNCHECKED.
             if stage_a == Some(stage_b) {
-                out.push(viol(
-                    ViolationSeverity::Warning,
-                    stage_b,
-                    format!(
-                        "'{}' drives BOTH rails of ordering {} after {} ({}) and declares no sequencing promise — UNCHECKED, not a pass",
-                        inst_name(stage_b), e.b.name, e.a.name, e.basis
-                    ),
-                    "a multi-output supply must promise its built-in power-up order (datasheet sequencing table) for this edge to pass".into(),
-                ));
+                let Some(seq) = attr(stage_b, "pmic_seq").map(|v| v.trim_matches('"').to_string()) else {
+                    out.push(viol(
+                        ViolationSeverity::Warning,
+                        stage_b,
+                        format!(
+                            "'{}' drives BOTH rails of ordering {} after {} ({}) and declares no sequencing promise (`pmic_seq`) — UNCHECKED, not a pass",
+                            inst_name(stage_b), e.b.name, e.a.name, e.basis
+                        ),
+                        "a multi-output supply must promise its built-in power-up order (datasheet sequencing table) for this edge to pass".into(),
+                    ));
+                    continue;
+                };
+                let (out_a, out_b) = (pmic_output_on(stage_b, net_a), pmic_output_on(stage_b, net_b));
+                let (Some(out_a), Some(out_b)) = (out_a, out_b) else {
+                    out.push(viol(ViolationSeverity::Warning, stage_b, format!(
+                        "'{}': cannot identify which outputs drive '{}'/'{}' — sequencing promise UNCHECKED",
+                        inst_name(stage_b), net_label(net_a), net_label(net_b)
+                    ), "wire the rails from the block's VOUT_<output> contract pins".into()));
+                    continue;
+                };
+                let groups: Vec<Vec<&str>> = seq.split(',').map(|g| g.split('|').collect()).collect();
+                let pos = |o: &str| groups.iter().position(|g| g.contains(&o));
+                let (Some(pa), Some(pb)) = (pos(&out_a), pos(&out_b)) else {
+                    out.push(viol(ViolationSeverity::Warning, stage_b, format!(
+                        "'{}': output {} or {} not in the promised order '{}' — UNCHECKED",
+                        inst_name(stage_b), out_a, out_b, seq
+                    ), "extend the block's pmic_seq to cover every output".into()));
+                    continue;
+                };
+                if pb <= pa {
+                    out.push(viol(ViolationSeverity::Error, stage_b, format!(
+                        "ordering {}.{} after {}.{} ({}): the PMIC's built-in order puts {} at strobe {} {} {} at strobe {} — the promise CONTRADICTS the declared ordering (rails cannot be re-strobed at board level; reassign the rails to different outputs)",
+                        e.b.inst_name, e.b.name, e.a.inst_name, e.a.name, e.basis,
+                        out_b, pb + 1, if pb == pa { "TOGETHER WITH" } else { "BEFORE" }, out_a, pa + 1
+                    ), "swap the requirement→output assignment in the grouped resolve, or use a variant with a different strobe map".into()));
+                    continue;
+                }
+                // order holds; timing against the promised delay range
+                let dly = attr(stage_b, "pmic_seq_dly").map(|v| v.trim_matches('"').to_string());
+                let range = dly.as_deref().and_then(|d| {
+                    let (lo, hi) = d.split_once('-')?;
+                    Some((crate::stage_acceptance::parse_si(lo)?, crate::stage_acceptance::parse_si(hi)?))
+                });
+                let dist = (pb - pa) as f64;
+                if let (Some(tmin), Some((lo, hi))) = (e.t_min, range) {
+                    if dist * lo + 1e-12 >= tmin {
+                        out.push(viol(ViolationSeverity::Info, stage_b, format!(
+                            "ordering {}.{} after {}.{}: inherited from '{}' built-in sequencer ({}→{}, {} strobe(s) apart; t_min {:.1}ms guaranteed — ≥ {:.1}ms even at the minimum inter-strobe delay)",
+                            e.b.inst_name, e.b.name, e.a.inst_name, e.a.name, inst_name(stage_b), out_a, out_b, dist as u32, tmin * 1e3, dist * lo * 1e3
+                        ), "no action — the promise covers the declaration".into()));
+                    } else if dist * hi < tmin {
+                        out.push(viol(ViolationSeverity::Error, stage_b, format!(
+                            "ordering {}.{} after {}.{}: t_min {:.1}ms exceeds the PMIC's maximum achievable spacing ({} strobe(s) × {:.0}ms max delay = {:.1}ms)",
+                            e.b.inst_name, e.b.name, e.a.inst_name, e.a.name, tmin * 1e3, dist as u32, hi * 1e3, dist * hi * 1e3
+                        ), "reassign to outputs further apart in the strobe order, or a discrete stage with an RC chain".into()));
+                    } else {
+                        out.push(viol(ViolationSeverity::Warning, stage_b, format!(
+                            "ordering {}.{} after {}.{}: t_min {:.1}ms is inside the programmable delay window ({:.1}–{:.1}ms achievable) — depends on the PROGRAMMED delays, UNCHECKED (stated)",
+                            e.b.inst_name, e.b.name, e.a.inst_name, e.a.name, e.t_min.unwrap_or(0.0) * 1e3, dist * lo * 1e3, dist * hi * 1e3
+                        ), "verify the OTP/firmware DLYx values cover it".into()));
+                    }
+                } else {
+                    out.push(viol(ViolationSeverity::Info, stage_b, format!(
+                        "ordering {}.{} after {}.{}: inherited from '{}' built-in sequencer ({} at strobe {} → {} at strobe {})",
+                        e.b.inst_name, e.b.name, e.a.inst_name, e.a.name, inst_name(stage_b), out_a, pa + 1, out_b, pb + 1
+                    ), "no action — the promise covers the declaration".into()));
+                }
                 continue;
             }
             let Some(en_net) = pin_net.get(&(stage_b, "EN".to_string())).copied() else {
