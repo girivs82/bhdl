@@ -48,6 +48,7 @@ struct PmicBlock {
     outputs: Vec<PmicOutput>,
     seq: Option<String>,
     seq_dly: Option<String>,
+    seq_dly_steps: Option<String>,
 }
 
 
@@ -190,29 +191,49 @@ pub fn apply_group_overrides(
             };
             mems.push(mm);
         }
-        // cover: every member must land on an unused output
-        let mut used: Vec<usize> = Vec::new();
-        let mut mapping: Vec<(String, String)> = Vec::new();
-        for m in &mems {
-            let slot = pmic.outputs.iter().enumerate().find(|(i, o)| {
-                !used.contains(i)
-                    && (o.vout - m.vout).abs() <= 0.02 * m.vout + 1e-9
-                    && o.i_max + 1e-9 >= m.imax / 0.8
-            });
-            match slot {
-                Some((i, o)) => {
-                    used.push(i);
-                    mapping.push((m.name.clone(), o.name.clone()));
+        // SEQUENCING-AWARE cover (spec §8.3): the assignment respects
+        // the declared rail ordering under the part's strobe order —
+        // "connect the stages according to the sequence". A member's
+        // rail comes from its `<m>.VOUT -> @RAIL` wiring.
+        let rail_of_member = |m: &str| -> String {
+            let needle = format!("{m}.VOUT -> @");
+            cur_masked
+                .find(&needle)
+                .map(|pp| {
+                    cur_masked[pp + needle.len()..]
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_')
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let member_rows: Vec<(String, String, f64, f64)> = mems
+            .iter()
+            .map(|m| (m.name.clone(), rail_of_member(&m.name), m.vout, m.imax / 0.8))
+            .collect();
+        let edges = domain_order_edges(&out);
+        let mapping: Vec<(String, String)> = match seq_aware_assign(pmic, &member_rows, &edges) {
+            Ok((assign, unchecked)) => {
+                if unchecked > 0 {
+                    // surfaced later by ERC033 with the exact windows
                 }
-                None => {
-                    return Err(format!(
-                        "resolve {} = {}: '{}' ({}V @ {}A ⇒ rating ≥ {:.2}A) matches NO unused output of {} — the commit is refused (outputs: {})",
-                        g.members.join(", "), g.block, m.name, m.vout, m.imax, m.imax / 0.8, g.block,
-                        pmic.outputs.iter().map(|o| format!("{}:{:.2}V/{:.1}A", o.name, o.vout, o.i_max)).collect::<Vec<_>>().join(", ")
-                    ));
-                }
+                assign
+                    .iter()
+                    .map(|(mi, oi)| (member_rows[*mi].0.clone(), pmic.outputs[*oi].name.clone()))
+                    .collect()
             }
-        }
+            Err(why) => {
+                let mut msg = format!(
+                    "resolve {} = {}: {}",
+                    g.members.join(", "), g.block, why
+                );
+                for l in custom_otp_proposal(pmic, &member_rows, &edges) {
+                    msg.push_str("\n  ");
+                    msg.push_str(&l);
+                }
+                return Err(msg);
+            }
+        };
         // per-rail EN/PG references are the sequencer's — hard error
         for m in &g.members {
             for pin in ["EN", "PG"] {
@@ -376,9 +397,313 @@ fn scan_pmics(stdlib_root: &Path) -> Vec<PmicBlock> {
                 outputs,
                 seq: attrs.get("pmic_seq").map(|s| s.trim_matches('"').to_string()),
                 seq_dly: attrs.get("pmic_seq_dly").map(|s| s.trim_matches('"').to_string()),
+                seq_dly_steps: attrs.get("pmic_seq_dly_steps").map(|s| s.trim_matches('"').to_string()),
             });
         }
     }
+    out
+}
+
+
+/// A declared power-up ordering edge between two RAILS (from the
+/// instantiated entities' domain contracts: `after=` + slot expansion),
+/// extracted at TEXT level for the resolver's assignment search.
+#[derive(Debug, Clone)]
+pub struct RailOrderEdge {
+    pub rail_a: String,
+    pub rail_b: String,
+    pub t_min: Option<f64>,
+    pub t_max: Option<f64>,
+}
+
+/// Scan the source for domain ordering edges resolved to rail names:
+/// for each `inst: Entity(...)` whose entity declares domains, the
+/// domain's rail is the `@RAIL` wired to `<inst>.<first pin>`.
+pub fn domain_order_edges(source: &str) -> Vec<RailOrderEdge> {
+    use rowan::ast::AstNode;
+    let pr = bhdl_parser::parse(source);
+    let Some(sf) = bhdl_ast::SourceFile::cast(pr.syntax()) else { return Vec::new() };
+    let domains = crate::safety_model::entity_domain_map(&sf.syntax().clone());
+    let masked = crate::stage_resolution::mask_comments(source);
+    let mut edges = Vec::new();
+    for (ename, (doms, _)) in &domains {
+        // instances of this entity, text-level
+        let pat = format!(": {ename}(");
+        let mut off = 0usize;
+        let mut insts: Vec<String> = Vec::new();
+        while let Some(pp) = masked[off..].find(&pat) {
+            let at = off + pp;
+            off = at + pat.len();
+            let name: String = masked[..at]
+                .chars()
+                .rev()
+                .skip_while(|c| c.is_whitespace())
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            if !name.is_empty() {
+                insts.push(name);
+            }
+        }
+        for inst in insts {
+            let rail_of = |dname: &str| -> Option<String> {
+                let d = doms.iter().find(|d| d.name == dname)?;
+                let pin = d.pins.first()?;
+                for pat in [format!("@"), format!("@")] {
+                    let _ = pat;
+                }
+                // `@RAIL -> inst.pin` or `inst.pin -> @RAIL`
+                let needle_a = format!("-> {inst}.{pin}");
+                if let Some(pp) = masked.find(&needle_a) {
+                    if let Some(h) = masked[..pp].rfind('@') {
+                        let r: String = masked[h + 1..].chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                        if !r.is_empty() {
+                            return Some(r);
+                        }
+                    }
+                }
+                let needle_b = format!("{inst}.{pin} -> @");
+                if let Some(pp) = masked.find(&needle_b) {
+                    let r: String = masked[pp + needle_b.len()..].chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                    if !r.is_empty() {
+                        return Some(r);
+                    }
+                }
+                None
+            };
+            let mut slots: Vec<u32> = doms.iter().filter_map(|d| d.seq_slot).collect();
+            slots.sort_unstable();
+            slots.dedup();
+            for d in doms {
+                if d.sw_enabled {
+                    continue;
+                }
+                let Some(rb) = rail_of(&d.name) else { continue };
+                for a in &d.seq_after {
+                    if let Some(ra) = rail_of(a) {
+                        edges.push(RailOrderEdge { rail_a: ra, rail_b: rb.clone(), t_min: d.seq_t_min_s, t_max: d.seq_t_max_s });
+                    }
+                }
+                if let Some(slot) = d.seq_slot {
+                    if let Some(pos) = slots.iter().position(|x| *x == slot) {
+                        if pos > 0 {
+                            let prev = slots[pos - 1];
+                            for a in doms.iter().filter(|x| x.seq_slot == Some(prev)) {
+                                if let Some(ra) = rail_of(&a.name) {
+                                    edges.push(RailOrderEdge { rail_a: ra, rail_b: rb.clone(), t_min: d.seq_slot_t_min_s, t_max: None });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    edges
+}
+
+/// The SEQUENCING-AWARE assignment: pick the requirement→output map
+/// that satisfies electrical fit AND the declared rail ordering under
+/// the PMIC's strobe order + delay range. Returns (assignment,
+/// unchecked-count) or Err(the reason nothing fits). `members` =
+/// (name, rail, vout, i_max_derated).
+fn seq_aware_assign(
+    pmic: &PmicBlock,
+    members: &[(String, String, f64, f64)],
+    edges: &[RailOrderEdge],
+) -> Result<(Vec<(usize, usize)>, usize), String> {
+    let groups: Vec<Vec<&str>> = pmic
+        .seq
+        .as_deref()
+        .map(|s| s.split(',').map(|g| g.split('|').collect()).collect())
+        .unwrap_or_default();
+    let strobe_of = |out: &str| groups.iter().position(|g| g.contains(&out));
+    let dly = pmic
+        .seq_dly
+        .as_deref()
+        .and_then(|d| {
+            let (lo, hi) = d.split_once('-')?;
+            Some((parse_si_txt(lo)?, parse_si_txt(hi)?))
+        });
+    // electrical candidates per member
+    let cands: Vec<Vec<usize>> = members
+        .iter()
+        .map(|(_, _, vout, derated)| {
+            pmic.outputs
+                .iter()
+                .enumerate()
+                .filter(|(_, o)| (o.vout - vout).abs() <= 0.02 * vout + 1e-9 && o.i_max + 1e-9 >= *derated)
+                .map(|(i, _)| i)
+                .collect()
+        })
+        .collect();
+    for (k, c) in cands.iter().enumerate() {
+        if c.is_empty() {
+            return Err(format!(
+                "'{}' ({}V @ derated {:.2}A) matches NO output electrically (outputs: {})",
+                members[k].0, members[k].2, members[k].3,
+                pmic.outputs.iter().map(|o| format!("{}:{:.2}V/{:.1}A", o.name, o.vout, o.i_max)).collect::<Vec<_>>().join(", ")
+            ));
+        }
+    }
+    // exhaustive search (≤7 members × ≤7 outputs): minimize (hard
+    // ordering violations, then UNCHECKED timing count)
+    // best = (assignment, hard violations, unchecked windows,
+    // Σ assigned ratings) — the last term is the deterministic
+    // least-over-rating tie-break (smallest adequate outputs win,
+    // leaving the bigger ones free)
+    let mut best: Option<(Vec<(usize, usize)>, usize, usize, f64)> = None;
+    let n = members.len();
+    let mut assign: Vec<usize> = vec![usize::MAX; n];
+    fn rec(
+        k: usize,
+        n: usize,
+        cands: &[Vec<usize>],
+        assign: &mut Vec<usize>,
+        used: &mut Vec<usize>,
+        eval: &mut dyn FnMut(&[usize]) -> (usize, usize, f64),
+        best: &mut Option<(Vec<(usize, usize)>, usize, usize, f64)>,
+    ) {
+        if k == n {
+            let (hard, unchecked, rating) = eval(assign);
+            let better = match best {
+                None => true,
+                Some((_, bh, bu, br)) => {
+                    hard < *bh
+                        || (hard == *bh && unchecked < *bu)
+                        || (hard == *bh && unchecked == *bu && rating + 1e-12 < *br)
+                }
+            };
+            if better {
+                *best = Some((assign.iter().enumerate().map(|(m, o)| (m, *o)).collect(), hard, unchecked, rating));
+            }
+            return;
+        }
+        for &o in &cands[k] {
+            if used.contains(&o) {
+                continue;
+            }
+            used.push(o);
+            assign[k] = o;
+            rec(k + 1, n, cands, assign, used, eval, best);
+            used.pop();
+        }
+    }
+    let mut eval = |assign: &[usize]| -> (usize, usize, f64) {
+        let mut hard = 0usize;
+        let mut unchecked = 0usize;
+        let rating: f64 = assign.iter().map(|&o| pmic.outputs[o].i_max).sum();
+        for e in edges {
+            let ma = members.iter().position(|(_, r, _, _)| r == &e.rail_a);
+            let mb = members.iter().position(|(_, r, _, _)| r == &e.rail_b);
+            let (Some(ma), Some(mb)) = (ma, mb) else { continue };
+            let (Some(pa), Some(pb)) = (
+                strobe_of(&pmic.outputs[assign[ma]].name),
+                strobe_of(&pmic.outputs[assign[mb]].name),
+            ) else {
+                unchecked += 1;
+                continue;
+            };
+            if pb <= pa {
+                hard += 1;
+                continue;
+            }
+            let dist = (pb - pa) as f64;
+            if let (Some(tmin), Some((lo, hi))) = (e.t_min, dly) {
+                if dist * lo + 1e-12 >= tmin {
+                    // guaranteed
+                } else if dist * hi < tmin {
+                    hard += 1;
+                } else {
+                    unchecked += 1;
+                }
+            }
+            if let (Some(tmax), Some((lo, _hi))) = (e.t_max, dly) {
+                if dist * lo > tmax + 1e-12 {
+                    hard += 1;
+                }
+            }
+        }
+        (hard, unchecked, rating)
+    };
+    let mut used = Vec::new();
+    rec(0, n, &cands, &mut assign, &mut used, &mut eval, &mut best);
+    match best {
+        Some((a, 0, unchecked, _)) => Ok((a, unchecked)),
+        Some((_, hard, _, _)) => Err(format!(
+            "no requirement→output assignment satisfies the declared rail ordering under this part's strobe order ({} unavoidable violation(s) in the best assignment) — the existing OTP does not fit; see the custom-OTP proposal",
+            hard
+        )),
+        None => Err("no electrically valid assignment exists".into()),
+    }
+}
+
+/// The CUSTOM-OTP proposal: when the existing OTP does not fit, derive
+/// the strobe order + quantized DLYx values FROM the declared ordering
+/// — the spec to hand the vendor for a custom-programmed variant.
+/// `members` as in `seq_aware_assign`; picks the smallest quantized
+/// delay ≥ each edge's t_min (steps from `pmic_seq_dly_steps`).
+pub fn custom_otp_proposal(
+    pmic: &PmicBlock,
+    members: &[(String, String, f64, f64)],
+    edges: &[RailOrderEdge],
+) -> Vec<String> {
+    let steps: Vec<f64> = pmic
+        .seq_dly_steps
+        .as_deref()
+        .map(|s| s.split(',').filter_map(parse_si_txt).collect())
+        .unwrap_or_default();
+    // topological order of member rails under the declared edges
+    let mut order: Vec<usize> = (0..members.len()).collect();
+    // Kahn-ish: repeatedly pick a rail with no unsatisfied prerequisite
+    let mut placed: Vec<usize> = Vec::new();
+    while placed.len() < members.len() {
+        let next = order.iter().copied().find(|&m| {
+            !placed.contains(&m)
+                && edges.iter().all(|e| {
+                    e.rail_b != members[m].1
+                        || members.iter().position(|(_, r, _, _)| r == &e.rail_a).map(|a| placed.contains(&a)).unwrap_or(true)
+                })
+        });
+        match next {
+            Some(m) => placed.push(m),
+            None => return vec!["custom-OTP proposal impossible: the declared ordering is CYCLIC".into()],
+        }
+    }
+    order = placed;
+    let mut out = Vec::new();
+    out.push("CUSTOM-OTP proposal (hand this sequence to the vendor for a custom-programmed variant):".into());
+    for (strobe, &m) in order.iter().enumerate() {
+        // required minimum delay INTO this rail = max t_min over edges
+        // whose rail_b is this member's rail
+        let need = edges
+            .iter()
+            .filter(|e| e.rail_b == members[m].1)
+            .filter_map(|e| e.t_min)
+            .fold(0.0f64, f64::max);
+        let dly = if strobe == 0 {
+            None
+        } else {
+            Some(
+                steps
+                    .iter()
+                    .copied()
+                    .find(|s| *s + 1e-12 >= need)
+                    .unwrap_or_else(|| steps.last().copied().unwrap_or(0.0)),
+            )
+        };
+        out.push(format!(
+            "    STROBE{}: {} (rail {}{}){}",
+            strobe + 1,
+            members[m].0,
+            members[m].1,
+            if need > 0.0 { format!(", needs ≥ {:.1}ms in", need * 1e3) } else { String::new() },
+            dly.map(|d| format!(" — DLY{} = {:.0}ms{}", strobe, d * 1e3, if d + 1e-12 < need { " (INSUFFICIENT: exceeds the largest quantized step — split across strobes)" } else { "" })).unwrap_or_default(),
+        ));
+    }
+    out.push("    (output→rail electrical fit must still hold; the vendor assigns the physical outputs)".into());
     out
 }
 
@@ -386,6 +711,13 @@ fn scan_pmics(stdlib_root: &Path) -> Vec<PmicBlock> {
 /// resolved requirements; returns report lines (empty when fewer than
 /// two requirements, or nothing covers more than one rail).
 pub fn evaluate(resolutions: &[StageResolution], stdlib_root: &Path) -> Vec<String> {
+    evaluate_with_source(resolutions, stdlib_root, "")
+}
+
+/// `source` enables the SEQUENCING-AWARE cover (rails + declared
+/// ordering are read from it); empty = electrical-only greedy (the
+/// legacy report shape, used when no source text is at hand).
+pub fn evaluate_with_source(resolutions: &[StageResolution], stdlib_root: &Path, source: &str) -> Vec<String> {
     if resolutions.len() < 2 {
         return Vec::new();
     }
@@ -396,9 +728,19 @@ pub fn evaluate(resolutions: &[StageResolution], stdlib_root: &Path) -> Vec<Stri
             .find(|(k, _)| k.trim() == key)
             .and_then(|(_, v)| parse_si_txt(v.trim()))
     };
+    let edges = if source.is_empty() { Vec::new() } else { domain_order_edges(source) };
+    let masked = if source.is_empty() { String::new() } else { crate::stage_resolution::mask_comments(source) };
+    let rail_of_inst = |inst: &str| -> String {
+        let needle = format!("{inst}.VOUT -> @");
+        masked
+            .find(&needle)
+            .map(|pp| masked[pp + needle.len()..].chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect())
+            .unwrap_or_default()
+    };
     let mut lines = Vec::new();
     for pmic in scan_pmics(stdlib_root) {
         let mut used: Vec<usize> = Vec::new();
+        #[allow(unused_mut)]
         let mut cover: Vec<(String, String)> = Vec::new(); // (instance, output)
         let mut covered_price = 0.0f64;
         let mut covered_priced = true;
@@ -447,6 +789,42 @@ pub fn evaluate(resolutions: &[StageResolution], stdlib_root: &Path) -> Vec<Stri
         if cover.len() < 2 {
             continue; // a PMIC that covers one rail is not aggregation
         }
+        // SEQUENCING-AWARE re-assignment over the covered set (§8.3):
+        // the report shows the same assignment a grouped commit would
+        // make, or the unfit verdict + the custom-OTP proposal.
+        let mut seq_note: Vec<String> = Vec::new();
+        if !edges.is_empty() {
+            let member_rows: Vec<(String, String, f64, f64)> = cover
+                .iter()
+                .filter_map(|(inst, _)| {
+                    let r = resolutions.iter().find(|r| &r.instance == inst)?;
+                    Some((
+                        inst.clone(),
+                        rail_of_inst(inst),
+                        req_val(r, "vout")?,
+                        req_val(r, "i_max")? / 0.8,
+                    ))
+                })
+                .collect();
+            match seq_aware_assign(&pmic, &member_rows, &edges) {
+                Ok((assign, unchecked)) => {
+                    cover = assign
+                        .iter()
+                        .map(|(mi, oi)| (member_rows[*mi].0.clone(), format!("{} ({}, {:.2}V, {:.1}A rated)", pmic.outputs[*oi].name, pmic.outputs[*oi].topology, pmic.outputs[*oi].vout, pmic.outputs[*oi].i_max)))
+                        .collect();
+                    seq_note.push(format!(
+                        "    assignment is SEQUENCING-AWARE: the declared rail ordering rides the strobe order{}",
+                        if unchecked > 0 { format!(" ({unchecked} timing window(s) depend on programmed delays — stated)") } else { String::new() }
+                    ));
+                }
+                Err(why) => {
+                    seq_note.push(format!("    ⚠ the existing OTP does NOT fit the declared ordering: {why}"));
+                    for l in custom_otp_proposal(&pmic, &member_rows, &edges) {
+                        seq_note.push(format!("    {l}"));
+                    }
+                }
+            }
+        }
         let pmic_price: Option<(f64, String)> = pmic
             .part_number
             .as_deref()
@@ -461,6 +839,7 @@ pub fn evaluate(resolutions: &[StageResolution], stdlib_root: &Path) -> Vec<Stri
         for (inst, out) in &cover {
             lines.push(format!("    {inst} → {out}"));
         }
+        lines.extend(seq_note);
         for l in &leftovers {
             lines.push(format!("    not covered: {l}"));
         }
@@ -480,12 +859,12 @@ pub fn evaluate(resolutions: &[StageResolution], stdlib_root: &Path) -> Vec<Stri
         }
         if let Some(seq) = &pmic.seq {
             lines.push(format!(
-                "    built-in power-up order: {} (inter-strobe delay {}) — the sequencing these rails inherit for free; the strict gate against declared domain ordering binds at aggregation COMMIT (future increment, stated)",
+                "    built-in power-up order: {} (inter-strobe delay {}) — the sequencing these rails inherit for free; ERC033 verifies it strictly after a grouped commit",
                 seq,
                 pmic.seq_dly.as_deref().unwrap_or("unstated")
             ));
         }
-        lines.push("    commit is the designer's lever — aggregation is REPORTED, never auto-bound (this increment)".into());
+        lines.push("    commit is the designer's lever: `resolve u1, u2, … = <Block>;` — aggregation is REPORTED, never auto-bound".into());
     }
     lines
 }

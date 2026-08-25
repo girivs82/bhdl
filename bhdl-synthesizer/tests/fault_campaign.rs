@@ -3631,13 +3631,79 @@ board PmicCommit {{
     assert!((tg("V33") - 7.0e-3).abs() < 0.3e-3, "V33 {}", tg("V33"));
     assert!(rep.findings.iter().all(|f| f.sev != bhdl_synthesizer::powerup::Sev::Error), "{:#?}", rep.findings);
 
-    // unachievable: t_min 15 ms > 1 strobe × 10 ms max — Error with
-    // the arithmetic
-    let (_n, v) = run(board("", r#"after="VDD18" t_min=15ms"#)).await;
-    assert!(v.iter().any(|x| x.severity == ViolationSeverity::Error && x.description.contains("maximum achievable spacing")), "{v:#?}");
+    // t_min 15 ms: the SEQ-AWARE assignment (§8.3) sidesteps the old
+    // Error by picking LDO3 — 2 strobes from DCDC1, so 15 ms sits
+    // inside the programmable 2–20 ms window: committed, with the
+    // window stated UNCHECKED by ERC033
+    {
+        let r = resolve_stages(&board("", r#"after="VDD18" t_min=15ms"#), &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("bhdl-stdlib"), &[]).unwrap().unwrap();
+        assert!(r.group_commits.iter().any(|l| l.contains("u3→LDO3")), "{:#?}", r.group_commits);
+        let pr = parse(&r.source);
+        let sf = SourceFile::cast(pr.syntax()).unwrap();
+        let analysis = analyze(&sf);
+        let mut gen = NetlistGenerator::new();
+        let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+        let v = bhdl_synthesizer::sequencing::check_power_sequencing(&n, &analysis);
+        assert!(v.iter().any(|x| x.severity == ViolationSeverity::Warning && x.description.contains("PROGRAMMED delays")), "{v:#?}");
+        assert!(!v.iter().any(|x| x.severity == ViolationSeverity::Error), "{v:#?}");
+    }
 
-    // contradicted: VDD18 (DCDC1, strobe 2) declared after VDD33
-    // (LDO2, strobe 3) — the promise contradicts, Error with strobes
-    let (_n, v) = run(board(r#"after="VDD33""#, "")).await;
-    assert!(v.iter().any(|x| x.severity == ViolationSeverity::Error && x.description.contains("CONTRADICTS") && x.description.contains("strobe")), "{v:#?}");
+    // truly unachievable: t_min 40 ms exceeds even LDO4's 3-strobe ×
+    // 10 ms spacing — the commit REFUSES with the custom-OTP proposal
+    let e = resolve_stages(&board("", r#"after="VDD18" t_min=40ms"#), &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("bhdl-stdlib"), &[]).unwrap_err().to_string();
+    assert!(e.contains("does not fit") && e.contains("CUSTOM-OTP proposal"), "{e}");
+
+    // contradicted: VDD18 (1.8 V ⇒ only DCDC1, strobe 2) declared
+    // after VDD33 (LDO outputs, all LATER strobes) — no assignment can
+    // satisfy it; refused at RESOLVE time with the proposal
+    let e = resolve_stages(&board(r#"after="VDD33""#, ""), &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("bhdl-stdlib"), &[]).unwrap_err().to_string();
+    assert!(e.contains("does not fit") && e.contains("CUSTOM-OTP proposal"), "{e}");
+}
+
+/// OTP sequencing, both workflows (§8.3): with an EXISTING OTP the
+/// assignment is SEQUENCING-AWARE — the requirement→output map is
+/// chosen so the declared rail ordering rides the strobe order (the
+/// greedy pick would violate it); when no assignment can fit, the
+/// commit refuses AND emits the CUSTOM-OTP proposal — the strobe/DLY
+/// spec to hand the vendor, quantized to the part's real delay codes,
+/// with an honest INSUFFICIENT flag when a window exceeds the largest
+/// step.
+#[tokio::test]
+async fn pmic_otp_seq_aware_assignment_and_proposal() {
+    use bhdl_synthesizer::stage_resolution::resolve_stages;
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let stdlib = ws.join("bhdl-stdlib");
+    let board = |tmin: &str| format!(r#"
+import {{ LdoStage }} from "bhdl-stdlib/power/stages.bhdl";
+entity OtpSoc() {{
+    pin 1: power in;
+    pin 2: power in;
+    pin GND: ground;
+    domain VDD_A pins="1" v=3.3V i_nom=50mA after="VDD_B" t_min={tmin} source="FIXTURE — otp probe";
+    domain VDD_B pins="2" v=3.3V i_nom=50mA source="FIXTURE — otp probe";
+}}
+board OtpBoard {{
+    power VSYS = 3.7V @ 5A;
+    port VA: power out = 3.3V @ 150mA;
+    port VB: power out = 3.3V @ 150mA;
+    ground GND;
+    @VSYS -> ua: LdoStage(vout=3.3V, i_max=150mA, vin=3.7V).VIN;
+    ua.GND -> @GND; ua.VOUT -> @VA;
+    @VSYS -> ub: LdoStage(vout=3.3V, i_max=150mA, vin=3.7V).VIN;
+    ub.GND -> @GND; ub.VOUT -> @VB;
+    soc: OtpSoc();
+    @VA -> soc.1; @VB -> soc.2; soc.GND -> @GND;
+    resolve ua, ub = Pmic_TPS65217B;
+}}
+"#);
+    // fit: VDD_A after VDD_B forces the NON-greedy assignment
+    // (ub→LDO3 strobe 4, ua→LDO4 strobe 5); 1 ms guaranteed
+    let r = resolve_stages(&board("1ms"), &stdlib, &[]).unwrap().unwrap();
+    assert!(r.group_commits.iter().any(|l| l.contains("ua→LDO4") && l.contains("ub→LDO3")), "{:#?}", r.group_commits);
+    // unfit: 50 ms exceeds every strobe spacing — refused WITH the
+    // vendor-handoff proposal
+    let e = resolve_stages(&board("50ms"), &stdlib, &[]).unwrap_err().to_string();
+    assert!(e.contains("does not fit"), "{e}");
+    assert!(e.contains("CUSTOM-OTP proposal") && e.contains("STROBE2: ua") && e.contains("INSUFFICIENT"), "{e}");
 }

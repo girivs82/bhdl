@@ -718,7 +718,7 @@ async fn main() -> Result<()> {
                 .flatten()
                 .map(|r| r.resolutions)
                 .unwrap_or_default();
-            let aggregation = bhdl_synthesizer::aggregation::evaluate(&resolutions, &stdlib);
+            let aggregation = bhdl_synthesizer::aggregation::evaluate_with_source(&resolutions, &stdlib, &desugared);
             let up = bhdl_synthesizer::powerup::simulate_powerup_opt(&netlist, &source_file, true);
             let down = bhdl_synthesizer::powerup::simulate_powerdown_opt(&netlist, &source_file, true);
             let sanity = bhdl_synthesizer::powertree::final_pdn_sanity(&netlist, &source_file);
@@ -1277,10 +1277,11 @@ fn resolve_stage_requirements(
             // PMIC AGGREGATION post-step (spec §8): per-rail resolution
             // first, then ask whether one multi-output part covers the
             // SET — reported, never auto-bound.
-            for l in bhdl_synthesizer::aggregation::evaluate(
+            for l in bhdl_synthesizer::aggregation::evaluate_with_source(
                 &r.resolutions,
                 &bhdl_common::import_search::locate_dir("bhdl-stdlib")
                     .unwrap_or_else(|| PathBuf::from("bhdl-stdlib")),
+                input_content,
             ) {
                 println!("  {} {}", "⧉".cyan(), l);
             }

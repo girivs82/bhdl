@@ -1043,3 +1043,34 @@ worst-case phase relation (conservative, stated). The duty is also
 the honest basis for thermal averaging of bursty dissipation — a
 refinement for the resolver's thermal gate when it learns to read
 driven-domain periods (stated, not yet plumbed).
+
+### 8.3 OTP sequencing, both directions
+
+Two workflows exist for a PMIC's OTP power-up sequence, and the tool
+serves both:
+
+- **Existing OTP** (catalog variant): the grouped commit's — and the
+  aggregation report's — requirement→output assignment is
+  SEQUENCING-AWARE: among the electrically valid assignments
+  (exhaustive search, ≤7×7), the one is chosen whose strobe positions
+  satisfy the declared rail ordering (`after`/slots, resolved to
+  rails through the domain contracts) with the fewest
+  depends-on-programmed-delays windows; "connect the stages according
+  to the sequence" happens automatically — the case ERC033 used to
+  answer with "reassign the rails" is now solved by the resolver
+  itself (verified: two same-voltage rails whose declared order
+  opposes the greedy pick get the swapped assignment, and ERC033
+  confirms the inheritance). Timing composes against the promised
+  delay range exactly as §8.1 defines.
+- **Custom OTP** (we provide the sequence to the vendor): when NO
+  assignment fits the existing OTP, the commit refuses — and emits
+  the CUSTOM-OTP PROPOSAL: a topological order of the member rails
+  under the declared edges, one strobe each, with each inter-strobe
+  DLY picked as the smallest of the part's QUANTIZED delay codes
+  (`pmic_seq_dly_steps`, e.g. TPS65217's 1/2/5/10 ms from the
+  DLYx[1:0] encoding) that covers the required t_min — and an honest
+  INSUFFICIENT flag when a window exceeds the largest step ("split
+  across strobes"). The same proposal appears in the aggregation
+  report when the fit fails, so the vendor-handoff artifact exists
+  before anyone commits anything. A cyclic declared ordering is named
+  as such.
