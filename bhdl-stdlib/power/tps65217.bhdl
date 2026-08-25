@@ -117,6 +117,13 @@ entity Pmic_TPS65217B(
     // aggregation evaluation reports against declared domain ordering.
     attribute pmic_seq     = "LDO1,DCDC1,LDO2,LDO3,LDO4,DCDC2|DCDC3";
     attribute pmic_seq_dly = "1ms-10ms"; // SLVSB64I: programmable inter-strobe delay range
+    // OTP DEFAULT strobe schedule, B variant (SLVSB64I SEQ5 reset:
+    // DLY1 = 10b = 5 ms, DLY2 = 00b = 1 ms; SEQ6 reset 0x00: DLY3–6 =
+    // 1 ms). Cumulative from STROBE15 (t = 0); the STROBE15→14→1
+    // spacing is approximated as 2×DLY6 = 2 ms (the figure labels only
+    // DLY6 in that span — stated). Bucks ramp with tSS = 750 µs.
+    attribute pmic_strobe_t = "LDO1:0ms,DCDC1:2ms,LDO2:7ms,LDO3:8ms,LDO4:9ms,DCDC2:10ms,DCDC3:10ms";
+    attribute t_ss          = 750us;     // SLVSB64I: buck soft-start (5→95 %)
 
     u: TPS65217B();
     VIN -> u.SYS;

@@ -3613,6 +3613,23 @@ board PmicCommit {{
     assert!(!n.instances.values().any(|i| i.name.starts_with("u3_")), "u3 collapsed into the PMIC");
     assert!(v.iter().any(|x| x.severity == ViolationSeverity::Info && x.description.contains("inherited from") && x.description.contains("guaranteed")), "{v:#?}");
     assert!(!v.iter().any(|x| x.severity == ViolationSeverity::Error), "{v:#?}");
+    // the powerup engine models the OTP STROBE schedule (SLVSB64I SEQ5
+    // B reset: DLY1=5ms, others 1ms): DCDC1 good at strobe 2ms + 95%
+    // of tSS 750µs ≈ 2.75ms; LDO2 at 7ms; windows verified on the
+    // REAL times
+    let pr2 = parse(&{
+        let r = bhdl_synthesizer::stage_resolution::resolve_stages(&board("", r#"after="VDD18" t_min=500us"#), &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("bhdl-stdlib"), &[]).unwrap().unwrap();
+        r.source
+    });
+    let sf2 = SourceFile::cast(pr2.syntax()).unwrap();
+    let analysis2 = analyze(&sf2);
+    let mut gen2 = NetlistGenerator::new();
+    let n2 = gen2.generate_from_ast_and_analysis(&sf2, &analysis2).await.expect("synthesize");
+    let rep = bhdl_synthesizer::powerup::simulate_powerup(&n2, &sf2);
+    let tg = |rail: &str| rep.rails.iter().find(|r| r.net == rail).and_then(|r| r.t_good).unwrap_or_else(|| panic!("{rail}: {:#?}", rep.rails));
+    assert!((tg("V18") - 2.75e-3).abs() < 0.3e-3, "V18 {}", tg("V18"));
+    assert!((tg("V33") - 7.0e-3).abs() < 0.3e-3, "V33 {}", tg("V33"));
+    assert!(rep.findings.iter().all(|f| f.sev != bhdl_synthesizer::powerup::Sev::Error), "{:#?}", rep.findings);
 
     // unachievable: t_min 15 ms > 1 strobe × 10 ms max — Error with
     // the arithmetic

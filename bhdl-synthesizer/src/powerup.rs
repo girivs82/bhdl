@@ -262,9 +262,22 @@ impl Stim {
     }
 }
 
+/// A strobed multi-output rail: forced to its profile while the feed
+/// is alive (V = 0 before t_on, ramp over t_ramp, nominal after);
+/// integrates freely (discharge through loads) once the feed dies.
+#[derive(Debug, Clone)]
+struct TimedIdeal {
+    v: f64,
+    t_on: f64,
+    t_ramp: f64,
+    feed: NetId,
+    feed_v: f64,
+}
+
 struct Model {
     stages: Vec<StageDef>,
     ideal_v: HashMap<NetId, f64>,
+    timed_ideal: HashMap<NetId, TimedIdeal>,
     cap_on_net: HashMap<NetId, f64>,
     static_load: HashMap<NetId, f64>,
     /// rail→GND resistive conductance (bleed resistors, resistive
@@ -458,10 +471,26 @@ impl Model {
                 let i_in = s.reflect_in(sup, volt(&state.v, s.vout), volt(&state.v, s.vin));
                 *i_net.entry(s.vin).or_default() -= i_in;
             }
+            // strobed rails: forced to their profile while the feed lives
+            let mut timed_active: Vec<NetId> = Vec::new();
+            for (n, ti) in &self.timed_ideal {
+                if volt(&state.v, ti.feed) > 0.5 * ti.feed_v.max(1e-9) {
+                    let dt_on = state.t - ti.t_on;
+                    let v = if dt_on <= 0.0 {
+                        0.0
+                    } else if ti.t_ramp > 0.0 && dt_on < ti.t_ramp {
+                        ti.v * dt_on / ti.t_ramp
+                    } else {
+                        ti.v
+                    };
+                    state.v.insert(*n, v);
+                    timed_active.push(*n);
+                }
+            }
             // rates
             let mut dvdt: HashMap<NetId, f64> = HashMap::new();
             for (n, _vn) in &self.all_rails {
-                if self.ideal_v.contains_key(n) {
+                if self.ideal_v.contains_key(n) || timed_active.contains(n) {
                     continue;
                 }
                 let c = self.cap_on_net.get(n).copied().unwrap_or(MIN_C).max(MIN_C);
@@ -544,6 +573,14 @@ impl Model {
                     }
                 }
             }
+            for ti in self.timed_ideal.values() {
+                let er = ti.t_ramp.max(1e-6);
+                for bp in [ti.t_on, ti.t_on + er * GOOD_FRAC, ti.t_on + er] {
+                    if bp > state.t + 1e-12 {
+                        dt = dt.min(bp - state.t);
+                    }
+                }
+            }
             dt = dt.max(1e-9);
             // advance
             for (n, r) in &dvdt {
@@ -556,6 +593,23 @@ impl Model {
                 state.v.insert(*en, nv);
             }
             state.t += dt;
+            // re-apply the strobed profiles at the POST-advance time:
+            // bookkeeping and the settled check read state AFTER the
+            // advance, and a stale-by-one-interval force lets the run
+            // settle before a strobe value ever lands
+            for (n, ti) in &self.timed_ideal {
+                if volt(&state.v, ti.feed) > 0.5 * ti.feed_v.max(1e-9) {
+                    let dt_on = state.t - ti.t_on;
+                    let v = if dt_on <= 0.0 {
+                        0.0
+                    } else if ti.t_ramp > 0.0 && dt_on < ti.t_ramp {
+                        ti.v * dt_on / ti.t_ramp
+                    } else {
+                        ti.v
+                    };
+                    state.v.insert(*n, v);
+                }
+            }
             if capture {
                 tr.samples.push((
                     state.t,
@@ -598,7 +652,8 @@ impl Model {
                 }
             }
             // settled?
-            let stims_done = stims.iter().all(|s| state.t >= s.end());
+            let stims_done = stims.iter().all(|s| state.t >= s.end())
+                && self.timed_ideal.values().all(|ti| state.t >= ti.t_on + ti.t_ramp + 1e-9);
             let settled = stims_done
                 && self.stages.iter().enumerate().all(|(k, _)| matches!(state.modes[k], Mode::Regulating | Mode::Off))
                 && dvdt.values().all(|r| r.abs() < 1e-6)
@@ -698,29 +753,74 @@ fn build_model(netlist: &Netlist, sf: &SourceFile, rep: &mut PowerupReport) -> (
 
     let harvest = crate::powertree::harvest_loads(netlist, sf);
     let mut ideal_v: HashMap<NetId, f64> = HashMap::new();
-    // multi-output supplies (PMICs): the PWL engine does not model the
-    // internal sequencer/soft-start yet — their output rails enter as
-    // IDEAL at the promised voltages, STATED; the built-in ordering is
-    // verified by ERC033 against the pmic_seq promise instead.
+    // multi-output supplies (PMICs): when the block declares its OTP
+    // strobe schedule (`pmic_strobe_t`), each wired output rail is
+    // modeled as a STROBED source — 0 until its strobe time, a t_ss
+    // ramp (bucks), nominal after — while the feed lives; it
+    // discharges through its loads once the feed dies. Without a
+    // schedule the rails enter as plain ideal (stated).
+    let mut timed_ideal: HashMap<NetId, TimedIdeal> = HashMap::new();
     for (i, inst) in netlist.instances.iter() {
         let Some(tbl) = attr(i, "pmic_outputs") else { continue };
-        rep.notes.push(format!(
-            "multi-output supply '{}' idealized (internal sequencer/soft-start not modeled — stated; ERC033 verifies its pmic_seq promise)",
-            inst.name
-        ));
+        let strobes: HashMap<String, f64> = attr(i, "pmic_strobe_t")
+            .map(|t| {
+                t.trim_matches('"')
+                    .split(',')
+                    .filter_map(|e| {
+                        let (n, tt) = e.split_once(':')?;
+                        Some((n.to_string(), crate::stage_acceptance::parse_si(tt)?))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let t_ss = attr_si(i, "t_ss").unwrap_or(0.0);
+        let feed = pin_net.get(&(i, "VIN".to_string())).copied();
+        if strobes.is_empty() || feed.is_none() {
+            rep.notes.push(format!(
+                "multi-output supply '{}' idealized (no strobe schedule declared — stated; ERC033 verifies its pmic_seq promise)",
+                inst.name
+            ));
+        } else {
+            rep.notes.push(format!(
+                "multi-output supply '{}': STROBED per its OTP schedule (pmic_strobe_t; bucks ramp t_ss) — the 15→14→1 spacing approximation is stated on the block",
+                inst.name
+            ));
+        }
         for e in tbl.trim_matches('"').split(',') {
             let p: Vec<&str> = e.split(':').collect();
             if p.len() != 4 { continue; }
             let Some(v) = crate::stage_acceptance::parse_si(p[2]) else { continue };
-            if let Some(n) = pin_net.get(&(i, format!("VOUT_{}", p[0]))) {
-                ideal_v.insert(*n, v);
+            let Some(n) = pin_net.get(&(i, format!("VOUT_{}", p[0]))) else { continue };
+            match (strobes.get(p[0]), feed) {
+                (Some(t_on), Some(fd)) => {
+                    // the harvest pass may have classed this rail as an
+                    // externally supplied ideal (a declared port with no
+                    // STAGE driving it) — the strobed model owns it
+                    ideal_v.remove(n);
+                    let feed_v = harvest
+                        .rails
+                        .iter()
+                        .find(|r| netlist.nets.get(fd).and_then(|x| x.name.as_deref()) == Some(r.net.as_str()))
+                        .map(|r| r.voltage)
+                        .unwrap_or(0.0);
+                    timed_ideal.insert(*n, TimedIdeal {
+                        v,
+                        t_on: *t_on,
+                        t_ramp: if p[1] == "buck" { t_ss } else { 0.0 },
+                        feed: fd,
+                        feed_v,
+                    });
+                }
+                _ => {
+                    ideal_v.insert(*n, v);
+                }
             }
         }
     }
     let stage_out: Vec<NetId> = stages.iter().map(|s| s.vout).collect();
     for r in &harvest.rails {
         if let Some((nid, _)) = netlist.nets.iter().find(|(_, n)| n.name.as_deref() == Some(r.net.as_str())) {
-            if !stage_out.contains(&nid) {
+            if !stage_out.contains(&nid) && !timed_ideal.contains_key(&nid) {
                 ideal_v.insert(nid, r.voltage);
             }
         }
@@ -835,6 +935,7 @@ fn build_model(netlist: &Netlist, sf: &SourceFile, rep: &mut PowerupReport) -> (
         .iter()
         .map(|s| (s.vout, s.v_target))
         .chain(ideal_v.iter().map(|(n, vi)| (*n, *vi)))
+        .chain(timed_ideal.iter().map(|(n, t)| (*n, t.v)))
         .collect();
     let net_label: HashMap<NetId, String> = all_rails
         .iter()
@@ -849,7 +950,7 @@ fn build_model(netlist: &Netlist, sf: &SourceFile, rep: &mut PowerupReport) -> (
     }
     let modes = vec![Mode::Off; stages.len()];
     (
-        Model { stages, ideal_v, cap_on_net, static_load, res_load_g, en_rc, all_rails, dom_loads, net_label },
+        Model { stages, ideal_v, timed_ideal, cap_on_net, static_load, res_load_g, en_rc, all_rails, dom_loads, net_label },
         State { t: 0.0, v, modes },
     )
 }

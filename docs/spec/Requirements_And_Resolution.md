@@ -1005,3 +1005,28 @@ delays — verify the OTP/firmware DLYx values"). The power-up engine
 idealizes a PMIC's output rails at their promised voltages (internal
 sequencer/soft-start not modeled — stated in the report header);
 ERC033's promise check is the sequencing authority for them.
+
+### 8.2 The PMIC sequencer in the timeline
+
+A multi-output block that declares its OTP strobe schedule —
+
+```bhdl
+attribute pmic_strobe_t = "LDO1:0ms,DCDC1:2ms,LDO2:7ms,…";
+```
+
+(TPS65217B: cumulative from STROBE15 with the SEQ5/SEQ6 register
+RESET values, B variant DLY1 = 5 ms and DLY2–6 = 1 ms — SLVSB64I
+§8.6.30/31; the STROBE15→14→1 spacing is approximated as 2×DLY6,
+stated on the block) — is no longer idealized by the power-up engine:
+each wired output becomes a STROBED source, 0 V until its strobe
+time, ramping with the block's `t_ss` (bucks), nominal after, forced
+only while the feed lives — on input loss the rails are released and
+discharge through their loads like any bank. Good-times land on the
+real schedule (DCDC1 at 2 ms + 95 % of 750 µs = 2.71 ms; LDO2 at
+7 ms), so the declared windows (order, t_min, t_max, slots) are
+verified against the ACTUAL strobe timeline, alongside ERC033's
+promise arithmetic. A block without a schedule still idealizes,
+stated. Engine subtlety worth recording: the strobed profiles are
+re-applied at the POST-advance time — bookkeeping and the settled
+check read post-advance state, and a stale-by-one-interval force let
+the run settle before a strobe's value ever landed.
