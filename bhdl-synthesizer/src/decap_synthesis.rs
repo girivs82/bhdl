@@ -461,7 +461,13 @@ pub fn run_decap_synthesis(
                 let rise = dom.step_rise_s.unwrap_or(1e-6);
                 let durs = dom.step_dur_s.unwrap_or(1e-4);
                 let f_hi = 1.0 / (std::f64::consts::PI * rise);
-                let f_lo_step = 1.0 / (2.0 * std::f64::consts::PI * (durs + 2.0 * rise));
+                // a PERIODIC burst concentrates its content at the
+                // fundamental 1/period and harmonics — the low edge is
+                // the fundamental, not the single-shot estimate
+                let f_lo_step = match dom.step_period_s {
+                    Some(per) if per > 0.0 => 1.0 / per,
+                    _ => 1.0 / (2.0 * std::f64::consts::PI * (durs + 2.0 * rise)),
+                };
                 let f_c = stage_fc(netlist, &stmt.instance);
                 let f_lo = match f_c {
                     Some(fc) => f_lo_step.max(fc),

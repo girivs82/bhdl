@@ -218,6 +218,7 @@ struct DomLoad {
     step_rise_s: Option<f64>,
     step_dur_s: Option<f64>,
     droop_max_pct: Option<f64>,
+    step_period: Option<f64>,
     i_sleep: Option<f64>,
     sleep_off: bool,
     down_before: Vec<String>,
@@ -849,6 +850,7 @@ fn build_model(netlist: &Netlist, sf: &SourceFile, rep: &mut PowerupReport) -> (
                 step_rise_s: d.step_rise_s,
                 step_dur_s: d.step_dur_s,
                 droop_max_pct: d.droop_max_pct,
+                step_period: d.step_period_s,
                 i_sleep: d.i_sleep_a,
                 sleep_off: d.sleep_off,
                 down_before: d.seq_down_before.clone(),
@@ -1032,6 +1034,14 @@ pub fn simulate_powerup_opt(netlist: &Netlist, sf: &SourceFile, capture: bool) -
             let settled_v = |n: NetId| volt(&settled.v, n);
             let self_droop = settled_v(d.net.unwrap()) - tr.min_v.get(&d.net.unwrap()).copied().unwrap_or(0.0);
             let droop_ok = d.droop_max_pct.map(|p| self_droop <= p / 100.0 * d.v_nom + 1e-9);
+            if let (Some(per), Some(durs)) = (d.step_period, d.step_dur_s) {
+                if per > 0.0 {
+                    rep.interactions.push(format!(
+                        "{}.{}: PERIODIC burst (duty {:.0}% at {:.1} Hz) — peak alignment covers every phase relation (conservative, stated); the auto-mask low edge sits at the fundamental",
+                        d.owner, d.name, durs / per * 100.0, 1.0 / per
+                    ));
+                }
+            }
             let coupling: Vec<(String, f64)> = model
                 .all_rails
                 .iter()

@@ -399,6 +399,7 @@ fn parse_domain_item(ename: &str, toks: &[String], d: &mut EntityData) {
                             step_rise_s: secs("rise"),
                             step_dur_s: secs("dur"),
                             droop_max_pct: pct("droop_max"),
+                            step_period_s: secs("period"),
                             pdn_r_ohm: ohms("pdn_r"),
                             pdn_l_h: henr("pdn_l"),
                             noise_uvrms: noise("noise"),

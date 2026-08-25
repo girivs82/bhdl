@@ -543,6 +543,7 @@ UNCHECKED against a requirement that states it — never a pass.
 | `PreregStage` | `PassiveFrontEnd` (fuse + TVS) | auto | fuse rating, `ov_clamp`, 0 V … clamp point | ov_trip, uv_trip, reverse_polarity, temp, qual | — |
 | `PreregStage` | `Efuse_TPS2660` | template | 2 A, 4.2–55 V, `ov_trip`, `uv_trip`, `reverse_polarity`, T_J ≤ 150 °C via θ_JA 38.6 | ov_clamp, qual | `r_ilim` (ILIM law not in the library) |
 | `PreregStage` | `IdealDiode_LM74700` | template | rating = the FET's, 3.2–65 V, `reverse_polarity`, AEC-Q100 grade 1 (−40…125 °C) | ov_clamp, ov_trip, uv_trip | pass FET + axes |
+| multi-output (§8) | `Pmic_TPS65217B` | aggregation report → grouped `resolve` | 3×1.2 A bucks + 2×100 mA LDO + 2×200 mA LS-LDO (B-variant OTP rails, FIXED), built-in strobe sequencer (`pmic_seq` + OTP schedule `pmic_strobe_t`), −40…105 °C, θ_JA 30.4 | noise, qual | — (bare block name; rails are OTP) |
 
 Reading the table is the point: a `PreregStage` requirement that states
 `reverse_polarity` has no auto-bindable block — the designer must choose
@@ -1030,3 +1031,15 @@ stated. Engine subtlety worth recording: the strobed profiles are
 re-applied at the POST-advance time — bookkeeping and the settled
 check read post-advance state, and a stale-by-one-interval force let
 the run settle before a strobe's value ever landed.
+
+**Periodic bursts (§7.3/§7.5 addendum).** A domain whose step repeats
+(frame cadences) declares `period=`: the burst's spectral content
+concentrates at the fundamental 1/period and its harmonics, so the
+auto-mask's low edge becomes the fundamental instead of the
+single-shot estimate (still clamped at the f_c/100 kHz floor — the
+sub-crossover region remains the regulator's); the interaction report
+states the duty and frequency, and peak alignment remains the
+worst-case phase relation (conservative, stated). The duty is also
+the honest basis for thermal averaging of bursty dissipation — a
+refinement for the resolver's thermal gate when it learns to read
+driven-domain periods (stated, not yet plumbed).

@@ -308,6 +308,12 @@ pub struct PowerDomain {
     pub step_dur_s: Option<f64>,
     /// Allowed droop under the step (± percent of v_nom).
     pub droop_max_pct: Option<f64>,
+    /// Burst repetition period (s) when the step is PERIODIC (frame
+    /// cadences): concentrates the step's spectral content at the
+    /// fundamental 1/period and its harmonics, and gives the duty
+    /// cycle dur/period for thermal averaging.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step_period_s: Option<f64>,
     /// Declared layout-PDN budget: series R (Ω) and L (H) between the
     /// board network and the die — added as labelled series terms.
     pub pdn_r_ohm: Option<f64>,
