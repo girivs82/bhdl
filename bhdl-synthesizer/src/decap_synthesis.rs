@@ -65,6 +65,46 @@ struct Candidate {
     esr_ohm: f64,
     esl_h: f64,
     c_text: String,
+    /// DC-bias derating curve (V, F) breakpoints — the vendor tool's
+    /// export, declared per part; empty = no curve (nominal used,
+    /// stated). Effective C at the rail voltage = linear interpolation.
+    dc_bias: Vec<(f64, f64)>,
+}
+
+/// Effective capacitance at `v` volts from a (V, F) curve — linear
+/// interpolation, clamped to the end points. Empty curve = nominal.
+pub fn c_effective_at(nominal: f64, curve: &[(f64, f64)], v: f64) -> f64 {
+    if curve.is_empty() {
+        return nominal;
+    }
+    let mut pts: Vec<(f64, f64)> = curve.to_vec();
+    pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    if v <= pts[0].0 {
+        return pts[0].1;
+    }
+    if v >= pts[pts.len() - 1].0 {
+        return pts[pts.len() - 1].1;
+    }
+    for w in pts.windows(2) {
+        if v >= w[0].0 && v <= w[1].0 {
+            let t = (v - w[0].0) / (w[1].0 - w[0].0).max(1e-12);
+            return w[0].1 + t * (w[1].1 - w[0].1);
+        }
+    }
+    nominal
+}
+
+/// Parse a "0V:22µF,5V:12µF" curve string.
+pub fn parse_dc_bias(txt: &str) -> Vec<(f64, f64)> {
+    txt.split(',')
+        .filter_map(|e| {
+            let (v, c) = e.trim().split_once(':')?;
+            Some((
+                parse_unit(v.trim(), &[("mV", 1e-3), ("V", 1.0)])?,
+                parse_farads(c.trim())?,
+            ))
+        })
+        .collect()
 }
 
 /// Walk the board for `decouple` statements. Token soup:
@@ -227,7 +267,10 @@ fn load_library(lib_path: &str) -> Result<(Vec<Candidate>, Vec<String>), String>
             skipped.push(format!("{name}: esl '{esl_text}' unparseable"));
             continue;
         };
-        out.push(Candidate { entity: name, c_f, esr_ohm, esl_h, c_text });
+        // optional per-part DC-bias curve (the vendor tool's export);
+        // absence = nominal, stated in the synthesis notes
+        let dc_bias = attrs.get("dc_bias").map(|t| parse_dc_bias(t)).unwrap_or_default();
+        out.push(Candidate { entity: name, c_f, esr_ohm, esl_h, c_text, dc_bias });
     }
     if out.is_empty() {
         return Err(format!("decouple: library '{lib_path}' has no usable candidates (capacitance+esr+esl declared)"));
@@ -294,6 +337,7 @@ fn mint_decap(
     rail: NetId,
     gnd: NetId,
     stmt: &DecoupleStmt,
+    rail_v: f64,
 ) -> Result<(), String> {
     let mod_id = netlist
         .modules
@@ -318,8 +362,18 @@ fn mint_decap(
         // ideal — a silent-drop path. Numbers for the solver, the
         // library entity keeps the pretty datasheet text.
         inst.attributes.insert("spice_model".into(), "capacitor".into());
-        inst.attributes.insert("value".into(), cand.c_text.clone());
+        // the SOLVER sees the EFFECTIVE capacitance at the rail's DC
+        // bias (per-part curve when declared; nominal otherwise) — the
+        // sweep judges the network as biased ceramics actually behave
+        let c_eff = c_effective_at(cand.c_f, &cand.dc_bias, rail_v);
+        inst.attributes.insert("value".into(), format!("{c_eff}"));
         inst.attributes.insert("capacitance".into(), cand.c_text.clone());
+        if !cand.dc_bias.is_empty() {
+            inst.attributes.insert(
+                "dc_bias".into(),
+                cand.dc_bias.iter().map(|(v, c)| format!("{v}V:{c}F")).collect::<Vec<_>>().join(","),
+            );
+        }
         inst.attributes.insert("esr".into(), format!("{}", cand.esr_ohm));
         inst.attributes.insert("esl".into(), format!("{}", cand.esl_h));
         inst.attributes.insert("kicad_symbol".into(), "Device:C".into());
@@ -584,7 +638,7 @@ pub fn run_decap_synthesis(
             let mut best: Option<(f64, usize)> = None;
             for (ci, cand) in cands.iter().enumerate() {
                 let trial_name = format!("__decap_trial__");
-                mint_decap(netlist, cand, &trial_name, rail_id, gnd_id, stmt)?;
+                mint_decap(netlist, cand, &trial_name, rail_id, gnd_id, stmt, dom.v_nom)?;
                 let r = worst_ratio(netlist, &rail_name, &dom, overrides)?.0;
                 remove_instance(netlist, &trial_name);
                 if best.map(|(br, _)| r < br).unwrap_or(true) {
@@ -600,7 +654,7 @@ pub fn run_decap_synthesis(
             }
             n += 1;
             let name = format!("{}_{}_dec{}", stmt.instance, stmt.domain, n);
-            mint_decap(netlist, &cands[best_ci], &name, rail_id, gnd_id, stmt)?;
+            mint_decap(netlist, &cands[best_ci], &name, rail_id, gnd_id, stmt, dom.v_nom)?;
             chosen.push(cands[best_ci].clone());
             let w = worst_ratio(netlist, &rail_name, &dom, overrides)?;
             info!(
@@ -646,7 +700,7 @@ pub fn run_decap_synthesis(
                     n += 1;
                     extra += 1;
                     let name = format!("{}_{}_dec{}", stmt.instance, stmt.domain, n);
-                    mint_decap(netlist, c, &name, rail_id, gnd_id, stmt)?;
+                    mint_decap(netlist, c, &name, rail_id, gnd_id, stmt, dom.v_nom)?;
                     info!("decouple {}.{}: margin +{} ({})", stmt.instance, stmt.domain, name, c.entity);
                     margin_added.push(format!("{name} ({})", c.entity));
                 }

@@ -1414,9 +1414,16 @@ pub fn final_pdn_sanity(netlist: &Netlist, _sf: &SourceFile) -> Vec<String> {
         netlist.modules.get(netlist.instances.get(i).map(|x| x.definition).unwrap_or_default()).map(|m| m.name.clone()).unwrap_or_default()
     };
     let net_class = |n: NetId| netlist.nets.get(n).map(|x| x.net_class.clone());
-    // caps per net: (nominal sum, uncharacterized instances)
-    let mut cap_sum: std::collections::HashMap<NetId, f64> = Default::default();
+    // caps per net: worst-case-LOW and worst-case-HIGH effective sums.
+    // A part with a per-part DC-bias curve contributes its effective C
+    // at the rail voltage ±20 % class tolerance (covers K/M codes,
+    // stated); a curve-less part carries the blanket vendor band
+    // (×0.5 / ×1.2, the SLVS916I-class guidance).
+    let mut cap_lo: std::collections::HashMap<NetId, f64> = Default::default();
+    let mut cap_hi: std::collections::HashMap<NetId, f64> = Default::default();
+    let mut cap_nom: std::collections::HashMap<NetId, f64> = Default::default();
     let mut uncharacterized: std::collections::HashMap<NetId, Vec<String>> = Default::default();
+    let mut caps_raw: Vec<(NetId, f64, Option<String>, String)> = Vec::new();
     for (i, inst) in netlist.instances.iter() {
         if !matches!(module_of(i).as_str(), "Cap" | "Capacitor") {
             continue;
@@ -1430,17 +1437,42 @@ pub fn final_pdn_sanity(netlist: &Netlist, _sf: &SourceFile) -> Vec<String> {
             if net_class(*b) == Some(bhdl_netlist::types::NetClass::Ground)
                 && net_class(*a) != Some(bhdl_netlist::types::NetClass::Ground)
             {
-                *cap_sum.entry(*a).or_default() += v;
+                caps_raw.push((*a, v, netlist.instances.get(i).and_then(|x| x.attributes.get("dc_bias").cloned()), inst.name.clone()));
                 if attr_si(i, "esr").is_none() || attr_si(i, "esl").is_none() {
                     uncharacterized.entry(*a).or_default().push(format!("{} ({:.0}µF)", inst.name, v * 1e6));
                 }
             }
         }
     }
+    // rail voltages: the driving stage's output_voltage
+    let mut rail_v: std::collections::HashMap<NetId, f64> = Default::default();
+    for (i, _inst) in netlist.instances.iter() {
+        if let (Some(vt), Some(vout)) = (attr_si(i, "output_voltage"), pin_net.get(&(i, "VOUT".to_string()))) {
+            rail_v.insert(*vout, vt);
+        }
+    }
+    for (n, nominal, curve, _name) in &caps_raw {
+        let (lo, hi) = match curve {
+            Some(c) => {
+                let eff = crate::decap_synthesis::c_effective_at(
+                    *nominal,
+                    &crate::decap_synthesis::parse_dc_bias(c.trim_matches('"')),
+                    rail_v.get(n).copied().unwrap_or(0.0),
+                );
+                (eff * 0.8, eff * 1.2)
+            }
+            None => (nominal * 0.5, nominal * 1.2),
+        };
+        *cap_lo.entry(*n).or_default() += lo;
+        *cap_hi.entry(*n).or_default() += hi;
+        *cap_nom.entry(*n).or_default() += nominal;
+    }
     for (i, inst) in netlist.instances.iter() {
         let Some(_vt) = attr_si(i, "output_voltage") else { continue };
         let Some(vout) = pin_net.get(&(i, "VOUT".to_string())) else { continue };
-        let total = cap_sum.get(vout).copied().unwrap_or(0.0);
+        let total = cap_nom.get(vout).copied().unwrap_or(0.0);
+        let total_lo = cap_lo.get(vout).copied().unwrap_or(0.0);
+        let total_hi = cap_hi.get(vout).copied().unwrap_or(0.0);
         let rail = netlist.nets.get(*vout).and_then(|x| x.name.clone()).unwrap_or_default();
         let min_eff = attr_si(i, "c_out_eff_min").or_else(|| attr_si(i, "c_out_min"));
         let max_eff = attr_si(i, "c_out_eff_max");
@@ -1451,20 +1483,21 @@ pub fn final_pdn_sanity(netlist: &Netlist, _sf: &SourceFile) -> Vec<String> {
             )),
             (mn, mx) => {
                 if let Some(mn) = mn {
-                    // worst-case effective = nominal × 0.5 (DC bias/tolerance,
-                    // the datasheets' own derate guidance — stated)
-                    if total * 0.5 < mn {
+                    // worst-case-LOW effective: per-part DC-bias curves
+                    // where declared (±20 % tolerance), the blanket
+                    // ×0.5 vendor band otherwise — stated
+                    if total_lo < mn {
                         out.push(format!(
-                            "STABILITY: '{}' on {}: {:.0}µF nominal ⇒ ~{:.0}µF worst-case effective (×0.5 derate, stated) < the datasheet minimum {:.0}µF — under the loop-stability floor",
-                            inst.name, rail, total * 1e6, total * 0.5e6, mn * 1e6
+                            "STABILITY: '{}' on {}: {:.0}µF nominal ⇒ ~{:.0}µF worst-case effective (per-part bias curves where declared, ×0.5 class band otherwise — stated) < the datasheet minimum {:.0}µF — under the loop-stability floor",
+                            inst.name, rail, total * 1e6, total_lo * 1e6, mn * 1e6
                         ));
                     }
                 }
                 if let Some(mx) = mx {
-                    if total * 1.2 > mx {
+                    if total_hi > mx {
                         out.push(format!(
-                            "STABILITY: '{}' on {}: {:.0}µF nominal ⇒ up to {:.0}µF effective (×1.2, stated) > the datasheet maximum {:.0}µF — beyond the loop-stability envelope (the bulk fixpoint or decap network overshot; reduce bulk or split the rail)",
-                            inst.name, rail, total * 1e6, total * 1.2e6, mx * 1e6
+                            "STABILITY: '{}' on {}: {:.0}µF nominal ⇒ up to {:.0}µF effective (per-part curves where declared, ×1.2 otherwise — stated) > the datasheet maximum {:.0}µF — beyond the loop-stability envelope (the bulk fixpoint or decap network overshot; reduce bulk or split the rail)",
+                            inst.name, rail, total * 1e6, total_hi * 1e6, mx * 1e6
                         ));
                     }
                 }

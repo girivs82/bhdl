@@ -3773,3 +3773,73 @@ board CustomOtp {
     let u = n.instances.values().find(|i| i.name == "pm_u").expect("silicon");
     assert_eq!(u.attributes.get("part_number").map(|v| v.trim_matches(char::from(34)).to_string()).unwrap_or_default(), "PENDING-CUSTOM-OTP");
 }
+
+/// Per-part DC-bias consumption (§7.5 addendum 3): a library part
+/// declaring its vendor-exported curve is judged at the EFFECTIVE
+/// capacitance for the rail's bias — the decap sweep stamps the
+/// biased value, the minted instance carries the curve, and the
+/// interpolation itself is exact at and between breakpoints. The ×0.5
+/// class band remains only for curve-less parts.
+#[tokio::test]
+async fn dc_bias_curve_consumption() {
+    use bhdl_synthesizer::decap_synthesis::{c_effective_at, parse_dc_bias};
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    // the arithmetic: exact at breakpoints, linear between, clamped
+    let curve = parse_dc_bias("0V:47µF,2V:39µF,3.3V:31µF,5V:22µF");
+    assert_eq!(curve.len(), 4);
+    assert!((c_effective_at(47e-6, &curve, 3.3) - 31e-6).abs() < 1e-9);
+    assert!((c_effective_at(47e-6, &curve, 1.0) - 43e-6).abs() < 1e-9); // midpoint 0→2 V
+    assert!((c_effective_at(47e-6, &curve, 9.0) - 22e-6).abs() < 1e-9); // clamped
+    assert!((c_effective_at(47e-6, &[], 3.3) - 47e-6).abs() < 1e-12); // no curve = nominal
+
+    // integration: the biased fixture part, when selected, carries its
+    // curve on the minted instance and the SOLVER value is the biased
+    // effective (< nominal) at the 3.3 V rail
+    let board = r#"
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Ind } from "bhdl-stdlib/passives/inductor.bhdl";
+entity BiasSoc() {
+    pin 1: power in;
+    pin GND: ground;
+    domain VDD pins="1" v=3.3V i_nom=0.5A zmask="100kHz:200m 10MHz:200m" pdn_r=1m pdn_l=1n source="FIXTURE — dc-bias probe";
+}
+board BiasBoard {
+    power V33 = 3.3V @ 2A;
+    ground GND;
+    @V33 -> l_feed: Ind(1µH).1; l_feed.2 -> soc: BiasSoc().1;
+    soc.GND -> @GND;
+    decouple soc.VDD from "tests/circuits/realistic/decap_lib_fixture.bhdl" max_parts=8;
+}
+"#;
+    let pr = parse(board);
+    assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+    // whatever network was selected: every minted decap from a curve
+    // part must carry dc_bias, and its solver value must equal the
+    // biased effective at 3.3 V, not the nominal
+    let mut saw_biased = false;
+    for inst in n.instances.values() {
+        if !inst.attributes.contains_key("decap_origin") {
+            continue;
+        }
+        if let Some(curve_txt) = inst.attributes.get("dc_bias") {
+            let nominal = bhdl_synthesizer::stage_acceptance::parse_si(
+                inst.attributes.get("capacitance").unwrap(),
+            )
+            .unwrap();
+            let val: f64 = inst.attributes.get("value").unwrap().parse().unwrap();
+            let expect = c_effective_at(nominal, &parse_dc_bias(curve_txt.trim_matches(char::from(34))), 3.3);
+            assert!((val - expect).abs() / expect < 1e-6, "{val} vs {expect}");
+            assert!(val < nominal, "biased value must sit below nominal at 3.3 V");
+            saw_biased = true;
+        }
+    }
+    // the fixture's biased 47 µF part exists in the library; if the
+    // greedy solver never selected it this test would be VACUOUS —
+    // assert we actually exercised the path
+    assert!(saw_biased, "no biased part was selected — the fixture no longer exercises the dc_bias path: {:#?}", n.instances.values().filter(|i| i.attributes.contains_key("decap_origin")).map(|i| i.name.clone()).collect::<Vec<_>>());
+}

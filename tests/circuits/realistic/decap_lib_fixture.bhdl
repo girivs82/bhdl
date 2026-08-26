@@ -46,3 +46,15 @@ entity DecapNoEsl() {
     attribute esr = 8mΩ;
     attribute kicad_symbol = "Device:C";
 }
+
+// FIXTURE — a bulk part WITH a per-part DC-bias curve (the shape a
+// vendor tool exports; the NUMBERS here are fixture data, labelled).
+entity DecapBiased47u() {
+    pin 1: power in;
+    pin 2: ground;
+    attribute capacitance = 47µF;
+    attribute esr = 8mΩ;
+    attribute esl = 1.2nH;
+    attribute dc_bias = "0V:47µF,2V:39µF,3.3V:31µF,5V:22µF"; // FIXTURE curve
+    attribute source = "FIXTURE — dc-bias consumption test";
+}

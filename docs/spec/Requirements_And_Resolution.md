@@ -1111,3 +1111,18 @@ block wearing per-variant names:
   power-up engine all read the same configuration. Engine note: an
   attribute VALUE containing `;` is truncated by the attr scanner —
   catalog rows separate with `&&`.
+
+**Per-part DC-bias curves (§7.5 addendum 3).** The MLCC vendors block
+automated datasheet access and publish bias curves through interactive
+tools — so the DATA stays designer-supplied, and the MECHANISM now
+exists to consume it: a characterized library part may declare its
+vendor-exported curve, `attribute dc_bias = "0V:47µF,3.3V:31µF,…";`.
+Everything that judges capacitance uses the EFFECTIVE value at the
+rail's DC bias (linear interpolation, clamped): the decap sweep
+stamps the biased value as the solver capacitance, the minted
+instance carries the curve, the power-up engine sums effective per
+rail, and the stability sanity applies per-part curves ±20 % class
+tolerance where declared — the blanket ×0.5/×1.2 vendor band remains
+only for curve-less parts (fixpoint `seqbulk` included). The class
+factor is thereby the FALLBACK it was always meant to be; pasting the
+vendor tool's export into the library replaces it part by part.

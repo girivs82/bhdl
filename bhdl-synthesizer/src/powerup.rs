@@ -699,7 +699,14 @@ fn build_model(netlist: &Netlist, sf: &SourceFile, rep: &mut PowerupReport) -> (
     };
     let net_class = |n: NetId| netlist.nets.get(n).map(|x| x.net_class.clone());
 
-    let mut cap_on_net: HashMap<NetId, f64> = HashMap::new();
+    // capacitors: collected raw here, summed into cap_on_net AFTER the
+    // rails are known — a part with a declared per-part DC-bias curve
+    // contributes its EFFECTIVE capacitance at its rail's nominal
+    // voltage (the vendor tool's export); fixpoint bulk without a
+    // curve enters at ×0.5 nominal (the vendors' class derate
+    // guidance, SLVS916I Table-1 footnote); everything else nominal
+    // (datasheet-procedure margins, stated).
+    let mut caps_raw: Vec<(NetId, f64, Option<String>, bool)> = Vec::new();
     for (i, _inst) in netlist.instances.iter() {
         if !matches!(module_of(i).as_str(), "Cap" | "Capacitor") {
             continue;
@@ -709,20 +716,13 @@ fn build_model(netlist: &Netlist, sf: &SourceFile, rep: &mut PowerupReport) -> (
             pin_net.get(&(i, "2".to_string())),
         ) else { continue };
         let Some(v) = attr_si(i, "value") else { continue };
-        // fixpoint bulk (ceramics-only reliability policy) enters the
-        // simulation at WORST-CASE EFFECTIVE capacitance: x0.5 nominal,
-        // the vendors' own DC-bias/tolerance derate guidance (SLVS916I
-        // Table-1 footnote states -50 %) - so the sized bank still meets
-        // the droop with real, derated ceramics. Other capacitors enter
-        // at nominal (their values came from datasheet procedures that
-        // carry their own margins - stated).
-        let v_eff = if _inst.name.starts_with("seqbulk_") { v * 0.5 } else { v };
         for (a, b) in [(n1, n2), (n2, n1)] {
             if net_class(*b) == Some(NetClass::Ground) && net_class(*a) != Some(NetClass::Ground) {
-                *cap_on_net.entry(*a).or_default() += v_eff;
+                caps_raw.push((*a, v, attr(i, "dc_bias"), _inst.name.starts_with("seqbulk_")));
             }
         }
     }
+    let mut cap_on_net: HashMap<NetId, f64> = HashMap::new();
 
     let mut stages: Vec<StageDef> = Vec::new();
     for (i, inst) in netlist.instances.iter() {
@@ -944,6 +944,19 @@ fn build_model(netlist: &Netlist, sf: &SourceFile, rep: &mut PowerupReport) -> (
         .chain(ideal_v.iter().map(|(n, vi)| (*n, *vi)))
         .chain(timed_ideal.iter().map(|(n, t)| (*n, t.v)))
         .collect();
+    for (n, nominal, curve, is_bulk) in &caps_raw {
+        let rail_v = all_rails.iter().find(|(rn, _)| rn == n).map(|(_, vv)| *vv).unwrap_or(0.0);
+        let eff = match curve {
+            Some(c) => crate::decap_synthesis::c_effective_at(
+                *nominal,
+                &crate::decap_synthesis::parse_dc_bias(c.trim_matches('"')),
+                rail_v,
+            ),
+            None if *is_bulk => nominal * 0.5,
+            None => *nominal,
+        };
+        *cap_on_net.entry(*n).or_default() += eff;
+    }
     let net_label: HashMap<NetId, String> = all_rails
         .iter()
         .map(|(n, _)| {
