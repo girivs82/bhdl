@@ -173,7 +173,8 @@ pub fn check_power_sequencing(
             }
             let has_identity = attr(*i, "stage_requirement").is_some()
                 || attr(*i, "output_voltage").is_some()
-                || attr(*i, "pmic_outputs").is_some();
+                || attr(*i, "pmic_outputs").is_some()
+                || attr(*i, "pmic_variants").is_some();
             has_identity.then_some(*i)
         })
     };
@@ -404,7 +405,8 @@ pub fn check_power_sequencing(
             // be-met fails, depends-on-programmed-delays is a stated
             // UNCHECKED.
             if stage_a == Some(stage_b) {
-                let Some(seq) = attr(stage_b, "pmic_seq").map(|v| v.trim_matches('"').to_string()) else {
+                let view = crate::aggregation::pmic_view(&|k| attr(stage_b, k));
+                let Some(seq) = view.as_ref().and_then(|v| v.seq.clone()) else {
                     out.push(viol(
                         ViolationSeverity::Warning,
                         stage_b,
@@ -442,7 +444,7 @@ pub fn check_power_sequencing(
                     continue;
                 }
                 // order holds; timing against the promised delay range
-                let dly = attr(stage_b, "pmic_seq_dly").map(|v| v.trim_matches('"').to_string());
+                let dly = view.as_ref().and_then(|v| v.dly.clone());
                 let range = dly.as_deref().and_then(|d| {
                     let (lo, hi) = d.split_once('-')?;
                     Some((crate::stage_acceptance::parse_si(lo)?, crate::stage_acceptance::parse_si(hi)?))

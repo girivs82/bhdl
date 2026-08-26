@@ -3707,3 +3707,69 @@ board OtpBoard {{
     assert!(e.contains("does not fit"), "{e}");
     assert!(e.contains("CUSTOM-OTP proposal") && e.contains("STROBE2: ua") && e.contains("INSUFFICIENT"), "{e}");
 }
+
+/// OTP-friendly PMIC library (§8.4): ONE configurable block carries
+/// every catalog variant as data. A grouped resolve naming the FAMILY
+/// lets the resolver pick the variant (a 1.5 V DCDC1 exists only in
+/// the C row); `otp="custom"` takes the §8.3 proposal shape directly,
+/// drives the strobed timeline from the designer's schedule, and the
+/// MPN is a visible PENDING sentinel until the vendor assigns one.
+#[tokio::test]
+async fn pmic_variant_family_selection_and_custom_otp() {
+    use bhdl_synthesizer::stage_resolution::resolve_stages;
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let stdlib = ws.join("bhdl-stdlib");
+    // family resolve: only variant C has DCDC1 = 1.5 V and a 400 mA
+    // 1.8 V LS-LDO — the resolver selects it
+    let fam = r#"
+import { BuckStage, LdoStage } from "bhdl-stdlib/power/stages.bhdl";
+board FamilyBoard {
+    power VSYS = 3.7V @ 5A;
+    port V15: power out = 1.5V @ 0.8A;
+    port V18L: power out = 1.8V @ 300mA;
+    ground GND;
+    @VSYS -> u1: BuckStage(vout=1.5V, i_max=0.8A, vin=3.7V).VIN;
+    u1.GND -> @GND; u1.VOUT -> @V15;
+    @VSYS -> u2: LdoStage(vout=1.8V, i_max=300mA, vin=3.7V).VIN;
+    u2.GND -> @GND; u2.VOUT -> @V18L;
+    resolve u1, u2 = Pmic_TPS65217;
+}
+"#;
+    let r = resolve_stages(fam, &stdlib, &[]).unwrap().unwrap();
+    assert!(r.group_commits.iter().any(|l| l.contains("Pmic_TPS65217C") && l.contains("u1→DCDC1")), "{:#?}", r.group_commits);
+
+    // custom OTP: the proposal spec IS the configuration — strobed
+    // timeline from the designer's schedule, PENDING MPN visible
+    let custom = r#"
+import { Pmic_TPS65217 } from "bhdl-stdlib/power/tps65217.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+board CustomOtp {
+    power VSYS = 3.7V @ 5A;
+    port V12: power out = 1.2V @ 1A;
+    port V25: power out = 2.5V @ 80mA;
+    ground GND;
+    pm: Pmic_TPS65217(otp="custom", mpn="PENDING-CUSTOM-OTP", otp_outputs="DCDC1:buck:1.2V:1.2A,LDO2:ldo:2.5V:0.1A", otp_seq="DCDC1,LDO2", otp_strobe_t="DCDC1:0ms,LDO2:5ms");
+    @VSYS -> pm.VIN;
+    pm.GND -> @GND;
+    pm.VOUT_DCDC1 -> @V12;
+    pm.VOUT_LDO2 -> @V25;
+    @V12 -> R1: Res(1.2Ω, wattage=2W).1; R1.2 -> @GND;
+    @V25 -> R2: Res(31Ω, wattage=1W).1; R2.2 -> @GND;
+}
+"#;
+    let pr = parse(custom);
+    assert!(pr.errors().is_empty(), "{:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let n = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+    let rep = bhdl_synthesizer::powerup::simulate_powerup(&n, &sf);
+    let tg = |rail: &str| rep.rails.iter().find(|r| r.net == rail).and_then(|r| r.t_good).unwrap_or_else(|| panic!("{rail}: {:#?}", rep.rails));
+    // DCDC1 at 0 + 95 % of tSS; LDO2 at the designer's 5 ms strobe
+    assert!((tg("V12") - 0.71e-3).abs() < 0.3e-3, "V12 {}", tg("V12"));
+    assert!((tg("V25") - 5.0e-3).abs() < 0.3e-3, "V25 {}", tg("V25"));
+    // the part carries the PENDING sentinel — a visible BOM gap
+    let u = n.instances.values().find(|i| i.name == "pm_u").expect("silicon");
+    assert_eq!(u.attributes.get("part_number").map(|v| v.trim_matches(char::from(34)).to_string()).unwrap_or_default(), "PENDING-CUSTOM-OTP");
+}

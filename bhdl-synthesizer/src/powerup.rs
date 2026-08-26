@@ -762,11 +762,16 @@ fn build_model(netlist: &Netlist, sf: &SourceFile, rep: &mut PowerupReport) -> (
     // schedule the rails enter as plain ideal (stated).
     let mut timed_ideal: HashMap<NetId, TimedIdeal> = HashMap::new();
     for (i, inst) in netlist.instances.iter() {
-        let Some(tbl) = attr(i, "pmic_outputs") else { continue };
-        let strobes: HashMap<String, f64> = attr(i, "pmic_strobe_t")
+        if attr(i, "pmic_outputs").is_none() && attr(i, "pmic_variants").is_none() {
+            continue;
+        }
+        let Some(view) = crate::aggregation::pmic_view(&|k| attr(i, k)) else { continue };
+        let tbl = view.outputs_txt.clone();
+        let strobes: HashMap<String, f64> = view
+            .strobe_t
+            .as_deref()
             .map(|t| {
-                t.trim_matches('"')
-                    .split(',')
+                t.split(',')
                     .filter_map(|e| {
                         let (n, tt) = e.split_once(':')?;
                         Some((n.to_string(), crate::stage_acceptance::parse_si(tt)?))
@@ -787,7 +792,7 @@ fn build_model(netlist: &Netlist, sf: &SourceFile, rep: &mut PowerupReport) -> (
                 inst.name
             ));
         }
-        for e in tbl.trim_matches('"').split(',') {
+        for e in tbl.split(',') {
             let p: Vec<&str> = e.split(':').collect();
             if p.len() != 4 { continue; }
             let Some(v) = crate::stage_acceptance::parse_si(p[2]) else { continue };

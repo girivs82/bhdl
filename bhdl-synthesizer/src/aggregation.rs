@@ -42,6 +42,9 @@ struct PmicOutput {
 #[derive(Debug, Clone)]
 struct PmicBlock {
     block: String,
+    /// the configurable base entity (variant catalogs): commits may
+    /// name the FAMILY and let the search pick the variant
+    family: Option<String>,
     part_number: Option<String>,
     vin_min: Option<f64>,
     vin_max: Option<f64>,
@@ -123,12 +126,18 @@ pub fn apply_group_overrides(
     let mut notes = Vec::new();
     // apply back-to-front so spans stay valid
     for g in groups.iter().rev() {
-        let Some(pmic) = pmics.iter().find(|p| p.block == g.block) else {
+        // exact alias, or the FAMILY name — "have the resolver select
+        // the correct variant" (§8.4): every catalog row is a candidate
+        let variant_cands: Vec<&PmicBlock> = pmics
+            .iter()
+            .filter(|p| p.block == g.block || p.family.as_deref() == Some(g.block.as_str()))
+            .collect();
+        if variant_cands.is_empty() {
             return Err(format!(
-                "resolve {} = {}: no multi-output block of that name declares `pmic_outputs` in the library",
+                "resolve {} = {}: no multi-output block (or variant family) of that name declares an output catalog in the library",
                 g.members.join(", "), g.block
             ));
-        };
+        }
         // locate each member's requirement instantiation `m: Trait(args)`
         struct Member {
             name: String,
@@ -212,28 +221,47 @@ pub fn apply_group_overrides(
             .map(|m| (m.name.clone(), rail_of_member(&m.name), m.vout, m.imax / 0.8))
             .collect();
         let edges = domain_order_edges(&out);
-        let mapping: Vec<(String, String)> = match seq_aware_assign(pmic, &member_rows, &edges) {
-            Ok((assign, unchecked)) => {
-                if unchecked > 0 {
-                    // surfaced later by ERC033 with the exact windows
+        // try every candidate variant; keep the best fitting one
+        // (fewest unchecked windows, then least over-rating, then
+        // block name for determinism)
+        let mut chosen: Option<(&PmicBlock, Vec<(usize, usize)>, usize, f64)> = None;
+        let mut why_not: Vec<String> = Vec::new();
+        for cand in &variant_cands {
+            match seq_aware_assign(cand, &member_rows, &edges) {
+                Ok((assign, unchecked)) => {
+                    let rating: f64 = assign.iter().map(|(_, o)| cand.outputs[*o].i_max).sum();
+                    let better = match &chosen {
+                        None => true,
+                        Some((cb, _, cu, cr)) => {
+                            unchecked < *cu
+                                || (unchecked == *cu && rating + 1e-12 < *cr)
+                                || (unchecked == *cu && (rating - cr).abs() <= 1e-12 && cand.block < cb.block)
+                        }
+                    };
+                    if better {
+                        chosen = Some((cand, assign, unchecked, rating));
+                    }
                 }
-                assign
-                    .iter()
-                    .map(|(mi, oi)| (member_rows[*mi].0.clone(), pmic.outputs[*oi].name.clone()))
-                    .collect()
+                Err(why) => why_not.push(format!("{}: {}", cand.block, why)),
             }
-            Err(why) => {
-                let mut msg = format!(
-                    "resolve {} = {}: {}",
-                    g.members.join(", "), g.block, why
-                );
-                for l in custom_otp_proposal(pmic, &member_rows, &edges) {
+        }
+        let Some((pmic, assign, _unchecked, _)) = chosen else {
+            let mut msg = format!(
+                "resolve {} = {}: no variant fits —\n  {}",
+                g.members.join(", "), g.block, why_not.join("\n  ")
+            );
+            if let Some(first) = variant_cands.first() {
+                for l in custom_otp_proposal(first, &member_rows, &edges) {
                     msg.push_str("\n  ");
                     msg.push_str(&l);
                 }
-                return Err(msg);
             }
+            return Err(msg);
         };
+        let mapping: Vec<(String, String)> = assign
+            .iter()
+            .map(|(mi, oi)| (member_rows[*mi].0.clone(), pmic.outputs[*oi].name.clone()))
+            .collect();
         // per-rail EN/PG references are the sequencer's — hard error
         for m in &g.members {
             for pin in ["EN", "PG"] {
@@ -254,7 +282,7 @@ pub fn apply_group_overrides(
         let mut edits: Vec<Edit> = vec![Edit { span: g.span, text: String::new() }];
         for (k, m) in mems.iter().enumerate() {
             if k == 0 {
-                edits.push(Edit { span: m.trait_span, text: format!("{}()", g.block) });
+                edits.push(Edit { span: m.trait_span, text: format!("{}()", pmic.block) });
             } else {
                 edits.push(Edit { span: m.stmt_span, text: String::new() });
             }
@@ -282,7 +310,7 @@ pub fn apply_group_overrides(
                     (!r.is_empty()).then_some(r)
                 });
             if let Some(feed) = feed {
-                if let Some(stmt_end) = out.find(&format!("{first}: {}()", g.block)).and_then(|p| out[p..].find(';').map(|x| p + x + 1)) {
+                if let Some(stmt_end) = out.find(&format!("{first}: {}()", pmic.block)).and_then(|p| out[p..].find(';').map(|x| p + x + 1)) {
                     out.insert_str(stmt_end, &format!("\n    @{feed} -> {first}.PWR_EN; // sequencer starts with the supply (grouped commit)"));
                     notes.push(format!("{first}.PWR_EN tied to @{feed} (unwired — the sequencer starts with the supply, stated)"));
                 }
@@ -291,20 +319,20 @@ pub fn apply_group_overrides(
             }
         }
         // stamp the committed mapping for ERC033's strict gate + reports
-        if let Some(stmt_end) = out.find(&format!("{first}: {}()", g.block)).and_then(|p| out[p..].find(';').map(|x| p + x + 1)) {
+        if let Some(stmt_end) = out.find(&format!("{first}: {}()", pmic.block)).and_then(|p| out[p..].find(';').map(|x| p + x + 1)) {
             let map_txt = mapping.iter().map(|(m, o)| format!("{m}:{o}")).collect::<Vec<_>>().join(",");
             out.insert_str(stmt_end, &format!("\n    attribute {first}.pmic_committed = \"{map_txt}\";"));
         }
         notes.insert(0, format!(
             "GROUPED COMMIT: {} = {} — {}",
-            g.members.join(" + "), g.block,
+            g.members.join(" + "), pmic.block,
             mapping.iter().map(|(m, o)| format!("{m}→{o}")).collect::<Vec<_>>().join(", ")
         ));
         if let Some(seq) = &pmic.seq {
             notes.push(format!("built-in power-up order now governs these rails: {seq} — ERC033 verifies it against the declared domain ordering"));
         }
         // import for the block
-        let lib_file = find_block_file(stdlib_root, &g.block);
+        let lib_file = find_block_file(stdlib_root, pmic.family.as_deref().unwrap_or(&pmic.block));
         if let Some(rel) = lib_file {
             let already = out.lines().any(|l| l.trim_start().starts_with("import") && l.contains(&g.block));
             if !already {
@@ -316,7 +344,7 @@ pub fn apply_group_overrides(
                     }
                     o3 += line.len();
                 }
-                out.insert_str(insert_at, &format!("import {{ {} }} from \"{rel}\";\n", g.block));
+                out.insert_str(insert_at, &format!("import {{ {} }} from \"{rel}\";\n", pmic.block));
             }
         }
     }
@@ -341,6 +369,96 @@ fn find_block_file(stdlib_root: &Path, block: &str) -> Option<String> {
     None
 }
 
+
+/// The FLAT view of a multi-output supply's selected OTP configuration
+/// (spec §8.4): resolved from the variant catalog (`pmic_variants` +
+/// `pmic_variant`), from the custom-OTP ctor passthroughs
+/// (`pmic_otp_*`, variant="custom"), or from legacy flat attributes.
+/// One resolver for every consumer — the report, the commit, ERC033
+/// and the power-up engine all see the same configuration.
+#[derive(Debug, Clone, Default)]
+pub struct PmicView {
+    pub outputs_txt: String,
+    pub seq: Option<String>,
+    pub strobe_t: Option<String>,
+    pub dly: Option<String>,
+    pub dly_steps: Option<String>,
+    pub mpn: Option<String>,
+}
+
+pub fn pmic_view(get: &dyn Fn(&str) -> Option<String>) -> Option<PmicView> {
+    let clean = |v: String| v.trim_matches('"').to_string();
+    let dly = get("pmic_seq_dly").map(clean);
+    let dly_steps = get("pmic_seq_dly_steps").map(clean);
+    if let Some(cat) = get("pmic_variants").map(clean) {
+        let variant = get("pmic_variant").map(clean).unwrap_or_default();
+        if variant == "custom" {
+            let outputs = get("pmic_otp_outputs").map(clean).unwrap_or_default();
+            if outputs.is_empty() {
+                return None; // custom without a spec: nothing to see — stated by callers
+            }
+            return Some(PmicView {
+                outputs_txt: outputs,
+                seq: get("pmic_otp_seq").map(clean).filter(|s| !s.is_empty()),
+                strobe_t: get("pmic_otp_strobe_t").map(clean).filter(|s| !s.is_empty()),
+                dly,
+                dly_steps,
+                mpn: None, // custom OTP: MPN pending vendor assignment — a stated gap
+            });
+        }
+        for row in cat.split("&&") {
+            let mut fields = row.split('~').map(str::trim);
+            let Some(name) = fields.next() else { continue };
+            if name != variant {
+                continue;
+            }
+            let mut v = PmicView { dly: dly.clone(), dly_steps: dly_steps.clone(), ..Default::default() };
+            for f in fields {
+                if let Some((k, val)) = f.split_once('=') {
+                    match k.trim() {
+                        "outputs" => v.outputs_txt = val.trim().to_string(),
+                        "seq" => v.seq = Some(val.trim().to_string()),
+                        "strobe_t" => v.strobe_t = Some(val.trim().to_string()),
+                        "mpn" => v.mpn = Some(val.trim().to_string()),
+                        _ => {}
+                    }
+                }
+            }
+            if !v.outputs_txt.is_empty() {
+                return Some(v);
+            }
+        }
+        return None;
+    }
+    // legacy flat attributes
+    let outputs = get("pmic_outputs").map(clean)?;
+    Some(PmicView {
+        outputs_txt: outputs,
+        seq: get("pmic_seq").map(clean),
+        strobe_t: get("pmic_strobe_t").map(clean),
+        dly,
+        dly_steps,
+        mpn: get("part_number").map(clean),
+    })
+}
+
+pub(crate) fn parse_outputs(txt: &str) -> Vec<PmicOutput> {
+    txt.split(',')
+        .filter_map(|e| {
+            let p: Vec<&str> = e.split(':').collect();
+            if p.len() != 4 {
+                return None;
+            }
+            Some(PmicOutput {
+                name: p[0].to_string(),
+                topology: p[1].to_string(),
+                vout: parse_si_txt(p[2])?,
+                i_max: parse_si_txt(p[3])?,
+            })
+        })
+        .collect()
+}
+
 fn scan_pmics(stdlib_root: &Path) -> Vec<PmicBlock> {
     let mut files = Vec::new();
     collect_bhdl(stdlib_root, &mut files);
@@ -348,10 +466,9 @@ fn scan_pmics(stdlib_root: &Path) -> Vec<PmicBlock> {
     let mut out = Vec::new();
     for f in files {
         let Ok(text) = std::fs::read_to_string(&f) else { continue };
-        if !text.contains("pmic_outputs") {
+        if !text.contains("pmic_outputs") && !text.contains("pmic_variants") {
             continue;
         }
-        // every `entity <X>` in the file that declares pmic_outputs
         let mut off = 0usize;
         while let Some(p) = text[off..].find("entity ") {
             let at = off + p;
@@ -364,36 +481,68 @@ fn scan_pmics(stdlib_root: &Path) -> Vec<PmicBlock> {
                 continue;
             }
             let attrs = entity_attrs_txt(&text, &name);
-            let Some(tbl) = attrs.get("pmic_outputs") else { continue };
-            let outputs: Vec<PmicOutput> = tbl
-                .trim_matches('"')
-                .split(',')
-                .filter_map(|e| {
-                    let p: Vec<&str> = e.split(':').collect();
-                    if p.len() != 4 {
-                        return None;
+            let vin_min = attrs.get("vin_min").and_then(|v| parse_si_txt(v));
+            let vin_max = attrs.get("vin_max").and_then(|v| parse_si_txt(v));
+            if let Some(cat) = attrs.get("pmic_variants") {
+                // one candidate per catalog row, named by its alias
+                // (`alias Pmic_X_B = Pmic_X(variant="B"…)`)
+                for row in cat.trim_matches('"').split("&&") {
+                    let variant = row.split('~').next().unwrap_or("").trim().to_string();
+                    if variant.is_empty() {
+                        continue;
                     }
-                    Some(PmicOutput {
-                        name: p[0].to_string(),
-                        topology: p[1].to_string(),
-                        vout: parse_si_txt(p[2])?,
-                        i_max: parse_si_txt(p[3])?,
-                    })
-                })
-                .collect();
+                    let a = |k: &str| -> Option<String> {
+                        match k {
+                            "pmic_variant" => Some(variant.clone()),
+                            other => attrs.get(other).cloned(),
+                        }
+                    };
+                    let Some(view) = pmic_view(&a) else { continue };
+                    let outputs = parse_outputs(&view.outputs_txt);
+                    if outputs.is_empty() {
+                        continue;
+                    }
+                    // the alias naming this variant, from the same file
+                    let alias = {
+                        let needle = format!("= {name}(otp=\"{variant}\"");
+                        text.find(&needle).and_then(|pp| {
+                            let head = text[..pp].rfind("alias ")?;
+                            let an: String = text[head + 6..]
+                                .chars()
+                                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                                .collect();
+                            (!an.is_empty()).then_some(an)
+                        })
+                    };
+                    let Some(alias) = alias else { continue };
+                    out.push(PmicBlock {
+                        block: alias,
+                        family: Some(name.clone()),
+                        part_number: view.mpn.clone(),
+                        vin_min,
+                        vin_max,
+                        outputs,
+                        seq: view.seq.clone(),
+                        seq_dly: view.dly.clone(),
+                        seq_dly_steps: view.dly_steps.clone(),
+                    });
+                }
+                continue;
+            }
+            let Some(tbl) = attrs.get("pmic_outputs") else { continue };
+            let outputs = parse_outputs(tbl.trim_matches('"'));
             if outputs.is_empty() {
                 continue;
             }
-            // the silicon's part_number: the part entity this block
-            // instantiates, or its own attr
             let part_number = attrs.get("part_number").cloned().or_else(|| {
                 crate::stage_resolution::block_part_number(&text, &name)
             });
             out.push(PmicBlock {
                 block: name,
+                family: None,
                 part_number,
-                vin_min: attrs.get("vin_min").and_then(|v| parse_si_txt(v)),
-                vin_max: attrs.get("vin_max").and_then(|v| parse_si_txt(v)),
+                vin_min,
+                vin_max,
                 outputs,
                 seq: attrs.get("pmic_seq").map(|s| s.trim_matches('"').to_string()),
                 seq_dly: attrs.get("pmic_seq_dly").map(|s| s.trim_matches('"').to_string()),

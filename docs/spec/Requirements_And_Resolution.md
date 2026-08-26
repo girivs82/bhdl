@@ -1074,3 +1074,40 @@ serves both:
   report when the fit fails, so the vendor-handoff artifact exists
   before anyone commits anything. A cyclic declared ordering is named
   as such.
+
+### 8.4 The OTP-friendly library — one block, every variant
+
+The vendor mints a new part number per OTP for their traceability;
+the library stays configurable and generic. The reconciliation is one
+block wearing per-variant names:
+
+- **One entity, a variant catalog, aliases.** `Pmic_TPS65217(otp=…)`
+  carries ALL FOUR catalog rows as data (`pmic_variants`: outputs /
+  built-in order / OTP-default strobe schedule / MPN per row — every
+  figure from the same datasheet, including the per-variant SEQ5
+  resets and the C/D 400 mA LS-LDOs; TPS65217A's load switches are
+  unmodeled, stated). `alias Pmic_TPS65217B = Pmic_TPS65217(otp="B",
+  mpn="TPS65217B")` keeps every existing name working, and
+  `part_number` derives from the ctor — the LP2985 family-SKU
+  precedent. NOTE: `variant` is a bhdl keyword; the parameter is
+  `otp`.
+- **The resolver selects the variant.** A grouped resolve may name
+  the FAMILY (`resolve u1, u2 = Pmic_TPS65217;`): every catalog row
+  is a candidate, the §8.3 sequencing-aware search runs per row, and
+  the best fit wins (fewest unchecked windows, least over-rating,
+  name-deterministic) — verified: a 1.5 V DCDC1 requirement selects
+  variant C. Exact alias names still commit exactly that variant.
+- **Custom OTP closes the loop.** `otp="custom"` takes the §8.3
+  proposal shape directly (`otp_outputs`/`otp_seq`/`otp_strobe_t` —
+  the designer's data, like `r_ilim`), drives the strobed power-up
+  timeline from the supplied schedule, and carries
+  `mpn="PENDING-CUSTOM-OTP"` as a visible BOM gap until the vendor
+  assigns the traceability number (an EMPTY mpn cannot express "no
+  MPN" — the language's empty-arg rule falls back to the default,
+  stated on the block).
+- **One resolver for every consumer**: `aggregation::pmic_view`
+  flattens (catalog row | custom spec | legacy flat attrs) into one
+  view; the report, the commit, ERC033's strict gate and the
+  power-up engine all read the same configuration. Engine note: an
+  attribute VALUE containing `;` is truncated by the attr scanner —
+  catalog rows separate with `&&`.
