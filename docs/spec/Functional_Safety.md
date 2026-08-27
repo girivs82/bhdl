@@ -702,3 +702,45 @@ The impedance sweep and the droop solve validate the ENTIRE upstream
 tree in one circuit — a leaf step propagates through every rank of
 decoupling into the intermediate rails naturally, because the netlist
 IS one circuit.
+
+The safety case consumes the contract via `assume pdn(<inst>.<domain>)`;
+a clean run discharges the assumption as machine-verified (and clears
+the validation-time ASSUMPTION_OPEN gap); a violated check leaves it
+Open with an AouViolated gap.
+
+### 2.11 PDN recheck under capacitor faults *(implemented)*
+
+The whole-universe campaign (§2.9) classifies faults on the settled
+DC operating point — where a capacitor is invisible. An OPEN decap or
+bulk cap, or capacitance drift, is therefore a DC no-op whose FIT
+weight would land silently in the safe bucket even when losing the
+part defeats the very droop/mask contract the safety case consumed —
+a misclassified single-point/latent exposure.
+
+The campaign closes this with a **PDN recheck**: for every fault on a
+CAPACITOR (module `Cap`/`Capacitor` or a `capacitance` attribute —
+the same broadened detection the sizing engines use) of kind `open`,
+`drift_low` or `drift_high` (at the worst probe magnitude), the §2.10
+mask sweep + droop transient re-run against the MUTATED netlist.
+Initial conditions reuse the healthy operating point — valid exactly
+because these fault kinds are DC no-ops. A violation that is NEW
+versus the healthy baseline (a contract already broken healthy
+carries its own gap and is not the fault's doing):
+
+- of a contract the case consumes via `assume pdn(...)` — fires the
+  synthetic effect `pdn:<inst>.<domain>` on the fault row. No DC
+  monitor can see a dynamic violation (a supervisor only trips during
+  the transient itself, a path the DC classification structurally
+  cannot model — stated in the row note), so with no mechanism
+  detecting it the row classifies RESIDUAL and the exposure lands in
+  SPFM where it belongs.
+- of a contract the case never consumed — a design-only note on the
+  row, stated.
+
+The decap sweep's own `margin` (N+1) verification covers non-bulk
+single-opens at synthesis time but EXEMPTS bulk parts (stated there);
+this recheck is where that exemption gets its honest verdict. The
+counterpart sizing knob is `requirements { pdn_redundancy: "n+1"; }`
+(Requirements_And_Resolution.md §7.5): one extra part per fixpoint
+bulk stack, so any single open leaves the proven-sufficient count —
+turning these residual rows back into no-effect rows by construction.

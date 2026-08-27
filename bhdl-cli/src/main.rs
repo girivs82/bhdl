@@ -2211,6 +2211,24 @@ async fn run_powertree(
                     ),
                     None => println!("  bulk source: bare Cap (no project decap_lib shortlist — stated; declare one to make bulk a characterized, orderable part)"),
                 }
+                // N+1 redundancy knob (safety): one extra bulk part per
+                // rail so ANY single open leaves the proven-sufficient
+                // count. Provable by construction for the shortlist
+                // stack — the fixpoint proved k sufficient, we place
+                // k+1 — and the loop re-simulates the k+1 stack, so a
+                // knee/slot-timing regression from the EXTRA capacitance
+                // is caught, not assumed away.
+                let n_plus_1 = match bhdl_synthesizer::powertree::project_pdn_redundancy(input_content).as_deref() {
+                    Some("n+1") => {
+                        println!("  pdn_redundancy: n+1 — every bulk stack carries one extra part (any single open keeps the proven-sufficient count; the fixpoint re-simulates the redundant stack)");
+                        true
+                    }
+                    Some(other) => {
+                        println!("  pdn_redundancy: \"{other}\" is not a known mode (only \"n+1\") — IGNORED, stated");
+                        false
+                    }
+                    None => false,
+                };
                 let mut converged: Option<String> = None;
                 let mut open_findings: Vec<String> = Vec::new();
                 let mut last_built: Option<(bhdl_netlist::Netlist, SourceFile)> = None;
@@ -2234,10 +2252,24 @@ async fn run_powertree(
                         for (r, c) in &bulk {
                             match &bulk_part {
                                 Some((_, ent, nom, _)) => {
-                                    let n_parts = (c / nom).ceil().max(1.0) as usize;
+                                    let n_parts = (c / nom).ceil().max(1.0) as usize
+                                        + if n_plus_1 { 1 } else { 0 };
                                     for k in 1..=n_parts {
                                         extra.push_str(&format!(
                                             "    @{r} -> seqbulk_{lr}_{k}: {ent}().1; seqbulk_{lr}_{k}.2 -> @{gnd};\n",
+                                            lr = r.to_lowercase()
+                                        ));
+                                    }
+                                }
+                                None if n_plus_1 => {
+                                    // no shortlist granularity to add ONE
+                                    // part of — redundancy needs each
+                                    // survivor subset ≥ C, so two full-
+                                    // size caps (2C total, stated)
+                                    for k in 1..=2usize {
+                                        extra.push_str(&format!(
+                                            "    @{r} -> seqbulk_{lr}_{k}: Cap({:.0}µF).1; seqbulk_{lr}_{k}.2 -> @{gnd};\n",
+                                            c * 1e6,
                                             lr = r.to_lowercase()
                                         ));
                                     }
@@ -3390,7 +3422,113 @@ async fn run_safety(
                 geo_adjacency.insert(inst.name.clone(), pairs);
             }
         }
-        bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solver, &geo_adjacency, Some(&tran));
+        // PDN-contract recheck for capacitor open/drift faults: the
+        // SAME two dynamic checks that discharge `assume pdn(...)` in
+        // the PDN section below — Z(f) mask sweep and load-step droop
+        // — run against the MUTATED netlist. Keep formulas in lockstep
+        // with that section. Initial conditions reuse the HEALTHY
+        // operating point: valid because a cap open/drift is a DC
+        // no-op (the only fault kinds the campaign rechecks here).
+        let pdn_domains: Vec<(String, bhdl_common::safety::PowerDomain)> = model
+            .parts
+            .iter()
+            .flat_map(|p| p.domains.iter().map(|d| (p.instance.clone(), d.clone())))
+            .collect();
+        let pdn_check = |mutated: &bhdl_netlist::Netlist| -> Vec<(String, String)> {
+            let mut out = Vec::new();
+            if pdn_domains.is_empty() {
+                return out;
+            }
+            let mut conv = NetlistToSpiceConverter::new();
+            conv.set_model_overrides(overrides.clone());
+            let Ok(circ) = conv.convert(mutated) else { return out };
+            let pin_net = |inst: &str, pin: &str| -> Option<String> {
+                mutated.pin_instances.values().find_map(|pi| {
+                    let i = mutated.instances.get(pi.instance)?;
+                    if i.name != inst {
+                        return None;
+                    }
+                    let p = mutated.pins.get(pi.pin_def)?;
+                    if p.name != pin {
+                        return None;
+                    }
+                    mutated.nets.get(pi.net?)?.name.clone()
+                })
+            };
+            for (inst, dom) in &pdn_domains {
+                let Some(net) = dom.pins.first().and_then(|p0| pin_net(inst, p0)) else { continue };
+                let aref = format!("{inst}.{}", dom.name);
+                let budget = |f: f64| -> f64 {
+                    let r = dom.pdn_r_ohm.unwrap_or(0.0);
+                    let l = dom.pdn_l_h.unwrap_or(0.0);
+                    (r * r + (2.0 * std::f64::consts::PI * f * l).powi(2)).sqrt()
+                };
+                if dom.zmask.len() >= 2 {
+                    if let Ok((freqs, z)) = bhdl_spice::ac::run_ac_impedance(&circ, &net, 100e3, 50e6, 20) {
+                        let mask_at = |f: f64| -> Option<f64> {
+                            let m = &dom.zmask;
+                            if f < m[0].0 || f > m[m.len() - 1].0 {
+                                return None;
+                            }
+                            let w = m.windows(2).find(|w| f >= w[0].0 && f <= w[1].0)?;
+                            let t = (f.ln() - w[0].0.ln()) / (w[1].0.ln() - w[0].0.ln());
+                            Some((w[0].1.ln() + t * (w[1].1.ln() - w[0].1.ln())).exp())
+                        };
+                        let mut worst: Option<(f64, f64)> = None;
+                        for (i, &f) in freqs.iter().enumerate() {
+                            let zt = z[i].norm() + budget(f);
+                            if let Some(mk) = mask_at(f) {
+                                let r = zt / mk;
+                                if worst.map(|(wr, _)| r > wr).unwrap_or(true) {
+                                    worst = Some((r, f));
+                                }
+                            }
+                        }
+                        if let Some((r, f)) = worst {
+                            if r > 1.0 {
+                                out.push((aref.clone(), format!("|Z| exceeds the mask {r:.2}x at {:.2}MHz", f / 1e6)));
+                                continue; // the domain's verdict is settled
+                            }
+                        }
+                    }
+                }
+                if std::env::var("BHDL_PDN_RECHECK_DEBUG").is_ok() {
+                    eprintln!("pdn_recheck debug: domain {aref} net {net} zmask_pts={} out_so_far={}", dom.zmask.len(), out.len());
+                }
+                if let (Some(step), Some(dm)) = (dom.step_a, dom.droop_max_pct) {
+                    let rise = dom.step_rise_s.unwrap_or(1e-6);
+                    let dur = dom.step_dur_s.unwrap_or(10.0 * rise);
+                    let total = 4.0 * dur;
+                    let params = bhdl_spice::transient::TransientParams::new(
+                        "",
+                        bhdl_spice::transient::Stimulus::Constant(0.0),
+                        circ.nodes().map(|(_, n)| n.name.clone()).filter(|n| n != "0").collect::<Vec<_>>(),
+                        total,
+                        total / 400.0,
+                    )
+                    .with_timed_current_drives(vec![bhdl_spice::transient::TimedCurrentDrive {
+                        node: net.clone(),
+                        i_amps: step,
+                        t_start: 0.0,
+                        t_end: dur,
+                    }]);
+                    if let Ok(r) = bhdl_spice::ibis_transient::run_transient_ibis_ic(&circ, &params, &[], Some(&healthy_volts)) {
+                        if let Some(tr) = r.probe_voltages.get(&net) {
+                            let v0 = tr.first().copied().unwrap_or(dom.v_nom);
+                            let vmin = tr.iter().cloned().fold(f64::MAX, f64::min);
+                            let extra = step * dom.pdn_r_ohm.unwrap_or(0.0)
+                                + dom.pdn_l_h.unwrap_or(0.0) * step / rise;
+                            let droop_pct = ((v0 - vmin) + extra) / dom.v_nom * 100.0;
+                            if droop_pct > dm {
+                                out.push((aref.clone(), format!("droop {droop_pct:.2}% > {dm}% under the {step}A step")));
+                            }
+                        }
+                    }
+                }
+            }
+            out
+        };
+        bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solver, &geo_adjacency, Some(&tran), Some(&pdn_check));
         // FMEDA metrics from the measured universe.
         bhdl_synthesizer::fault_campaign::compute_metrics(&mut model);
     }
@@ -3614,6 +3752,13 @@ async fn run_safety(
                     }
                 }
             }
+            // the AssumptionOpen gap was recorded at VALIDATION time,
+            // before these checks ran — a machine-discharged assumption
+            // must not keep reporting itself as an open gap
+            model.gaps.retain(|g| {
+                !(matches!(g.class, bhdl_common::safety::GapClass::AssumptionOpen)
+                    && g.subject.ends_with(&format!("pdn:{aref}")))
+            });
         }
     }
 

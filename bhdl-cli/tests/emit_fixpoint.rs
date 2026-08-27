@@ -155,3 +155,65 @@ entity SlSoc() {{
     // STABILITY finding printed
     assert!(!text.contains("STABILITY:"), "{}", text.lines().rev().take(15).collect::<Vec<_>>().join("\n"));
 }
+
+/// N+1 redundancy knob (`requirements { pdn_redundancy: "n+1"; }`):
+/// every bulk stack carries one extra part so ANY single capacitor
+/// open leaves the proven-sufficient count. With a shortlist that is
+/// k+1 library parts; the bare-Cap fallback (asserted here — it is
+/// deterministic) emits TWO full-size caps, each alone sufficient.
+#[test]
+fn emit_bulk_n_plus_1_redundancy() {
+    let root = workspace_root();
+    let dir = std::env::temp_dir().join("bhdl_emit_nplus1_bulk_test");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let board = r#"
+board NPlusOneBulk {
+    requirements { pdn_redundancy: "n+1"; }
+    power VBAT = 3.6V @ 10A;
+    port V50: power out = 5V @ 5A;
+    ground GND;
+    soc: SlSoc();
+    @V50 -> soc.1; soc.GND -> @GND;
+}
+entity SlSoc() {
+    pin 1: power in;
+    pin GND: ground;
+    domain VDD_MAIN pins="1" v=5V i_nom=200mA i_max=1A step=4.5A rise=10us dur=200us droop_max=3% source="FIXTURE — N+1 bulk probe";
+}
+"#;
+    let f = dir.join("n1.bhdl");
+    std::fs::write(&f, board).unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_bhdl-cli"));
+    cmd.current_dir(&dir)
+        .env_remove("BHDL_LIB_PATH")
+        .args(["-I", root.to_str().unwrap()])
+        .arg(&f)
+        .args(["powertree", "--input", "VBAT", "--emit", "1"]);
+    let out = cmd.output().expect("spawn bhdl-cli");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        text.contains("pdn_redundancy: n+1"),
+        "knob not stated:\n{}",
+        text.lines().rev().take(15).collect::<Vec<_>>().join("\n")
+    );
+    let emitted = std::fs::read_to_string(&f).unwrap();
+    // bare-Cap fallback under n+1: two full-size caps, never one
+    let n1 = emitted.contains("seqbulk_v50_1: Cap(");
+    let n2 = emitted.contains("seqbulk_v50_2: Cap(");
+    assert!(n1 && n2, "expected two full-size bulk caps under n+1:\n{emitted}");
+    // and both are the SAME size (each survivor subset must be >= C)
+    let size_of = |k: usize| -> Option<String> {
+        emitted
+            .lines()
+            .find(|l| l.contains(&format!("seqbulk_v50_{k}: Cap(")))
+            .and_then(|l| l.split("Cap(").nth(1))
+            .and_then(|r| r.split(')').next())
+            .map(str::to_string)
+    };
+    assert_eq!(size_of(1), size_of(2), "redundant caps must be identical:\n{emitted}");
+}

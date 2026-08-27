@@ -1144,3 +1144,22 @@ falls back to the bare `Cap` (a stated, visible placeholder — the BOM
 cannot ship it). The CLI states its choice
 (`bulk source: shortlist part <Entity> (<C> nominal)`) so the report
 and the sign-off agree on where the bulk came from.
+
+**N+1 bulk redundancy (§7.5 addendum 5).** The fixpoint bisects bulk
+to the SMALLEST sufficient stack — deliberately zero single-fault
+margin, and the decap sweep's own single-open margin verification
+exempts bulk parts (stated there). For a safety product that is a
+real exposure: the fault campaign's PDN recheck
+(Functional_Safety.md §2.11) classifies a bulk-cap open that defeats
+the droop contract as RESIDUAL. The knob
+`requirements { pdn_redundancy: "n+1"; }` closes it at sizing time:
+every emitted bulk stack carries ONE extra part. For a shortlist
+stack this is provable by construction — the fixpoint proved k
+sufficient, k+1 is placed, any single open leaves k — and the loop
+re-simulates the redundant stack, so a knee/slot-timing regression
+from the EXTRA capacitance is caught, not assumed away. The bare-Cap
+fallback has no part granularity to add one of, so it emits TWO
+full-size caps (2C total, stated). Any other value of the key is
+unknown and IGNORED with a statement. The stated line
+(`pdn_redundancy: n+1 — …`) makes the report and the FMEDA agree on
+why the stack is one part larger than the sizing demands.

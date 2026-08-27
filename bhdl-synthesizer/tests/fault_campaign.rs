@@ -90,7 +90,7 @@ async fn declared_faults_run_classify_and_regenerate_gaps() {
     // (+0 states). Under the all-12V mock with alias-following, the
     // classification is deterministic; measured DC exists for the
     // mechanism because the fixture declares detected_when.
-    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve, &HashMap::new(), None);
+    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve, &HashMap::new(), None, None);
     // 3 generic 2-pin parts × 4 modes (short/open + drift_high/drift_low
     // — value-carrying parts get parametric drift probed at the declared
     // tolerance edge and the labelled 0.5×/2× convention point) +
@@ -201,7 +201,7 @@ safety GeoDemo as g {
 
     // No geometry → ordering fallback: 4 opens + 3 consecutive bridges.
     let mut model = build_safety_model(&netlist, &[&sf]);
-    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve, &HashMap::new(), None);
+    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve, &HashMap::new(), None, None);
     let bridges: Vec<_> = model.universe.iter().filter(|u| u.mode == "short_adjacent").collect();
     assert_eq!(bridges.len(), 3, "{:#?}", model.universe);
     assert!(
@@ -217,7 +217,7 @@ safety GeoDemo as g {
     let mut geo: HashMap<String, Vec<(String, String)>> = HashMap::new();
     geo.insert("u1".into(), vec![("1".into(), "2".into()), ("3".into(), "4".into())]);
     let mut model2 = build_safety_model(&netlist, &[&sf]);
-    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model2, &solve, &geo, None);
+    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model2, &solve, &geo, None, None);
     let bridges2: Vec<_> = model2.universe.iter().filter(|u| u.mode == "short_adjacent").collect();
     assert_eq!(bridges2.len(), 2, "{:#?}", model2.universe);
     assert!(
@@ -254,7 +254,7 @@ async fn fmeda_export_serializes_the_measured_model() {
             .collect())
     };
     run_declared_faults(&netlist, &mut model, &solve, None);
-    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve, &HashMap::new(), None);
+    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve, &HashMap::new(), None, None);
     bhdl_synthesizer::fault_campaign::compute_metrics(&mut model);
     let csvs = bhdl_synthesizer::fault_campaign::export_fmeda(&model);
 
@@ -471,7 +471,7 @@ safety PulseDemo as g {
     assert!(fq.note.as_deref().unwrap_or("").contains("INTERNAL detection"), "{fq:?}");
     assert!(!fq.note.as_deref().unwrap_or("").contains("crossed at"), "external monitor must be blind: {fq:?}");
     // universe: state rows classified over the trace, one λ each
-    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve, &HashMap::new(), Some(&tran));
+    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve, &HashMap::new(), Some(&tran), None);
     let states: Vec<_> = model.universe.iter().filter(|u| u.mode == "state").collect();
     assert_eq!(states.len(), 2, "{states:#?}");
     assert!(states.iter().all(|u| u.ran && !u.fired.is_empty()), "{states:#?}");
@@ -585,7 +585,7 @@ safety LatentDemo as g {
             .collect();
         Ok((times, traces))
     };
-    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve, &HashMap::new(), Some(&tran));
+    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve, &HashMap::new(), Some(&tran), None);
     // base classification: glitch is dangerous + EXTERNALLY detected
     // (flag couples while m intact); quiet detected internally too
     let ug = model.universe.iter().find(|u| u.targets.iter().any(|t| t.contains("glitch"))).unwrap();
@@ -3842,4 +3842,110 @@ board BiasBoard {
     // greedy solver never selected it this test would be VACUOUS —
     // assert we actually exercised the path
     assert!(saw_biased, "no biased part was selected — the fixture no longer exercises the dc_bias path: {:#?}", n.instances.values().filter(|i| i.attributes.contains_key("decap_origin")).map(|i| i.name.clone()).collect::<Vec<_>>());
+}
+
+/// Capacitor open/drift faults are DC no-ops — without the PDN
+/// recheck their FIT weight lands silently in the safe bucket even
+/// when losing the part defeats the droop/mask contract the safety
+/// case consumes via `assume pdn(...)`. The recheck closes that:
+/// a NEW violation (vs the healthy baseline) fires the synthetic
+/// effect `pdn:<ref>` and, with no mechanism seeing it, classifies
+/// RESIDUAL. The mock PdnCheck also proves the gating: it would
+/// report a violation for ANY missing instance, so the resistor-open
+/// row staying clean shows non-capacitor faults never invoke it, and
+/// a baseline-violated ref never surfaces on fault rows.
+#[tokio::test]
+async fn pdn_recheck_classifies_cap_open_and_drift_as_dangerous() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let src = std::fs::read_to_string(ws.join("tests/circuits/realistic/test_safety_pdn_recheck.bhdl")).unwrap();
+    let pr = parse(&src);
+    assert!(pr.errors().is_empty(), "parse: {:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let netlist = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+    let mut model = build_safety_model(&netlist, &[&sf]);
+    assert!(model.errors.is_empty(), "errors: {:#?}", model.errors);
+    // the fixture's safety case consumes the contract
+    assert!(
+        model.scopes.iter().any(|s| s.assumptions.iter().any(|a| a.id == "pdn:soc.VDD")),
+        "fixture must declare assume pdn(brd.soc.VDD)"
+    );
+
+    let solve = |faulted: &bhdl_netlist::Netlist| -> Result<HashMap<String, f64>, String> {
+        Ok(faulted
+            .nets
+            .iter()
+            .filter_map(|(_, n)| n.name.clone())
+            .map(|name| {
+                let v = if name == "GND" { 0.0 } else { 12.0 };
+                (name, v)
+            })
+            .collect())
+    };
+    // healthy c_bulk capacitance (numeric prefix; the unit suffix is
+    // preserved by apply_drift, so prefix comparison is unit-safe)
+    let cap_num = |n: &bhdl_netlist::Netlist| -> Option<f64> {
+        n.instances.iter().find(|(_, i)| i.name == "c_bulk").and_then(|(_, i)| {
+            let v = i.attributes.get("capacitance")?;
+            let end = v.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(v.len());
+            v[..end].parse::<f64>().ok()
+        })
+    };
+    let healthy_c = cap_num(&netlist).expect("fixture c_bulk has a capacitance attribute");
+    // Mock PdnCheck: "always.BROKEN" is violated on EVERY board
+    // including healthy (baseline suppression must eat it); the real
+    // contract is violated when c_bulk is missing OR reduced, and —
+    // deliberately — when ANY other instance is missing (r_load open
+    // would report if the campaign invoked the check for it).
+    let pdn = |mutated: &bhdl_netlist::Netlist| -> Vec<(String, String)> {
+        let mut out = vec![("always.BROKEN".to_string(), "violated healthy too".to_string())];
+        let n_inst = mutated.instances.iter().count();
+        let full = netlist.instances.iter().count();
+        let degraded = match cap_num(mutated) {
+            None => true,                   // c_bulk opened
+            Some(c) => c < 0.9 * healthy_c, // c_bulk drifted low
+        } || n_inst < full; // ANY instance missing
+        if degraded {
+            out.push(("soc.VDD".to_string(), "droop 9.99% > 4% under the 2A step".to_string()));
+        }
+        out
+    };
+    bhdl_synthesizer::fault_campaign::run_universe(
+        &netlist, &mut model, &solve, &HashMap::new(), None, Some(&pdn),
+    );
+
+    let row = |part: &str, mode: &str| -> &bhdl_common::safety::UniverseFault {
+        model
+            .universe
+            .iter()
+            .find(|u| u.part == part && u.mode == mode)
+            .unwrap_or_else(|| panic!("no {part} {mode} row: {:#?}", model.universe))
+    };
+    // c_bulk open: fires the synthetic pdn effect, undetected = residual
+    let open = row("c_bulk", "open");
+    assert!(open.fired.contains(&"pdn:soc.VDD".to_string()), "{open:#?}");
+    assert!(open.detected.is_empty(), "{open:#?}");
+    assert!(
+        open.note.as_deref().unwrap_or("").contains("PDN contract VIOLATED"),
+        "{open:#?}"
+    );
+    // c_bulk drift_low (the -50% convention probe halves the capacitance)
+    let dl = row("c_bulk", "drift_low");
+    assert!(dl.fired.contains(&"pdn:soc.VDD".to_string()), "{dl:#?}");
+    // drift_high doubles it — no violation, no pdn effect
+    let dh = row("c_bulk", "drift_high");
+    assert!(!dh.fired.iter().any(|f| f.starts_with("pdn:")), "{dh:#?}");
+    // r_load open: NOT a capacitor — the recheck is never invoked even
+    // though the mock would report a violation (vacuity guard on the
+    // gating), so no pdn effect and no PDN note
+    let ro = row("r_load", "open");
+    assert!(!ro.fired.iter().any(|f| f.starts_with("pdn:")), "{ro:#?}");
+    assert!(!ro.note.as_deref().unwrap_or("").contains("PDN contract"), "{ro:#?}");
+    // baseline suppression: the always-violated ref never surfaces
+    for u in &model.universe {
+        assert!(!u.fired.iter().any(|f| f.contains("always.BROKEN")), "{u:#?}");
+        assert!(!u.note.as_deref().unwrap_or("").contains("always.BROKEN"), "{u:#?}");
+    }
 }

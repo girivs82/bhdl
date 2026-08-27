@@ -1588,7 +1588,22 @@ pub fn project_decap_lib(source: &str) -> Option<String> {
         .map(|(_, v)| v.trim_matches('"').to_string())
 }
 
-pub const EMIT_IMPORT: &str = "import { BuckStage, LdoStage, BuckExtStage, PreregStage, BoostStage } from \"bhdl-stdlib/power/stages.bhdl\";";
+/// Project knob `requirements { pdn_redundancy: "n+1"; }` — size the
+/// fixpoint's startup-bulk stack so ANY single capacitor open leaves
+/// the proven-sufficient count in place. The decap sweep's own margin
+/// already covers non-bulk single-opens (its bulk exemption is what
+/// this knob closes); the fault campaign's PDN recheck is the verdict
+/// either way. Any value other than "n+1" is unknown — the caller
+/// states it and proceeds without redundancy.
+pub fn project_pdn_redundancy(source: &str) -> Option<String> {
+    let masked = crate::stage_resolution::mask_comments(source);
+    crate::stage_resolution::scan_project_requirements(&masked)
+        .into_iter()
+        .find(|(k, _)| k == "pdn_redundancy")
+        .map(|(_, v)| v.trim_matches('"').to_string())
+}
+
+pub const EMIT_IMPORT: &str ="import { BuckStage, LdoStage, BuckExtStage, PreregStage, BoostStage } from \"bhdl-stdlib/power/stages.bhdl\";";
 
 fn fmt_v(v: f64) -> String {
     format!("{v}V")

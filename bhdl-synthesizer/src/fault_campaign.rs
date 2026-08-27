@@ -511,6 +511,16 @@ pub struct PinDrive {
 pub type TranSolver<'a> =
     dyn Fn(&Netlist, f64, &[PinDrive]) -> Result<(Vec<f64>, HashMap<String, Vec<f64>>), String> + 'a;
 
+/// PDN-contract recheck: (mutated netlist) → the list of VIOLATED
+/// domain contracts as (`<instance>.<domain>`, detail). The caller
+/// supplies the engine (the CLI's Z(f) mask sweep + droop transient —
+/// the SAME checks that discharge `assume pdn(...)` on the healthy
+/// board). The campaign invokes it for CAPACITOR open/drift faults,
+/// which are invisible to the DC operating point (a cap is an open at
+/// DC) yet can defeat the dynamic contract the safety case leans on —
+/// without this, their FIT weight lands silently in the safe bucket.
+pub type PdnCheck<'a> = dyn Fn(&Netlist) -> Vec<(String, String)> + 'a;
+
 /// Split a behavior string into DC mutation ops and transient pulse
 /// ops. `pulse(PIN, <V>, <duration>)` is transient; everything else is
 /// applied as a permanent mutation. Several ';'-separated ops are ONE
@@ -1116,9 +1126,68 @@ pub fn run_universe(
     solve: &Solver,
     geo_adjacency: &HashMap<String, Vec<(String, String)>>,
     tran: Option<&TranSolver>,
+    pdn: Option<&PdnCheck>,
 ) {
     use bhdl_common::safety::{PartData, UniverseFault};
     let view = View::build(netlist);
+    // ── PDN recheck plumbing (capacitor open/drift faults) ──────────
+    // A capacitor by the same broadened detection the sizing engines
+    // use: module Cap|Capacitor OR a capacitance attribute.
+    let is_capacitor = |inst_name: &str| -> bool {
+        view.inst
+            .get(inst_name)
+            .and_then(|id| netlist.instances.get(*id))
+            .map(|i| {
+                netlist
+                    .modules
+                    .get(i.definition)
+                    .map(|m| matches!(m.name.as_str(), "Cap" | "Capacitor"))
+                    .unwrap_or(false)
+                    || i.attributes.contains_key("capacitance")
+            })
+            .unwrap_or(false)
+    };
+    // `assume pdn(<inst>.<domain>)` refs the safety case consumes — a
+    // violated one under fault is DANGEROUS to every goal leaning on
+    // it; a violation the case never consumed is a design-only note.
+    let pdn_assumed: std::collections::HashSet<String> = model
+        .scopes
+        .iter()
+        .flat_map(|s| s.assumptions.iter())
+        .filter_map(|a| a.id.strip_prefix("pdn:").map(str::to_string))
+        .collect();
+    // Baseline ONCE on the healthy board: a contract already violated
+    // healthy carries its own AouViolated gap — only NEW violations
+    // are the fault's doing.
+    let pdn_baseline: std::collections::HashSet<String> = match pdn {
+        Some(chk) => chk(netlist).into_iter().map(|(aref, _)| aref).collect(),
+        None => std::collections::HashSet::new(),
+    };
+    // Fold NEW violations of the mutated board into a fault row: a
+    // consumed contract fires the synthetic effect `pdn:<ref>` (DC
+    // monitors cannot see a dynamic violation, so with no mechanism
+    // detecting it the row classifies RESIDUAL — exactly the exposure
+    // this recheck exists to surface).
+    let pdn_recheck = |faulted: &Netlist, uf: &mut UniverseFault| {
+        let Some(chk) = pdn else { return };
+        for (aref, detail) in chk(faulted) {
+            if pdn_baseline.contains(&aref) {
+                continue;
+            }
+            if pdn_assumed.contains(&aref) {
+                uf.fired.push(format!("pdn:{aref}"));
+                let n = format!(
+                    "PDN contract VIOLATED under this fault: {detail} — dynamic violation, invisible to DC monitors (a supervisor would only see it during the transient itself)"
+                );
+                uf.note = Some(match uf.note.take() { Some(p) => format!("{p}; {n}"), None => n });
+            } else {
+                let n = format!(
+                    "PDN contract of {aref} violated under this fault ({detail}) — design-only: the safety case declares no `assume pdn({aref})`, stated"
+                );
+                uf.note = Some(match uf.note.take() { Some(p) => format!("{p}; {n}"), None => n });
+            }
+        }
+    };
     // (instance, state name) → behavior, for state-mode (re-)application
     let state_behaviors: HashMap<(String, String), Option<String>> = model
         .parts
@@ -1457,6 +1526,17 @@ pub fn run_universe(
                 if !notes.is_empty() {
                     uf.note = Some(notes.join("; "));
                 }
+                // capacitance drift is invisible at DC — recheck the
+                // dynamic PDN contract at the worst probe magnitude
+                if is_capacitor(&inst) {
+                    let mut refaulted = netlist.clone();
+                    if apply_drift(&mut refaulted, &view, &inst, &format!("{wpct:+}%")).is_ok() {
+                        pdn_recheck(&refaulted, &mut uf);
+                        if !uf.fired.is_empty() {
+                            uf.false_alarm = false;
+                        }
+                    }
+                }
                 universe.push(uf);
                 continue;
             }
@@ -1564,6 +1644,16 @@ pub fn run_universe(
             if !errs.is_empty() {
                 let e = errs.join("; ");
                 uf.note = Some(match uf.note.take() { Some(n) => format!("{n}; {e}"), None => e });
+            }
+            // an OPEN capacitor is a DC no-op — recheck the dynamic
+            // PDN contract on the mutated board (the decap sweep's
+            // single-open margin exempts BULK parts, stated there;
+            // this is where that exemption gets its honest verdict)
+            if mode == "open" && is_capacitor(&part.instance) {
+                pdn_recheck(&faulted, &mut uf);
+                if !uf.fired.is_empty() {
+                    uf.false_alarm = false;
+                }
             }
             universe.push(uf);
         }
