@@ -2193,6 +2193,24 @@ async fn run_powertree(
                 let base_region = region;
                 let mut chains: Vec<String> = Vec::new();
                 let mut bulk: std::collections::BTreeMap<String, f64> = Default::default();
+                // bulk comes FROM the characterized shortlist when the
+                // project declares one (spec §7.5 addendum 4): stack the
+                // library's largest characterized part instead of a bare
+                // farad value — every capacitor on the rail is then a
+                // shortlisted, orderable, curve-aware part
+                let bulk_part = bhdl_synthesizer::powertree::project_decap_lib(input_content)
+                    .and_then(|lib| bhdl_synthesizer::powertree::project_decap_lib(input_content).map(|l| (lib, l)))
+                    .and_then(|(lib, _)| {
+                        bhdl_synthesizer::decap_synthesis::bulk_part_from_library(&lib).map(|(e, c, curve)| (lib, e, c, curve))
+                    });
+                match &bulk_part {
+                    Some((lib, e, c, curve)) => println!(
+                        "  bulk source: shortlist part {e} ({:.0}µF nominal{}, {lib})",
+                        c * 1e6,
+                        if curve.is_empty() { "" } else { ", DC-bias curve declared" }
+                    ),
+                    None => println!("  bulk source: bare Cap (no project decap_lib shortlist — stated; declare one to make bulk a characterized, orderable part)"),
+                }
                 let mut converged: Option<String> = None;
                 let mut open_findings: Vec<String> = Vec::new();
                 let mut last_built: Option<(bhdl_netlist::Netlist, SourceFile)> = None;
@@ -2214,11 +2232,22 @@ async fn run_powertree(
                     if !bulk.is_empty() {
                         extra.push_str("\n    // bulk (sized by the power-up/interaction fixpoint — the sim is the sizing oracle)\n");
                         for (r, c) in &bulk {
-                            extra.push_str(&format!(
-                                "    @{r} -> seqbulk_{lr}: Cap({:.0}µF).1; seqbulk_{lr}.2 -> @{gnd};\n",
-                                c * 1e6,
-                                lr = r.to_lowercase()
-                            ));
+                            match &bulk_part {
+                                Some((_, ent, nom, _)) => {
+                                    let n_parts = (c / nom).ceil().max(1.0) as usize;
+                                    for k in 1..=n_parts {
+                                        extra.push_str(&format!(
+                                            "    @{r} -> seqbulk_{lr}_{k}: {ent}().1; seqbulk_{lr}_{k}.2 -> @{gnd};\n",
+                                            lr = r.to_lowercase()
+                                        ));
+                                    }
+                                }
+                                None => extra.push_str(&format!(
+                                    "    @{r} -> seqbulk_{lr}: Cap({:.0}µF).1; seqbulk_{lr}.2 -> @{gnd};\n",
+                                    c * 1e6,
+                                    lr = r.to_lowercase()
+                                )),
+                            }
                         }
                     }
                     if !extra.is_empty() {
@@ -2227,8 +2256,22 @@ async fn run_powertree(
                             &format!("{extra}    {}", bhdl_synthesizer::powertree::EMIT_END),
                         );
                     }
-                    let new_text = bhdl_synthesizer::powertree::splice_power_region(&disk, &region)
+                    let mut new_text = bhdl_synthesizer::powertree::splice_power_region(&disk, &region)
                         .map_err(|e| anyhow::anyhow!("{e}"))?;
+                    if let Some((lib, ent, _, _)) = &bulk_part {
+                        if !bulk.is_empty() && !new_text.lines().any(|l| l.trim_start().starts_with("import") && l.contains(ent.as_str())) {
+                            let mut insert_at = 0usize;
+                            let mut o3 = 0usize;
+                            for line in new_text.split_inclusive('\n') {
+                                if line.trim_start().starts_with("import ") {
+                                    insert_at = o3 + line.len();
+                                }
+                                o3 += line.len();
+                            }
+                            let rel = if lib.starts_with('.') || lib.starts_with('/') || lib.starts_with("bhdl-stdlib") { lib.clone() } else { format!("./{lib}") };
+                            new_text.insert_str(insert_at, &format!("import {{ {ent} }} from \"{rel}\";\n"));
+                        }
+                    }
                     let resolved = resolve_stage_requirements(&new_text, input_path, None, false)?;
                     let re_pr = parse(&resolved);
                     if !re_pr.errors().is_empty() {

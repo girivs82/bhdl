@@ -1,0 +1,553 @@
+{
+  "board": "FaultDemo",
+  "mission": {
+    "ambient_c": 40.0,
+    "on_hours": null,
+    "cycles": null,
+    "environment": null,
+    "quality": null,
+    "profile": null,
+    "phases": [],
+    "time_basis": null,
+    "lifetime_h": 15000.0
+  },
+  "scopes": [
+    {
+      "path": "",
+      "entity": "FaultDemo",
+      "ns": "brd",
+      "goals": [
+        {
+          "name": "SG_MID",
+          "path": "SG_MID",
+          "library_type": null,
+          "level": "AsilB",
+          "title": "mid node stays in its window",
+          "id": "SG-FC-1",
+          "ftti": null,
+          "safe_state": null,
+          "effects": [
+            {
+              "name": "overvoltage",
+              "expr": "brd.r_bot.1>8V",
+              "severity": "S2",
+              "refs": [
+                "r_bot.1"
+              ]
+            },
+            {
+              "name": "undervoltage",
+              "expr": "brd.r_bot.1<4V",
+              "severity": "S2",
+              "refs": [
+                "r_bot.1"
+              ]
+            }
+          ],
+          "refines": null
+        }
+      ],
+      "mechanisms": [
+        {
+          "instance": "sense",
+          "handle": "brd.sense",
+          "kind": "Psm",
+          "goal": "SG_MID",
+          "detects": [
+            "overvoltage"
+          ],
+          "protects": null,
+          "claimed_dc": 0.9,
+          "dc_source": "FIXTURE claim — measured DC supersedes",
+          "interval": null,
+          "latency": "1ms",
+          "detected_when": "brd.sense.1>4V",
+          "measured_dc": 1.0,
+          "measured_note": "2 dangerous fault(s), λ-weighted basis (equal mode split — mode fractions are unmeasured data)"
+        }
+      ],
+      "faults": [
+        {
+          "kind": "short",
+          "targets": [
+            "r_top.1",
+            "r_top.2"
+          ],
+          "expect": "SG_MID.overvoltage",
+          "detected_by": "sense",
+          "within": "10ms",
+          "run": true,
+          "fired": [
+            "SG_MID.overvoltage"
+          ],
+          "expectation_met": true,
+          "note": "FTTI MEASURED: board path settles 0.0500ms after the fault (transient from the healthy operating point, step 0.0500ms — resolution = one step) + 1.0000ms declared chip-internal latency+interval = 1.0500ms total",
+          "timing_met": true
+        },
+        {
+          "kind": "short",
+          "targets": [
+            "r_bot.1",
+            "r_bot.2"
+          ],
+          "expect": "SG_MID.undervoltage",
+          "detected_by": null,
+          "within": null,
+          "run": true,
+          "fired": [
+            "SG_MID.undervoltage"
+          ],
+          "expectation_met": true,
+          "note": null,
+          "timing_met": null
+        },
+        {
+          "kind": "open",
+          "targets": [
+            "r_bot"
+          ],
+          "expect": "SG_MID.overvoltage",
+          "detected_by": "sense",
+          "within": "500us",
+          "run": true,
+          "fired": [
+            "SG_MID.overvoltage"
+          ],
+          "expectation_met": true,
+          "note": "FTTI MEASURED: board path settles 0.0025ms after the fault (transient from the healthy operating point, step 0.0025ms — resolution = one step) + 1.0000ms declared chip-internal latency+interval = 1.0025ms total",
+          "timing_met": false
+        },
+        {
+          "kind": "open",
+          "targets": [
+            "r_top"
+          ],
+          "expect": "SG_MID.overvoltage",
+          "detected_by": null,
+          "within": null,
+          "run": true,
+          "fired": [
+            "SG_MID.undervoltage"
+          ],
+          "expectation_met": false,
+          "note": null,
+          "timing_met": null
+        },
+        {
+          "kind": "drift",
+          "targets": [
+            "r_top",
+            "+200%"
+          ],
+          "expect": "SG_MID.undervoltage",
+          "detected_by": null,
+          "within": null,
+          "run": true,
+          "fired": [
+            "SG_MID.undervoltage"
+          ],
+          "expectation_met": true,
+          "note": null,
+          "timing_met": null
+        },
+        {
+          "kind": "state",
+          "targets": [
+            "sense",
+            "\"sense_stuck\""
+          ],
+          "expect": "SG_MID.overvoltage",
+          "detected_by": null,
+          "within": null,
+          "run": true,
+          "fired": [],
+          "expectation_met": false,
+          "note": null,
+          "timing_met": null
+        }
+      ],
+      "waivers": [],
+      "assumptions": [],
+      "metrics": {
+        "lambda_total_fit": 45.13428945225282,
+        "lambda_residual_fit": 12.295575990971958,
+        "lambda_latent_fit": 4.0,
+        "unmeasured_faults": 0,
+        "spfm": 0.7275779426198934,
+        "lfm": 0.8781925484164816,
+        "pmhf_fit": 12.295760424611823,
+        "pmhf_dual_fit": 0.0001844336398645794,
+        "target_level": "AsilB",
+        "targets": [
+          0.9,
+          0.6,
+          100.0
+        ],
+        "pass": false
+      }
+    }
+  ],
+  "parts": [
+    {
+      "instance": "r_bot",
+      "type_name": "Res",
+      "parent": null,
+      "data": {
+        "Handbook": {
+          "class": "res_fixed_film",
+          "source": "MIL-HDBK-217F §9.2 fixed film (RL/RLR model)",
+          "per": "MILHDBK217F",
+          "fit": 12.196552005336947,
+          "fit_basis": "λ=12.2 FIT = 1000·λb(0.00081)·π_R(1.0@1000Ω)·π_Q(15 lower)·π_E(1 GB) @ S=0.14, Ta=40°C per MILHDBK217F [MIL-HDBK-217F N2 §9.2 (RL MIL-R-22684 / RLR MIL-R-39017), p.9-3/9-4]"
+        }
+      },
+      "domains": []
+    },
+    {
+      "instance": "r_m1",
+      "type_name": "Res",
+      "parent": null,
+      "data": {
+        "Handbook": {
+          "class": "res_fixed_film",
+          "source": "MIL-HDBK-217F §9.2 fixed film (RL/RLR model)",
+          "per": "MILHDBK217F",
+          "fit": 10.54313747030891,
+          "fit_basis": "λ=10.5 FIT = 1000·λb(0.00070)·π_R(1.0@10000Ω)·π_Q(15 lower)·π_E(1 GB) @ S=0.00, Ta=40°C per MILHDBK217F [MIL-HDBK-217F N2 §9.2 (RL MIL-R-22684 / RLR MIL-R-39017), p.9-3/9-4]"
+        }
+      },
+      "domains": []
+    },
+    {
+      "instance": "r_top",
+      "type_name": "Res",
+      "parent": null,
+      "data": {
+        "Handbook": {
+          "class": "res_fixed_film",
+          "source": "MIL-HDBK-217F §9.2 fixed film (RL/RLR model)",
+          "per": "MILHDBK217F",
+          "fit": 12.394599976606973,
+          "fit_basis": "λ=12.4 FIT = 1000·λb(0.00083)·π_R(1.0@1000Ω)·π_Q(15 lower)·π_E(1 GB) @ S=0.15, Ta=40°C per MILHDBK217F [MIL-HDBK-217F N2 §9.2 (RL MIL-R-22684 / RLR MIL-R-39017), p.9-3/9-4]"
+        }
+      },
+      "domains": []
+    },
+    {
+      "instance": "sense",
+      "type_name": "DemoSense",
+      "parent": null,
+      "data": {
+        "Behavioral": {
+          "failure_states": 2,
+          "source": "FIXTURE — illustrative split",
+          "states": [
+            {
+              "name": "sense_open",
+              "fit": 6.0,
+              "behavior": "open(2)",
+              "internal_detection": null
+            },
+            {
+              "name": "sense_stuck",
+              "fit": 4.0,
+              "behavior": "short(1,2)",
+              "internal_detection": null
+            }
+          ]
+        }
+      },
+      "domains": []
+    }
+  ],
+  "universe": [
+    {
+      "scope": "",
+      "part": "r_bot",
+      "mode": "short",
+      "targets": [
+        "r_bot.1",
+        "r_bot.2"
+      ],
+      "ran": true,
+      "fired": [
+        "SG_MID.undervoltage"
+      ],
+      "detected": [],
+      "false_alarm": false,
+      "latent": false,
+      "latent_exposed_fit": 0.0,
+      "weight_fit": 3.049138001334237,
+      "note": null
+    },
+    {
+      "scope": "",
+      "part": "r_bot",
+      "mode": "open",
+      "targets": [
+        "r_bot"
+      ],
+      "ran": true,
+      "fired": [
+        "SG_MID.overvoltage"
+      ],
+      "detected": [
+        "brd.sense"
+      ],
+      "false_alarm": false,
+      "latent": false,
+      "latent_exposed_fit": 0.0,
+      "weight_fit": 3.049138001334237,
+      "note": null
+    },
+    {
+      "scope": "",
+      "part": "r_bot",
+      "mode": "drift_high",
+      "targets": [
+        "r_bot",
+        "+5%"
+      ],
+      "ran": true,
+      "fired": [],
+      "detected": [],
+      "false_alarm": false,
+      "latent": false,
+      "latent_exposed_fit": 0.0,
+      "weight_fit": 3.049138001334237,
+      "note": "probes: ±5% (declared tolerance) and 0.5×/2× (FMEDA convention, not vendor data); λ = equal 4-way mode split"
+    },
+    {
+      "scope": "",
+      "part": "r_bot",
+      "mode": "drift_low",
+      "targets": [
+        "r_bot",
+        "-50%"
+      ],
+      "ran": true,
+      "fired": [
+        "SG_MID.undervoltage"
+      ],
+      "detected": [],
+      "false_alarm": false,
+      "latent": false,
+      "latent_exposed_fit": 0.0,
+      "weight_fit": 3.049138001334237,
+      "note": "probes: ±5% (declared tolerance) and 0.5×/2× (FMEDA convention, not vendor data); λ = equal 4-way mode split; worst probe -50%; sweep: UNDETECTED dangerous window -49%..-95% (to probe limit)"
+    },
+    {
+      "scope": "",
+      "part": "r_m1",
+      "mode": "short",
+      "targets": [
+        "r_m1.1",
+        "r_m1.2"
+      ],
+      "ran": true,
+      "fired": [],
+      "detected": [
+        "brd.sense"
+      ],
+      "false_alarm": true,
+      "latent": false,
+      "latent_exposed_fit": 0.0,
+      "weight_fit": 2.6357843675772274,
+      "note": null
+    },
+    {
+      "scope": "",
+      "part": "r_m1",
+      "mode": "open",
+      "targets": [
+        "r_m1"
+      ],
+      "ran": true,
+      "fired": [],
+      "detected": [],
+      "false_alarm": false,
+      "latent": false,
+      "latent_exposed_fit": 0.0,
+      "weight_fit": 2.6357843675772274,
+      "note": null
+    },
+    {
+      "scope": "",
+      "part": "r_m1",
+      "mode": "drift_high",
+      "targets": [
+        "r_m1",
+        "+5%"
+      ],
+      "ran": true,
+      "fired": [],
+      "detected": [],
+      "false_alarm": false,
+      "latent": false,
+      "latent_exposed_fit": 0.0,
+      "weight_fit": 2.6357843675772274,
+      "note": "probes: ±5% (declared tolerance) and 0.5×/2× (FMEDA convention, not vendor data); λ = equal 4-way mode split"
+    },
+    {
+      "scope": "",
+      "part": "r_m1",
+      "mode": "drift_low",
+      "targets": [
+        "r_m1",
+        "-5%"
+      ],
+      "ran": true,
+      "fired": [],
+      "detected": [],
+      "false_alarm": false,
+      "latent": false,
+      "latent_exposed_fit": 0.0,
+      "weight_fit": 2.6357843675772274,
+      "note": "probes: ±5% (declared tolerance) and 0.5×/2× (FMEDA convention, not vendor data); λ = equal 4-way mode split"
+    },
+    {
+      "scope": "",
+      "part": "r_top",
+      "mode": "short",
+      "targets": [
+        "r_top.1",
+        "r_top.2"
+      ],
+      "ran": true,
+      "fired": [
+        "SG_MID.overvoltage"
+      ],
+      "detected": [
+        "brd.sense"
+      ],
+      "false_alarm": false,
+      "latent": false,
+      "latent_exposed_fit": 0.0,
+      "weight_fit": 3.098649994151743,
+      "note": null
+    },
+    {
+      "scope": "",
+      "part": "r_top",
+      "mode": "open",
+      "targets": [
+        "r_top"
+      ],
+      "ran": true,
+      "fired": [
+        "SG_MID.undervoltage"
+      ],
+      "detected": [],
+      "false_alarm": false,
+      "latent": false,
+      "latent_exposed_fit": 0.0,
+      "weight_fit": 3.098649994151743,
+      "note": null
+    },
+    {
+      "scope": "",
+      "part": "r_top",
+      "mode": "drift_high",
+      "targets": [
+        "r_top",
+        "+100%"
+      ],
+      "ran": true,
+      "fired": [
+        "SG_MID.undervoltage"
+      ],
+      "detected": [],
+      "false_alarm": false,
+      "latent": false,
+      "latent_exposed_fit": 0.0,
+      "weight_fit": 3.098649994151743,
+      "note": "probes: ±5% (declared tolerance) and 0.5×/2× (FMEDA convention, not vendor data); λ = equal 4-way mode split; worst probe +100%; sweep: UNDETECTED dangerous window +90%..+900% (to probe limit)"
+    },
+    {
+      "scope": "",
+      "part": "r_top",
+      "mode": "drift_low",
+      "targets": [
+        "r_top",
+        "-5%"
+      ],
+      "ran": true,
+      "fired": [],
+      "detected": [],
+      "false_alarm": false,
+      "latent": false,
+      "latent_exposed_fit": 0.0,
+      "weight_fit": 3.098649994151743,
+      "note": "probes: ±5% (declared tolerance) and 0.5×/2× (FMEDA convention, not vendor data); λ = equal 4-way mode split"
+    },
+    {
+      "scope": "",
+      "part": "sense",
+      "mode": "state",
+      "targets": [
+        "sense",
+        "sense_open"
+      ],
+      "ran": true,
+      "fired": [],
+      "detected": [
+        "brd.sense"
+      ],
+      "false_alarm": true,
+      "latent": false,
+      "latent_exposed_fit": 0.0,
+      "weight_fit": 6.0,
+      "note": null
+    },
+    {
+      "scope": "",
+      "part": "sense",
+      "mode": "state",
+      "targets": [
+        "sense",
+        "sense_stuck"
+      ],
+      "ran": true,
+      "fired": [],
+      "detected": [],
+      "false_alarm": false,
+      "latent": true,
+      "latent_exposed_fit": 6.14778799548598,
+      "weight_fit": 4.0,
+      "note": "LATENT: with open(r_bot) also injected, the dangerous effect persists UNDETECTED"
+    }
+  ],
+  "gaps": [
+    {
+      "class": "EffectUndetected",
+      "goal": "SG_MID",
+      "subject": "undervoltage",
+      "fix": "declare a psm mechanism that detects 'undervoltage' or refine the goal"
+    },
+    {
+      "class": "FaultUnrun",
+      "goal": "SG_MID.overvoltage",
+      "subject": "open(r_bot)",
+      "fix": "campaign ran: SG_MID.overvoltage fired and is detected, but the FTTI check FAILED — never detected or the mechanism's declared interval+latency exceeds within 500us"
+    },
+    {
+      "class": "FaultUnrun",
+      "goal": "SG_MID.overvoltage",
+      "subject": "open(r_top)",
+      "fix": "campaign ran: expected SG_MID.overvoltage did NOT fire (fired: [SG_MID.undervoltage]) — fix the fault declaration or the design"
+    },
+    {
+      "class": "FaultUnrun",
+      "goal": "SG_MID.overvoltage",
+      "subject": "state(sense,\"sense_stuck\")",
+      "fix": "campaign ran: expected SG_MID.overvoltage did NOT fire (fired: []) — fix the fault declaration or the design"
+    },
+    {
+      "class": "MetricMissed",
+      "goal": "",
+      "subject": "ASIL_B metrics",
+      "fix": "SPFM 72.8% < 90% (ISO 26262-5:2018 T4/T5/T6) — raise coverage or reduce residual λ"
+    }
+  ],
+  "errors": []
+}

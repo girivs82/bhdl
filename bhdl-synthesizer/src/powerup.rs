@@ -708,14 +708,19 @@ fn build_model(netlist: &Netlist, sf: &SourceFile, rep: &mut PowerupReport) -> (
     // (datasheet-procedure margins, stated).
     let mut caps_raw: Vec<(NetId, f64, Option<String>, bool)> = Vec::new();
     for (i, _inst) in netlist.instances.iter() {
-        if !matches!(module_of(i).as_str(), "Cap" | "Capacitor") {
+        // a capacitor: the stdlib Cap, OR any characterized library
+        // part declaring its capacitance (decap networks, shortlist
+        // bulk) — previously invisible to the dynamics engine, stated
+        let is_cap = matches!(module_of(i).as_str(), "Cap" | "Capacitor")
+            || attr(i, "capacitance").is_some();
+        if !is_cap {
             continue;
         }
         let (Some(n1), Some(n2)) = (
             pin_net.get(&(i, "1".to_string())),
             pin_net.get(&(i, "2".to_string())),
         ) else { continue };
-        let Some(v) = attr_si(i, "value") else { continue };
+        let Some(v) = attr_si(i, "value").or_else(|| attr_si(i, "capacitance")) else { continue };
         for (a, b) in [(n1, n2), (n2, n1)] {
             if net_class(*b) == Some(NetClass::Ground) && net_class(*a) != Some(NetClass::Ground) {
                 caps_raw.push((*a, v, attr(i, "dc_bias"), _inst.name.starts_with("seqbulk_")));

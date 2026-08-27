@@ -1,0 +1,52 @@
+import { BuckStage, LdoStage, BuckExtStage, PreregStage, BoostStage } from "bhdl-stdlib/power/stages.bhdl";
+entity LoopSoc() {
+    pin 1: power in;
+    pin 2: power in;
+    pin GND: ground;
+    domain VDD_MAIN pins="1" v=5V i_nom=200mA i_max=1A slot=1 step=4.5A rise=10us dur=200us droop_max=2% source="FIXTURE — loop probe";
+    domain VDD_AUX pins="2" v=3.3V i_nom=100mA i_max=0.3A slot=2 source="FIXTURE — loop probe";
+}
+board AutoLoop {
+    power VBAT = 3.6V @ 10A;
+    port V50: power out = 5V @ 5A;
+    port V33: power out = 3.3V @ 1A;
+    ground GND;
+    soc: LoopSoc();
+    @V50 -> soc.1; @V33 -> soc.2; soc.GND -> @GND;
+
+
+
+
+
+    // ── BEGIN GENERATED POWER TREE (bhdl powertree --emit — regenerate, never hand-edit) ──
+    // option "min-inductors (cost)" — LDO wherever the dissipation bound allows (no inductor); ONE shared intermediate for the rest
+    // assumptions are CONSERVATIVE ESTIMATES (stated per stage); the real part swapped in must MEET OR BEAT them
+
+    u_v33: LdoStage(vout=3.3V, i_max=0.3A, vin=3.6V, noise=30uV);
+    @VBAT -> u_v33.VIN;
+    u_v33.VOUT -> @V33;
+    u_v33.GND -> @GND;
+    attribute u_v33.powertree_eff_assumed_pct = "91.7";
+    attribute u_v33.powertree_noise_assumed_uvrms = "30";
+    attribute u_v33.powertree_rating_required_a = "0.375";
+    attribute u_v33.powertree_basis = "physics: Vout/Vin";
+    attribute u_v33.powertree_serves = "soc.VDD_AUX";
+
+    u_v50: BoostStage(vout=5V, i_max=1A, vin=3.6V);
+    @VBAT -> u_v50.VIN;
+    u_v50.VOUT -> @V50;
+    u_v50.GND -> @GND;
+    attribute u_v50.powertree_eff_assumed_pct = "85.0";
+    attribute u_v50.powertree_noise_assumed_uvrms = "500";
+    attribute u_v50.powertree_rating_required_a = "1.736";
+    attribute u_v50.powertree_basis = "estimate: conservative boost band at 0.20A; step-up 1.4:1 penalty 0pt; switch carries the INPUT current 1.39A = I_out·V_out/V_in";
+    attribute u_v50.powertree_serves = "soc.VDD_MAIN";
+    
+    // sequencing chains (auto: declared domain ordering — verified by ERC033 + `bhdl powerup`)
+    @V50 -> seqr_u_v33: Res(100kΩ).1; seqr_u_v33.2 -> u_v33.EN;
+    u_v33.EN -> seqc_u_v33: Cap(1.000e-8).1; seqc_u_v33.2 -> @GND;
+
+    // bulk (sized by the power-up/interaction fixpoint — the sim is the sizing oracle)
+    @V50 -> seqbulk_v50: Cap(704µF).1; seqbulk_v50.2 -> @GND;
+    // ── END GENERATED POWER TREE ──
+}

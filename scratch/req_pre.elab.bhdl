@@ -1,0 +1,42 @@
+// ELABORATED bhdl — generated from req_pre.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// synthesized imports: expansion children reference these
+import { Fuse } from "bhdl-stdlib/protection/tvs.bhdl";
+import { TVSDiode } from "bhdl-stdlib/protection/tvs.bhdl";
+
+import { PreregStage } from "bhdl-stdlib/power/stages.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { PassiveFrontEnd } from "bhdl-stdlib/protection/front_end.bhdl";
+
+board PreProbe {
+    power VIN = 12V @ 3A;
+    power V_PROT = 12V @ 2A;
+    ground GND;
+
+    R_LOAD: Res(6Ω, 5%, 50W);
+    fe: PassiveFrontEnd(12V, 2A, 3A, 24V);
+    attribute fe.expansion_applied = "true";
+    attribute fe.powertree_rating_required_a = "2.5000";
+    attribute fe.stage_binding = "survey";
+    attribute fe.stage_bound = "PassiveFrontEnd";
+    attribute fe.stage_requirement = "vout=12V, i_max=2A, vin=12V, ov_clamp=30V";
+    attribute fe.stage_trait = "PreregStage";
+    fe_D_tvs: TVSDiode(24V);
+    attribute fe_D_tvs.composed_parent = "fe";
+    attribute fe_D_tvs.composed_role = "shunt";
+    fe_F: Fuse(3A, 10mΩ);
+    attribute fe_F.composed_parent = "fe";
+    attribute fe_F.composed_role = "series";
+    R_LOAD.2 -> @GND;
+    fe.GND -> @GND;
+    fe_D_tvs.A -> @GND;
+    @VIN -> fe.VIN;
+    @VIN -> fe_F.1;
+    @V_PROT -> R_LOAD.1;
+    @V_PROT -> fe.VOUT;
+    @V_PROT -> fe_D_tvs.K;
+    @V_PROT -> fe_F.2;
+}

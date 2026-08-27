@@ -1,0 +1,10 @@
+import { BuckBoostStage } from "bhdl-stdlib/power/stages.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+board BuckBoostReq {
+    power VBAT = 3.6V @ 3A;
+    port V33: power out = 3.3V @ 1.5A;
+    ground GND;
+    @VBAT -> u1: BuckBoostStage(vout=3.3V, i_max=1.5A, vin=3.6V, vin_min=2.5V, vin_max=4.2V).VIN;
+    u1.GND -> @GND; u1.VOUT -> @V33;
+    @V33 -> R_LOAD: Res(2.2Ω, wattage=10W).1; R_LOAD.2 -> @GND;
+}

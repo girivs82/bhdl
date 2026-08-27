@@ -1,0 +1,164 @@
+// ELABORATED bhdl — generated from pmic.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// synthesized imports: expansion children reference these
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Diode } from "bhdl-stdlib/passives/diode.bhdl";
+import { Ind } from "bhdl-stdlib/passives/inductor.bhdl";
+import { TPS54331 } from "bhdl-stdlib/power/tps54331.bhdl";
+import { XC6206 } from "bhdl-stdlib/power/xc6206.bhdl";
+
+import { BuckStage, LdoStage } from "bhdl-stdlib/power/stages.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Buck_TPS54331 } from "bhdl-stdlib/power/tps54331.bhdl";
+import { Ldo_XC6206 } from "bhdl-stdlib/power/xc6206.bhdl";
+
+board PmicBoard {
+    power V11 = 1.1V @ 0.9A;
+    power V18 = 1.8V @ 0.8A;
+    power V33 = 3.3V @ 0.08A;
+    power VSYS = 3.7V @ 5A;
+    ground GND;
+
+    R1: Res(2.25Ω, 5%, 2W);
+    R2: Res(1.25Ω, 5%, 2W);
+    R3: Res(42Ω, 5%, 1W);
+    u1: Buck_TPS54331(1.8V, 3.7V, 0.8A, 570kHz);
+    attribute u1.expansion_applied = "true";
+    attribute u1.gated_pins = "EN";
+    attribute u1.powertree_rating_required_a = "1.0000";
+    attribute u1.stage_binding = "survey";
+    attribute u1.stage_bound = "Buck_TPS54331";
+    attribute u1.stage_requirement = "vout=1.8V, i_max=0.8A, vin=3.7V";
+    attribute u1.stage_trait = "BuckStage";
+    u1_C_boot: Cap(100nF, 50V);
+    attribute u1_C_boot.composed_parent = "u1";
+    attribute u1_C_boot.composed_role = "series";
+    u1_C_in: Cap(0.0000023374726077428783, 50V);
+    attribute u1_C_in.composed_parent = "u1";
+    attribute u1_C_in.composed_role = "shunt";
+    u1_C_out: Cap(0.0000017543859649122807, 50V);
+    attribute u1_C_out.composed_parent = "u1";
+    attribute u1_C_out.composed_role = "shunt";
+    u1_D_catch: Diode(0.45V);
+    attribute u1_D_catch.composed_parent = "u1";
+    attribute u1_D_catch.composed_role = "shunt";
+    u1_L_out: Ind(0.000006756756756756757, 1.472);
+    attribute u1_L_out.composed_parent = "u1";
+    attribute u1_L_out.composed_role = "series";
+    u1_R_bot: Res(10kΩ, 1%, 0.25W);
+    attribute u1_R_bot.composed_parent = "u1";
+    attribute u1_R_bot.composed_role = "shunt";
+    u1_R_top: Res(12500.000, 1%, 0.25W);
+    attribute u1_R_top.composed_parent = "u1";
+    attribute u1_R_top.composed_role = "series";
+    u1_u: TPS54331();
+    attribute u1_u.composed_parent = "u1";
+    attribute u1_u.composed_role = "shunt";
+    u2: Buck_TPS54331(1.1V, 3.7V, 0.9A, 570kHz);
+    attribute u2.expansion_applied = "true";
+    attribute u2.gated_pins = "EN";
+    attribute u2.powertree_rating_required_a = "1.1250";
+    attribute u2.stage_binding = "survey";
+    attribute u2.stage_bound = "Buck_TPS54331";
+    attribute u2.stage_requirement = "vout=1.1V, i_max=0.9A, vin=3.7V";
+    attribute u2.stage_trait = "BuckStage";
+    u2_C_boot: Cap(100nF, 50V);
+    attribute u2_C_boot.composed_parent = "u2";
+    attribute u2_C_boot.composed_role = "series";
+    u2_C_in: Cap(0.0000021990696243896815, 50V);
+    attribute u2_C_in.composed_parent = "u2";
+    attribute u2_C_in.composed_role = "shunt";
+    u2_C_out: Cap(0.0000019736842105263157, 50V);
+    attribute u2_C_out.composed_parent = "u2";
+    attribute u2_C_out.composed_role = "shunt";
+    u2_D_catch: Diode(0.45V);
+    attribute u2_D_catch.composed_parent = "u2";
+    attribute u2_D_catch.composed_role = "shunt";
+    u2_L_out: Ind(0.000005022566426075199, 1.656);
+    attribute u2_L_out.composed_parent = "u2";
+    attribute u2_L_out.composed_role = "series";
+    u2_R_bot: Res(10kΩ, 1%, 0.25W);
+    attribute u2_R_bot.composed_parent = "u2";
+    attribute u2_R_bot.composed_role = "shunt";
+    u2_R_top: Res(3750.000, 1%, 0.25W);
+    attribute u2_R_top.composed_parent = "u2";
+    attribute u2_R_top.composed_role = "series";
+    u2_u: TPS54331();
+    attribute u2_u.composed_parent = "u2";
+    attribute u2_u.composed_role = "shunt";
+    u3: Ldo_XC6206(3.3V, 80mA, 3.7V);
+    attribute u3.expansion_applied = "true";
+    attribute u3.powertree_rating_required_a = "0.1000";
+    attribute u3.stage_binding = "survey";
+    attribute u3.stage_bound = "Ldo_XC6206";
+    attribute u3.stage_requirement = "vout=3.3V, i_max=80mA, vin=3.7V";
+    attribute u3.stage_trait = "LdoStage";
+    u3_C_in: Cap(1µF, 50V);
+    attribute u3_C_in.composed_parent = "u3";
+    attribute u3_C_in.composed_role = "shunt";
+    u3_C_out: Cap(1µF, 50V);
+    attribute u3_C_out.composed_parent = "u3";
+    attribute u3_C_out.composed_role = "shunt";
+    u3_u: XC6206(3.3V, 250mV, 1µA);
+    attribute u3_u.composed_parent = "u3";
+    attribute u3_u.composed_role = "shunt";
+    R1.2 -> @GND;
+    R2.2 -> @GND;
+    R3.2 -> @GND;
+    u1.GND -> @GND;
+    u1_C_in.2 -> @GND;
+    u1_C_out.2 -> @GND;
+    u1_D_catch.A -> @GND;
+    u1_R_bot.2 -> @GND;
+    u1_u.GND -> @GND;
+    u2.GND -> @GND;
+    u2_C_in.2 -> @GND;
+    u2_C_out.2 -> @GND;
+    u2_D_catch.A -> @GND;
+    u2_R_bot.2 -> @GND;
+    u2_u.GND -> @GND;
+    u3.GND -> @GND;
+    u3_C_in.2 -> @GND;
+    u3_C_out.2 -> @GND;
+    u3_u.GND -> @GND;
+    @V11 -> R2.1;
+    @V11 -> u2.VOUT;
+    @V11 -> u2_C_out.1;
+    @V11 -> u2_L_out.2;
+    @V11 -> u2_R_top.1;
+    @V18 -> R1.1;
+    @V18 -> u1.VOUT;
+    @V18 -> u1_C_out.1;
+    @V18 -> u1_L_out.2;
+    @V18 -> u1_R_top.1;
+    @V33 -> R3.1;
+    @V33 -> u3.VOUT;
+    @V33 -> u3_C_out.1;
+    @V33 -> u3_u.VOUT;
+    @VSYS -> u1.VIN;
+    @VSYS -> u1_C_in.1;
+    @VSYS -> u1_u.EN;
+    @VSYS -> u1_u.VIN;
+    @VSYS -> u2.VIN;
+    @VSYS -> u2_C_in.1;
+    @VSYS -> u2_u.EN;
+    @VSYS -> u2_u.VIN;
+    @VSYS -> u3.VIN;
+    @VSYS -> u3_C_in.1;
+    @VSYS -> u3_u.VIN;
+    u1_R_bot.1 -> u1_R_top.2;  // net u1_auto_13
+    u1_R_bot.1 -> u1_u.FB;  // net u1_auto_13
+    u1_C_boot.1 -> u1_u.BOOT;  // net u1_auto_16
+    u1_C_boot.2 -> u1_D_catch.K;  // net u1_auto_6
+    u1_C_boot.2 -> u1_L_out.1;  // net u1_auto_6
+    u1_C_boot.2 -> u1_u.SW;  // net u1_auto_6
+    u2_R_bot.1 -> u2_R_top.2;  // net u2_auto_13
+    u2_R_bot.1 -> u2_u.FB;  // net u2_auto_13
+    u2_C_boot.1 -> u2_u.BOOT;  // net u2_auto_16
+    u2_C_boot.2 -> u2_D_catch.K;  // net u2_auto_6
+    u2_C_boot.2 -> u2_L_out.1;  // net u2_auto_6
+    u2_C_boot.2 -> u2_u.SW;  // net u2_auto_6
+}

@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "mappings": {
+    "R": {
+      "r_pull": "R1"
+    },
+    "U": {
+      "pll": "U1",
+      "soc": "U2"
+    }
+  }
+}

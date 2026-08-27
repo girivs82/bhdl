@@ -1,0 +1,10 @@
+import { BuckStage } from "bhdl-stdlib/power/stages.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+board ReqProbe {
+    power VIN = 12V @ 3A;
+    port V5: power out = 5V @ 2A;
+    ground GND;
+    @VIN -> u1: BuckStage(vout=5V, i_max=2A, vin=12V).VIN;
+    u1.GND -> @GND; u1.VOUT -> @V5;
+    @V5 -> R_LOAD: Res(2.5Ω, wattage=10W).1; R_LOAD.2 -> @GND;
+}

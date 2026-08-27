@@ -1,0 +1,10 @@
+import { BuckExtStage } from "bhdl-stdlib/power/stages.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+board ExtProbe {
+    power VIN = 24V @ 10A;
+    port V5: power out = 5V @ 8A;
+    ground GND;
+    @VIN -> u1: BuckExtStage(vout=5V, i_max=8A, vin=24V).VIN;
+    u1.GND -> @GND; u1.VOUT -> @V5;
+    @V5 -> R_LOAD: Res(0.625Ω, wattage=50W).1; R_LOAD.2 -> @GND;
+}

@@ -1425,14 +1425,18 @@ pub fn final_pdn_sanity(netlist: &Netlist, _sf: &SourceFile) -> Vec<String> {
     let mut uncharacterized: std::collections::HashMap<NetId, Vec<String>> = Default::default();
     let mut caps_raw: Vec<(NetId, f64, Option<String>, String)> = Vec::new();
     for (i, inst) in netlist.instances.iter() {
-        if !matches!(module_of(i).as_str(), "Cap" | "Capacitor") {
+        // stdlib Cap OR any characterized part declaring capacitance
+        // (decap networks, shortlist bulk)
+        let is_cap = matches!(module_of(i).as_str(), "Cap" | "Capacitor")
+            || inst.attributes.contains_key("capacitance");
+        if !is_cap {
             continue;
         }
         let (Some(n1), Some(n2)) = (
             pin_net.get(&(i, "1".to_string())),
             pin_net.get(&(i, "2".to_string())),
         ) else { continue };
-        let Some(v) = attr_si(i, "value") else { continue };
+        let Some(v) = attr_si(i, "value").or_else(|| attr_si(i, "capacitance")) else { continue };
         for (a, b) in [(n1, n2), (n2, n1)] {
             if net_class(*b) == Some(bhdl_netlist::types::NetClass::Ground)
                 && net_class(*a) != Some(bhdl_netlist::types::NetClass::Ground)
@@ -1539,11 +1543,13 @@ pub fn rail_cap_envelope(
     let net_class = |n: NetId| netlist.nets.get(n).map(|x| x.net_class.clone());
     let mut fixed_c: std::collections::HashMap<NetId, f64> = Default::default();
     for (i, inst) in netlist.instances.iter() {
-        if !matches!(module_of(i).as_str(), "Cap" | "Capacitor") || inst.name.starts_with("seqbulk_") {
+        let is_cap = matches!(module_of(i).as_str(), "Cap" | "Capacitor")
+            || inst.attributes.contains_key("capacitance");
+        if !is_cap || inst.name.starts_with("seqbulk_") {
             continue;
         }
         let (Some(n1), Some(n2)) = (pin_net.get(&(i, "1".to_string())), pin_net.get(&(i, "2".to_string()))) else { continue };
-        let Some(v) = attr_si(i, "value") else { continue };
+        let Some(v) = attr_si(i, "value").or_else(|| attr_si(i, "capacitance")) else { continue };
         for (a, b) in [(n1, n2), (n2, n1)] {
             if net_class(*b) == Some(bhdl_netlist::types::NetClass::Ground)
                 && net_class(*a) != Some(bhdl_netlist::types::NetClass::Ground)
@@ -1569,6 +1575,17 @@ pub fn rail_cap_envelope(
         );
     }
     out
+}
+
+
+/// The project's declared capacitor shortlist
+/// (`requirements { decap_lib: "<path>"; }`), if any.
+pub fn project_decap_lib(source: &str) -> Option<String> {
+    let masked = crate::stage_resolution::mask_comments(source);
+    crate::stage_resolution::scan_project_requirements(&masked)
+        .into_iter()
+        .find(|(k, _)| k == "decap_lib")
+        .map(|(_, v)| v.trim_matches('"').to_string())
 }
 
 pub const EMIT_IMPORT: &str = "import { BuckStage, LdoStage, BuckExtStage, PreregStage, BoostStage } from \"bhdl-stdlib/power/stages.bhdl\";";
@@ -1739,10 +1756,43 @@ pub fn splice_power_region(source: &str, region: &str) -> Result<String, String>
         text.replace_range(b..end, region.trim_end());
         Ok(text)
     } else {
-        // insert before the LAST closing brace (the board's)
-        let brace = text
-            .rfind('}')
-            .ok_or("powertree emit: no closing brace found — is there a board definition?")?;
+        // insert before the BOARD block's own closing brace — found by
+        // brace-matching from the `board` keyword, NOT the file's last
+        // `}` (an entity defined AFTER the board would otherwise
+        // receive the splice and shred the parse)
+        let board_kw = text
+            .lines()
+            .scan(0usize, |pos, l| {
+                let start = *pos;
+                *pos += l.len() + 1;
+                Some((start, l))
+            })
+            .find(|(_, l)| {
+                let t = l.trim_start();
+                t.starts_with("board ") || t == "board" || t.starts_with("board\t")
+            })
+            .map(|(start, _)| start)
+            .ok_or("powertree emit: no board definition found")?;
+        let open = text[board_kw..]
+            .find('{')
+            .map(|i| board_kw + i)
+            .ok_or("powertree emit: board block has no opening brace")?;
+        let mut depth = 0usize;
+        let mut close = None;
+        for (i, c) in text[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = Some(open + i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let brace = close.ok_or("powertree emit: board block never closes")?;
         text.insert_str(brace, &format!("\n{region}"));
         Ok(text)
     }

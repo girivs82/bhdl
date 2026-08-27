@@ -1,0 +1,15 @@
+import { Pmic_TPS65217 } from "bhdl-stdlib/power/tps65217.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+board CustomOtp {
+    power VSYS = 3.7V @ 5A;
+    port V12: power out = 1.2V @ 1A;
+    port V25: power out = 2.5V @ 80mA;
+    ground GND;
+    pm: Pmic_TPS65217(otp="custom", mpn="PENDING-CUSTOM-OTP", otp_outputs="DCDC1:buck:1.2V:1.2A,LDO2:ldo:2.5V:0.1A", otp_seq="DCDC1,LDO2", otp_strobe_t="DCDC1:0ms,LDO2:5ms");
+    @VSYS -> pm.VIN;
+    pm.GND -> @GND;
+    pm.VOUT_DCDC1 -> @V12;
+    pm.VOUT_LDO2 -> @V25;
+    @V12 -> R1: Res(1.2Ω, wattage=2W).1; R1.2 -> @GND;
+    @V25 -> R2: Res(31Ω, wattage=1W).1; R2.2 -> @GND;
+}

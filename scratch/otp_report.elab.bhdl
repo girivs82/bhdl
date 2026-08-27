@@ -1,0 +1,82 @@
+// ELABORATED bhdl — generated from otp_report.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// synthesized imports: expansion children reference these
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { XC6206 } from "bhdl-stdlib/power/xc6206.bhdl";
+
+import { LdoStage } from "bhdl-stdlib/power/stages.bhdl";
+import { Ldo_XC6206 } from "bhdl-stdlib/power/xc6206.bhdl";
+entity OtpSoc() {
+    pin 1: power in;
+    pin 2: power in;
+    pin GND: ground;
+    domain VDD_A pins="1" v=3.3V i_nom=50mA after="VDD_B" t_min=50ms source="FIXTURE — otp probe";
+    domain VDD_B pins="2" v=3.3V i_nom=50mA source="FIXTURE — otp probe";
+}
+
+board OtpBoard {
+    power VA = 3.3V @ 0.15A;
+    power VB = 3.3V @ 0.15A;
+    power VSYS = 3.7V @ 5A;
+    ground GND;
+
+    soc: OtpSoc();
+    ua: Ldo_XC6206(3.3V, 150mA, 3.7V);
+    attribute ua.expansion_applied = "true";
+    attribute ua.powertree_rating_required_a = "0.1875";
+    attribute ua.stage_binding = "survey";
+    attribute ua.stage_bound = "Ldo_XC6206";
+    attribute ua.stage_requirement = "vout=3.3V, i_max=150mA, vin=3.7V";
+    attribute ua.stage_trait = "LdoStage";
+    ua_C_in: Cap(1µF, 50V);
+    attribute ua_C_in.composed_parent = "ua";
+    attribute ua_C_in.composed_role = "shunt";
+    ua_C_out: Cap(1µF, 50V);
+    attribute ua_C_out.composed_parent = "ua";
+    attribute ua_C_out.composed_role = "shunt";
+    ua_u: XC6206(3.3V, 250mV, 1µA);
+    attribute ua_u.composed_parent = "ua";
+    attribute ua_u.composed_role = "shunt";
+    ub: Ldo_XC6206(3.3V, 150mA, 3.7V);
+    attribute ub.expansion_applied = "true";
+    attribute ub.powertree_rating_required_a = "0.1875";
+    attribute ub.stage_binding = "survey";
+    attribute ub.stage_bound = "Ldo_XC6206";
+    attribute ub.stage_requirement = "vout=3.3V, i_max=150mA, vin=3.7V";
+    attribute ub.stage_trait = "LdoStage";
+    ub_C_in: Cap(1µF, 50V);
+    attribute ub_C_in.composed_parent = "ub";
+    attribute ub_C_in.composed_role = "shunt";
+    ub_C_out: Cap(1µF, 50V);
+    attribute ub_C_out.composed_parent = "ub";
+    attribute ub_C_out.composed_role = "shunt";
+    ub_u: XC6206(3.3V, 250mV, 1µA);
+    attribute ub_u.composed_parent = "ub";
+    attribute ub_u.composed_role = "shunt";
+    soc.GND -> @GND;
+    ua.GND -> @GND;
+    ua_C_in.2 -> @GND;
+    ua_C_out.2 -> @GND;
+    ua_u.GND -> @GND;
+    ub.GND -> @GND;
+    ub_C_in.2 -> @GND;
+    ub_C_out.2 -> @GND;
+    ub_u.GND -> @GND;
+    @VA -> soc.1;
+    @VA -> ua.VOUT;
+    @VA -> ua_C_out.1;
+    @VA -> ua_u.VOUT;
+    @VB -> soc.2;
+    @VB -> ub.VOUT;
+    @VB -> ub_C_out.1;
+    @VB -> ub_u.VOUT;
+    @VSYS -> ua.VIN;
+    @VSYS -> ua_C_in.1;
+    @VSYS -> ua_u.VIN;
+    @VSYS -> ub.VIN;
+    @VSYS -> ub_C_in.1;
+    @VSYS -> ub_u.VIN;
+}

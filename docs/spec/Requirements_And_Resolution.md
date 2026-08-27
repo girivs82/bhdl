@@ -1126,3 +1126,21 @@ tolerance where declared — the blanket ×0.5/×1.2 vendor band remains
 only for curve-less parts (fixpoint `seqbulk` included). The class
 factor is thereby the FALLBACK it was always meant to be; pasting the
 vendor tool's export into the library replaces it part by part.
+
+**Bulk from the characterized shortlist (§7.5 addendum 4).** With a
+shortlist library in play, the fixpoint's startup bulk no longer mints
+an abstract `Cap(<farads>)`: the emitter picks the LARGEST-value
+candidate from the project's `decap_lib`, stacks
+`ceil(C_required / C_nominal)` real instances
+(`seqbulk_<rail>_<k>: <Entity>()`) on the rail, and inserts the
+library import alongside them. The convergence loop then re-simulates
+with what will actually be placed: a candidate carrying a `dc_bias`
+curve is summed at its effective value on that rail; a curve-less
+candidate keeps the conservative ×0.5 class factor — so the count the
+loop settles on is sized against characterized reality, not the ideal
+farad. Declared ESR/ESL on the candidate feed the final
+stability/resonance sanity for free. A project without a `decap_lib`
+falls back to the bare `Cap` (a stated, visible placeholder — the BOM
+cannot ship it). The CLI states its choice
+(`bulk source: shortlist part <Entity> (<C> nominal)`) so the report
+and the sign-off agree on where the bulk came from.

@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "mappings": {
+    "R": {
+      "r_bot": "R1",
+      "r_m1": "R2",
+      "r_top": "R3",
+      "sense": "R4"
+    }
+  }
+}

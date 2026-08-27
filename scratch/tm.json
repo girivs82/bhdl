@@ -1,0 +1,95 @@
+{
+  "board": "DualRail",
+  "rows": [
+    {
+      "id": "DualRail.rail.V5_A",
+      "kind": "rail budget",
+      "stated_by": "designer",
+      "statement": "V5_A = 5V @ 1A",
+      "implemented_by": [],
+      "verifier": "ERC028 (driven / boundary)",
+      "status": "Verified",
+      "evidence": "ERC028 (warning, not gating): Board port 'V5_A' supplies rail 'V5_A' from outside, but the net touches no connector-class instance — nothing to solder"
+    },
+    {
+      "id": "DualRail.rail.V5_B",
+      "kind": "rail budget",
+      "stated_by": "designer",
+      "statement": "V5_B = 5V @ 1A",
+      "implemented_by": [],
+      "verifier": "ERC028 (driven / boundary)",
+      "status": "Verified",
+      "evidence": "ERC028 (warning, not gating): Board port 'V5_B' supplies rail 'V5_B' from outside, but the net touches no connector-class instance — nothing to solder"
+    },
+    {
+      "id": "DualRail.rail.VBAT",
+      "kind": "rail budget",
+      "stated_by": "designer",
+      "statement": "VBAT = 12V @ 3A",
+      "implemented_by": [],
+      "verifier": "ERC028 (driven / boundary)",
+      "status": "Verified",
+      "evidence": "ERC028 (warning, not gating): Board port 'VBAT' supplies rail 'VBAT' from outside, but the net touches no connector-class instance — nothing to solder"
+    },
+    {
+      "id": "SG-SYS-010",
+      "kind": "safety goal",
+      "stated_by": "safety goal SG_SUPPLY (ASIL_B)",
+      "statement": "Neither 5V rail overvolts undetected — FTTI 10ms",
+      "implemented_by": [],
+      "verifier": "fault campaign (measured DC, FTTI) — `bhdl safety`",
+      "status": "Violated",
+      "evidence": "EffectUndetected: any_ov — declare a psm mechanism that detects 'any_ov' or refine the goal"
+    },
+    {
+      "id": "SG-REG-002",
+      "kind": "safety goal",
+      "stated_by": "safety goal rail_a.SG_UV (ASIL_A)",
+      "statement": "Loss of VOUT is signalled — FTTI 50ms",
+      "implemented_by": [
+        "rail_a_mon (Psm)"
+      ],
+      "verifier": "fault campaign (measured DC, FTTI) — `bhdl safety`",
+      "status": "Unverified",
+      "evidence": "fault campaign not part of this build — run `bhdl safety --json m.json`, then `bhdl trace --safety m.json` for the measured DC / FTTI evidence"
+    },
+    {
+      "id": "SG-REG-002",
+      "kind": "safety goal",
+      "stated_by": "safety goal rail_b.SG_UV (ASIL_A)",
+      "statement": "Loss of VOUT is signalled — FTTI 50ms",
+      "implemented_by": [
+        "rail_b_mon (Psm)"
+      ],
+      "verifier": "fault campaign (measured DC, FTTI) — `bhdl safety`",
+      "status": "Unverified",
+      "evidence": "fault campaign not part of this build — run `bhdl safety --json m.json`, then `bhdl trace --safety m.json` for the measured DC / FTTI evidence"
+    },
+    {
+      "id": "HSI_FAULT_A",
+      "kind": "hardware–software interface",
+      "stated_by": "designer (HSI)",
+      "statement": "active: low; direction: input; latency_max: 10ms; level: 5V; owner: fw/safety_monitor; signal: r_flag_a.1; source: rail_a.nFAULT",
+      "implemented_by": [
+        "hw: rail_a.nFAULT",
+        "fw: fw/safety_monitor"
+      ],
+      "verifier": "netlist: wiring + pin direction + source supply level",
+      "status": "Unverified",
+      "evidence": "ok wiring: rail_a.nFAULT and r_flag_a.1 share a net; ok direction: software sees input; pin r_flag_a.1 is declared InOut; UNCHECKED level: source's supply rail not resolvable on this board — UNCHECKED; UNCHECKED latency_max 10ms: no verifier in this build (timing is firmware + hardware) — UNVERIFIED, stated"
+    },
+    {
+      "id": "HSI_BAD",
+      "kind": "hardware–software interface",
+      "stated_by": "designer (HSI)",
+      "statement": "direction: output; level: 3.3V; signal: r_flag_a.1; source: rail_b.nFAULT",
+      "implemented_by": [
+        "hw: rail_b.nFAULT"
+      ],
+      "verifier": "netlist: wiring + pin direction + source supply level",
+      "status": "Violated",
+      "evidence": "NOK wiring: rail_b.nFAULT and r_flag_a.1 share a net; ok direction: software sees output; pin r_flag_a.1 is declared InOut; UNCHECKED level: source's supply rail not resolvable on this board — UNCHECKED"
+    }
+  ],
+  "findings": []
+}

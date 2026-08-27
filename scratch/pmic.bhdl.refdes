@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "mappings": {
+    "C": {
+      "u1_C_boot": "C1",
+      "u1_C_in": "C2",
+      "u1_C_out": "C3",
+      "u2_C_boot": "C4",
+      "u2_C_in": "C5",
+      "u2_C_out": "C6",
+      "u3_C_in": "C7",
+      "u3_C_out": "C8"
+    },
+    "D": {
+      "u1_D_catch": "D1",
+      "u2_D_catch": "D2"
+    },
+    "L": {
+      "u1_L_out": "L1",
+      "u2_L_out": "L2"
+    },
+    "R": {
+      "R1": "R1",
+      "R2": "R2",
+      "R3": "R3",
+      "u1_R_bot": "R4",
+      "u1_R_top": "R5",
+      "u2_R_bot": "R6",
+      "u2_R_top": "R7"
+    },
+    "U": {
+      "u1": "U1",
+      "u1_u": "U2",
+      "u2": "U3",
+      "u2_u": "U4",
+      "u3": "U5",
+      "u3_u": "U6"
+    }
+  }
+}

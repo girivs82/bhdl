@@ -1,0 +1,11 @@
+import { BoostStage } from "bhdl-stdlib/power/stages.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+board BoostTmpl {
+    power VBAT = 5V @ 4A;
+    port V12: power out = 12V @ 0.5A;
+    ground GND;
+    @VBAT -> u1: BoostStage(vout=12V, i_max=0.5A, vin=5V).VIN;
+    u1.GND -> @GND; u1.VOUT -> @V12;
+    @V12 -> R_LOAD: Res(24Ω, wattage=10W).1; R_LOAD.2 -> @GND;
+    resolve u1 = BoostRegulator(i_sw_limit=4A, f_sw=1.2MHz, rds_on=80mΩ, i_quiescent=100µA, vref=1.245V);
+}

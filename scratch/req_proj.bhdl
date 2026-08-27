@@ -1,0 +1,11 @@
+import { LdoStage } from "bhdl-stdlib/power/stages.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+board ProjProbe {
+    requirements { temp_min: -40degC; temp_max: 85degC; qual: "AEC-Q100"; asil: B; }
+    power V5 = 5V @ 1A;
+    port V3V3: power out = 3.3V @ 100mA;
+    ground GND;
+    @V5 -> u2: LdoStage(vout=3.3V, i_max=100mA, vin=5V).VIN;
+    u2.GND -> @GND; u2.VOUT -> @V3V3;
+    @V3V3 -> R_LOAD: Res(33Ω, wattage=1W).1; R_LOAD.2 -> @GND;
+}

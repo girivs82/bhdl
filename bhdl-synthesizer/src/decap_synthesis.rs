@@ -222,6 +222,21 @@ fn parse_unit(v: &str, mults: &[(&str, f64)]) -> Option<f64> {
 /// Load the candidate library: entities with declared capacitance, esr
 /// and esl attributes. Entities missing any of the three are skipped
 /// with a stated note (Real-Data: an undeclared parasite is not zero).
+
+/// The SHORTLIST's bulk part (spec §7.5 addendum 4): the
+/// largest-capacitance characterized candidate in the project's decap
+/// library — what the --emit bulk fixpoint stacks instead of a bare
+/// farad value, so every capacitor on the rail is a shortlisted,
+/// characterized, orderable part. Returns (entity, nominal F,
+/// dc_bias curve).
+pub fn bulk_part_from_library(lib_path: &str) -> Option<(String, f64, Vec<(f64, f64)>)> {
+    let (cands, _skipped) = load_library(lib_path).ok()?;
+    cands
+        .into_iter()
+        .max_by(|a, b| a.c_f.partial_cmp(&b.c_f).unwrap())
+        .map(|c| (c.entity, c.c_f, c.dc_bias))
+}
+
 fn load_library(lib_path: &str) -> Result<(Vec<Candidate>, Vec<String>), String> {
     let resolved = bhdl_common::import_search::resolve_relative(lib_path, std::path::Path::new("."));
     let text = std::fs::read_to_string(&resolved)
@@ -549,6 +564,18 @@ pub fn run_decap_synthesis(
             }
         }
         if dom.zmask.len() < 2 {
+            // a step/droop_max declaration whose spectral content sits
+            // ENTIRELY below the crossover floor derives no in-band
+            // mask — that region is the REGULATOR's (stated UNCHECKED
+            // pending an `f_c` declaration), so the statement is
+            // SKIPPED gracefully, never a hard failure
+            if dom.step_a.is_some() && dom.droop_max_pct.is_some() {
+                info!(
+                    "decouple {}.{}: the step's spectral content lies entirely below the crossover floor — no in-band mask to synthesize against; the low-frequency transient is the regulator's (UNCHECKED pending `attribute f_c`, stated) — statement skipped",
+                    stmt.instance, stmt.domain
+                );
+                continue;
+            }
             return Err(format!(
                 "decouple {}.{}: the domain declares no usable zmask (need ≥2 breakpoints) and no step/droop_max to derive one — nothing to synthesize against",
                 stmt.instance, stmt.domain

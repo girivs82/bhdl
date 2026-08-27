@@ -1,0 +1,50 @@
+// ELABORATED bhdl — generated from req_ldo_tmpl.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// synthesized imports: expansion children reference these
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { LinearRegulatorIc } from "bhdl-stdlib/power/regulator.bhdl";
+
+import { LdoStage } from "bhdl-stdlib/power/stages.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { LinearRegulator } from "bhdl-stdlib/power/regulator.bhdl";
+
+board LdoProbe {
+    power V3V3 = 3.3V @ 0.2A;
+    power V5 = 5V @ 1A;
+    ground GND;
+
+    R_LOAD: Res(16.5Ω, 5%, 1W);
+    u2: LinearRegulator(3.3V, 100mA, 5V, 1.2V, 5mA);
+    attribute u2.expansion_applied = "true";
+    attribute u2.gated_pins = "EN";
+    attribute u2.powertree_rating_required_a = "0.1250";
+    attribute u2.stage_binding = "override";
+    attribute u2.stage_bound = "LinearRegulator";
+    attribute u2.stage_requirement = "vout=3.3V, i_max=100mA, vin=5V";
+    attribute u2.stage_trait = "LdoStage";
+    u2_C_in: Cap(0.33µF, 50V);
+    attribute u2_C_in.composed_parent = "u2";
+    attribute u2_C_in.composed_role = "shunt";
+    u2_C_out: Cap(0.1µF, 50V);
+    attribute u2_C_out.composed_parent = "u2";
+    attribute u2_C_out.composed_role = "shunt";
+    u2_u: LinearRegulatorIc(3.3V, 1.2V, 5mA);
+    attribute u2_u.composed_parent = "u2";
+    attribute u2_u.composed_role = "shunt";
+    R_LOAD.2 -> @GND;
+    u2.GND -> @GND;
+    u2_C_in.2 -> @GND;
+    u2_C_out.2 -> @GND;
+    u2_u.GND -> @GND;
+    @V3V3 -> R_LOAD.1;
+    @V3V3 -> u2.VOUT;
+    @V3V3 -> u2_C_out.1;
+    @V3V3 -> u2_u.VOUT;
+    @V5 -> u2.VIN;
+    @V5 -> u2_C_in.1;
+    @V5 -> u2_u.EN;
+    @V5 -> u2_u.VIN;
+}

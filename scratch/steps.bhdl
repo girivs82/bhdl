@@ -1,0 +1,21 @@
+import { BuckBoost_TPS63020 } from "bhdl-stdlib/power/tps63020.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+entity StepSoc() {
+    pin 1: power in;
+    pin 2: power in;
+    pin 3: power in;
+    pin GND: ground;
+    domain VDD_IO  pins="1" v=5V i_nom=150mA source="FIXTURE — steps probe";
+    domain VDD_CPU pins="2" v=5V i_nom=50mA step=1.2A rise=10us dur=500us droop_max=3% source="FIXTURE — steps probe";
+    domain VDD_GPU pins="3" v=5V i_nom=50mA step=1.2A rise=10us dur=500us droop_max=3% source="FIXTURE — steps probe";
+}
+board StepBoard {
+    power VBAT = 3.6V @ 8A;
+    port V50: power out = 5V @ 3A;
+    ground GND;
+    @VBAT -> u1: BuckBoost_TPS63020(v_out=5V, i_out_max=1.5A, v_in=3.6V, v_in_min=3.4V, v_in_max=4.2V).VIN;
+    u1.GND -> @GND; u1.VOUT -> @V50;
+    @V50 -> C_bulk: Cap(200µF).1; C_bulk.2 -> @GND;
+    soc: StepSoc();
+    @V50 -> soc.1; @V50 -> soc.2; @V50 -> soc.3; soc.GND -> @GND;
+}

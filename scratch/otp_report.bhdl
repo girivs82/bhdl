@@ -1,0 +1,20 @@
+import { LdoStage } from "bhdl-stdlib/power/stages.bhdl";
+entity OtpSoc() {
+    pin 1: power in;
+    pin 2: power in;
+    pin GND: ground;
+    domain VDD_A pins="1" v=3.3V i_nom=50mA after="VDD_B" t_min=50ms source="FIXTURE — otp probe";
+    domain VDD_B pins="2" v=3.3V i_nom=50mA source="FIXTURE — otp probe";
+}
+board OtpBoard {
+    power VSYS = 3.7V @ 5A;
+    port VA: power out = 3.3V @ 150mA;
+    port VB: power out = 3.3V @ 150mA;
+    ground GND;
+    @VSYS -> ua: LdoStage(vout=3.3V, i_max=150mA, vin=3.7V).VIN;
+    ua.GND -> @GND; ua.VOUT -> @VA;
+    @VSYS -> ub: LdoStage(vout=3.3V, i_max=150mA, vin=3.7V).VIN;
+    ub.GND -> @GND; ub.VOUT -> @VB;
+    soc: OtpSoc();
+    @VA -> soc.1; @VB -> soc.2; soc.GND -> @GND;
+}

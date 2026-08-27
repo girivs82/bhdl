@@ -1,0 +1,70 @@
+// ELABORATED bhdl — generated from req_efuse.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// synthesized imports: expansion children reference these
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { TPS2660 } from "bhdl-stdlib/protection/tps2660.bhdl";
+
+import { PreregStage } from "bhdl-stdlib/power/stages.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Efuse_TPS2660 } from "bhdl-stdlib/protection/tps2660.bhdl";
+
+board EfuseProbe {
+    power VIN = 12V @ 2A;
+    power V_PROT = 12V @ 1A;
+    ground GND;
+
+    R_LOAD: Res(12Ω, 5%, 20W);
+    // WARNING: param 'r_ilim' has no exported attribute and no default — round-trip may differ
+    fe: Efuse_TPS2660(12V, 1A, 30V, 8V);
+    attribute fe.expansion_applied = "true";
+    attribute fe.gated_pins = "FLT";
+    attribute fe.powertree_rating_required_a = "1.2500";
+    attribute fe.stage_binding = "override";
+    attribute fe.stage_bound = "Efuse_TPS2660";
+    attribute fe.stage_requirement = "vout=12V, i_max=1A, vin=12V, ov_trip=30V, uv_trip=8V, reverse_polarity=true";
+    attribute fe.stage_trait = "PreregStage";
+    fe_C_out: Cap(1µF, 50V);
+    attribute fe_C_out.composed_parent = "fe";
+    attribute fe_C_out.composed_role = "shunt";
+    fe_R_ilim: Res(16.5kΩ, 1%, 0.25W);
+    attribute fe_R_ilim.composed_parent = "fe";
+    attribute fe_R_ilim.composed_role = "shunt";
+    fe_R_ov_bot: Res(10kΩ, 1%, 0.25W);
+    attribute fe_R_ov_bot.composed_parent = "fe";
+    attribute fe_R_ov_bot.composed_role = "shunt";
+    fe_R_ov_top: Res(240000.000, 1%, 0.25W);
+    attribute fe_R_ov_top.composed_parent = "fe";
+    attribute fe_R_ov_top.composed_role = "series";
+    fe_R_uv_bot: Res(10kΩ, 1%, 0.25W);
+    attribute fe_R_uv_bot.composed_parent = "fe";
+    attribute fe_R_uv_bot.composed_role = "shunt";
+    fe_R_uv_top: Res(56666.667, 1%, 0.25W);
+    attribute fe_R_uv_top.composed_parent = "fe";
+    attribute fe_R_uv_top.composed_role = "series";
+    fe_u: TPS2660();
+    attribute fe_u.composed_parent = "fe";
+    attribute fe_u.composed_role = "shunt";
+    R_LOAD.2 -> @GND;
+    fe.GND -> @GND;
+    fe_C_out.2 -> @GND;
+    fe_R_ilim.2 -> @GND;
+    fe_R_ov_bot.2 -> @GND;
+    fe_R_uv_bot.2 -> @GND;
+    fe_u.GND -> @GND;
+    @VIN -> fe.VIN;
+    @VIN -> fe_R_ov_top.1;
+    @VIN -> fe_R_uv_top.1;
+    @VIN -> fe_u.IN;
+    @V_PROT -> R_LOAD.1;
+    @V_PROT -> fe.VOUT;
+    @V_PROT -> fe_C_out.1;
+    @V_PROT -> fe_u.OUT;
+    fe_R_uv_bot.1 -> fe_R_uv_top.2;  // net fe_auto_11
+    fe_R_uv_bot.1 -> fe_u.UVLO;  // net fe_auto_11
+    fe_R_ilim.1 -> fe_u.ILIM;  // net fe_auto_14
+    fe_R_ov_bot.1 -> fe_R_ov_top.2;  // net fe_auto_7
+    fe_R_ov_bot.1 -> fe_u.OVP;  // net fe_auto_7
+}

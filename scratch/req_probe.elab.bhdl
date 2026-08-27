@@ -1,0 +1,70 @@
+// ELABORATED bhdl — generated from req_probe.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// synthesized imports: expansion children reference these
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Ind } from "bhdl-stdlib/passives/inductor.bhdl";
+import { TPS54302 } from "bhdl-stdlib/power/tps54302.bhdl";
+
+import { BuckStage } from "bhdl-stdlib/power/stages.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Buck_TPS54302 } from "bhdl-stdlib/power/tps54302.bhdl";
+
+board ReqProbe {
+    power V5 = 5V @ 2A;
+    power VIN = 12V @ 3A;
+    ground GND;
+
+    R_LOAD: Res(2.5Ω, 5%, 10W);
+    u1: Buck_TPS54302(5V, 12V, 2A, 500kHz);
+    attribute u1.expansion_applied = "true";
+    attribute u1.gated_pins = "EN";
+    attribute u1.powertree_rating_required_a = "2.5000";
+    attribute u1.stage_binding = "survey";
+    attribute u1.stage_bound = "Buck_TPS54302";
+    attribute u1.stage_requirement = "vout=5V, i_max=2A, vin=12V";
+    attribute u1.stage_trait = "BuckStage";
+    u1_C_boot: Cap(100nF, 50V);
+    attribute u1_C_boot.composed_parent = "u1";
+    attribute u1_C_boot.composed_role = "series";
+    u1_C_in: Cap(0.00000648148148148148, 50V);
+    attribute u1_C_in.composed_parent = "u1";
+    attribute u1_C_in.composed_role = "shunt";
+    u1_C_out: Cap(0.000005833333333333333, 50V);
+    attribute u1_C_out.composed_parent = "u1";
+    attribute u1_C_out.composed_role = "shunt";
+    u1_L_out: Ind(0.000008333333333333334, 3.760);
+    attribute u1_L_out.composed_parent = "u1";
+    attribute u1_L_out.composed_role = "series";
+    u1_R_bot: Res(10kΩ, 1%, 0.25W);
+    attribute u1_R_bot.composed_parent = "u1";
+    attribute u1_R_bot.composed_role = "shunt";
+    u1_R_top: Res(73333.333, 1%, 0.25W);
+    attribute u1_R_top.composed_parent = "u1";
+    attribute u1_R_top.composed_role = "series";
+    u1_u: TPS54302();
+    attribute u1_u.composed_parent = "u1";
+    attribute u1_u.composed_role = "shunt";
+    R_LOAD.2 -> @GND;
+    u1.GND -> @GND;
+    u1_C_in.2 -> @GND;
+    u1_C_out.2 -> @GND;
+    u1_R_bot.2 -> @GND;
+    u1_u.GND -> @GND;
+    @V5 -> R_LOAD.1;
+    @V5 -> u1.VOUT;
+    @V5 -> u1_C_out.1;
+    @V5 -> u1_L_out.2;
+    @V5 -> u1_R_top.1;
+    @VIN -> u1.VIN;
+    @VIN -> u1_C_in.1;
+    @VIN -> u1_u.EN;
+    @VIN -> u1_u.VIN;
+    u1_R_bot.1 -> u1_R_top.2;  // net u1_auto_11
+    u1_R_bot.1 -> u1_u.FB;  // net u1_auto_11
+    u1_C_boot.1 -> u1_u.BOOT;  // net u1_auto_14
+    u1_C_boot.2 -> u1_L_out.1;  // net u1_auto_6
+    u1_C_boot.2 -> u1_u.SW;  // net u1_auto_6
+}

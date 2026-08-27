@@ -1,0 +1,25 @@
+import { BuckBoost_TPS63020 } from "bhdl-stdlib/power/tps63020.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+entity DownSoc() {
+    pin 1: power in;
+    pin 2: power in;
+    pin GND: ground;
+    domain VDD_CORE pins="1" v=5V i_nom=300mA i_sleep=50mA source="FIXTURE — pdown probe";
+    domain VDD_AUX pins="2" v=3.3V i_nom=5mA i_sleep=2uA sleep_off=true down_before="VDD_CORE" down_t_max=20ms source="FIXTURE — pdown probe";
+}
+board DownBoard {
+    power VBAT = 3.6V @ 8A;
+    port V50: power out = 5V @ 1A;
+    port V33: power out = 3.3V @ 0.5A;
+    ground GND;
+    @VBAT -> u1: BuckBoost_TPS63020(v_out=5V, i_out_max=1A, v_in=3.6V, v_in_min=3.0V, v_in_max=4.2V).VIN;
+    u1.GND -> @GND; u1.VOUT -> @V50;
+    @VBAT -> u2: BuckBoost_TPS63020(v_out=3.3V, i_out_max=0.3A, v_in=3.6V, v_in_min=3.0V, v_in_max=4.2V).VIN;
+    u2.GND -> @GND; u2.VOUT -> @V33;
+    @V33 -> C_big: Cap(470µF).1; C_big.2 -> @GND;
+    @V33 -> R_bleed: Res(3.3kΩ, wattage=1W).1; R_bleed.2 -> @GND;
+    u2.EN -> R_pd: Res(100kΩ).1; R_pd.2 -> @GND;
+    soc: DownSoc();
+    @V50 -> soc.1; @V33 -> soc.2; soc.GND -> @GND;
+}

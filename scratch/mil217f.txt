@@ -1,0 +1,13987 @@
+NOTICE
+
+NOT MEASUREMENT
+
+OF CHANGE
+
+SENSITIVE
+
+k
+
+THIS HANDBOOK IS FOR GUIDANCE ONLY DO NOT CITE THIS DOCUMENT AS A REQUIREMENT
+
+1
+e
+
+MIL-HDBK-217F
+
+NOTICE 2
+28 February 1995
+
+MILITARY HANDBOOK
+RELIABILITY PREDICTION OF ELECTRONIC EQUIPMENT
+
+To all holders of MIL-HDBK-217F
+1.
+
+.
+r
+
+The following pagesofMIL-HDBK-217F
+New Page($)
+Front Cover
+...
+Ml
+
+r
+
+have been revised and supersede the pagea Med.
+superseded Page(6)
+Front Cover
+...
+11!
+iv
+v
+vi
+
+“Date
+
+1
+
+[ 2 December 199I
+
+iv
+v
+vi
+vii
+
+.,.
+Vlll
+1-1
+
+I
+
+L
+
+1-2
+2-1
+2-2
+2-3
+2-4
+2-5
+2-6
+
+1
+
+I
+1
+,
+
+vii
+
+1
+
+1
+
+9.7
+
+I
+
+r
+v
+,
+
+New Page
+1-1
+
+2 Deoember 1991
+
+New Page ~
+2“1
+2-2
+2-3
+.
+2-4
+2-5
+2-6
+
+12 December 1991
+2 Deoember 1991
+2 Deoember 1991
+I 2 Daoember 1991
+12 December 1991
+12 Deoember 1991
+
+New Page
+5-3
+5-4
+5-5
+5-6
+5-9
+5-1o
+5-23
+5-24
+
+I
+10 July 1992
+
+2 December 1991
+
+2 December
+
+6-1
+
+6-2
+7-3
+7-4
+
+2 December
+
+1991
+
+6-1
+
+~
+
+~
+
+1991
+
+6-2
+7-3
+7-4
+
+11-4
+
+11-4, 11-5
+
+12-1
+
+12-1
+
+2 December
+
+12-2
+
+2
+
+11-1
+
+11-1
+
+11-2
+11-!?
+..-
+
+11-2
+11-3
+
+1
+
+,
+
+1-
+
+1~.p
+. .
+
+.——
+
+A
+
+1
+4
+
+1
+1
+
+I
+
+10 Ju~ 1992
+Reprinted without change
+2 December 1991
+2 IxoWnber 1991
+10 Ju& 1992
+Reprinted without change
+2 Deoember 1991
+2Deoember1991
+Reprinted without change
+2 December 1991
+2 Deoember 1991
+Reprinted without change
+2 December
+2 December
+[ 2 C)ecember
+I 2 December
+! 2 December
+2 December
+
+9-1 through 9-29
+10-1 through 10-32
+
+9-1 through 9-3
+10-1 through 10-6
+
+6
+
+\
+
+New Paae
+
+2-8
+5“3
+54
+5-5
+5-6
+5-9
+5-1o
+5-23
+5-24
+
+r
+
+Date
+2 December 1991
+Reprinted without charme
+2 Deoember 1991
+I 2 December 1991
+I 2 Deoember 1991
+I 10 Julv 1992
+
+. . .
+
+.
+
+.
+
+.
+
+——
+
+———-.—
+
+—
+
+December
+
+1991
+1991
+1991
+1991
+1991
+1991
+1991
+1991
+
+I
+4
+
+A
+
+,
+
+,
+d
+
+.—.
+1
+
+MI1-HDBK-217F
+NOTICE 2
+
+*
+
+New Page(s)
+
+I
+
+Superseded
+
+Date
+
+r
+
+12-3
+
+12-3
+
+f
+
+12-4
+12-5
+13-1
+13-2
+---
+
+12-4
+12-5
+13-1
+13-2
+---
+
+1
+
+10 JUIY 1992
+I 2 December 1991
+2 December 1991
+2 December 1991
+2 December 1991
+‘ - ?ecember 1991
+
+14-1 mrougn 144
+14-5
+15-1 through 15-6
+16-1
+New Page
+—
+
+14-1 through 14-2
+14-3
+
+15-1 through 15-3
+16-1
+r
+16-2
+I
+#
+16-4
+
+I
+
+A-1 through A-18
+
+A
+
+z Uecember
+
+1
+
+1991
+
+2 December 1991
+2 December 1991
+2 December 1991
+i
+
+New Page
+
+17-1
+
+17-1
+Appendix
+C-3
+
+Date
+
+Page(s)
+
+c-3
+c-4
+
+2 December
+2 December
+2 December
+] 2 December
+
+1991
+1991, 10 July 1992
+1991
+1991
+
+1
+
+c-4
+
+2.
+
+Retain the pages of this notice and insert before the Table of Contents.
+
+3.
+
+Holders of MIL-HDBK-217F will verify that page changes and additions indicated have been
+entered. The notice pages will be retained as a check sheet. The issuance, together with
+appended pages, is a separate publication. Each notice is to be retained by stocking points until
+the military handbook is revised or canceled.
+
+1
+
+1
+
+Preparing Activity:
+Air Force -17
+
+Custodians:
+Army - CR
+Navy - EC
+Air Force -17
+
+Project No, RELI-0074
+
+Review Activities:
+Army - Ml, AV, ER
+Navy - SH, AS, OS
+
+Air Force-11,13,
+
+15, 19,99
+
+Army - AT, ME, GL
+Navy - CG, MC, YD, TD
+Air Force -85
+
+AMSC NIA
+DISTRIBUTION
+
+— — —
+
+STATEMENT
+
+----
+
+1
+
+A: Approved
+
+1
+
+1
+
+1
+
+for publlc release; dlstnbutlon
+
+=,
+
+unlimited.
+
+I-
+
+r____
+
+—
+
+I
+
+I NOT MEASUREMENT SENSITIVE]
+
+MIL-HDBK-217F
+2 DECEMBER
+
+1991
+
+SUPERSEDING
+MIL-HDBK-217E, Notice 1
+2 January
+1990
+
+MILITARY HANDBOOK
+RELIABILITY PREDICTION OF
+ELECTRONIC EQUIPMENT
+
+THIS HANDBOOK IS FOR GUIDANCE ONLY -DO NOT
+CITE THIS DOCUMENT AS A REQUIREMENT
+! FSC-RELI
+_—.
+
+AMSC NIA
+DISTRIBUTION
+
+STATEMENT
+
+Ad Approved
+
+for publlc release; drstrlbu!lcn
+
+tinllmtted
+
+:
+
+MIL-HDBK-217F
+
+DEPARTMENT
+OF DEFENSE
+WASHINGTONDC
+20301
+
+RELIABILITY
+
+1, This standardization
+with the assistance
+2.
+
+3.
+
+PREDICTION
+
+OF ELECTRONIC
+
+handbook
+was developed
+of the military departments,
+
+Every effort has been
+prediction
+procedures.
+ensure its completeness
+
+EQUIPMENT
+
+by the Department
+of Defense
+federal agencies, and industry.
+
+made to reflect the latest information
+It is the intent to review this handbook
+
+on reliability
+periodically
+to
+
+and currency.
+
+Beneficial
+comments
+(recommendations,
+additions,
+deletions)
+and any
+pertinent
+data which may be of use in improving this document
+should be
+addressed to: Rome Laborato@ERSR,
+Attm Seymour F. Morris, 525 Brooks
+13441-4505,
+by using
+the
+self-addressed
+Rd.,
+Griffiss
+AFB,
+NY
+Standardization
+Document
+Improvement
+Proposal (DD Form 1426) appearing
+at the end of this document or by letter.
+
+—
+
+II
+,.. .-.
+
+.-— .. -...,
+
+-—.-—- ___
+
+__
+
+..
+
+.
+
+--.—
+
+.
+
+.
+
+— -----
+
+al..
+
+-A--
+
+I-*A
+
+A
+
+-*..A;a-
+
+MIL-HDBK-217F
+
+TA8LE
+SECTION
+1.1
+
+1.2
+1.3
+
+OF CONTENTS
+
+1: SCOPE
+Purpose ................... ..... .... .... .. .. ...... ... ... ......... .. .. .... .................. ......... .... ........ ... .... ..
+Application . ......... ....... ....... ...... .. ... ... ...... ........ ..... .............. ... .... .......... ............ ... .... ..
+Computerized
+Reliability Prediction .. .... .. ........ ... ..... ...... ........ .... ....... ....... ........... .... ..
+
+1-1
+1-1
+1-1
+
+..................... ................... ....... ....... ... ..... ... ......
+
+2-1
+
+SECTION
+
+2:
+
+REFERENCE
+
+SECTION
+3.1
+3.2
+3.3
+3.4
+
+3:
+INTRODUCTION
+Reliability Engineering ... .... ...... . .... ... ....... ........ .... .. .... ............... .......... ... .... .... .... .... ..
+The Role of Reliability Prediction ........... ............................................................. .... ..
+Limitations of Reliability Predictions ....... ....................... ........................... .................
+
+Part Stress Analysis Prediction ................................................................................
+
+3-1
+3-1
+3-2
+3-2
+
+SECTION
+
+4:
+
+. ..... .......................... ................. ..
+
+4-1
+
+5.2
+5.3
+5.4
+5.5
+5.6
+5.7
+5.8
+
+. .... ... ............ .... .................. ...... .... .... ..
+INTRODUCTION
+......... ................................................... ........
+Memories .... .... .... ...... ........ ...... ..........0..... .... ...... .... ........... .................. ...... ..... ........ .
+VHSIC/VHSIC
+Like ................. ..... .... .............. ..... ...... ... .................... ... ....... .... .. .. ......
+GaAs MMIC and Digital Devices . .. ... .... ..... ........ .... .... ........... ....... .............. ....... .... .... ..
+Hybrids ... ... ............. ...... .... ........ ... ... ... ... .... .... .... .... ........... .......... ...... .... ........ ..........
+SAW Devices ........ ..... ............ ... .. .... ...... ........ ....... .... ..... ............. ..... ...... . ...... .. .. ......
+Magnetic Bubble Memories ...... .. ...... ... ... ........ ... .... .... ..... ...... ................ ......... .. ........
+XT Table for All ................ .......... ..... .................... .....................0... ........... ...., *.**...... .,
+
+5-1
+5-3
+5-4
+5-7
+5-8
+5-9
+5-1o
+5-11
+5“13
+
+5.9
+
+C2 Table for All .......................................................................................................
+
+5-14
+
+5.10
+
+XE, ~ and ZQ Tables for All ............. ................................................*.**................0.
+
+5-15
+
+5.11
+
+TJ Determination,
+
+(All Except Hybrids) ......................*.*... ............................ ...*.....*,.
+
+5-17
+
+5.12
+
+TJ Determination,
+
+(For Hybrids) ...................................................................... .*.......
+
+5-18
+
+5.13
+
+Examples ...............................................................................................................
+
+5-20
+
+RELIABILITY
+
+5:
+
+SECTION
+
+5.1
+
+DOCUMENTS
+
+ANALYSIS
+
+EVALUATION
+
+MICROCIRCUITS,
+
+●
+
+Gate/Logic Arrays and Microprocessors
+
+●
+
+●
+
+●
+
+●
+
+6:
+
+SECTION
+6.0
+6.1
+6.2
+6.3
+6.4
+6.5
+6.6
+6.7
+6.8
+6.9
+6.10
+6.11
+6.12
+6.13
+6,14
+
+DISCRETE
+SEMICONDUCTORS
+Discrete Semiconductors,
+Introduction ... . ....... ... .. .. ......... ...... ................... ....00..... ... ..
+Diodes, Low Frequency ..... ..... .. .. ... .. .... ... ... ..... .... .. ............ ........... ...... .... ....... .........,
+Diodes, High Frequency (Microwave, RF) . ....... ..... .... ...... ..................... ... .... .... .... .... ..
+Transistors, Low Frequency, Bipolar ..... ... .... .... .... .. ....... ..... ..................... ....... .... . .....
+Transistors,
+Low Frequency, Si FET ...... ........ ....... ...................0................................
+Transistors,
+Unijunction ........... .. ............ ................ ................................. ....... .... ......
+Transistors, Low Noise, High Frequency, Bipolar ........... ... O.*......**.*.. ....... ......... .... ... .
+Transistors,
+High Power, High Frequency,
+Bipolar .......0..... ....................... .................
+Transistors, High Frequmcy, GaAs FET .. .... ..... .
+
+Laser Diode ... . ....... ....... ........... .. ......... .................. .... ... ... .... . ........ .
+................ ..... ... .... .. ... ... ........ .... .. ..... ....... .............. ... ........... ..........
+
+6-1
+6-2
+6-4
+6-6
+6-8
+6-9
+6-10
+6-12
+6-14
+6-16
+6-17
+6-19
+6-20
+6-21
+6-23
+
+6.15
+
+Example ...... ........................ .... ..... .... ... ... ....... .. .... ................ .................. . ...... . .........
+
+6-25
+
+●
+
+. . . . . . . ...0.
+
+Transistors, High Frequency, Si FET ..........................
+Thyristors and SCRS .....................**.........................
+●
+
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+. . . . . . . . . . . . . . ●. . . . . . . . . . . . . ● . . . . . . . . . . . . . . . .
+
+. . . . . . ...0...
+
+Optoelectronics,
+
+Detectors,
+
+Isolators,
+
+Optoelectronics, Alphanumeric Displays .........0..................
+Optoelectronics,
+TJ Determination
+
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+Emitters ... .... ........ .............
+● .
+
+. . . . . ..*......
+
+,,
+
+.,
+
+. 0......,,
+
+,
+
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+...
+
+Ill
+
+m
+
+m
+
+T
+
+I
+
+1
+
+--I
+
+MIL-HD8K-217F
+NOTICE
+
+TABLE
+
+OF
+
+2
+
+CONTENTS
+7-1
+
+sECTION
+7.1
+7.2
+7.3
+
+TUBEs
+7:
+................ .......... ............. .. .................. .... .....
+All Types Except ?WT and Magnetron
+Traveling
+Wave ................................... ............... ......... .................... ........ ................
+Magnetron ............ ... ............ .............. ....... ................. .. ....!..... ... ....... ....... ...............
+
+SECTlON
+8.0
+8.1
+8.2
+8.3
+8.4
+
+LASERs
+8:
+introduction ............ ..... ....... ...... .............. ............... ..... ........ ... .... .. .... ........ ....... ...... .
+......... ....... ....... ..... ....... ....... .................. .. ..............” ........” ... ....”” ...
+Helium and Argon
+.. ........ ....... .. ........ ............ ...... ... .......... .. .................. ......... ..
+Carbon Dioxide, Sealed
+............ .... ....... ......................................... ...... ....... ..........
+Carbon Dioxide, Flowing
+........ ..... ..................... .... ... ............ .............. ...
+Solid State, ND:YAG and Ruby Rod
+
+sECTION
+9.1
+
+RESISToRs
+9:
+Resistors . ... .......... ..... ........ ...... ........ ....... .................... ....... .... ...”. .. ......o=~... ...-..”..” “”
+
+9-1
+
+sECTION
+
+10-1
+10-6
+
+10.2
+
+CAPACITORS
+10:
+Capacitors ............ .... ... ...... .. ............... ... ...... ................ ......... ....*.... ......0...”. ....... ...”.
+.. ...... ... ...... ........ ............... ......... ........... ........... .....” . .... ........... .
+Capacitors,
+Example
+
+sECTIO~
+11.1
+11.2
+11.3
+
+INDUCTIVE
+DEVICES
+11:
+........ ..... ..... ...... .... .... ....... ....... .............. ..................... ................. ...... .
+Transformers
+Colh,.. . . ....... ..... ... .................... ........ ...................
+..................
+..................................
+..........””
+......... ......
+..
+... ......”... ...
+.. .
+Determination
+of l-lot Spot Temperature
+
+11-1
+11-3
+11-4
+
+sECTlol
+12.1
+12.2
+12.3
+
+ROTATING
+DEVICES
+12:
+Motors . .. ............. .... ............. ... .... .. ...... ..................... ............*.* ... .. ...”... ................”.
+
+12-1
+
+sECTIO
+13.1
+13.2
+
+RELAys
+Mechanical .. ............. ........ ...... .... ... ..................... ..... ................. ...........0..... ..... ........
+.......... ........ ................ ................ ... .......................... ... ...
+Solid State and Time Delay
+
+13-1
+13-3
+
+sECTlc )N
+14.1
+14.2
+
+SWITCHEs
+14:
+Sw[tche . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . ...*.”.. ....o.”..~” . . . . . . . . . . . . . . .
+Circuit Breakers ................. ..... ..... ...........0..,,..,.. . ..........” ....... ....” ... ......””” .........””. ... ..
+
+14-1
+14-2
+
+SECTI( )N
+15.1
+
+CONNECTORS
+15:
+...... ........ ........ .... ...... ................. ... .......... ..... ....” .. .........” .... .. ....
+Connectors,
+General
+. ..... ...... .... ... ...... .............. .............. .......*....” ...*...**”* .. *..*.*.*. .....
+Connectors,
+Sockets
+
+7-3
+7-4
+8-1
+8-2
+8-3
+8-4
+8-5
+
+●
+
+10.1
+
+12-4
+12-5
+
+.......................................................” ......*....”.” .........””.”” .*.*
+Synchros and Resolvem
+............................................ ...............................$.................
+Elapsed lime Meters
+●
+
+13:
+
+15.2 )
+
+15-1
+15-3
+
+16-1
+16-2
+
+INTERCONNECTION
+ASSEMBLIES
+......... .................. ........ .. .....
+sECTl~ ON 16:
+Interconnection
+Assemblies with Plated Through Holes ................... ......................
+16.’ I
+Interconnection
+Assemblies,
+Suflace Mount Technology
+16.: ~
+
+17-1
+
+SECTI ON
+17. 1
+
+CONNECTIONS
+17:
+...... ............ ....... ....... .... ........................ .................
+Connections
+
+SECT! ION
+18. 1
+
+METERS
+Meters, Panel .................................!....... .................................................................
+
+18-1
+
+SECT ION
+19 .1
+
+QUARTZ CRYSTALS
+19:
+.................................................
+Quartz C~sta\s .....................................................
+
+19-1
+
+. . ..0......
+
+. . . . . . . . . . . . . . . . . .
+
+18:
+
+Supersedes
+
+page w of Revtslon
+
+F
+
+Iv
+>
+
+--1
+
+.
+
+-----
+
+--
+
+- -
+
+——-—
+
+--
+
+-n
+
+l-l
+
+--l
+
+,
+
+--,
+
+..*
+
+.
+
+.T”c ,
+
+MIL-HDBK-217F
+NOTICE 2
+
+TABLE
+
+OF
+
+CONTENTS
+
+SECTION
+20.1
+
+LAMPS
+20:
+Lamps .. . ..... .. .......... .............. ........... .... .... .... ....................... .. ...... ... .... .... ... .............
+
+20-1
+
+SECTION
+21.1
+
+ELECTRONIC
+FILTERS
+21:
+Electronic
+Filters, Non-Tunable ........ ... ........ ......... ................................................... .
+
+21-1
+
+SECTION
+22.1
+
+FUSES
+22:
+Fuses. . .... .. .... ...... ................ ......... .. ... ........ ..... .... ......... .... .... ..... ....... .... .... .............
+
+22-1
+
+SECTION
+23.1
+
+MISCELLANEOUS
+PARTS
+23:
+Miscellaneous Parts ............. ... .......... .. ............... .... ........ ..... ....... .... .... .... ... .. ........ ....
+
+23-1
+
+. .. .... .. ..... .... ...*.. ... .. ...*... ... ...
+
+A-1
+
+APPENDIX
+
+A:
+
+PARTS
+
+COUNT
+
+APPENDIX
+
+B:
+
+VHSIC/VHSICOLIKE
+
+APPENDIX
+
+C:
+
+BIBLIOGRAPHY
+
+RELIABILITY
+
+PREDICTION
+
+AND
+
+CMOS
+
+MODEL)
+
+.. ..... .... ...
+
+OF
+
+B-1
+c-1
+
+TABLES
+
+Parts with Mu)ti-Level Quality Specifications ......................... ...............................
+Environmental
+Symbol and Description ........................................*. ....................
+
+3-3
+
+3-4
+4-1
+
+Reliability Analysis Checklist ...... .......................................................................
+Defautt Case Temperatures for All Environments (°C) . ..... ............ ... ..... . ............ ...
+
+6-23
+
+Approximate Thermal Resistance for Semicond@or
+Devices
+Sk= .......*.*.......**......*...................*...*..*...........................
+in Various Pa*@
+
+6-24
+
+LIST
+Figure 5-1:
+Figure 8-1:
+
+(DETAILED
+
+. .................. ... .... ... ................. ........ ...... .... .... ...... ...............
+
+LIST
+Table 3-1:
+Table 3-2:
+Table 4-1:
+Table 6-1:
+Table 6-2:
+
+VLSI
+
+OF
+
+FIGURES
+
+Cross Sectional View of a Hybrid with a Single Multi-Layered Substrate .......... .... ..
+Examples of Active Optical Suffaces . ........... ... ................ ............ ..... ... ....... ..... ...
+
+5-18
+8-1
+
+V
+Supersedes
+,.. . -
+
+I r—acinclucl
+
+page v of Revision
+I VLRY
+
+I rlmllllulk
+
+F
+I IWUIIIICIIIICLIL
+
+I
+
+~ a IVusw
+
+M! L-HDBK-217F
+
+NOTICE 2
+
+FOREWORD
+1.0
+THIS
+HANDBOOK
+NOT BE CITED
+AS A
+HAVE
+TO COMPLY.
+
+IS
+FOR
+GUIDANCE
+IF
+REQUIREMENT.
+
+MIL-HDBK-217F,
+Notice
+2 provides
+the
+study (see Ref. 37 listed in Appendix C):
+b
+
+Revised
+
+resistor
+
+and capacitor
+
+IT
+
+changes based
+
+following
+
+models,
+
+THIS
+HANDBOOK
+SHALL
+CONTRACTOR
+DOES
+NOT
+
+ONLY.
+IS, THE
+
+including
+
+upon a recently completed
+
+new models to address
+
+●
+
+Updated failure rate models for transformers,
+connectors,
+printed
+circuit
+boards
+(with
+connections.
+
+.
+
+A new model to address
+
+.
+
+A revised Traveling Wave Tube model based upon data supplied by the Electronic Industries
+Association Microwave Tube Division.
+This further lowers the calculated failure rates beyond
+the earlier modifications
+made in the base document (MIL-HDBK-217F,
+2 December 1991).
+
+●
+
+Revised
+the Fast Recove~
+reevaluation of Ref. 28.
+
+surface
+
+Notice
+2.0
+MIL-HDBK-217F,
+errors in the basic F Revision.
+
+mounted
+
+coils, motors, relays,
+and without
+surface
+
+chip devices.
+
+switches, circuit breakers,
+mount technology)
+and
+
+technology solder connections.
+
+Power
+
+Rectifier
+
+base
+
+1, (10 July
+
+1992)
+
+was
+
+failure
+
+issued
+
+rate
+
+downward
+
+to correct
+
+minor
+
+based
+
+New failure rate prediction models are provided for the following
+
+a
+
+typographical
+
+document),
+(2 December
+1991) provided the
+MIL-tiDBK-217F,
+(base
+3.0
+changes based upon recently completed studies (see Ref. 30 and 32 listed in Appendix C):
+1.
+
+on
+
+nine major
+
+following
+
+classes
+
+of
+
+microcircuits:
+●
+
+Monolithic
+
+Bipolar
+
+Digital and Linear Gate/Logic
+
+●
+
+Monolithic
+
+MOS Digital and Linear
+
+Gate/Logic
+
+●
+
+Monolithic
+(including
+
+Bipolar
+
+Microprocessor
+
+Controllers)
+
+●
+
+Monolithic
+
+Bipolar and MOS Memory Devices
+
+●
+
+Monolithic
+
+GaAs Digital Devices
+
+●
+
+Monolithic
+
+GaAs
+
+●
+
+Hybrid
+
+9
+
+Magnetic
+
+Bubble
+
+●
+
+Surface
+
+Acoustic
+
+and MOS Digital
+
+MMIC
+
+Array Devices
+Array Devices
+
+Devices
+
+Devices
+
+Microcircuits
+
+Memories
+Wave Devices
+
+new prediction
+models for bipolar and MOS
+The 2 December
+1991 revision provided
+up to 60,000,
+linear microcircuits
+with up to 3000
+microcircuits
+with gate counts
+and co-processors
+up to 32 bits,
+transistors,
+bipolar and MOS digital microprocessor
+memory devices with up to 1 million bits, GaAs monolithic microwave
+integrated circuits
+(MMICS) with up to 1,000 active elements,
+and GaAs digital ICS with up to 10,000
+The C, factors
+have been extensively
+revised to reflect new technology
+transistors.
+dewces with Improved reliability, and the activation energies representing
+the temperature
+sensltwlty of the dice (nT) have been changed for MOS devices and ‘or memories
+The
+
+Supersedes
+wlBaiaKa
+
+Ufi
+
+II M1iw
+
+~av~
+
+page VII of Revision
+
+F, NotIce 1
+
+Vll
+
+MIL-HDBK-217F
+
+NOTICE 2
+
+FOREWORD
+
+C2 factor remains
+
+unchanged
+
+from the prewous
+
+Handbook
+
+version,
+
+but includes
+
+pin grid
+
+arrays and surface mount packages using the same model as hermetic, solder-sealed
+dual
+New values have been included for the quality factor (XQ), the learning
+in-hne packages.
+factor
+
+(~~), and the environmental!
+
+factor
+
+(nE).
+
+The model
+
+for hybrid
+
+microcircuits
+
+has
+
+been revised to be simpler to use, to delete the temperature
+dependence
+of the seal and
+interconnect
+failure
+rate contributions,
+and to provide a method of calculating
+chip
+junction temperatures.
+2.
+
+A new model for Very High Speed Integrated
+Circuits (VHSIC/VHSiC
+Large Scale Integration (VLSI) devices (gate counts above 60,000).
+
+3.
+
+The reformatting
+
+4.
+
+A reduction
+
+5.
+
+A revised
+
+6.
+
+Rewsed
+models for
+Industries Association
+
+of the entire handbook
+
+in the number
+failure
+
+and
+
+Very
+
+to make it easier to use.
+
+of environmental
+
+rate model for Network
+
+Like)
+
+factors
+
+(zE) from 27 to 14.
+
+Resistors.
+
+TWS
+and Klystrons
+based
+Microwave Tube Division.
+
+on data
+
+supplied
+
+by the
+
+Electronic
+
+MIL-HDBK-217F
+NOTICE 2
+1.0
+
+SCOPE
+
+- This handbook
+Is for guidance
+only and shall
+not be cited
+as a
+Purpose
+1.1
+requirement.
+ff it la, the contractor
+does not have to comply
+(see Page 1-2).
+T he
+purpose of this handbook is to establish and maintain consistent and uniform methods for estimating
+the inherent reliability
+(i.e., the reliability of a mature design) of military electronic
+equipment
+and
+systems.
+It provides a common basis for reliability predictions during acquisition programs for military
+It also establishes a common basis for comparing and evaluating
+electronic systems and equipment.
+The handbook is intended to be used as a tool
+reliability predictions of related or competitive designs.
+to increase the reliability of the equipment being designed.
+1.2
+Appllcatlon
+- This handbook
+contains two methods of reliability
+prediction
+- “Part Stress
+Analysis” in Sections 5 through 23 and ‘Parts Count” in Appendix A. These methods vary in degree
+of information needed to apply them. The Parl Stress Analysis Method requires a greater amount of
+detailed information and is appl”=ble
+during the later design phase when actual hardware and circuits
+are being designed. The Parts Count Method requires less information, generally part quantities,
+quallty level, and the application environment. This method is applicable during the early design phase
+In general, the Parts Count Method will usually result in a more
+and during proposal formulation.
+consewative
+estimate (i.e., higher failure rate) of system reliability than the Parts Stress Method.
+
+Supersedes
+
+page
+
+1-1
+
+of Revision
+
+F
+
+1-1
+
+MI L-I-IDBK-217F
+
+NOTICE 2
+1.0
+
+SCOPE
+
+COMMANDER,
+
+to s~
+printing
+
+Prior
+
+Point
+
+for
+be made:
+
+the
+
+ACrOSS
+
+“EZIS
+●
+
+lat.
+
+the
+
+in
+
+cover
+
+HAZUX)BOOK
+
+subject
+
+aotico
+
+the
+
+ard tistrtitia,
+
+BIG
+
+to
+
+BOLD BLACK LZITERS
+
+XS FOR ~
+
+tha
+
+follas
+
+m
+
+s.
+
+mm=
+
+Redictim
+
+of
+
+Six@O
+
+Stock
+
+CAM:
+
+bert
+
+DoD
+
+- Au
+
+additions
+
+nwt
+
+mm’rm~s
+
+-Y.
+
+mcunENT~A~””
+xn the FOREWORD (Page vii of Notice 2 ) , ~agr~h
+‘THIS HANDBOOK 1S POR GUIDAN= ONLY. msEANDBoox~~
+~R
+IFrrxs,
+m
+BE CXTZD AS A ~.
+HAVE
+
+●
+
+RL/ERsR,
+
+“-li~ili~
+Notice 2 to ~-xDBK-217F,
+Elecwodc
+lz@gX=t”
+, EOjact
+REU-0074
+
+SUBJECT:
+
+●
+
+LABORA~RY (AFMC), AlTN:
+
+R-
+
+1.0:
+
+M
+mEs NOT
+
+COMPLY. ”
+
+“MS
+
+entry for
+the SCOPE* pua4m@
+1.1 (~e)
+:
+handbook is for guibce
+only
+and shall not be citd
+as a
+the contrmtor
+&e8 not have to
+If it ia,
+requir~t.
+coa@y . “
+
+Add
+
+an
+
+If YOU have anY uuestim
+contact
+Ma. Carla
+J~
+.
+
+thb
+
+r~
+
+Waltez
+
+B.
+
+Be%
+
++
+Chaiman,
+Defense Standada
+
+reQueat , plea-
+
+, 11
+
+=mrQV’--t
+
+Council
+cc :
+
+OVSD(A&T)~~&E/SE,
+
+Mr. M. Zsak
+
+New Page
+
+1-2
+■
+
+-.
+
+Ma
+
+1
+
+I
+
+1
+
+1
+
+MIL-HDBK-217F
+NOTICE 2
+
+2.0
+
+REFERENCE
+
+DOCUMENTS
+
+This handbook cites some specifications
+which have been cancelled or which describe devices that are
+not to be used for new design. This information is necessary because some of these devices are used in
+so-called “off-the-shelf”
+equipment which the Department of Defense purchases.
+The documents cited
+in this section are for guidance and information.
+
+TITLE
+
+SPECIFICATION
+
+SECTION #
+
+MIL-C-5
+
+10.1
+
+Capacitors, Fixed, Mica Dielectric, General Specification for
+
+M! L-R-l 1
+
+9.1
+
+Resistor, Fixed, Composition (Insulated), General Specification for
+
+MIL-R-19
+
+9.1
+
+Resistor, Variable, Wirewound (Low Operating Temperature) General
+Specification for
+
+MIL-C-20
+
+10.1
+
+Capacitor, Fwed, Ceramic Dielectric (Temperature Compensating),
+Established Reliability and Nonestablished Reliability, General
+Specification for
+
+MIL-R-22
+
+9.1
+
+Resistor, Variable, Wirewound (Power Type), General Specification for
+
+MIL-C-25
+
+10.1
+
+Capacitor, Fixed, Paper-Dielectric, Direct Current (Hermetically Sealed
+in Metal Cases), General Specification for
+
+MIL-R-26
+
+9.1
+
+Resistor, Ftxad, Wirewound (Power Type), General Specif~ation for
+
+MIL-T-27
+
+11.1
+
+Transformer and Inductors (Audio, Power, High Power Pulse),
+General Specifiition
+for
+
+MIL-C-62
+
+10.1
+
+Capacitor, Fued Electrolytic (DC, Aluminum, Dry Ekctrotyte,
+Poladzad), General Specification for
+
+MIL-G81
+
+10,1
+
+Capacitor, Variable, Ceramic Dielectric, General Specification for
+
+MIL-C-92
+
+10.1
+
+Capacitor, Variable, Air Dielectric (Trimmer), General Specification for
+
+MIL-R-93
+
+9.1
+
+Resistor, Fixed, Wirewound (Accurate), General Specification for
+
+MIL-R-94
+
+9.14
+
+Resistor, Variable, Composition, General SpecMcation for
+
+MIL-V-95
+
+23.1
+
+Vibrator, Interrupter and Self-Rectifying, General Specification for
+
+W-L-1 11
+
+20.1
+
+Lamp, Incandescent Miniature, Tungsten Filament
+
+W-C-375
+
+14.5
+
+Circuit Breaker, Molded Case, Branch Circuit and Sewice
+
+W-F- 1726
+
+22.1
+
+Fuse, Cartridge, Class H (this covers renewable and nonrenewable)
+
+W-F-1814
+
+22.1
+
+Fuse, Cartridge, High Interrupting Capacity
+
+MIL-C-3098
+
+9.1
+
+Cqmtal Unit, Quartz, General Specification for
+
+MIL-C-3607
+
+5!1
+
+Connector, Coaxial, Radio Frequency, Series Pulse, General
+
+Specifications
+MIL-C-3643
+
+Supersedes
+
+51
+
+Connector, Coaxial, Radio Frequency, Series HN and Associated
+Fittings, General Specification for
+
+page 2-1 of Revision F
+
+--— 3..
+
+for
+
+tiz~
+
+2-1
+a
+
+u
+
+MIL-HDBK-217F
+
+NOTICE 2
+
+2.0
+
+REFERENCE
+
+DOCUMENTS
+
+MIL-G3650
+
+15.1
+
+MIL-C-3655
+
+15.1
+
+Connector, Coaxial, Radio Frequency, Series LC
+
+Cormector, PIIJg and Receptacle, Electrical (Coaxial Series Twin) and
+Associated Fittings, General Specification for
+
+2-2
+
+MIL-S-3786
+
+14.3
+
+Swrtch, Rotary (Circuit Selector, Low-Current (Capacity)), General
+Specification for
+
+MIL-S”3950
+
+14.1
+
+Switch, Toggle, Environmentally Sealed, General
+
+MIL-G3965
+
+10.1
+
+Capacitor, Fixed, Electrolytic (Nonsolid Electrolyte), Tantalum, General
+Specification for
+
+MIL-C+O15
+
+15.1
+
+Connector, Electrical, Ckoular Threaded, AN Type, General
+Specification for
+
+MIL-F-5372
+
+22.1
+
+Fuse, Current Limiter Type, Akcraft
+
+MIL-S-5594
+
+14.1
+
+Switches, Toggle, Electrically Held Sealed, General Specification for
+
+MIL-R-5757
+
+13.1
+
+Relays, Electromagnetic,
+
+MIL-R-6106
+
+13.1
+
+Relay, Electromagnetic (Including Established Reliability (ER) Types),
+General Specification for
+
+ML-L-6363
+
+20.1
+
+Lamp, Incandescent,
+
+MIL-S-8805
+
+14.1, 14.2
+
+MIL-S-8834
+
+14.1
+
+Switches, Toggle, Positive Break General Specification for
+
+MIL-S-8932
+
+14,1
+
+Switches,
+
+MIL-S-9395
+
+14,1
+
+Switches, Pressure, (Absolute, Gage, and Differential), General
+Specification for
+
+MIL-S-9419
+
+14.1
+
+Switch, Toggle, Momentary Four Position On, Center Off, General
+Specification for
+
+MIL-M-10304
+
+18.1
+
+Meter, Electrical Indicating, Panel Type, Ruggedized, General
+Specificat”mn for
+
+MIL-R-10509
+
+9.1
+
+Resistor, Fixed Film (High Reliability), General Specification for
+
+MIL-GI0950
+
+10,1
+
+Capacitor, Fixed, M’ka Dielectric, Button Style, General Specification
+for
+
+MIL-C-11OI5
+
+10.1
+
+Capacitor, Fixed, Ceramic Dielectric (General Purpose), General
+Specification for
+
+MlL-C-l 1272
+
+10.1
+
+Capacitor, Fixed, Glass Dielectric, General Specification for
+
+Specification for
+
+General Specification for
+
+Aircraft Service, General Specification for
+
+Switches and Swttch Assemblies, Sensitive and Push (Snap Action),
+General Spedkatiin
+for
+
+Pressurer Aircraft, General Specification for
+
+Supersedes
+
+page 2-2 of Revision F
+
+MIL-HDBK-217F
+NOTICE 2
+
+2.0
+
+10.1
+
+MlL-C-l 1693
+
+REFERENCE
+
+DOCUMENTS
+
+Capacitor,
+Feed Through, Radio Interference Reduction AC and DC,
+(Hermetkally Sealed in Metal Cases) Estabiishd
+Reliability, General Specificatbn for
+
+and Nonestablished
+
+MlL-R-l 1804
+
+9.1
+
+Resistor, Fixed, Film (Power Type), General Specificat”mn for
+
+MIL-S-12211
+
+14,1
+
+Switch, Pressure
+
+MlL-S-l 2285
+
+?4.1
+
+Switches, Thermostatic
+
+MIL-S-12883
+
+15.3
+
+Sockets and Accessories for Plug-h Electronic Components, General
+Specification for
+
+MIL-G12889
+
+10.1
+
+Capacitor, By-f%ss, Radio - Interference Reduction, Paper Dielectric,
+AC and DC, (Hermetically Sealed in Metaiiic Cases), General
+Specificatbn for
+
+M!L-R-12934
+
+9.1
+
+Resistor, Variabie, Wirewound, Precision, General Specification for
+
+MIL-S-13484
+
+14.1
+
+Switch, Sensitive:
+
+MIL-C-13516
+
+14.2
+
+Circuit Breakers, Manual and Automatic (28 Voits DC)
+
+MIL-S-13623
+
+14.1
+
+Switches, Rotary: 28 Voit DC
+
+MIL-R-13718
+
+13.1
+
+Reiays, Electromagnetic
+
+MIL-S-13735
+
+14.1
+
+Switches, Toggle: 28 volt DC
+
+MIL-G14409
+
+10.1
+
+Capacitor, Vadable (Piston Type, Tubuiar Trimmer), General
+Spectfioatbn for
+
+MIL-F-15160
+
+22.1
+
+Fuse, instrument, Power and Teiephone
+
+MIL-S-1S291
+
+14.1
+
+Switches, Rotary, Snap Action and DetenVSpring Return Action,
+General Specification for
+
+MIL-C-15305
+
+11.2
+
+Coils, Electrical, Fixed and Variable, Radio Frequency, Generai
+Specification for
+
+MIL-G15370
+
+15.1
+
+Couplers, Directional, Generai Specification for
+
+MIL-F-15733
+
+21.1
+
+Fiiters and Capacitors, Radio Frequency Interference, Generai
+Specification for
+
+MIL-S-15743
+
+14.1
+
+Switches,
+
+MIL-G18312
+
+10.1
+
+Capacitor, Fixed, Metallized (Paper, Paper Piastic or Piastic Film)
+Dielectric, Direct Current (Hermetically Sealed in Metal Cases), General
+
+Supersedes
+
+21.1
+
+page 2-3 of Revision
+
+24 Volt DC
+
+Rotary, Enclosed
+
+Specification for
+MIL-F-18327
+
+30 Votts Direct Current Maximum, Waterproof
+
+‘
+
+Filter, High Pass, Low Pass, Band Pass, Band Suppression and Dual
+Functioning, General Specification for
+
+F
+
+2-3
+
+tvllL-HDBK-217F
+NOTICE 2
+
+2.0
+
+REFERENCE
+
+DOCUMENTS
+—
+
+ML-R-18546
+
+9.1
+
+Resistor, Fixed, Wkewound (Power Type. Chassis Mounted), General
+Specification for
+
+MlL-S-l 9500
+
+6.0
+
+Semiconductor Device, General Specification for
+
+MIL-R-19523
+
+13.1
+
+Relays, Control
+
+MIL-R-19648
+
+13.1
+
+Relay, Time, Delay, Thermal, General Specif”~at”kmfor
+
+MIL-G19978
+
+10.1
+
+Capacitor, Fixed Plastic (or Paper-Plastic) Dielectric (Hermetically
+SeaJed in Metal, Ceramic or Glass Cases), Established and
+Nonestablished ReliaMlity, General Specificat”bn for
+
+MIL-T-21038
+
+11.1
+
+Transformer, Puke, Low Power, General Specification for
+
+MIL-G21097
+
+15.1
+
+Connedor, Electrical, Printed Wking Board, General Purpose, General
+Specification for
+
+MIL-s-212n
+
+14.1
+
+Switches, L“quid Level, General Specification for
+
+MIL-G21617
+
+15.1
+
+Ccmnectors, Plug and Receptacle - Electrical Rectangular, Polarized
+Shell, Miniature Type
+
+MIL-R-22097
+
+9.1
+
+Resistor, Variable, Nonwirewmnd
+Specification for
+
+MIL-S-22614
+
+14.1
+
+Switches, Sensitive
+
+MIL-R-22664
+
+9.2
+
+Resistor, FMed, Film, Insulated, General Specifioatiin
+
+MIL-S-2271O
+
+14.4
+
+Switches, Code Mcating
+
+(Adjustment Types), General
+
+for
+
+Wheel (Printed Circuit), (Ttwmbwheel,
+
+In-1ine
+
+and Pushbutton), General Specification for
+
+2-4
+
+MIL-S-22865
+
+14,1
+
+Switches, Pushbutton, Illuminated, General Specif”ution for
+
+MIL-G22992
+
+15.1
+
+Connectors, Plugs and Receptacles, Electrical, Water-ProOf, Quick
+HeavyDutyType, General Specification for
+Di-nnect,
+
+MIL-C23163
+
+10.1
+
+Vacuum or Gas Dielectric, General
+Capacitors, Fixed or Variable,
+Specification for
+
+MIL-CX23269
+
+10.1
+
+Capacitor, Fixed, Glass Dielectric, Established Reliability, General
+Specification for
+
+MIL-R-23285
+
+9.1
+
+Resistor, Variable, Nonwirewound, General Specificat”mn for
+
+MIL-F-23419
+
+22.1
+
+Fuse, Caflridg8, Instrument Type, General Specification for
+
+MIL-T-23648
+
+9.1
+
+Resistor, Thermal, (Thermally Sensitive Resistor), Insulated, General
+Specification for
+
+MS-24055
+
+15.1
+
+Connector, Plug-Receptacle,
+Female, 7.5 Amps
+
+Electrical, Hexagonal, 9 Contacts,
+
+MS-24056
+
+15.1
+
+Connector, Plug-Receptacle,
+7.5 Amps
+
+Electrical, Hexagonal, 9 Contacts, Male,
+
+Supersedes
+
+page 2-4 of Revision F
+
+MIL-HDBK-217F
+NOTICE 2
+
+2.0
+
+REFERENCE
+
+DOCUMENTS
+
+MIL-C-24308
+
+15.1
+
+Connectors, Eiectric, Rectangular, Nonerwironmental, Miniature,
+Polarized Shell, Rack and Panel, General Specdicatbn for
+
+MIL-S-24317
+
+14,1
+
+Switches, Mu!tistation, Pushbutton (Illuminate
+General Specification for
+
+MIL-C-25516
+
+15.1
+
+Connector, Electrical, Miniature, Coaxial, Environment Resistant Type,
+General Specification for
+
+MIL-C-26482
+
+15.1
+
+Connector, Electrical (Wcular, Miniature, Quick Disconnect,
+Environment Resisting), Receptacles and Plugs, General Specificat”bn
+for
+
+ML- C-26500
+
+15.1
+
+Connectors, General Purpose, Electrical, Miniature, Ckcular,
+Environment Resisting, General Spedficat’bn for
+
+MIL-R-27208
+
+9.1
+
+Resistor, Variable, Wlrewound, Nonprecis”on, General
+
+and hlon-l!luminated),
+
+Specificat’mn for
+MIL-C-28731
+
+15.1
+
+Connectors, Electrical, Rectangular, Removable Contact, Formed
+Blade, Fork Type (For Rack and Panel and Other Applicat”bns), General
+Specification for
+
+MIL-C28748
+
+15.1
+
+Connector, Plug and Receptacle, Rectangular, Rack and Panel, Solder
+Type and Crimp Type Contacts, General Specifiiion
+for
+
+MIL-R-28750
+
+13.2
+
+Relay, Sol”d State, General Specification for
+
+MIL-C-28804
+
+15.1
+
+Connectors, Plug and Receptacle, Electrio Rectangular, High Density,
+Polarized Center JackScrew, General Specification for, Inactive for New
+Designs
+
+MIL-G28840
+
+15.1
+
+Connector, Electrical, Circular Threaded, High Density, High Shock
+Shipboard, Class D, General Specification for
+
+MIL-M-3851O
+
+5.0
+
+Microcircuits, General Specification for
+
+MIL-S-385=
+
+15.3
+
+Sockets, Chip Carrier, Ceramic, General Specification for
+
+MIL-H-38534
+
+5.0
+
+Hybrid Micmcirdts,
+
+MIL-I-38535
+
+5.0
+
+Integrated Wcuits
+SpedficatiOn for
+
+MIL-G38999
+
+15.1
+
+Connector, Ekctrical, Circular, Miniature, High Density, Quick
+Disconnect, (Bayonet, Threaded, and Breech Coupling) Environment
+Resistant, Removable Crimp and Hermetic Solder Contacts, General
+Specification for
+
+MIL-G39001
+
+10.1
+
+Capacitor, Fixed, Mica-Dielectric, Established Reliability, General
+Specification for
+
+MIL-R-39002
+
+9.1
+
+Resistor, Variable, Wkewound, Semi-Precision,
+for
+
+MIL-C-39003
+
+10.1
+
+Capacitor, Fixed, Electrolytic, (Solid Electrolyte), Tantalum,
+Established Reliability, General Specification for
+
+Supersedes
+
+page 2-5 of Revision
+
+F
+
+General Specification for
+(Microcircufis) Manufacturing, General
+
+General Specification
+
+2-5
+
+MIL-HDBK-217F
+NOTICE 2
+
+2.0
+
+REFERENCE
+
+DOCUMENTS
+
+—
+
+2-6
+
+MIL-R-39005
+
+9.1
+
+Resistor, Fixad, Wirewound (Accurate), Established Reliability, General
+Specification for
+
+MIL-G39006
+
+10.1
+
+Capacitor, Fixed, Electrolytic (Nonsolid Electrolyte) Tantalum
+Established Reliability, General Specification for
+
+MIL-R”39007
+
+9.1
+
+Resistor, Fixed, Wkewound (Power Type), Established Reliability,
+General Specification for
+
+MIL-R-39008
+
+9.1
+
+Resistor, Fixed, Composition (Insulated), Established Reliability,
+General Specification for
+
+MIL-R-39009
+
+9.1
+
+Resistor, Fixed, WmMVOund (Power Type, Chassis Mounted)
+Established Reliabiiii, General Specification for
+
+MIL-G3901O
+
+11.2
+
+Coils, Electrical, FMed, Radio Frequency, Molded, Established
+Reliability, General Specification for
+
+MIL-C-39012
+
+15.1
+
+Connector, Coaxial, Radio Frequency, General Specification for
+
+MIL”C-39014
+
+10.1
+
+Capacitor, Fixed, Ceramic Dielectric (General Purpose), Established
+Reliability, General Specification for
+
+MIL-R-39015
+
+9.1
+
+Resistor, Variable, Wlrewound (Lead Screw Actuated), Established
+ReliatWty, Genera! Specification for
+
+MIL-R-39016
+
+13.1
+
+Relay, Electromagnetic,
+for
+
+MIL-R-39017
+
+9.1
+
+Resistor, Fued, Fiim (Insulated), Established ReiiabNty, General
+Specif.kdon
+for
+
+MIL-C-39018
+
+10.1
+
+Capacitor, Fwed, Ekctrofytic (Aluminum Oxide), Established Reliability
+and Nonestablished Reliability, General Specification for
+
+MIL-G39019
+
+14.5
+
+Circuit Breakers, Magnetic, Low Power, Seaied, Trip-Free, General
+Specification for
+
+MIL-C-39022
+
+10.1
+
+Capacitors, Fixed, Metaiiued, Paper-Plastic Film or Piastic Film
+Dielectric, Direct and Alternating Current (Hermetically Sealed in Metal
+or Ceramic Cases), Established Reliability, General Specification for
+
+MIL-R-39023
+
+9.1
+
+Resistor, Variabie, Nonwirewound, Precision, Generai Specification for
+
+MIL-R-39035
+
+9.1
+
+Resistor, Variable, Nonwirewound (Adjustment Type), Established
+Rel.&ility, General Specification for
+
+MIL-S-45885
+
+14.1
+
+Switch, Rotary
+
+MIL-C-49142
+
+15.1
+
+Connectors, Piugs and Receptacle, Eiectricai Triaxiai, Radio
+Frequency, Generai Specification for
+
+MIL-G55074
+
+15.1
+
+Connectors, Plug and Receptacle, Teiephone, Eiectrcal, Subassembly
+and Accessories and Contact Assembiy, Electrical, General
+Specification for
+
+MIL-P’55110
+
+15.2
+
+Printed Wiring Board, General Specifi~tion
+
+MIL-R 55182
+
+91
+
+Resistor,
+
+FIxd,
+
+Established Reiiabiiity, General Specification
+
+for
+
+Film, Es!abl(shed Reliability, General Specification for
+
+Supersedes
+
+page 2-6 of Revision
+
+F
+
+MII--HDBK-217F
+
+NOTICE 2
+
+2.0
+
+REFERENCE
+
+DOCUMENTS
+
+MIL-C-55235
+
+15.1
+
+Connectors, Coaxial, Radio Frequency, Series TPS
+
+MIL-C-55302
+
+15.1
+
+Connector, Printed Circuit, Subassembly
+
+MIL-A-55339
+
+15.1
+
+Adaptors, Connector, Coaxial, Radio Frequency, (Between Series and
+Within Series), General Specification for
+
+MIL-R-55342
+
+9.1
+
+Resistors, Fixed, Film, Chip, Established Reliability, General
+Specification for
+
+MIL-C-55365
+
+10.1
+
+Capacitor, Fixed, Electrolytic (Tantalum), Chip, Established Reliability,
+General Specification for
+
+MIL-S-55433
+
+14.1
+
+Swhches, Reed, General Specification for
+
+MIL-C-55514
+
+10.1
+
+Capacitors, Freed, Plastic (or Metallized Plastic) Dielectric, DC or DCAC, In Non-Metal Cases, Established Reliability, General Specification
+for
+)
+
+MIL-G55629
+
+14.5
+
+Circuit Breaker, Magnetic, Unsealed, or Panel Seal, Trip-Free, General
+Specification for
+
+MIL”T-55631
+
+11.1
+
+Transformer, Intermediate Frequency, Radio Frequency and
+Discriminator, General Specification for
+
+MIL-G55681
+
+10,1
+
+Capacitor, Chip, Multiple Layer, Fixed, Unencapsulated Ceramic
+Dielectric, Established Reliability, General Specification for
+
+15.1
+
+Connedor, Electriil,
+
+MIL-S-81551
+
+14.1
+
+Switches; Toggle, Hermetically Sealed, General Specification for
+
+MIL-C-81659
+
+15.1
+
+Connectors, Electrical Rectangular, Crimp Contact
+
+MIL-S-82359
+
+14.1
+
+Switch, Rotary, Variable Resistor Assembly Type
+
+MIL-(X3383
+
+14.5
+
+Circuit Breaker, Remote Control, Thermal, Trip-Free, General
+Specification for
+
+MIL-R-83401
+
+9.1
+
+Resistor Networks, Fixed, Film and Capacitor-Resistor Networks,
+Ceramic Capacitors and Fixed Film Resistors, General Specification for
+
+MIL-C-83421
+
+10,1
+
+Capacitors, Freed Metallued Plastii Film Dielectric (DC, AC or DC
+and AC) Hermetically sealed in Metal or Ceramic Cases, Established
+Reliabil”~, General Specification for
+
+11.2
+
+Coils, Radio Frequency, Chip, Fixed or Variable, General Specification
+for
+
+MIL-C-83500
+
+10,1
+
+Capacitor, Fixed, Electrolytic (Nonsolid Electrolyte), Tantalum Cathode,
+General Specification for
+
+MIL-S-83504
+
+14,1
+
+Switches, Dual In-Line Package (DIP), General Specification for
+
+MIL-C-83513
+
+15.1
+
+Connector, Electrical, Rectangular, Microminiature, Polarized Shell,
+General Specification for
+
+MIL-G8151
+
+1
+
+MIL-C+3446
+
+New Page
+
+‘
+
+and Aaessories
+
+Circular, Hgh Densky, Ouick Disconnect,
+Environment Resisting and Accessories, General Specification for
+
+2-7
+_-e_-.—
+—..—
+--—
+---—
+--=—=—a=—==.—a
+.-A._-...._.
+.. ___
+. ____ ____ —————
+
+MIL-HDBK-217F
+
+NOTICE 2
+
+2.0
+
+REFERENCE
+
+DOCUMENTS
+
+MIL-C-83515
+
+15.1
+
+Connectors, Telecommunication,
+for
+
+MIL-R-83516
+
+13.1
+
+Relays, Reed, Dry, General Specification for
+
+MIL-C-83517
+
+15.1
+
+Connectors, Coaxial, Radio Frequency for Coaxial, Strip or Microstrp
+Transmission Line, General Specification for
+
+MIL-R-83520
+
+13.1
+
+Relays, Electromechanical, General Purpose, Non-Hermetically Sealed,
+Plastic Enclosure (Dust Cover), General Specification for
+
+MIL-G83527
+
+15.1
+
+Connectors, Plug and Receptacle, Electrical, Rectangular Muttiple
+
+Polarized Shell, General Specification
+
+Insert Type, Rack to Panel, Environment Resisting, 15~C Total
+Continuous Opemting Temperature, General Specification for
+MIL-R-83536
+
+13,1
+
+Relays, Electromagnetic,
+for
+
+Established Reliability, General Specification
+
+MIL-C-83723
+
+15.1
+
+Connector, Electrical (Circular Environment Resisting), Receptacles
+and Plugs, General Specification for
+
+M!L-R-83725
+
+13.1
+
+Relay, Vacuum, General Specification for
+
+MIL-R-83726
+
+13.1, 13.2,
+13.3
+
+MIL-S-83731
+
+14.1
+
+Switch, Toggle, Unsealed and Sealed Toggle, General Specification
+
+MIL-G83733
+
+15.1
+
+Connector, Electrical, Miniature, Rectangular Type, Rack to Panel,
+
+Relays, Hybrid and Solid State, Time Delay, General Specification for
+
+for
+
+Envhnment Resistkg, XKY’C Total Continuous Operating
+Temperature, General Specifiiion
+for
+MIL-S-83734
+
+15.3
+
+Sockets, Plug-In Electronic Components, Dual-In-Line (DIPS) and
+Single-In-Line Packages (SIPS), General Specification for
+
+MIL-M5028
+
+15.1
+
+Connector, Electrical, Rectangular, Individual Contact Sealing,
+Polarized Center JackScrew, General Specification for
+
+STANDARD
+MIL-STD-756
+
+Reliability Modeling and Prediction
+
+MIL-STD-683
+
+Test Methods and Procedures for Microelectronics
+
+MIL-STD-975
+
+NASA Standard Electrical, Electronic and Electromechanical (EEE) Parts List
+
+MIL-STD-1547
+
+Electronic Parts, Materials
+Technical Requirements for
+
+MIL-STD-1772
+
+Certification Requirements for Hybrid Microcircuit Facilities and Lines
+
+Copies
+functions
+
+of specifications
+
+and standards
+required
+should be obtained from the contracting
+
+and Processes
+
+for Space and Launch Vehicles,
+
+by Contracbrs
+in connection with specific acquisition
+activity or as directed by the contracting officer. Single
+
+copies are also available (without charge) upon written request to:
+Standardization
+Oocument Order Desk, 700 Robim AVe , Wilding ~, section D,
+Ph(ladelphla, PA 19111-5094, (215) 697-2667
+
+2-8
+
+New Page
+
+,-- -----
+
+MIL-HDBK-217F
+
+NOTICE
+
+MICROCIRCUITS,
+
+5.1
+
+2
+
+GATE/LOGIC
+
+ARRAYS
+
+AND
+
+MICROPROCESSORS
+
+DESCRIPTION
+1. Bipolar Devices, Digital and Linear Gate/Logic Arrays
+2. MOS Devices, Digital and Linear Gate/Logic Arrays
+3. Field Programmable Logic Array (PLA) and
+Programmable
+Array Logic (PAL)
+4, Microprocessors
+kp = (cl fi~ + C2fiE)
+
+~QfiL
+
+‘ailures~l
+
+06
+
+Hours
+
+-
+
+Digital and Linear Gate/Logic Array Die Complexity Failure Rate - Cl
+PLA/PAL
+Linear
+Digital
+No. Gates
+c,
+No. Transistof$
+No. Gates
+I c,
+
+T
+I
+t
+
+~
+
+v
+
+c,
+
+1 to
+
+100
+
+.010
+
+101 to
+
+1,000
+
+.020
+.040
+.080
+.16
+.29
+
+1,001 to
+3,000
+3,001 to 10,000
+10,001 to 30,000
+30,001 to 60,000
+
+Linear
+No, Transistor
+
+1 to
+101
+301
+1,001
+
+to
+to
+to
+
+I
+
+\
+
+E=F==7
+Up to 8
+
+.060
+
+,14
+
+Up to 16
+
+.12
+
+.28
+
+Up to 32
+
+.24
+
+,56
+
+●
+
+c,
+
+up to 500
+
+.00085
+
+501 to 1,000
+2,001 to 5,000
+5,001 to 20,000
+
+.0017
+.0034
+.0068
+
+For CMOS gate counts above 60,000 use the Vi+ SIC/VHSIC-Like
+
+rocm
+Die Complexi~ Failure Rate - Cl
+MO.S
+c,
+
+.021
+.042
+
+PLA/PAL
+No. Gates
+
+c,
+.010
+.020
+.040
+.060
+
+100
+300
+1,000
+10,000
+
+I
+
+.010
+
+up to 200
+201 to 1,000
+1,001 to 5,000
+
+.010
+.020
+.040
+.060
+
+100
+300
+1,000
+10,000
+
+Linear and Digital Gate/Logic Array Die Gomplex~ Failure Rate -Cl
+
+Digital
+No. Gates
+
+‘NOTE:
+
+1 to
+101 to
+301 to
+1,001 to
+
+.0025
+.0050
+.010
+.020
+.040
+.080
+
+100
+to
+101 to
+1,000
+1,001 to
+3,000
+3,001 to 10,000
+10,001 to 30,000
+30,001 to 60,000
+1
+
+c,
+
+modei In Section
+
+5.3
+
+All Other Model Parametef’s
+Refer to
+Parameter
+1
+XT
+
+Section 5.8
+
+C2
+
+section 5,9
+
+7tE, flQ, XL
+
+Section 5.10
+
+,
+
+A
+
+L
+
+Supersedes
+- —_=...= ------
+
+page
+
+_____ -_ ——_
+
+5-3
+
+of Revision
+.
+
+5-3
+F
+All GAQ =*Q AW -w......-.
+
+baw. -“ -....-=
+
+--
+
+----
+
+MIL-HDBK-217F
+
+5.2
+
+MEMORIES
+
+MICROCIRCUITS,
+
+—
+DESCRIPTION
+1. Read Only Memories (ROM)
+2. Programmable
+Read Only Memories (PROM)
+3. Ultraviolet Eraseable PROMS (UVEf’ROM)
+4. “Flash,” MNOS and Floating Gate Electrically
+Eraseable PROMS (EEPROM).
+Includes both
+d
+floating gate tunnel oxide (FLOTOX) and texture
+polysilicon type EEPROMS
+5. Static Random Access Memories (SRAM)
+R
+~vnamic Random Access Memories (DRAM)
+_=.
+
+w.
+
+.—
+
+Acyc) XQ XL
+
+kp=(C1XT+C2YCE+
+
+Die Complex~
+
+Failure Rate - Cl
+MOs
+
+Memory
+
+Size, B (Bits)
+
+UVEPROM*
+EEPROM,
+mPROM
+
+DRAM
+
+(MOS &
+BiMOS)
+
+.00085
+.0017
+.0034
+.0068
+
+.0013
+.0025
+.0050
+.010
+
+.0078
+.016
+.031
+.062
+
+.00065
+
+up to 16K
+16 K< BSWK
+64K<BS2%K
+256K < B s IM
+
+.0013
+.0026
+.0052
+
+t
+,
+
+Bipolar
+SRAM
+
+PROM,
+
+ROM
+
+05 Hours
+
+Failures/l
+
+ROM,
+PROM
+
+.0094
+.019
+.038
+.075
+
+SRAM
+
+.0052
+
+.011
+.021
+.042
+
+,
+
+A2 Faaor for LCYCCalculation
++
+
++
+
+Fatior for Acyc Calculation
+
+Total No. Of
+prograrnmin9
+
+L
+
+Programming
+Cycles
+\OM Life, C
+OV&%PF
+
+Textur8dPol?
+
+Cycles Over
+~EPROM Life, C
+
+Flotoxl
+
+Jp to
+
+100
+100< c s 200
+
+.00070
+.0014
+
+200< CS 500
+500<cs1K
+1K<CS3K
+3K<CS7K
+7K<CS15K
+
+.0034
+.0068
+.020
+.049
+.10
+
+.014
+.023
+.033
+.061
+.14
+.30
+
+.14
+.20
+.68
+1.3
+
+.30
+.30
+.30
+.30
+
+15K < C s 20K
+20K < C s 30K
+30K< C s 100K
+100K < C s 200 K
+200K < C s 400 K
+
+400K < C s 500 K
+
+NO. Of
+
+Total
+
+Textured-Poiy
+I
+
+2.7
+3.4
+
+,30
+.30
+
+6.817 X 10-6 (C)
+
+Al=
+
+2.
+
+No underlying
+
+equation
+
+2.3
+
+400K < C s 500K
+A!! Other Model
+parameter
+
+5.8
+
+section 5.9
+
+C2
+1
+
+Parametem
+Refer to
+Section
+
+XT
+
+~E, ~Qt
+k Cyc
+
+1.
+
+1.1
+
+300K c C s 400K
+
+v
+
+1
+
+o
+
+up to 300K
+
+.0097
+
+Section
+
+XL
+
+(EEPRoMs
+
+5.10
+
+Page 5-5
+
+only)
+
+for Textured-
+
+Poly.
+L ~yc = 0
+
+A2
+
+For a}! other devices
+
++
+
+MIL-HDBK-217F
+
+NOTICE 2
+MICROCIRCUITS,
+
+5.2
+
+EEPROM
+
+MEMORIES
+
+Cycling Induced Failure Rate - Acyc
+
+ReadWrite
+
+?bO
+Cyc =
+All Memo~ Devices Except Flotox and
+Textured-Poly
+EEPROMS
+
+A*B2
+
+~[
+
+Poly EEPROMS
+
+Flotox and Textured
+
+c=
+
+Al
+
+B, + ~
+
+P*
+Page 5-4
+
+Page 5-4
+
+Al
+
+page 5-6
+
+page 5-6
+A
+Apu
+
+B4
+A2
+
+Page 5-5
+pie
+
+02-0
+
+02
+
+‘ECC
+1
+
+5-6
+
+Sedion 5.1o
+
+Sectiorl
+
+5.1o
+
+fi~~~
+
+= 1.0
+
+%CC
+
+~EcC
+
+= .72
+
+‘ECC
+
+ltQ
+
+Error Corred”mn Code (ECC)
+1. No On-Chip ECC
+
+2. On-Chip t-tammi~
+
+Options:
+
+Code
+
+3. Two-Needs-One
+
+~~~c
+
+=1.0
+= .72
+= .66
+
+~EGC = “=
+
+Redutiant Cell APP~ti
+
+IW)TES:
+
+1.
+
+See Referen@ 24 for rnodeliWl off~~p
+schemes at the memq system level.
+
+2.
+
+If EEPROM
+
+3.
+
+4.
+
+type is unkmw,
+
+assure
+
+error detectbn and com@bn
+
+Fbtox.
+
+some EEPROM manufadurem
+have inco~rated
+Error Coff@ion
+Code Opt@ns:
+on+hip error corred~n
+cimuitfY into their EEPROM dev”wes. This is represetied
+by
+Other manufadurem
+have taken a redundant cell
+the on-chip hammin9 code entw.
+apprOach whiih imrpo~~
+an extra storag9 transistor in Ovefy memo~ Cell. Thk
+is represe~ed
+by the two-needs~ne
+redutia~
+cell ent~.
+based on an assumed
+The Al ancf 4 factom shown in Section 5.2 wem deveb~d
+For EEPROMS used in systems with
+
+system Iiie of 10,000 operatin9 hours.
+s“~nifiatily longer or shofier expe~ed Iiietimes the Al and ~ factom should be
+~ttiplied by:
+
+\
+I
+
+System Lifetime Operating Hours
+10,000
+
+5-5
+Supersedes
+
+page 5-5 of Revision
+
+F
+
+MIL-HDBK-217F
+NOTICE 2
+
+5.2
+
+MICROCIRCLJITS,
+
+MEMORIES
+
+1
+
+r
+
+II
+
+m“
+4
+
+8
+
+iii
++
+
+$!
+
+m
+
+I
+
+8
+t?
+
+n
+
+z
+
+m-
+
+II
+
+t+
+
+Supersedes
+
+5-6
+T
+
+:’-----
+
+m
+
+page 5-6 of Revision F
+
+V.-d.
+-r.,
+
+MIL-HDBK-217F
+
+NOTICE 2
+5.5
+
+MICROCIRCUITS,
+
+HYBRIDS
+
+DESCRIPTION
+Hybrid Microcircuits
+~=
+
+[z Nc kc] (I + .2zE
+
+Nc
+
+=
+
+Number of Each Particular
+
+kc
+
+=
+
+Failure Rate of Each Pafiicular
+
+) YCFnQZL
+
+Fail.reN106
+
+Ho.m
+
+Component
+Component
+
+The general procedure for developing an overall hybrid failure rate is to calculate an individual failure rate
+for each component type used in the hybrid and then sum them. This summation is then modified to
+account for the overall hybrid function (XF), screening level (@, a~ matUritY (XL). The hybfid Packa9e
+failure rate is a function of the active component failure modified by the environmental factor (i.e., (1 + .2
+~E) ). Onw the component types listed in the folbwing ti3bi8 are considered to contribute S@’ItiiCWItly to
+the overall failure rate of most h@rids. All other component types (e.g., resistors, inductors, etc.) are
+cons”tiered to contribute insignif”~ntty to the overall hybrid failure rate, and are assumed to have a failure
+rate of zero. This simplificationis valid for most hybrids; however, if the hybrid consists of mostly passive
+cornmments then a failure rate should be calculated for these devices. If factorina in other
+com~onent
+.
+for these calculatbk.
+= Hybrid Case Temperature
+aWme ~Q = f, XE’1
+and
+TA
+
+type~,
+
+Determination
+
+Determine kc for These
+
+of kc
+
+Handbook Section
+
+Make These Assumptions
+
+When Determining
+
+xc
+
+Component Types
+5
+
+Microcircuits
+
+Discrete Semiconductors
+
+6
+
+c2=0~zQ=’1~
+Smion 5.12, ~p
+
+= 1, TJ as Determined from
+= O (for WWC).
+
+ZQ = 1, nA = 1, TJ as Determined from Section
+6.14, nE = 1.
+
+10
+
+Capacitors
+
+~=l’TA
+
+=
+
+Hybrid Case Temperature,
+
+I?cpl.
+NOTE:
+
+tf maximum rated stress for a die is unknown, assume the same as for a discretely package
+die of the same type. If the same die has several ratings based on the discrete packaged
+type, assume the lowest rating. Power rating used should be based on case temperature
+for discrete semiconductors.
+
+Circuit Function Factor -
+
+All Other Hybrid Model Parameters
+
+F
+
+Circuit Type
+
+~F
+
+Digital
+
+1.0
+
+Video, 10 MHz< f <1 GHz
+
+1.2
+
+Mcrowave,
+
+2.6
+
+f >1 GHz
+
+Linear, f <10 MHz
+Power
+
+5.8
+21
+
+I
+
+I
+
+I
+
+~~, ~Q,
+
+~E
+
+I
+
+Refer to Section 5.10
+
+I
+
+MIL-HDBK-217F
+
+5.6
+
+MICROCIRCUITS,
+
+SAW DEVICES
+DESCRIPTION
+Surface Acoustic Wave Devices
+
+Environmental Factor - nE
+—
+
+Quality Factor - ZQ
+Screening Level
+
+7CQ
+
+10 Temperature Cycles (-55°C to
++125°C) with end point ektrkd
+tests at temperature extremes.
+
+.10
+
+None beyond best commetil
+
+1.0
+
+Environment
+
+~E
+
+GB
+
+.5
+
+%
+
+2.0
+
+%
+Ns
+
+4.0
+
+Nu
+
+6.0
+
+Alc
+
+4.0
+
+‘IF
+
+5.0
+
+%c
+
+5.0
+
+‘UF
+
+8.0
+
+‘RW
+
+8.0
+
+4.0
+
+practices.
+
+5-1o
+
+SF
+
+.50
+
+MF
+
+5.0
+
+ML
+
+42
+
+CL
+
+220
+
+MIL-HDBK-217F
+
+NOTICE 2
+
+MICROCIRCUITS,
+
+5.13
+
+-iimr imim %rFFir
+Power Dissipation,
+pD (W)
+Area of Chip (in.*)
+
+Source
+
+Si Diode
+
+Vendor Spec. Sheet
+
+2
+
+3
+
+3
+
+14
+
+8
+
+No. of Pins
+
+TrFiF
+
+EXAMPLES
+
+.33
+
+.35
+
+.6
+
+.6
+
+.42
+
+Circuit Analysis
+
+.0041
+
+.0065
+
+.0025
+
+.0025
+
+.0022
+
+Equ. 2 Above
+
+eJ~(%NV)
+
+30.8
+
+19.4
+
+50.3
+
+50.3
+
+56.3
+
+Equ. 1 Above
+
+TJ (%)
+
+75
+
+72
+
+95
+
+95
+
+89
+
+Equ. 3 Above
+
+2.
+
+Calculate Failure Rates for Each Component:
+A)
+
+LMI 06 Die, 13 Transistors (from Vendor Spec. Sheet)
+
+Section 5.1
+Because C9 = O;
+XT: %WiOn 5.8; XQ, XL Defau~ to 1.0
+,
+=
+B)
+
+(.01)(3.8)(1)(1) = .038 Failure#l 06 Flours
+
+LM741 Die, 23 Transistors. Use Same Procedure as Above.
+$
+
+c)
+
+=
+
+cl XT ~Q
+
+Sificon NPN Transistor,
+
+XL
+
+Rated
+
+=
+
+(.01)(3.1)(1)(1) = ’031 ‘ailured106
+
+Power=
+
+5W (From Vendor
+
+~ec.
+
+‘oum
+
+Sheet),
+
+VcE~CE()
+
+= .6,
+
+~E
+
+to
+
+Linear Application
+~
+
+=
+
+%~T~AnR%ZQXE
+
+=
+
+(.00074) (3.9)(~ .0)(1 .8)(.29) (1)(1)
+
+6
+
+.0015 Failures/l 06 Hours
+
+SOCtiOn 6.3; nA, ~Qt
+
+oefau~
+
+1.0
+
+D) Silicon PNP Transistor, Same as C.
+.0015 Failures/l 06 Hours
+E)
+
+SiliconGeneral
+Construction.
+‘P
+
+=
+=
+=
+
+Supersedes
+
+Purpose Diode (Analog), Voltage Stress = 600/’, Metallurgically
+
+k) ‘T % ‘C ‘Q ‘E
+
+Section 6.1; ZQJ
+
+XE
+
+Defau~
+
+Bonded
+
+to
+
+1.0
+
+(.0038)(6.3)(.29)(1)(1)(1)
+.0069 Failures/l 06 Hours
+
+page 5-23 of Revision
+
+F
+
+5-23
+
+MII--HDBK-2I
+
+7F
+
+NOTICE 2
+
+5.13
+
+MICROCIRCUITS,
+F)
+
+Ceramic Chip Capacitor,
+‘A=
+
+Vottage Stress = 50Y0,
+for
+the
+Hybrid,
+1340 pF, 125°C Rated Temp.
+‘CASE
+‘P
+
+G)
+
+EXAMPLES
+
+=
+
+lb ncv
+
+~Q ~E
+
+=
+
+(.0028)(1.4)(1)(1)
+
+=
+
+.0039 Failures/l
+
+Section
+06 Hours
+
+Thick Film Resistors, per instructions in Section 5.5, the contribution of these devices is
+considered insignificant relative to the overall hybrid failure rate and they may be ignored.
+
+=
+
+[Z NcLc](l
+
+~E
+
+=
+
+6.0
+
+Section 5.10
+
+fiF
+
+=
+
+5.8
+
+Section 5.5
+
+ICQ
+
+=
+
+1
+
+Section 5.10
+
+XL
+
+=
+
+1
+
+Section 5.10
+
+=
+
+[ (1)(.038)+(1)(.031)+ (2) (.0015)+
+
+%
+
+%
+
++.27cE)71F7ypL
+
+(2) (.0015)
+
++ (2)(.0069) + (2)(.0039) ](1 + .2(6.0))
+
+%
+
+5-24
+
+10.1 1; XQ, ~E Default to 1.0
+
+=
+
+1.2 Failures/l
+
+(5,8) (l)(1)
+
+06 Hours
+
+Supersedes
+
+page 5-24 of Rewsion F
+
+MIL-HDBK-217F
+
+6.0
+
+DISCRETE
+
+SEMICONDUCTORS,
+
+INTRODUCTION
+
+The semiconductor
+transistor, diode and opto-electronic
+device sections present the failure rates on
+the basis of device type and construction. An analytical model of the failure rate is also presented for each
+The various types of discrete semiconductor devices require different failure rate
+device category.
+models that vary to some degree. The models apply to single devices unless otherwise noted. For
+multiple devices in a single package the hybrid model in Section 5.5 shouid be used.
+
+The applicable MIL specification for transistors, and optoelectronic
+(JAN, JANTX, JANTXV) are as defined in MIL-S-19500.
+
+devices is MlL-S-l
+
+9500.
+
+The
+
+quality levels
+
+The temperature
+
+factor (XT) is based On the device Junction temperature”
+
+Ju~tiOn
+
+temperature
+
+should be computed based on worse case power (or maximum power dissipation) and the device junction
+to case thermal resistance. Determination of jmctbn temperatures is expiairwd in Section 6.14.
+Reference 28 should be consulted for further detailed information on the modeis appearing h’!this
+sect ion.
+
+6-1
+
+MIL-HDBK-217F
+NOTICE 2
+
+6.1
+
+DIODES,
+
+LOW
+
+FREQUENCY
+DESCRIPTION
+Low FrequenCy Diodes: General Purpose Analog, Switching,
+Fast Recovery, Power Rectifier, Transient Suppreswr,
+Current
+Regulator, Voltage Regulator, Voltage Reference
+
+SPECIFICATION
+fvllL-s-19500
+
+Temperature Factor - ~
+
+Base Failure Rate - ~
+Diode
+TyDe/Application
+,.
+-.
+
+(Voltage Ragukto
+and Curre
+
+%
+
+I
+
+TJ (~)
+
+.0038
+
+General PUIPOW Analog
+Switching
+Fast Recovery Power Rectifier
+
+.0010
+.025
+.0030
+
+Power Rectifier/Schoflky
+power Diode
+Power Rectifier with
+High Voltage Stacks
+Transient SuppressorNaristor
+Current Regulator
+Vottage Regulator and Voltage
+Referencx? (Avalanche
+
+.0050/
+Junction
+
+.0013
+.0034
+.0020
+
+and Zener)
+Terrperatum
+(General Purrmse Anak
+Pov
+TJ (oC)
+q
+
+Factor
+
+- XT
+
+Switching, Fast RmvwY,
+nsient Su r sor
+%T
+T ~ (“C)
+
+5
+
+25
+
+1.0
+
+105
+
+30
+35
+40
+45
+50
+55
+60
+65
+70
+75
+80
+85
+90
+95
+100
+
+1.2
+1.4
+1.6
+1.9
+2.2
+2.6
+
+110
+115
+120
+125
+130
+135
+140
+145
+150
+155
+160
+165
+170
+175
+
+~T =
+
+?J =
+
+E
+exp
+
+3.0
+3.4
+3.9
+4.4
+5.0
+5.7
+6.4
+7.2
+8.0
+
+((
+
+.3091
+
+9.0
+10
+11
+12
+14
+15
+16
+18
+20
+21
+23
+25
+28
+30
+32
+
+1
+
+—-—
+TJ ~ 273
+
+Juncllon Temperature
+
+TJ ~)
+
+%T
+
+25
+
+1.0
+
+30
+35
+40
+45
+50
+55
+60
+65
+70
+75
+80
+85
+90
+95
+100
+
+1.1
+1.2
+1.4
+
+XT =
+It=
+bJ
+
+Vottage Reference,
+
+S!?94!a
+
+1.5
+
+1.6
+1.8
+
+2.0
+2.1
+2.3
+2.5
+2.7
+3.0
+3.2
+3.4
+3.7
+
+exp
+
+((
+
+-1925
+
+105
+
+110
+115
+120
+125
+130
+135
+140
+145
+150
+155
+160
+165
+170
+175
+
+3.9
+4.2
+4.5
+4.8
+5.1
+5.4
+5.7
+6.0
+6.4
+6.7
+7.1
+7.5
+7.9
+8.3
+8.7
+4
+
+1
+‘-—
+TJ + 273
+
+Junction Temperature (“C)
+
+1
+298
+
+))
+
+I
+I
+
+I
+
+1“
+298
+))
+
+(“C)
+1
+
+6-2
+
+Supersedes
+t
+
+page 6-2 of Revision F
+
+MIL-HDBK-217F
+NOTICE 2
+
+7.2
+
+TUBES,
+
+TRAVELING
+
+WAVE
+
+DESCRIPTION
+Traveling Wave Tubes
+~
+
+Failures/l
+
+= +pE
+
+Environment
+
+Base Failure Rate - ~
+power ~
+
+,1
+
+1
+
+2
+
+Frequency (GHz)
+6
+8
+10
+4
+
+10
+
+11
+11
+11
+11
+11
+12
+12
+12
+13
+14
+15
+17
+
+12 13
+12 13
+12 13
+12 13
+12 14
+13 14
+13 14
+13 15
+14 15
+15 16
+16 18
+18 20
+
+16 19 24 29
+16 20 24 29
+16 20 24 29
+16202429U@
+1720242943@
+1720253044U
+17212631ti
+18 22 26 32
+19 23 27 33
+20 24 29 35
+22 26 32 39
+24 29 35 43
+
+;Z
+1000
+
+3000
+5000
+8000
+10000
+15000
+20000
+30000
+>40000
+
+\
+14
+
+18
+
+42
+42
+42
+
+61
+61
+61
+
+~~
+
+S
+~y
+
+Factor - ZF
+~E
+
+Environment
+
+.5
+
+GB
+
+I
+
+GF
+
+I
+
+GM
+
+7.0
+
+Ns
+
+3.0
+
+NU
+
+10
+
+r
+
+5.0
+
+Alc
+51
+56
+62
+
+75
+83
+91
+
+1.5
+
+7.0
+
+‘IF
+
+6.0
+
+‘Uc
+
+9.0
+
+‘UF
+
+k)”
+
+11(1.00001)P (1.l)F
+
+P
+
+=
+
+Rated Power In Watts (Pew, lf pum,
+.001 s P <40,000
+
+SF
+
+F
+
+-
+
+Operating Frequency In GHz, .1 S F S 18
+
+MF
+
+11
+
+ML
+
+33
+
+20
+
+Am
+
+If the operating freque~
+
+is a band, or two different
+
+values, use the geometdc mean of the end point
+i
+
+06 Hours
+
+frequendes when using table.
+
+I
+
+c,
+
+.05
+
+I
+
+500
+
+7-3
+Supersedes
+———
+
+page 7-3 of Revision F
+
+--------—---*-+-*-
+
+MIL-HDBK-217F
+
+7.3
+
+TUBES,
+
+MAGNETRON
+DESCRIPTION
+Magnetrons, Pulsed
+
+Lp = kb7r”7cc7tE
+
+and Continuous Wave (CW)
+06 Hours
+
+Failures/l
+
+Base Failure Rate - ~
+
+P(MW)
+.01
+.05
+.1
+.3
+
+.5
+:
+5
+
+I
+
+Pulsed
+
+.1
+1.4
+
+.5
+4.6
+
+1
+7.6
+
+5
+
+10
+
+24
+
+41
+
+67
+
+1.9
+
+6.3
+
+10
+
+34
+
+56
+
+‘3
+
+2.2
+2.8
+
+7.2
+9.o
+
+12
+15
+
+39
+48
+
+~
+80
+
+3.1
+3.5
+4.4
+4.9
+
+10
+11
+14
+16
+
+17
+19
+24
+26
+
+54
+
+89
+100
+130
+140
+
+:
+~
+
+Frequency (GHz)
+50
+30
+40
+130
+110
+91
+
+20
+
+110
+130
+
+150
+170
+210
+230
+
+140
+180
+200
+
+150
+180
+220
+2@
+
+180
+210
+260
+290
+
+230
+2W
+310
+
+280
+3=
+390
+
+~o
+410
+@
+
+120
+
+60
+
+70
+
+150
+210
+240
+300
+
+170
+230
+270
+330
+
+80
+190
+
+90
+200
+
+100
+220
+
+260
+290
+370
+
+280
+320
+400
+
+300
+350
+430
+
+330
+380
+470
+520
+
+370
+420
+530
+Wo
+
+410
+470
+580
+~o
+
+440
+510
+830
+700
+
+480
+550
+~o
+760 -
+
+CW Magnetrons (Ratad Power < 5 KW):
+
+Magnetrons:
+
+$-18
+
+19( F)-73 (P)-20
+
+b
+=
+F=
+
+operating
+
+P=
+
+outout Power in MW,
+
+FrequenCy in GHz,
+
+.15 F <100
+.01 SP<5
+
+Environment
+
+LMllization Factor - ZI I
+
+Factor - nE
+
+u
+
+7
+Utilization (Radiate HOUN
+Filament HoufS)
+
+%U
+
+I
+
+.44
+
+0.0
+
+.50
+.55
+
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+0.9
+
+Environment
+
+~E
+
+GB
+
+1.0
+
+GF
+
+4.0
+
+Ns
+
+15
+
+Nu
+
+47
+
+I
+
+I
+
+R
+
+=
+
+*IC
+‘IF
+
+I
+
+Radiate HourWFilament
+
+Construction
+
+Hours
+
+7tc
+
+I CW(RatWPower.5~
+Coaxial Pulsed
+
+Conventional
+
+7-4
+
+I
+
+Factor - nc
+
+Construction
+
+Pulsed
+
+I
+
+1.0
+
+I
+
+1.0
+5.4
+
+I
+
+I
+
+.61
+.66
+.72
+.78
+.83
+.89
+.94
+
+0,44 + 0.56R
+
+2.0
+
+GM
+
+*UC
+Xu =
+
+I
+
+I
+
+‘UF
+
+i
+
+I
+
+10
+16
+12
+23
+
+Antfil
+
+80
+
+ML
+
+133
+
+CL
+
+2000
+
+- ‘nvv
+
+ri 7
+
+MIL-HDBK-217F
+NOTICE 2
+
+9.1
+
+Resistor Style
+
+Description
+
+Specification
+MiL-R-
+
+RESISTORS
+
+~T Tabie
+
+XS Table
+
+%
+
+Use
+Column:
+
+Use
+Column:
+
+i
+
+Rc
+
+11
+
+Resistor, Fixed, Composition (Insulated)
+
+.0017
+
+1
+
+2
+
+RCR
+
+39008
+
+Resistor, Fixed, Composition (Insuiated) Est. Rel.
+
+.0017
+
+1
+
+2
+
+RL
+
+22684
+
+Resistor, Fixed, Film, Insuiated
+
+.0037
+
+2
+
+1
+
+RLR
+
+39017
+
+Resistor, Fixed, Film (Insulated), Est. Rei.
+
+.0037
+
+2
+
+1
+
+RN (R, C Of N)
+
+55182
+
+Resistor, Fixed, Film, Est*iishd
+
+.0037
+
+2
+
+1
+
+RM
+
+55342
+
+Resistor, Fued, Fiim, Chip, Estabiisti
+
+.0037
+
+2
+
+1
+
+RN
+
+10509
+
+Resistor, Fixed Film (High Sttitiity)
+
+.0037
+
+2
+
+1
+
+RD
+
+11804
+
+Resistor, Fixed, Film (Power TYW)
+
+.0037
+
+WA, XT= 1
+
+1
+
+RZ
+
+83401
+
+Resistor Networks, Fixed, Film
+
+,0019
+
+1
+
+NIA ns = 1
+
+RB
+
+93
+
+Resistor, Fixed, Wkewound (Accurate)
+
+.0024
+
+2
+
+1
+
+RB R
+
+39005
+
+Resistor, Fixed, Wirewound
+
+(/@curate) Est. Rel.
+
+.0024
+
+2
+
+1
+
+RW
+
+26
+
+Resistor, Fixed, Whwound
+
+(Power TyTw)
+
+.0024
+
+2
+
+2
+
+RWR
+
+39007
+
+Resistor, Fiied, Wkewound (Power Type) Est.ReL
+
+.0024
+
+2
+
+2
+
+RE
+
+18546
+
+Resistor, I%ed, Whewound (Power TYPS, Ch-k
+Mounted)
+
+.0024
+
+2
+
+2
+
+RER
+
+39009
+
+Resistor, Freed, Whewound (Power Type, Chassis
+Mounted) Est. Rel.
+
+.0024
+
+2
+
+2
+
+RTH
+
+23648
+
+Thermistor, (Thermally Sensitive Resistor),
+Insuiated
+
+.0019
+
+N/A, XT=
+
+RT
+
+27208
+
+Resistor, Variabie, Wirewound (Lead Screw
+Activated)
+
+.0024
+
+2
+
+1
+
+RTR
+
+39015
+
+Resistor, Variable, Wirewound (Lead Screw
+Activated), Established Reliability
+
+.0024
+
+2
+
+1
+
+RR
+
+12934
+
+Resistor, Variabie, Wwewound, Precision
+
+.0024
+
+2
+
+1
+
+RA
+
+19
+
+Resistor, Variable,
+Temperature)
+
+Wkewound (Low Opwating
+
+.0024
+
+1
+
+1
+
+RK
+
+.39002
+
+Resistor, Variable, Wkewound, Semi-Precision
+
+.0024
+
+1
+
+1
+
+RP
+
+22
+
+Resistor, Wkewound, Power Type
+
+.0024
+
+2
+
+1
+
+RJ
+
+22097
+
+Resistor, Variable, Nonwirewound
+
+.0037
+
+2
+
+1
+
+RJR
+
+39035
+
+Resistor, Variable, Nonwirewound Est. Rel.
+
+.0037
+
+2
+
+1
+
+RV
+
+94
+
+Resistor, Variabie, Composition
+
+.0037
+
+2
+
+1
+
+RQ
+
+39023
+
+Resistor, Variable, NonwireWound, Precision
+
+.00 37
+
+1
+
+1
+
+RVC
+
+23285
+
+Resistor, Variable, Nonwirewound
+
+.00 37
+
+1
+
+1
+
+Supersedes
+
+Section 9.0-9.17
+
+of Revision
+
+ReiiabMy
+Reiiabiiity
+
+1 t’lrots=~
+
+9-1
+
+F
+
+.
+
+MIL-HDBK-217F
+NOTICE
+
+2
+
+RESISTORS
+
+9.1
+
+-—
+Power Factor - Xp
+,
+
+Temperature Factor - XT
+-
+
+np
+
+lower Dissipation (Watts)
+
+T(”C)
+
+Column 1
+
+Column 2
+
+,88
+
+.95
+
+.001
+
+.068
+
+20
+
+1.1
+
+1.1
+
+.01
+
+.17
+
+30
+
+1.5
+
+1.2
+
+.13
+
+.44
+
+40
+
+1.8
+
+1.3
+
+.25
+
+.58
+
+50
+
+2.3
+
+1.4
+
+.50
+
+.76
+
+60
+
+2.8
+
+1.5
+
+.75
+
+.89
+
+70
+
+3.4
+
+1.6
+
+1.0
+
+1.0
+
+80
+
+4.0
+
+1.7
+
+2.0
+
+1.3
+
+90
+
+4.8
+
+1.9
+
+3.0
+
+1.5
+
+100
+110
+
+5.6
+
+2.0
+
+4.0
+
+1.7
+
+6.6
+
+2.1
+
+5,0
+
+1.9
+
+120
+
+7.6
+
+2.3
+
+10
+
+2.5
+
+130
+
+8.7
+
+2.4
+
+25
+
+3.5
+
+140
+
+10
+
+2.5
+
+50
+
+4.6
+
+100
+
+6.0
+
+‘T
+
+(
+
+= exp —
+
+-Ea
+
+8.6 I7x1O
+
+1
+
+1
+.5
+
+(
+
+-=
+
+m
+
+150
+
+))
+
+7.1
+
+Kp - (Power Dissipation)”3g
+
+oiumn 1: Ea =.2
+olumn 2:
+
+1
+
+Ea -.08
+
+= Resistor Case Temperature. Can be approximate~
+as ambient component temperature for low
+power dissipation non-power type resistors.
+IOTE:
+
+XT vaiues shown shdd
+
+only be used up to
+
+the temperature rating of the device. For
+devices with ratings higher than 150°C, use
+the equation to determine nT
+
+9-2
+
+Supersedes
+
+—.
+
+page Section 90-9.17
+
+-..
+
+of Revision F
+
+MIL-HDBK-217F
+NOTICE 2
+
+9.1
+Power Stress Factor - nc
+Power Stress
+
+Column
+
+1
+
+Environment
+
+Column
+
+.1
+
+.79
+
+.66
+
+.2
+
+.88
+
+.81
+
+.3
+
+.99
+
+RESISTORS
+
+Factor - n=
+
+Environment
+
+2
+
+1.0
+
+GB
+
+1,0
+
+GF
+
+4.0
+
+GM
+
+16
+
+Ns
+
+12
+
+Nu
+
+42
+
+.4
+
+1.1
+
+1.2
+
+.5
+
+1.2
+
+1.5
+
+.6
+
+1.4
+
+1.0
+
+AC
+
+18
+
+.7
+
+1.5
+
+2.3
+
+‘IF
+
+23
+
+.8
+
+1.7
+
+2.8
+
+‘Uc
+
+31
+
+.9
+
+1,9
+
+3.4
+
+‘UF
+
+43
+
+‘RW
+
+63
+
+Column
+
+1: xs s .71e1 “1(S)
+
+.50
+
+SF
+
+MF
+
+37
+
+ML
+
+87
+
+CL
+
+1720
+
+Column 2: 7CS= .54e2”W(s)
+
+S = Actual Power Dissipation
+Rated Power
+
+Quality
+
+ICQ
+
+Established Reliability Styles
+s
+
+.03
+
+R
+
+0.1
+
+P
+
+0.3
+
+M
+
+1.0
+
+Non-Established Reliability
+Resistors (Most Two-Letter Styles)
+
+3.0
+
+Commercial or Unknown Screening
+Level
+
+10
+
+NOTE: Established reliability styles are failure
+rate graded (S, R, P, M) based on life testing
+defined in the applicable military device
+specification. This category usually applies only
+to three-letter
+
+Supersedes
+
+styles wilh an “R” suffix.
+
+Section 9.0-9.17
+
+of Revision
+
+F
+
+9-3
+
+MIL-HDBK-217F
+NOTICE 2
+
+CAPACITORS
+
+10.1
+
+~p=~nTxcnvx~RfiQ~
+EFailures/106 ~C)iJfS
+fiT
+
+Description
+
+;apacitor
+Style
+
+Spec.
+MIL-C-
+
+P
+
+25
+
+Capacitor, Fixed, PaprDielectrk, Direct Current
+(Hermeti=l~
+Sealed in Metal
+Cases)
+
+12889
+
+Capacitor, By-Pass, Radio Interferenm Reductbn, Paper
+Dieledrb, AC and DC
+(Hermetial~
+sealed in Metallic
+
+Table -
+
+nC Table -
+
+xv Table -
+
+Use
+
+Use
+
+Use
+
+Colurnm
+
+Column:
+
+Column:
+
+.00037
+
+1
+
+1
+
+1
+
+1
+
+.00037
+
+1
+
+1
+
+1
+
+1
+
+.00037
+
+1
+
+1
+
+1
+
+1
+
+.00051
+
+1
+
+1
+
+1
+
+1
+
+1
+
+%
+
+Cases)
+11693
+
+Capacitor, Feed through, Radio
+Interference Reduction AC and
+DC (Herm@W~ scald in metal
+cases), Established and
+blonestablished Reliabil”~
+
+n, CQR
+
+Capacitor, Fixed Plastic (or
+Paper-Pl=tk)
+Dielectric
+(Hermetial~
+sealed in metal,
+oaramic or glass cases),
+
+19978
+
+Estabkhd
+
+and NonestWishd
+
+,
+
+Reliability
+
+18312
+
+x-i
+
+%R
+
+~Ked, Metallizd
+Papr Plastb or Plastb
+
+@pacitor,
+
+.00037
+
+1
+
+1
+
+1
+
+.00051
+
+1
+
+1
+
+1
+
+1
+
+.00051
+
+1
+
+1
+
+1
+
+1
+
+.00051
+
+1
+
+1
+
+1
+
+1
+
+(P~r,
+Film) Dielectrk% Direct Current
+(1-iermetkal& Sealed in Metal
+
+Cases)
+39022
+
+Capacitor, Fixed, Metallizd
+Paper, Paper-Pi-tic
+Fdrn or
+Plastic Film Dielectric
+
+55514
+
+Capachor, Fixed, Plastic (or
+Metallized Plastic) Diokctrk,
+Dire@ Current in Non-Metal Cases
+
+83421
+
+Capacitor, Fixed Supermetdlud
+Plastic Film Dkdectrii (DC, AC or
+DC and AC) Hermetical& Sealed
+
+in Metal Cases, Establish
+Reliability
+
+-i
+
+.00076
+
+2
+
+1
+
+1
+
+Capacitom, Fixed, M’ka Dielectric
+
+2
+
+5
+
+.00076
+
+2
+
+1
+
+1
+
+Capacitor, Fixed, Mica Dielectric,
+Established Reliabilhy
+
+2
+
+39001
+
+2
+
+1
+
+Capacitor, Fixed, Mica Dielectric,
+Button Style
+
+.00076
+
+2
+
+10950
+
+1
+
+C8
+
+Capacitor, Fixed, Glass Dieiectr ic
+
+.00076
+
+1
+
+2
+
+1
+
+11272
+
+2
+
+CY
+
+.00076
+
+1
+
+2
+
+1
+
+23269
+
+2
+
+CYR
+
+CM
+
+Capacitor, Fixed, Glass
+Dielectric, Established Reliability
+
+i
+
+10-1
+Supersedes
+I
+
+Ocv
+
+Section
+.
+
+I
+
+10.1 -10.20
+m
+
+.
+
+I
+
+1
+
+of Revision
+
+F
+ml
+
+Iuw>
+
+16
+
+eal
+
+—>1
+
+MIL-HDBK-217F
+NOTICE 2
+
+CAPACITORS
+
+10.1
+
+—
+4
+Description
+
+Capacitor
+Style
+
+Spec.
+MIL-C-
+
+CK
+
+11015
+
+Capacitor, Fixed, Ceramic
+Dielectric (General Purpose)
+
+CKR
+
+39014
+
+Capacitor, Fixed, Ceramic
+Dielectrk (General Purpose),
+Establish
+Reliabiltiy
+
+cC, CCR
+
+20
+
+CapaCitor, Fixed, Ceramic
+Dielectti (Tem~rature
+Compensating), Establish
+Relitil~
+Nonestablishd
+
+CSR
+
+CL
+
+1
+
+nc Table -
+
+Xv Table -
+
+%
+
+Use
+Column:
+
+use
+Column:
+
+%R
+
+.00099
+
+2
+
+Use
+Column:
+1
+
+3
+
+1
+
+.00099
+
+2
+
+1
+
+3
+
+1
+
+.00099
+
+2
+
+1
+
+3
+
+1
+
+2
+
+1
+
+3
+
+1
+
+1
+
+2
+
+4
+
+See
+
+and
+
+55681
+
+Capacitor, Chip, Muttipk Layer,
+FMed, Ceramk Dieled~c,
+Established Reiiabil~
+
+39003
+
+Capacfior, Fixed, Electro~ic
+(Solid Electrolyte), Tantalum,
+Established Reliability
+
+55365
+
+Capacitor, Fixed, Electro~ic
+(Tantalum), Chip, Established
+Reliability
+
+3965
+
+Capackor, Fued, Electro~ic
+(Nonsoiti Electro~e), Tantalum
+
+r
+
+n~ Table -
+
+I
+
+.0020
+
+.00040
+
+‘
+
+%R
+Table
+.00005
+
+%R
+Table
+1
+
+2
+
+4
+
+1
+
+.00040
+
+1
+
+2
+
+4
+
+1
+
+.00040
+
+1
+
+2
+
+4
+
+1
+
+.000 12
+
+2
+
+2
+
+1
+
+1
+
+.000 12
+
+2
+
+2
+
+1
+
+1
+
+.0079
+
+1
+
+1
+
+5
+
+1
+
+.0060
+
+2
+
+1
+
+5
+
+1
+
+.0000072
+
+2
+
+1
+
+5
+
+1
+
+.0060
+
+1
+
+1
+
+5
+
+1
+
+.00040
+
+,
+
+39006
+
+Capackor, Fixed, Ek@ro~k
+(Nonmld ElectI’o~e), Tantalu m,
+Establish
+Reliabil~
+
+83500
+
+Capacfior, Fixed, Electro~ic
+(Nonsolid Ele@o~e), Tantal urn
+
+Cathode
+cU, CUR
+
+39018
+
+See
+
+4
+
+2
+
+1
+
+Capacitor, Fixed, Ebctro~ic
+(Aluminum Oxide), Established
+Reliabil”~ and Nonestablish*
+Reliability
+
+I
+
+L
+CE
+
+62
+
+Cv
+
+81
+
+Capacitor, Variable, Ceramic
+Dieied*
+(Trimmer)
+
+L
+Pc
+
+14409
+
+Capacitor, Variable (Piston Type,
+‘ Tubular Trimmer)
+
+CT
+
+92
+
+Capactior, Vati*le,
+(Trimmer)
+
+(%
+
+23183
+
+Capacitor, Fixed or Variable,
+Vacuum Dielectric
+
+Capacitor, Fixed Electrolytic (DC,
+Aluminum, Dry Ele@o~e,
+Polarized)
+
+Ak Die Iectric
+
+*
+
+Supersedes
+
+10-2
+I
+
+.-
+
+Section
+
+10.1 -10.20
+
+I
+
+. .
+of Revlslon F
+
+I
+
+1
+
+—-
+
+MIL-t-iDBK-217F
+NOTICE 2
+
+10.1
+
+Temperature
+
+CAPACITORS
+
+Capacitance Factor - ~,
+
+Factor - XT
+
+(
+
+%T
+
+Column 2
+
+Column 1
+
+Column 2
+
+T(%)
+
+Column
+
+20
+
+.91
+
+.79
+
+.000001
+
+.29
+
+.04
+
+30
+
+1.1
+
+1.3
+
+.00001
+
+.35
+
+.07
+
+40
+
+1.3
+
+1.9
+
+.0001
+
+.44
+
+.12
+
+50
+
+1.6
+
+2.9
+
+.001
+
+.54
+
+.20
+
+60
+
+1.8
+
+4.2
+
+.01
+
+.66
+
+.35
+
+70
+
+2.2
+
+6.0
+
+.05
+
+.76
+
+.50
+
+80
+
+2.5
+
+8.4
+
+.1
+
+.81
+
+.59
+
+90
+
+2.8
+
+11
+
+.5
+
+.94
+
+.85
+
+100
+
+3.2
+
+15
+
+1
+
+1.0
+
+1.0
+
+110
+
+3.7
+
+21
+
+3
+
+1.1
+
+1.3
+
+120
+
+4.1
+
+27
+
+8
+
+1.2
+
+1.6
+
+130
+
+4.6
+
+35
+
+18
+
+1.3
+
+1.9
+
+140
+
+5.1
+
+44
+
+40
+
+1.4
+
+2.3
+
+150
+
+5.6
+
+56
+
+200
+
+1.6
+
+3.4
+
+1000
+
+1.9
+
+4.9
+
+3000
+
+2.1
+
+6.3
+
+10000
+
+2.3
+
+8.3
+
+30000
+
+2.5
+
+11
+
+60000
+
+2.7
+
+13
+
+1
+
+-Ea
+= ‘W ( 8.617
+
+1
+
+Capacitance,
+c(~F)
+
+x10-5
+
+1
+
+( T + 273
+
+‘=
+
+))
+
+Column 1: Ea = .15
+Column 2: Ea = .35
+T = Capacitor Atiient
+
+Temperature
+
+120000
+
+NOTE: 1. fiT values shown should only ~ used
+up to the temperature rating of the
+
+Column 1: ~
+
+= C“og
+
+Column 2: ~
+
+= C-23
+
+device.
+2,
+
+For devices with ratings higher than
+150”C, use the equation to determine
+XT (for a~li~tions
+ahve 150”C).
+
+Supersedes
+I
+
+I
+
+I
+
+Section
+1-1
+
+.
+
+10.1 -10.20
+.
+
+I
+
+of Revision
+r
+
+10-3
+
+F
+Is-1
+
+.
+
+.
+
+t3-
+
+MIL-I+DBK-217F
+
+NOTICE 2
+10.1
+
+CAPACITORS
+—
+Voltage Stress Fac!or - x,
+
+Voltage Stress
+
+Column
+
+1
+
+Column 2
+
+Column 3
+
+Column 4
+
+Column 5
+
+0.1
+
+1.0
+
+1.0
+
+1.0
+
+1.0
+
+1,0
+
+0,2
+
+1.0
+
+1.0
+
+1.0
+
+1.0
+
+1.1
+
+0.3
+
+1.0
+
+1.0
+
+1.1
+
+1.0
+
+1.2
+
+0.4
+
+1.1
+
+1.0
+
+1.3
+
+1.0
+
+1,5
+
+0.5
+
+1.4
+
+1.2
+
+1.6
+
+1.0
+
+2.0
+
+0.6
+
+2.0
+
+2.0
+
+2.0
+
+2.0
+
+2.7
+
+0.7
+
+3.2
+
+5.7
+
+2.6
+
+15
+
+3.7
+
+0.8
+
+5.2
+
+19
+
+3.4
+
+130
+
+5.1
+
+0.9
+
+8.6
+
+59
+
+4.4
+
+990
+
+6.8
+
+1
+
+14
+
+166
+
+5.6
+
+4
+
+Column 1: 7CV=
+
+Column 2:
+
+~ 5+1
+.6
+
+()
+s
+
+xv =
+
+~
+
+&
+
+,6
+
+5900
+
+Column 4:
+
+Zv=
+
+Column 5:
+
+%V =
+
+10+1
+
+()
+Column 3: xv=
+
+*
+
+3+1
+s=
+
+()
+
+F
+~
+.6
+
+()
+
+17+1
+
+g
+
+3+1
+
+9.0
+
+4
+
+() .5
+
+Operating Voltage
+Rated Voltage
+
+Note: Operating voltage is the sum of applied DC voltage and peak AC voltage.
+
+Series Resistance Factor
+(Tantalum CSR Style CapacitorS Only) - XSR
+Circuit Resistance, CR (ohms/vott)
+
+—1
+
+%R
+
+>0.8
+
+.66
+
+>0.6 to 0.8
+
+1.0
+
+>0.4 to 0.6
+
+1,3
+
+>0.2 to 0.4
+
+2.0
+
+>0.1 to 0.2
+
+2.7
+3.3
+
+CR .
+
+Eff. Res. Between
+Voltage
+
+10-4
+
+<
+
+Cap. and Pwr, Su~~
+Applied to Capacitor
+
+Supersedes
+
+Section 10.1 - 10.20 of Revision F
+
+MIL-HDBK-217F
+
+NOTICE 2
+
+10.1
+
+Quality Factor - XO
+
+Environment
+
+—
+
+Quality
+Established
+o
+
+7rQ
+Reliability
+
+CAPACITORS
+
+Factor - KE
+
+Environment
+GB
+
+Styles
+
+fiE
+1.0
+
+.001
+
+GF
+
+10
+
+c
+
+.01
+
+GM
+
+20
+
+S,B
+
+.03
+
+R
+
+.1
+
+Ns
+
+7.0
+
+Nu
+
+15
+
+AC
+
+12
+
+‘IF
+
+15
+
+P
+
+.3
+
+M
+
+1.0
+
+‘Uc
+
+25
+
+L
+
+1.5
+
+‘UF
+
+30
+
+‘RW
+
+40
+
+Non-Established
+Reliability
+Capacitors (Most Two-Letter
+
+Commercial
+Level
+
+or Unknown
+
+Styles)
+
+SF
+
+3.0
+
+Screening
+10.
+
+.50
+
+MF
+
+20
+
+ML
+
+50
+
+CL
+
+570
+
+NOTE: ~t~tis~reltiil~~l~amfa~re
+rate graded (D, C, S, etc.) based on life testing
+defined in the applicable military device
+specification. This category usually applies only
+to three-letter styles with an “R” suffix.
+
+Supersedes
+
+Section
+
+10.1 -10.20
+
+of Revision
+
+F
+
+10-5
+
+MIL-HDBK-217F
+
+NOTICE 2
+
+10.2
+
+CAPACITORS,
+
+EXAMPLE
+
+—
+
+Example
+VDC rated capacitor
+type CQ09A1KE153K3
+is being used in a fixed ground
+environment, 50”C component ambient temperature, and 200 VDC applied with 50 Vrms @
+60 Hz. The capacitor is being procured in full accordance with the applicable specification.
+
+Given:
+
+A 400
+
+The letters “CQW in the type designation indicate that the specification is MlL-C-l 9978 and that it is a NonEstablished Reliability quality level. The “E” in the designation corresponds to a 400 volt DC rating. The
+“’I 53” in the designation expresses the capacitance in picofarads. The first two digits are significant and
+the third is the number of zeros to follow. Therefore, this capacitor has a capacitance of 15,000
+
+picofarads. (NOTE: Pioo = 10-12, ~ = 10-6)
+
+Based orI the given information the following modei factors are cfetetmined from the tables shown in
+Section 10.1.
+lb
+
+=
+
+.00051
+
+XT
+
+=
+
+1.6
+
+Use Table Equation (Note 15,000 pF = .015 PF)
+
+7CV
+
+=
+
+s=
+
+2.9
+
+s=
+
+$
+
+= ~ ~~c~v
+=
+
+$
+
+10-6
+
+%RXQ
+
+.049 Failures/l
+
+‘E
+
+DC Volts
+
+Applied + fi (AC Volts Applied~
+DC Rated Voltage
+
+200 + dz (50~ . .m
+400
+
+= (.00051)(I.6)(.69)
+
+(2.9) (1)(3 .O)(1O)
+
+06 Hours
+
+Supersedes
+
+Section
+
+10.1 - 10.20 of Revision F
+
+MIL-HDBK-217F
+
+NOTICE 2
+INDUCTIVE
+
+11.1
+
+Low Power Pulse
+Intermediate Frequewy
+
+TP
+
+)LP= ~~xTxQz~
+
+Fai~Ures/l
+
+Base Failure Rate - ~
+Lb
+
+Audio (15 -2oK Hz)
+
+06 Hours
+
+r
+
+(F/106 hrs.)
+
++
+lcQ
+
+QualitY
+
+.0054
+
+MIL-SPEc
+
+.014
+
+Lower
+
+1
+3
+
+i
+
+Environment
+
+Fader
+
+- ZE
+fiE
+
+Environment
+
+.049
+
+High Power, High
+Power Pulse (Peak
+Power z 300W, Avg.
+Pwr.25W)
+
+.
+
+1.0
+
+GB
+
+6.0
+
+GF
+.13
+
+RF .(1OK- IOM Hz)
+
+12
+
+GM
+
+,
+
+I
+
+Tempemtum Factor -XT
+I
+
+5.0
+
+Ns
+
+16
+
+Nu
+
+I
+
+I
+
+!’:
+1 .Z
+1.4
+1.6
+1.8
+1.9
+2.2
+2,4
+2.6
+2.8
+-.
+3.1
+.-
+
+I
+
+I
+
+Ad
+
+4.
+
+I
+1
+
+24
+
+Am,
+
+“ “t-Ivv
+
+ML
+cL
+
+*A
+
+I
+
+.3U
+13
+
+I
+
+34
+610
+
+.
+
+I
+
+4.6
+
+190
+-.11
+
+exp ~W-29Et
+8.617x
+I0
+
+[
+
+(
+
+THS = Hot Spot Temperature
+11.3. This prediction
+
+I_
+
+,
+1
+)){
+
+(“C), See Section
+
+model assumes that the
+
+insulation rated temperature E not exceeded for
+more than 50,0of the time.
+
+Supersedes
+
+9.0
+
+‘UF
+
+4.3
+
+180
+
+XT =
+
+7.0
+
+%c
+
+3.3
+3.5
+3.8
+
+.
+
+8.0
+
+‘IF
+
+I
+I
+
+,
+
+6.0
+
+Alc
+30
+40
+50
+60
+70
+80
+90
+100
+110
+120
+130
+140
+150
+160
+170
+
+1
+
+I
+
+.022
+
+Low Power Pulse
+(Peak Pwr. c 300W,
+Avg. Pwr. < 5W)
+
+.
+
+(IF), RF and Discriminator
+
+Quality Factor - ~
+
+1
+
+b
+
+Flyback (C 20 VOM)
+
+and High Power Pulse
+
+Audio, Power
+
+TF
+
+Transformer
+
+TRANSFORMERS
+
+DESCRIPTION
+
+sTYLE
+
+SPECIFICATION
+MIL-T-27
+MIL-T-21038
+MIL-T-55631
+
+DEVICES,
+
+page 11-1 of Revision
+
+F
+
+I
+
+J
+
+11-1
+
+MIL-HDBK-217F
+NOTICE 2
+
+INDUCTIVE
+
+11.1
+
+DEVICES,
+
+TRANSFORMERS
+
+Transformer
+Characterlstlc
+Determlnatlon
+Note
+MIL-T-27
+TF
+
+Example
+R
+
+4
+
+I
+
+AIL-T-27
+
+Designation
+01
+Famtiy
+
+Irlsul&dkm
+
+chS
+
+576
+
+I
+
+I
+
+I
+
+I
+Grade
+
+GA
+~~
+
+Syrflbd
+
+Family Type Codes Are:
+Power Transformer
+37 though 41
+
+and Filter: 01 through 09,
+
+Audio Transformer:
+
+10 through 21, 50 through 53
+
+Pulse Transformer:
+
+22 through 36,54
+
+MI L-T-21038
+TP
+
+Example
+
+Designation
+
+4
+
+Q
+
+I
+
+I
+
+I
+
+MIL-T-21we
+
+xl 1OoBcool
+
+h.suticxl
+
+Gr*
+
+Cbs
+
+MlL-T-5563I.
+The Transformers are Designated
+with the folbwing Types, Grades and Classes.
+Intermediate Frequency Transformer
+Radio Frequency Transformer
+Discriminator Transformer
+
+Type 1
+Type II
+Type Ill
+Grade 1
+
+Grade 2
+Grade 3
+Class O
+Class A
+Class B
+Class C
+
+.
+
+For Use When Immersionand
+Moisture Resistance Tests are
+Required
+For Use When Moisture Resistance
+Test is Required
+For Use in Sealed Assemblies
+85°C Maximum Operating
+Temperature
+I05°C Maximum Operating
+Temperature
+125°C Maximum Operating
+Temperature
+> 125°C Maximum Operating
+Temperature
+
+The class denotes the maximum operating
+temperature (temperature rise plus maximum
+
+ambient temperature)
+
+Supersedes
+
+11-2
+-
+
+z..__.
+
+.
+_
+
+=._—___
+
+.
+-—=---.+--——_-____>_
+
+page
+
+11-2 of Revision F
+
+._
+.
+
+e-—
+
+~.
+
+_—_. __
+
+.
+
+—————————..—
+_
+
+MIL-HDBK-217F
+
+NOTICE 2
+
+11.2
+
+COILS
+
+Quality Factor - ~ —
+
+Base Failure Rate - ~
++
+~
+
+Inductor Type
+
+DEVICES,
+
+DESCRIPTION
+Fixed and Variable, RF
+Fixed and Variable, RF, Chip
+Molded, RF, Est. Rel.
+
+STYLE
+
+SPECIFICATION
+MIL-C-15305
+MIL-C-83446
+MIL-C-3901O
+
+INDUCTIVE
+
+Quality
+
+F/lo6 Ms.
+
+IIQ
+
+,
+
+Fixed Inductor or Choke
+
+.000030
+
+Variable Inductor
+
+.000050
+
+Temperature
+
+Factor - XT
+
+s
+
+.03
+
+R
+
+.10
+
+P
+
+.30
+
+M
+
+1.0
+
+MIL-SPEC
+
+1.0
+
+Lower
+
+3.0
+
+TH@)
+
+XT
+
+20
+
+.93
+
+30
+
+1.1
+
+40
+
+1.2
+
+50
+
+1.4
+
+60
+
+1,6
+
+70
+
+1.8
+
+GB
+
+1.0
+
+80
+
+1.9
+
+GF
+
+6.0
+
+90
+
+2.2
+
+GM
+
+12
+
+100
+
+2.4
+
+Ns
+
+5.0
+
+110
+
+2.6
+
+120
+
+2.8
+
+Nu
+
+16
+
+130
+
+3.1
+
+140
+
+3.3
+
+150
+
+3.5
+
+160
+
+3.8
+
+170
+
+4.1
+
+*UF
+
+9.0
+
+180
+
+4.3
+
+*RW
+
+24
+
+190
+
+4.6
+
+sF
+
+XT = e)(p
+
+(
+
+-.11
+
+8.617x
+
+10
+
+-5
+
+Environment Factor - XE
+Environment
+
+*IC
+
+‘IF
+*UC
+
+1
+1
+TH~ + 273 -=
+
+(
+
+~E
+
+6.0
+
+8.0
+7.0
+
+.50
+
+MF
+
+13
+
+ML
+
+34
+
+CL
+
+610
+
+))
+
+‘HS = Hot Spot Temperature (“C),
+See Section 11.3
+
+Supersedes
+
+page 11-3 of Revision
+
+11-3
+
+F
+L1
+
+MIL-HDBK-217F
+
+NOTICE 2
+
+INDUCTIVE
+
+11.3
+
+DEVICES,
+
+DETERMINATION
+
+OF
+
+HOT
+
+SPOT
+
+TEMPERATURE
+
+l-lot Spot temperature can be estimated as follows:
+
+THS=TA+
+
+1.1 (Am
+
+where:
+-$+s
+
+=
+
+Hot Spot Temperature
+
+TA
+
+=
+
+Inductive
+
+AT
+
+=
+
+Average Temperature
+
+(“C)
+
+Device Ambient Operating
+
+Temperature
+
+(“C)
+
+Rise Above Ambient (“C)
+
+Rise” Test Method paragraph in the device base
+AT can either be determined by the appropriate “Te~erature
+specification (e.g., paragraph 4.8.12 for MI L-T-27E), or by approximation using one of the procedures
+described below. For space environments a dedicated thermal anatysis should be performed.
+AT&p mximation (Non-spaoe Environments)
+Information
+.—
+- Known
+1.
+
+MIL-C-3901 O Slash Sheet Number
+MIL-C-39010/l
+C-3C, 5C, 7C, 9A, lOA, 13, 14
+
+AT Armoximation
+
+I
+
+AT= 15°C
+AT= 35°C
+
+MIL-C-39010/4C, 6C, 8A, 11, 12
+
+AT= 125 WL/A
+
+2.
+
+Power Loss
+Case Radiating Surface Area
+
+3.
+
+Power Loss
+Transformer Weight
+
+AT= 11.5 wL/(wt.)”6766
+
+4.
+
+Input Power
+Transformer Weight
+
+AT= 2.1 W~(Wta)06766
+
+(Assumes
+
+W’
+
+=
+
+A=
+
+I
+
+800/0 Efficiency)
+
+Power Loss (W)
+Radiating Surface Area of Case (in2). See below for MIL-T-27 Case Areas
+
+Wt.
+
+=
+
+Transformer
+
+Weight
+
+w,
+
+= Input Power (W)
+
+(lbS.)
+
+NOTE: Methods are listed in prefemd order (i.e., most to least accurate). MIL~-3901 O are microminiature devices with surface areas less than 1 in2. Equations 2-4 are applicable to devices with
+surface areas from 3 in2 to 150 in2. Do not include the mounting surface when determining radiating
+swface area.
+
+MIL-T-27 Case Radiati nq Areas (Excludes Mounting Surface)
+Case
+AF
+AG
+Al-1
+AJ
+EB
+EA
+
+I
+
+Area (in2)
+
+Case
+
+Area (in2)
+
+Case
+
+4
+7
+11
+
+GB
+GA
+H5
+
+33
+43
+42
+
+LB
+LA
+MB
+
+18
+
+HA
+
+53
+
+MA
+
+21
+23
+
+JB
+JA
+
+58
+71
+
+NB
+NA
+
+FB
+
+25
+
+KB
+
+72
+
+OA
+
+FA
+
+31
+
+KA
+
+84
+
+17-4
+
+Supersedes
+#,. –
+
+Area @2)
+82
+98
+98
+115
+117
+
+139
+146
+
+pages 11-4 and 11-5 of Rev[sion F
+
+MIL-HDBK-217F
+NOTICE 2
+
+12.1
+
+ROTATING
+
+DEVICES,
+
+MOTORS
+
+The following failure-rate model applies to motors with power ratings below one horsepower. This model is applicable to
+pcdyphase, capacitor start and run and shaded pole motors. h’s application may be extended to other types of fractional
+horsepower motors utilizing rolling element grease packed bearings. The model is dictated by two failure modes, bearing
+failures and winding failures. Application of the model to D.C. brush motors assumes that brushes are inspected and
+replaced and are not a failure mode. Typical applications include fans and blowers as well as various other motor
+applications. The mode! is based on References 4 and 37, which contain a more comprehensive treatment of motor life
+The references should be reviewed when bearing loads exceed 10 percent of rated load, speeds
+prediction methods.
+‘ exceed 24,000rpm or motor loads include motor speed slip of greater than 25 percent.
+The instantaneous failure rates, or hazard rates, experienced by motors are not constant but increase with time. The
+over time wrid
+T. This time period is
+failure rate model in this section is an average failure rate for the motor op-ting
+either the system design life cycle (LC) or’ the time period the motor must last between complete refurbishment (or
+replacement).
+The model assumes that motors are replaced upon faifure and that an effective constan! failure rate is
+achieved after a given time due to the fact that the effective ~ime zero- of replaced motors becomes random after a
+, can be treated as a constant failure rate and
+significant portion of the population is replaced. The average faikuO rate,
+
+$
+
+added to other part failure rates from this Handbook.
+
+x,
+
+Lz
+
+l.p= —
+
+—
++ BaW
+
+[
+
+A(xB
+
+x 106 Failures/l 08 I-iours
+1
+
+Bearing & Winding Characteristic Life - c%Rand aw.~
+
+‘A (“c)
+
+E
+30
+40
+50
+60
+
+55000
+35000
+
+2.534-
+
+TA2~:73
+
+10 (
+
+-
+
+(Hr.)
+
+6.49+06
+3.2e+06
+1.W+06
+8.9e+05
+5.oe+05
+2.9e+05
+1.8e+05
+
+3600
+13000
+39000
+78000
+
+o
+
+aB
+
+~
+
+(Hr.)
+
+aB (Hr.)
+
+70
+80
+90
+100
+110
+120
+130
+140
+
+22000
+14000
+9100
+6100
+4200
+2900
+2100
+1500
+
+1
+4500
+10 (
+
+-
+
+~
+
+(Hr.)
+
+1.1Q+05
+7.09+04
+4*6e+04
+3.le+04
+2.19+04
+1.5e+04
+1.09+04
+7.5e+03
+
+1
+-1
+
++
+)
+
+[
+2357
+,0 [ TA + 273
+
+TA (=)
+
+20-~
+
+)
+
++300
+
+1.83]
+
+%/”
+aB
+
+=
+
+Weibull Characteristic Life for the Motor Bearing
+Weibull Characteristic Life for the Motor Windings
+
+w“
+TA
+
+Ambient Temperature
+
+=
+
+NOTE:
+
+See page 12-3 for method to cakulate aB and ~
+
+Supersedes
+.—__
+
+__
+
+———______ __
+
+(“C)
+
+when temperature is not @nstant.
+
+12-1
+
+page 12-1 of Revision F
+—-.____
+—
+
+—
+
+—..-_
+
+_
+
+MIL-HDBK-217F
+NOTICE 2
+
+ROTATING
+
+12.1
+
+DEVICES,
+
+MOTORS
+
+L and
+L Determination
+..
+1 —--— c
+
+A and B Determinatbn
+
+A
+
+Motor Type
+
+B
+
+1
+
+k, or Q
+
+aw
+
+aB
+
+1.1
+
+1.9
+
+Electrical (General)
+
+Lcw&
+
+0-.10
+
+.13
+
+.11 -.20
+
+.15
+
+.21 -.30
+
+.23
+
+.31 -.40
+
+.31
+
+.41 -.50
+
+.41
+
+.51 -.60
+
+.51
+
+55000 Hrs.
+
+.61 -.70
+
+.61
+
+2,9e + 5 Hrs.
+
+,71-.80
+
+.68
+
+.81 -.90
+
+.76
+
+>1.0
+
+1.0
+
+.29
+
+.48
+
+Sensor
+Servo
+
+2.4
+
+1.7
+
+Stepper
+
+11
+
+5.4
+
+Example Calculathn
+A general purpose elecltial motor is operati~ at
+50”C in a system with a 10 year desgn life (876W
+hours) expedancy,
+
+87600
+
+~fS.
+
+=
+
+55000 I+rs.
+87600
+
+I-trs.
+
+2.9e + 5 Hrs. =
+
+(
+
+.23
+(
+
+.3
+
+LC is the system design Me cycle (in hours), or
+the motor preventive rnaintename intewal, if
+motom will be periodidly
+
+L& .
+aB
+
+1.6
+
+f.rg=
+aw
+
+.3
+
+for
+
+1.0
+
+1 .e
+
+replaced or
+
+refutished.
+
+Determine kl and ~ separately
+LC am —
+LC ratios.
+based on the respedive —
+UB
+aw
+
+)
+
+)
+
+1.9
+1.1
+
+%=
+
+[*+
+
+‘P
+
+=
+
+~9.9
+ILL
+
+.23
+(1. V(2.9e
+
++ 5)
+
+1
+
+6
+
+x‘0
+
+10.3 Failures/l 06 Hours
+
+Supersedes
+
+I
+
+I
+
+page 12-2 of Revision
+
+F
+
+MIL-1-iDBK-217F
+NOTICE 2
+
+12.1
+‘Calculation
+
+ROTATING
+
+DEVICES,
+
+MOTORS
+
+for Cycled Temperature
+
+The following equation can be used to calculate a weighted characteristic life for both bearings and windings
+
+(e.g., for bearings substitute aB for all a’s in equation).
+h1+h2+h3+------hm
+a=
+
+hl
+
+hz
+
+—+
+al
+
+—+
+a2
+
+h3
+— +-------—
+a3
+
+h~
+a
+
+m
+
+where:
+a
+
+either ~
+
+h,
+
+Time at le~erature
+
+h*
+
+Time to Cycle From Temperature
+
+h3
+
+Time at Temperature
+
+T3
+
+hm
+
+mme at Temperature
+
+Tm
+
+al
+
+Bearing (or Winding)
+
+Liie at T1
+
+Bearing (or Whaling)
+
+Life at T2
+
+‘2
+
+or aw
+T1
+T, to T3
+
+T3 + T,
+
+T, + T3
+T~=2$T4=2
+
+4
+
+T3
+
+T2
+
+TI
+.
+
+/
+
+h4
+
+-f
+
+hl
+
+II
+1
+
+h3
+
+hz
+I
+
+Hours
+Thermal
+
+Supersedes
+
+page 12-3 of Notice
+
+1
+
+(h)
+Cycle
+
+12-3
+
+MIL-HDBK-217F
+NOTICE 2
+
+12.2
+
+ROTATING
+
+DEVICES,
+
+SYNCHROS
+
+AND
+
+RESOLVERS
+
+—
+
+DESCRIPTION
+Rotating Synchros and Resolvers
+Failures/l
+
+kp = &S~NXE
+
+NOT E:
+
+06 Hours
+
+Synchros and resolvers are predomiwtely
+used in service requiting only slow and infrequent motion.
+Mechan~al wearoti problems are infrequeti
+so that the electrical failure mode dominates, and no
+mechankal mode failure rate is required in the model above.
+Number of Brushes Factor - ~
+
+Base Failure Rate - ~
+=
+
+40
+
+.0083
+.0088
+.0095
+
+45
+50
+55
+60
+65
+
+.010
+.011
+.013
+.014
+.016
+
+70
+75
+80
+
+.019
+.022
+.027
+
+30
+35
+
+%
+TF
+
+I
+
+.
+
+.
+
+85
+90
+95
+100
+105
+110
+115
+120
+125
+130
+~
+
+.032
+.041
+.052
+.069
+.094
+.13
+.19
+.29
+.45
+.74
+,1.3
+
+52
+
+1.4
+
+3
+
+2.5
+
+4
+
+3.2
+
+Environment
+
+.oo535expf-)8”’
+Frame Ternpwatum
+
++ Atiieti
+
+%N
+
+Environment
+
+I
+
+(z)
+
+If Frame Temperature is Unknown Assume
+TF=40“C
+
+Number of Brushes
+~
+
+Tempenture
+
+GF
+
+2.0
+
+%
+
+7.0
+
+N“
+
+18
+
+‘UF
+
+Size 8 or
+smaller
+
+Size 10-16
+
+Size 18 or
+Larger
+
+Synchro
+
+2
+
+1.5
+
+1
+
+Resolver
+
+3
+
+2.25
+
+1.5
+
+DEVICE
+TYPE
+
+12
+
+N~
+
+*UC
+‘RW
+
+1
+
+A
+
+1.0
+
+‘IF
+
+w
+
+r
+fiE
+
+GB
+
+AC
+
+Size Factor - x~
+
+Factor - ZE
+
+4.0
+6.0
+16
+25
+26
+
+.50
+
+SF
+
+MF
+
+14
+
+ML
+
+36
+
+CL
+
+680
+
+I
+
+\
+
+Supersedes
+
+12-4
+
+//”-
+
+.>.
+
+\NaaA\
+
+page 12-4 of Notice 1
+
+MIL-HDBK-217F
+NOTICE 2
+
+12.3
+
+ROTATING
+
+DEVICES,
+
+ELAPSED
+
+TIME
+
+METERS
+
+DESCRIPTION
+Elapsed Time Meters
+
+kp =&p~Fai
+
+lures/106
+
+Hours
+
+Environment Factor - xc
+
+Base Failure Rate - ~
+
+L
+
+Lb
+
+Environment
+
+A.C.
+
+20
+
+GB
+
+1.0
+
+Invefier Driven
+
+30
+
+GF
+
+2.0
+
+Commutator D.C.
+
+%
+
+12
+
+80
+
+Ns
+
+7.0
+
+Nu
+
+18
+
+*IC
+
+5.0
+
+‘IF
+
+8.0
+
+Type
+
+I
+
+Temperature Stress Factor - XT
+Operating T (°C)/Rated T (~)
+
+[ ‘
+
+XT
+
+‘Uc
+o to
+
+Supersedes
+
+.5
+
+.5
+
+‘UF
+
+.6
+
+.6
+
+‘RW
+
+.8
+
+.8
+
+1.0
+
+1.0
+
+page 12-5 of Revision
+
+F
+
+~E
+
+16
+25
+26
+.50
+
+SF
+MF
+
+14
+
+ML
+
+38
+
+CL
+
+N/A
+
+12-5
+
+MIL-HDBK-217F
+NOTICE 2
+RELAYS,
+
+13.1
+
+DESCRIPTION
+Mechanical Relay
+
+SPECIFICATION
+M\L-R-5757
+MIL-R-6106
+MIL-R-13718
+MIL-R-19646
+MIL-R-19523
+MIL-R-390~6
+
+MIL-R-83516
+MIL-R-83520
+ML-R-83536
+MIL-R-83725
+MIL-R-83726 (Except Class C, Solti State Type)
+
+)bP= &Lncxc&xQn E
+
+T. (%)
+n’
+
+“
+
+.0067
+.0075
+.0064
+.0094
+.010
+.012
+.013
+.014
+.016
+
+.017
+
+75
+
+.019
+.021
+
+80
+65
+90
+95
+100
+105
+
+110
+115
+120
+125
+-.0059 exp
+(
+
+2“ %
+
+-.0059 exp
+
+~A
+
+“
+
+8.617
+
+(
+
+X 10-5
+
+~bant
+
+X
+
+1
+
+1.02
+1.06
+1.15
+1.28
+1.48
+1.76
+2.15
+2.72
+3.55
+4.77
+
+.10
+
+.20
+.30
+.40
+.50
+.60
+.70
+.80
+.90
+
+~
+1.
+
+y--
+
+~-zm1)
+1
+
+)
+
+298
+
+q
+
+,I
+
+Contad Fom Factor - nc
+
+1
+
+/
+r
+
+b
+
+%Yc
+
+10
+0.1
+‘CYC
+
+Rate
+
+100
+
+>1OOO
+
+.
+
+10-1000
+<10
+
+cn
+
+2.00
+
+3PDT
+4PDT
+6PDT
+
+?
+
+(C@es per Hour)
+
+I .au
+1.75
+
+●
+
+S2
+~
+
+~.exp
+
+(MIL-SPEC)
+
+1.00
+
+s?S1
+DPST
+sPOT
+3PST
+4PST
+DPDT
+
+I
+
+()
+
+21.0
+<1.0
+
+,
+
+(Applies to Active Concluding Conta~s)
+‘c
+mntact Form
+
+3.
+
+c@e Rate
+(@cbS
+per Hour)
+
+Cycle
+
+*
+
+S2
+-j
+
+2,72
+9.49
+54.6
+
+CydiMI Fader- ~yc
+
+L
+
+,
+
+Tempmture VC)
+
+1
+
+1.28
+1.76
+2.72
+4.77
+9.49
+21.4
+
+combinat’mnand use the worse casO (largest XL).
+
+1
+
+10-5 [ T + 273
+
+()
+
+I
+
+For single dev”-s wtkh switchtwo different load typs,
+evaluate q-for each possible str-s bad tyPS
+
+!
+
+—.—1
+
+-.17
+8.617
+
+[
+
+.U3
+
+{
+
+1
+
+-.19
+
+l=-- ‘R*06
+.-
+
+1
+
+1
+
+:6
+.005=
+.0066
+.0073
+.0081
+.0089
+.0098
+.011
+.012
+.013
+.014
+.015
+.017
+.018
+.019
+iii
+.022
+.024
+.026
+.027
+.029
+.031
+
+‘:&9
+
+30
+35
+40
+45
+50
+55
+60
+65
+70
+
+a.
+Ob Hours
+
+Failures/l
+
+Load Stress Factor - XL
+~- -I T.-A
+
+Base Failure Rate - ~
+Rat# Tempentt I~a
+1
+.
+I
+125”$
+I
+0s%’
+
+25
+
+‘“ %
+
+MECHANICAL
+
+A
+I
+
+Cycles per Hour
+10
+1.0
+
+2.50
+
+NOTE-
+
+3,00
+425
+550
+800
+
+basic design hmttations of the relay are not valld Deslg
+specdicatlons should be consulted prior to evaluation of
+
+1
+
+‘
+
+Values of nCYC for cycling rates beyond the
+
+n
+I
+
+-H ‘CYC
+
+13-1
+
+Supersedes
+nnll
+
+page
+-U.l1
+
+13-1
+
+of Revision
+WI
+
+F
+ITHSISIUI
+
+. rlxuu.
+
+uulllwalLlwIl
+
+10 IISZUIOUWUJ,
+
+w-l!W1-.
+-y-----------.---
+
+MIL-HDBK-217F
+NOTICE 2
+
+RELAYS,
+
+13.1
+
+—
+
+MECHANICAL
+Application and Constf’uction Factor - fiF
+1
+
+Quality Factor - n,
+Contact
+
+7tQ
+
+Quality
+
+Rating
+~
+
+.10
+
+R
+
+x
+
+.45
+
+u
+
+.60
+
+M
+
+1.0
+
+L
+
+1.5
+
+MIL-SPEC, Non-Est. Rel.
+
+1.5
+
+@mmercial
+
+2.9
+
+(Long)
+
+Armature
+Mercury
+
+General
+
+w
+
+Construction
+Type
+
+Dry Reed
+
+lrrent
+3Wmv
+Idma)
+
+.30
+
+P
+
+Application
+Type
+D~ Circuit
+
+Pum09e
+b
+Sensitive
+(0-lCN)mw)
+
+Polarized
+
+Wetted
+
+Magnetic Latching
+Balanc6d Armature
+Solenoid
+Armature (LoW)
+Balanced Armature
+Solenoid
+Armature (Long and
+
+short)
+Mercury Wetted
+Magnetic Latching
+Meter Movement
+Balancd Armature
+Armature (ShOti)
+
+fiE
+
+GB
+
+1.0
+
+GF
+
+2.0
+
+Nu
+
+27
+
+AC
+
+7.0
+
+.atch ing,
+Magnetic
+5-20 Amp
+
+High Voltage
+~
+Power
+
+11
+12
+46
+
+‘RW
+
+.50
+
+SF
+
+25-600
+
+25
+
+MF
+
+c,
+
+Ilrne Dew,
+~
+*-Thermal
+
+9.0
+
+‘UF
+
+13-2
+
+Electronic
+
+8.0
+
+%c
+
+‘
+
+25
+
+M
+
+Ns
+
+ML
+
+I
+
+15
+
+‘IF
+
+100
+1
+
+Environment
+
+%
+
+I
+
+2
+6
+100
+10
+10
+
+T
+
+Environment Factor - xcL
+\
+
+5
+
+66
+
+I
+
+Contractors
+(High
+Current)
+
+1
+
+w Reed
+Wetted
+Balan@ armature
+Vacuum (Glass)
+Vacuum (Ceramk)
+Armature (Longand
+Mikwy
+
+I 105
+5
+20
+5
+
+3
+
+short)
+Mercury Wetted
+Magnetic Latching
+Mechan’~1 Latching
+BalaArmature
+Solenoid
+Armature (Short)
+Mechanlcd Latching
+Baian@d Armature
+Solenoid
+
+:
+3
+2
+2
+7
+12
+10
+5
+
+page
+
+F
+
+N/A
+
+Supersedes
+—————
+
+13-2
+
+of Revision
+
+7F
+
+fvllL-HDBK-21
+NOTICE
+
+13.2
+
+2
+
+RELAYS,
+
+SOLiD
+
+STATE
+
+AND
+
+TIME DELAY
+
+DESCRIPTION
+Relay, Solid State
+Relay, Time Delay, Hybrid and Solid State
+
+SPECIFICATION
+MIL-R-28750
+MIL-R-83726
+
+The most accurate method for predicting the failure rate of solid state (and solid state time delay) relays is to sum
+the failure rates for the individual components which make up the relay. The indvidual component failure rates
+can either be calculated from the models provided in the main body of this Handbook (Parts Stress Method) or
+from the Pafls Count Method shown in Appendix A, depending upon the depth of knowledge the analyst has
+about the components being used. If insufficient information is available, the following default model can be
+used:
+~
+
+= ~z@E
+
+Failures/106 liours
+
+Environment Factor - XE
+
+Base Failure Rate - ~
+1
+Relay Type
+
+—
+
+Lb
+
+Environment
+
+fiE
+
+GB
+
+1.0
+
+GF
+
+3.0
+
+GM
+
+12
+
+Ns
+
+6.0
+
+N“
+
+17
+
+1
+
+Solid State
+
+.029
+
+Solid State Time Delay
+
+.029
+
+Hybrid
+
+.029
+
+Alc
+Quality Factor - z~
+
+—
+
+I
+
+Quality
+MIL-SPEC
+Commemial
+
+Supwsedw
+
+I
+
+I
+
+page 13-3 of RwIsm
+
+7CQ
+
+1.0
+1.9
+
+1
+
+12
+
+‘IF
+
+19
+
+%c
+
+21
+
+‘UF
+
+32
+
+‘RW
+
+23
+.40
+
+SF
+
+F
+
+MF
+
+12
+
+ML
+
+33
+
+cL
+
+590
+
+13-3
+
+MIL-HDBK-217F
+NOTICE 2
+SWITCHES
+
+14.~
+
+Base Failure Rate - ~
+1
+Spec.
+~ (F/106 tirs.)
+MIL-SDescription
+Centrifugal
+Dual-In-line Package
+Limit
+
+Liquid Level
+Microwave
+(waveguide)
+pressure
+
+I
+
+pushbutton
+
+Iced
+
+locker
+iotafy
+
+Sensitive
+
+Thermal
+
+Thurnbwhed
+Toggle
+
+I
+
+3.4
+.00012
+4.3
+2.3
+1.7
+
+N/A
+83504
+8805
+
+N/A
+
+II
+
+8932
+9395
+1211
+8805
+I
+22885
+24317
+55433
+3950
+22885
+3786
+13623
+15291
+15743
+22604
+22710
+45885
+82359
+8805
+13484
+22614
+12285
+24286
+22710
+3950
+5594
+8805
+8834
+9419
+13735
+.
+81551
+83731
+
+Stress
+s
+0.05
+
+I
+
+2,8
+
+.10
+
+.0010
+.023
+.11
+
+b
+
+0.1
+0.2
+0.3
+0.4
+0.5
+0.6
+0.7
+0.8
+0.9
+1.0
+
+1,06
+1.15
+1.28
+1.48
+1.76
+2.15
+2.72
+3.55
+4.77
+
+I
+
+I
+
+1.28
+1.76
+2,72
+4.77
+9.49
+21.4
+
+Lamp
+1.06
+1.28
+2.72
+9,49
+54.6
+
+Operating Load Current
+Rated Resistive Load Current
+
+s=
+
+XL
+
+=
+
+exp (S/.8)2
+
+for Resistive Load
+
+fiL
+
+=
+
+exp (s94)2
+
+for Inductive Load
+
+fiL
+
+=
+
+exp (S/.2)2
+
+for tirnp
+
+Load
+
+NOTE: When the switch is rated by indutiive load,
+then use resistive nL.
+
+.49
+
+Conta@ Configuration Factor* - Zc
+# of Contactst
+NC
+Contact Form
+1
+SPST
+2
+DPST
+2
+sPOT
+3
+3PST
+4
+4PST
+4
+DPDT
+6
+3PDT
+8
+4PDT
+12
+6PDT
+
+.031
+.18
+.10
+
+I
+
+4
+
+Load Stress Factor - XL
+Load Type
+Inductive
+Resistive
+1.02
+1.00
+1.06
+1.02
+
+●
+
+L
+
+xc
+1.0
+1.3
+1.3
+1.4
+1.6
+1.6
+1.8
+2.0
+2.3
+
+I
+
+Applies to toggle and pushbutton switches only,
+all others use fic = ~.
+
+74-1
+Supersedes
+
+page
+
+14-1
+
+through
+
+14-4
+
+of Revision
+
+F
+
+4
+
+MIL-HDBK-217F
+NOTICE 2
+
+SWITCHES
+
+14.1
+
+Environment
+
+Quality Factor - Kn
+.
+
+I
+
+I
+
+Quality
+
+I
+
+Lower
+
+I
+
+~E
+
+Environment
+
+~Q
+
+2
+
+J
+
+GB
+
+1.0
+
+GF
+
+3.0
+
+GM
+
+18
+
+NS
+
+8.0
+
+Nu
+
+29
+10
+
+*C
+
+18
+
+‘IF
+
+13
+
+‘Uc
+
+22
+
+‘UF
+
+46
+
+‘RW
+
+.50
+
+SF
+
+14-2
+
+I
+
+I
+
+1
+
+MIL-SPEC
+
+Factor - n~
+
+Supersedes
+
+MF
+
+25
+
+ML
+
+67
+
+CL
+
+1200
+
+page 14-1 through
+
+14-4
+
+of Revision
+
+F
+
+MIL-HDBK-217F
+NOTICE 2
+
+14.2
+
+SWITCHES,
+
+CIRCUIT
+
+BREAKERS
+
+DESCRIPTION
+Circuit Breakers, Manual and Automatic
+Circuit Breakers, Magnetic, Unsealed, Trip-Free
+Circuit Breakers, Remote Control, Thermal, Trip-Free
+Circuit Breakers, Magnetic, Low Power, Sealed, Trip-Free Service
+Circuit Breakers, Molded Case, Branch Circuit and Sewice
+
+SPECIFICATION
+MIL-C-13516
+MIL-C-55629
+MIL-C-83383
+MIL-C-39019
+W-C-375
+
+kp = &cXuZQnE
+
+Failures/l
+
+06 Hours
+
+Base Failure Rate - k
+
+oualitv Factor - ~n
+
+Description
+
+Quality
+
+%3
+
+7CQ
+
+Magnetic
+
+.34
+
+MIL-SPEC
+
+1.0
+
+Thermal
+
+.34
+
+Lower
+
+8.4
+
+Thermal-Magnetic
+
+.34
+Environment Factor - xc
+IE
+
+Configuration Factor - m
+Configuration
+
+nvironment
+GB
+
+1.0
+
+GF
+
+2.0
+
+SPST
+
+1.0
+
+GM
+
+15
+
+DPST
+
+2.0
+
+Ns
+
+8.0
+
+3PST
+
+3.0
+
+Nu
+
+27
+
+4PST
+
+4.0
+
+AC
+
+7.0
+
+‘IF
+
+9.0
+
+%c
+
+11
+
+‘UF
+
+12
+
+‘RW
+
+46
+
+Use Factor - z
+Use
+
+,
+
+Not Used as a Power
+On/Off Switch
+‘
+
+1.0
+
+Aiso Used as a Power
+On/Off Switch
+
+2.5
+
+Supersedes
+
+page 14-5 of Revision
+
+SF
+
+F
+
+.50
+
+MF
+
+25
+
+ML
+
+66
+
+CL
+
+NtA
+
+14-3
+
+MIL-HDBK-217F
+NOTICE 2
+
+CONNECTORS,
+
+15.1
+LP = kbnTnKnQnEFailures/lo6
+
+GENERAL
+
+‘ours
+
+APPLICATION NOTE: The failure rate model is for a mated pair of conneCtom. It is sometimes desirable to
+assign half of the overall mated pair connedor (i.e., single corm-or)
+failure rate to the Ime replaceable unit and
+An example of when this would be beneficial is for input to maintainability
+half to the chassis (or backplane).
+prediction to allow a failure rate weighted repair time to be estimated for both the LRU and chassis. This
+accounti~ procedure could be signif”tint if repair times for the two halves of the connector are substantially
+different. For a single connector divide ~ by tWO.
+Temperature Factor - XT
+
+Base Failure Rate - ~
+
+~ification
+MIL-C26482
+115
+27599
+i500
+29600
+1840
+83723
+)999
+
+Description
+;ircular/Cylititil
+
+I
+
+-$) (’v
+
+.0010
+
+1511
+
+ard Edge (PCB)*
+
+exagonal
+
+21097
+55302
+
+.040
+
+24055
+24056
+
+.15
+
+24308
+28731
+28748
+83515
+
+.021
+
+21617
+24308
+28748
+28804
+81659
+83513
+8352?
+83733
+85028
+
+.046
+
+ack and Panel
+
+Rectangular
+
+3F Coaxial
+
+S607
+36X3
+S650
+3655
+
+15370
+25516
+26637
+39012
+55235
+83517
+
+.00041
+
+XT
+
+Telephone
+
+55074
+
+.0075
+
+Power
+
+22992
+
+.0070
+
+Trlaxial
+
+49142
+
+.0036
+
+20
+
+.91
+
+30
+
+1.1
+
+40
+
+1.3
+
+50
+
+1.5
+
+60
+
+1.8
+
+70
+
+2.0
+
+80
+
+2.3
+
+90
+
+2.7
+
+100
+
+3.0
+
+110
+
+3.4
+
+120
+
+3.7
+
+130
+
+4.1
+
+140
+
+4.6
+
+150
+
+5.0
+
+160
+
+5.5
+
+170
+
+6.0
+
+180
+
+6.5
+
+190
+
+7.0
+
+200
+
+7.5
+
+210
+
+8.1
+
+220
+
+8.6
+
+230
+
+9.2
+
+240
+
+9.8
+
+250
+
+10.
+
+sexp
+
+r
+
+I
+-.14
+
+18.617
+
+‘-
+
+X 10-5
+
+(
+
+To
+
+1
++
+
+273
+
+.— 1
+298
+
+)1
+
+To = Connector Ambient + AT
+AT = Connector Insert Temperature
+(see Table)
+
+Rise
+
+‘ Pr~nted Circuit Board Connector
+15-1
+
+—a..
+
+. .
+
+.
+
+. .
+
+..
+
+____
+
+Supersedes
+
+page
+
+15-1
+
+.—— —a— ___
+
+_______ . .
+
+through
+
+15-5
+
+of Revision
+
+F
+—.—
+.—..——..
+
+MIL-HDBK-217F
+NOTICE 2
+
+Mating/Unmating
+
+Default Insert Temperature Rise
+lAT ‘C)
+Determination
+—
+—, —
+Contact Gauge
+Amperes
+L
+
+~er Contact
+2
+3
+4
+5
+6
+7
+8
+9
+10
+15
+20
+25
+30
+35
+40
+
+AT
+AT
+AT
+AT
+AT
+AT
+AT
+AT
+AT
+
+=
+=
+=
+=
+=
+=
+=
+=
+=
+
+30
+10
+22
+37
+56
+79
+
+22
+4
+8
+13
+19
+27
+36
+46
+57
+70
+
+20
+2
+5
+8
+13
+18
+23
+30
+37
+45
+96
+
+Mating/Unmating Cycles*
+(per 1000 hours)
+12
+0
+1
+1
+2
+3
+4
+5
+6
+7
+15
+26
+39
+54
+72
+92
+
+3.256(i)’
+“85
+2.856(i)’
+“85
+2.286(i)’ ●85
+1.345(i)l “85
+0.989(i)’
+●85
+0.640(i)’ “85
+0.429(i)’
+’85
+0.274(i)’
+’85
+
+32 Gauge Contacts
+30 Gauge Contacts
+28 Gauge Contacts
+24 Gauge Contacts
+22 Gauge Contacts
+20 Gauge Contacts
+18 Gauge Contacts
+16 Gauge Contacts
+
+0.100 (i)’ “85
+
+12 Gauge Contacts
+
+AT =
+
+Insert Temperature
+
+i
+
+Amperes per Contact
+
+=
+
+16
+1
+2
+4
+5
+8
+10
+13
+16
+19
+41
+70
+106
+
+RF Coaxial Connectors
+(High Power Applications)
+
+~K
+
+o to .05
+
+1.0
+
+> .05to .5
+
+1.5
+
+>.5t05
+
+2.0
+
+>5t050
+
+3.0
+
+> 50
+●One cycle includes both connect and
+disconnect.
+
+Quality Factor - XQ
+
+I
+
+Quality
+
+I
+
+I
+
+MIL-SPEC
+
+1
+
+Lower
+
+2
+Environment Factor - XE
+
+Rise
+4
+
+RF Coaxial Connectors
+
+Factor - nK
+
+AT = 5°C
+
+Environment
+
+~E
+
+GB
+
+1.0
+
+GF
+
+1.0
+
+GM
+
+8.0
+
+Ns
+
+5.0
+
+Nu
+
+13
+
+Alc
+
+3.0
+
+‘IF
+
+‘Uc
+
+AT= 50°C
+
+5.0
+8.0
+
+‘UF
+
+12
+
+‘RW
+
+19
+.50
+
+SF
+
+15-2
+
+Supersedes
+
+MF
+
+10
+
+ML
+
+27
+
+c,
+
+490
+
+page 15-2 through
+
+15-5 of Revision
+
+F
+
+MIL-HDBK-217F
+NOTICE 2
+
+15.2
+
+Lp = ++CP7CQ7CEFailures/l
+
+Active Pins Factor - np
+Number of “
+
+Number of
+Active
+Contacts
+
+Description
+
+Spec.
+httlL-S
+
+Lb
+
+Dual-In-Line Package
+
+83734
+
+.00064
+
+Single-In-Line Package
+
+83734
+
+.00064
+
+Chip Camier
+
+38533
+
+.00064
+
+Pin Grid Array
+
+NIA
+
+.00064
+
+Relay
+
+12883
+
+.037
+
+Transistor
+
+12883
+
+.0051
+
+Electron Tube, CRT
+
+12883
+
+.011
+
+Act ive
+
+Contacts
+
+1.0
+
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+
+H
+2.1
+2.3
+2.4
+2.5
+2.6
+2.7
+2.8
+2.9
+3.0
+3.1
+3.2
+3.3
+3.4
+3.5
+3.6
+4.1
+4.5
+5.0
+5.5
+5.9
+6.4
+
+16
+17
+18
+19
+20
+25
+30
+35
+40
+45
+50
+
+~Q
+
+.3
+
+MIL-SPEC.
+
+1.0
+Environment Factor - ~E
+
+55
+60
+65
+70
+75
+80
+85
+90
+95
+100
+105
+110
+115
+120
+125
+130
+13.5
+140
+
+1.5
+1.7
+
+14
+15
+
+Quality Factor - ~
+
+Lower
+
+SOCKETS
+
+06 Hours
+
+Base Failure Rate - ~
+
+Quality
+
+CONNECTORS,
+
+;$
+155
+160
+165
+170
+175
+180
+
+7tp
+6.9
+7.4
+7.9
+
+8.4
+8.9
+9.4
+9.9
+
+10
+11
+12
+12
+13
+13
+14
+14
+15
+16
+16
+
+17
+18
+18
+19
+20
+20
+21
+22
+
+Environment
+
+fiE
+
+GB
+
+1.0
+
+GF
+
+3.0
+
+%
+
+14
+
+Ns
+
+6.0
+
+Nu
+
+18
+
+N
+
+AC
+
+8.0
+
+‘IF
+
+12
+
+An active contact is the conductive element
+which mates with another element for the
+purpose of transferring electrical energy.
+
+11
+
+*UC
+
+Number of Active Pins
+
+13
+
+*UF
+
+25
+
+*RW
+
+.50
+
+SF
+MF
+
+14
+
+ML
+
+36
+
+c,
+
+650
+
+Supersedes
+
+=
+
+15-3
+
+page 15-6 of Revision F
+I
+
+I
+
+I
+
+l.-
+
+I
+
+----
+
+1
+
+I
+
+-.
+
+MIL-HDBK-217F
+NOTICE 2
+
+16.1
+
+INTERCONNECTION
+
+ASSEMBLIES
+
+Nptc+N2(~c+
+
+13) 7tQnEFaillJre@
+
+Ap =kb
+
+[
+
+WITH
+
+PLATED
+
+1
+
+THROUGH
+
+HOLES
+
+Hours
+
+APPLICATION NOTE: This model applies to board configurations with leaded devices mounted into the
+plated through holes and assumes failures are predominately defect related. For beads using surface mount
+technology, use Section ~6.2” For a mix of leaded devices mounted into plated through holes and surface
+mount devices, use this model for the leaded devices and use Section 16.2 for the surface mount contribution.
+
+A discrete wiring assembly with electroless deposit plated through holes is basidly a pattern of insulated wires
+The primary cause of failure for both printed wiring and discrete
+laid down on an adhesive coated substrate.
+wiring assemblies is associated with plated through-hole (PTH) problems (e.g., barrel crackng).
+Quality Factor - ~
+Base Failure Rate - ~
+
+Printed Wiring Assemb!yFtinted
+Circuit Boards with PTHs
+
+Quality
+
+.000017
+
+MIL-SPEC or Comparable Institutefor
+Interconnecting, and Packaging
+Electronic Circuits (lPC) Standads
+(IPC Level 3)
+
+1
+
+Lower
+
+2
+
+Discrete Wiring with Electroless
+A
+Deposited PTH (< 2 Levels of Circuit@
+
+.00011
+
+of PIWs Factor - N1 and N2
+
+Nu~r
+
+Quantity
+
+Factor I
+
+Envimnmti
+
+Automated Techniques: Quantity of
+Wave Infrared (IR) or Vapor Phase
+Soldered Functional PTlis
+
+N,
+
+Quantity of Hand Soldered PTHs
+Complex”~ Factor - ~
+
+Number of Circuit Planes, P
+S2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+
+=
+
+b
+
+Environment
+
+~E
+
+GB
+
+1.0
+
+GF
+
+I
+
+I
+
+I
+
+2.0
+
+GM
+
+7.0
+
+&s
+
+5.0
+
+Nu
+
+13
+
+%c
+
+5.0
+
+I
+
+‘IF
+
+8.0
+16
+
+%c
+
+28
+
+‘UF
+
+19
+
+%w
+
+.50
+
+SF
+MF
+
+10
+
+ML
+
+27
+
+cL
+
+500
+
+.
+
+1
+
+Discrete Wwng w/PTH
+xc
+
+I
+
+xc
+
+1.3
+1.6
+1.8
+2.0
+2.2
+2.4
+2.6
+2.8
+2.9
+3.1
+3.3
+3.4
+3.6
+3.7
+3.9
+4.0
+
+‘
+
+I
+
+L
+1.0
+
+Factor -xc
+
+1
+
+I
+
+N2
+
+ltQ
+
+kb
+
+Technology
+
+.65P 63
+Ifj-1
+
+Supersedes
+--1-
+
+I
+
+page
+
+16-1
+
+of Revision
+
+F
+,
+
+.“..
+
+~.
+
+.
+
+Jr--
+
+-----------
+
+.
+
+MIL-I+DBK-217F
+NOTICE 2
+
+INTERCONNECTION ASSEMBLIES, SURFACE MOUNT TECHNOLOGY
+
+16.2
+
+APPLICATION NOTE: The SMT Model was ctevelopecf to assess the life integfiiy of leadless and leaded
+devices. It provides a relative measure of circuit card wearout due to thermal cycling fatgue failure of the
+“weakest link- SMT device. An analysis shouti be periorrned on all circuit board SMT components. The
+component with the largest failure rate value (weakest link) is assessed as the overall board failure rate
+due to SMT. The model assumes the board is completely renewed upon failure of the weakest link and
+the results do not consider solder or lead marwfacturi~ defects. This model is based on the techniques
+developed in Reference 37.
+
+ASMT
+
+=
+
+Average failure rate over the
+expected equipment life cycle
+due to surface mount device
+This failure rate
+wearout.
+contr’butbn to the system is for
+the Surface Mount Device on
+each board exhibiting
+the
+highest absolute value of the
+strain range:
+
+I ( % AT -ucc(dT+TRIsE))
+ECF
+)LSMT = ~
+ECF
+
+=
+
+-..._._”,.”
+
+Lc
+
+0-.1
+.11 -.20
+.21 -.30
+.31 -.40
+.41 -.50
+.51 -.60
+,61-.70
+.71 -.80
+.81 -.90
+> .9
+
+Temperature cycling rate in
+cycles per calendar hour. Base
+on a thermal analysis of the circuit
+board. Use table default values if
+other estimates do not exist.
+
+Nf
+
+=
+
+Average number of thermal
+cycies to failure
+
+Nf=
+
+, (as AT- Cfcc(AT+
+(1
+
+3.5 &
+
+where:
+d=
+
+TRIsE))
+
+Distance from center of device to
+the furthest solder joint in miis
+(thousandths of an inch)
+
+ral~ ~r~~- ---FCF
+
+.13
+.15
+.23
+.31
+.41
+.51
+.61
+.68
+.76
+1.0
+
+h=
+
+Solder joint height in miis for
+Ieadiess devices. Default to h = 8
+for ali leaded configurations.
+
+w=
+
+Circuit board substrate thermai
+coefficient of expansion (TCE)
+
+AT
+
+Use environment temperature
+extreme difference
+
+=
+
+material
+thermal
+Package
+coefficientof expansion (TCE)
+
+w%=
+TRISE =
+
+LC
+
+=
+
+Design
+iife cycle
+of the
+equipment in which the circuit
+board is operating
+
+Temperature rise due to power
+dissipation (Pal)
+
+Pd
+
+=
+
+USMT = The Weibull characteristic life.
+
+8JC
+
+=
+
+USMT is a function of device and
+substrate material, the manufacturing
+methods, and the
+application environment used.
+
+P=
+
+16-2
+
+Ix 10 +)-’qn,c)
+
+u w------
+
+ECF
+
+-MT
+
+=
+
+lx 10-6
+
+Effective cumulative number of
+the
+Weibull
+failures
+over
+ctwacte~ic
+life.
+
+Ffi*iVGI
+~llmldat~~
+k..””...- _
+
+where:
+CR
+
+~Lc
+
+=
+
+eJcp
+
+Thermal resistance ‘/Watt
+Power Dissipation (Watts)
+
+Lead configuration factor
+
+New Page
+
+—
+
+MIL-HDBK-217F
+NOTIGE 2
+
+16.2
+
+INTERCONNECTION ASSEMBLIES, SURFACE MOUNT TECHNOLOGY
+as - Default TCE Substrate Values
+
+CR - Cycling Rate Defau~ Values
+Number Of
+Equipme~ TYPe
+Cycles/Hour
+
+Telecorn~~”~t’~ns
+Commercial Alrcrati
+INustrial
+
+Miliiafy Ahcnti
+
+.0042
+
+?ramicMuttilayer Bead
+
+.25
+.021
+
+~pper Clad Invar
+
+d
+
+1
+
+Corw@e
+
+3
+1
+
+@artz Fiber
+
+Lead Configuratbn
+
+L
+
+5
+
+Glass Fiber
+
+XLC - Lead Configuration Factor
+
+LeadlesS
+J or S Lead
+Gull WIW
+
+5
+K
+
+I
+
+Cafbon-Fibr/EpOW
+Kevlar Fiber
+
+.5
+
+(FigMer)
+
+7
+
+Copper Clad Mol@@mm
+
+.03
+.12
+
+MilfiarY Gwti
+Appl”=tbm
+Miliia~ Aircraft (Caf90)
+
+11
+
+FR-4 Multilayer Board w/Copper
+[ Clad Invar
+I
+
+.17
+
+computer
+
+20
+
+FR-4 Multilayer 60ard
+
+.08
+
+:onsumer (television, radio,
+recorder)
+
+18
+
+FR4 Laminate
+
+1.0
+
+l~omotive
+
+as
+
+Substrate Material
+
+%C
+1
+150
+5,000
+
+15
+
+Epoxy/Glass Laminate
+Polyamtie/Glass
+
+Laminate
+
+Polyam”~/Kevlar
+
+Laminate
+
+13
+6
+8
+
+Po&amtie/Wa~
+LamiMte
+@oxy/Kevkr Laminate
+
+.
+
+7
+7
+
+Alumina (Ceramk)
+
+c - TCE Package Values
+
+7
+
+@mxy Ararnkf Fiber
+,
+,
+
+7
+6
+
+Plastic
+Ceramic
+
+v
+
+21
+
+GF
+
+26
+
+GM
+
+26
+
+hJs
+
+61
+
+Nu
+
+31
+
+%c
+AIF
+%c
+‘UF
+%lw
+Sc
+M’F
+ML
+CL
+
+~
+
+20
+7
+
+var
+Porcelainked Copper Clad In
+
+Difference
+AT
+7
+
+Environment
+GB
+
+9
+
+Fiberglass Tefbn Laminates
+
+AT -Use Envimnmeti Default
+Te~erature
+
+6
+
+PolyamM Aramti Fitwr
+Epoxy-Quafiz
+
+31
+57
+57
+31
+
+1
+
+Fiberglass Ceramk Fibw
+
+1
+
+7
+
+●
+
+A large plastic encapsulated
+E)cAMPLE:
+Ieadless chip canier is mounted on a epoxyglass printed Wiring assetily.
+The $esign
+~ns”~erations are: a square pa*age is 1480
+roils on a side, solder height is 5 roils, power
+dissipation is .5 watts, thermal resistance is
+20 °C/wati, the design life is 20 years and
+envkOnmti is military grouti application. The
+failure rate cfevebped is the impad of SMT for a
+single circuit board and accounts for all SMT
+devices on this board. This failure rate is added
+to the sum of all of the component failure rates
+on the circuti board.
+
+7
+N/A
+NIA
+hJIA
+
+Nf
+
+(xsMT
+
+=
+
+c–fi
+16-3
+
+New Page
+
+MIL-HDBK-217F
+NOTICE 2
+
+16.2
+
+INTERCONNECTION ASSEMBLIES, SURFACE MOUNT TECHNOLOGY
+
+d
+~f
+
+=
+
+(asAT-ucc(A~+TRlsE)) I “0 -6)-226@Lc)
+
+3“5 (. R
+
+For d:
+
+d = ~ (1480) = 740 roils
+
+For h:
+
+h s 5 roils
+
+For as:
+
+as = 15 (Table - EPOXYGlass)
+
+ForAT:
+
+AT_ 21 (Table - GF)
+
+For WC:
+
+~.
+
+For TRISE:
+
+TRISE = eJC p = 20(.5) = 10°C
+
+For XLC:
+
+ZLC = 1 (Table - Leadless)
+
+For CR:
+
+CR = .03 cycle~our
+
+7 (Table - PlastiC)
+
+(1
+
+740
+(.65)(5)
+
+(Table - Milita~ Gmun@
+
+(W2V
+
+- 7W+1O)) 1)x 104
+
+Nf
+
+=
+
+3“5
+
+Nf
+
+=
+
+18,893 theml
+
+.
+
+629,767 hOu~
+18,893 cycles
+.03 cyiedbur
+=
+
+WMT
+
+1-c
+
+W=
+*
+
+“2”26 (1)
+
+cycles to failure
+
+.
+
+28
+
+aSMT
+
+“
+
+ECF
+
+=
+
+.23 failures (TaMe - Effedive Cumulative Failures)
+
+~SMT
+
+=
+
+ECF
+~T
+
+XSMT =
+
+-
+
+I
+
+.23 faiiures
+.0000004 failure~~ur
+= 629,767 kNJrS =
+
+.4 failures/106 hours
+
+,
+
+New Page
+16-4
+
+MIL-HDBK-217F
+
+NOTICE 2
+17.1
+
+CONNECTIONS
+
+used on all assemblies
+Use the Intermnnedion
+Assembly
+APPLICATION NOTE: The failure rate model in this section applies to connedions
+except those using plated through holes or surface mount technology.
+connections to a circuit board using either plated through hole technology
+Model in Sectbn 16 to account for
+The failure rate of the strudure which supports Soldefless
+the connedions
+and parts, e.g.,
+are
+wrap connections
+or surface mount technology.
+non-plated-through hole boards and terminal straps, is considered to be zero.
+chara~erized by SOIMwire wrapped under tenshn
+around a rrmdel
+post, whereas
+hati soldeting
+The following
+is for a single
+connedion.with wrapping does
+not depend on a tension induced connedion.
+
+L = LX=
+Ub
+
+06 Hours
+
+Failures/l
+
+P
+
+Envimnmnt Factor-Xc
+
+&
+
+Base Faihm Rate - ~
+Connedion
+
+Type
+
+Hand Solder, w/o Wrapping
+Hand Solder, w/Wrapping
+
+Soldeffess Wrap
+
+Spfing Contad
+Terminal Block
+
+Environment
+I
+
+GB
+.0013
+
+GF
+
+.000070
+
+GM
+.. .
+Ns
+
+.000015
+
+Weld
+
+Reflow Solder
+
+~ (F/106 hm)
+
+.00026
+
+crimp
+
+Clip Termin~bn
+
+1
+
+.0000068
+
+I
+
+~E
+.-
+
+1 .U
+
+1A I
+2.0
+
+7.0
+
+4.0
+
+u
+
+AC
+.00012
+
+4.0
+6.0
+
+.000069
+
+‘IF
+AN
+
+.17
+‘UF
+
+.062
+
+6.0
+8.0
+
+I
+
+16
+‘RW
+
+.50
+
+SF
+
+MF
+
+9.0
+
+ML
+
+24
+
+CL
+
+420
+
+17-1
+
+Supersedes
+
+page 17-1 of Revision
+
+F
+
+MIL-I-IDBK-217F
+
+APPENDIX
+
+A:
+
+PARTS
+
+COUNT
+
+RELIABILITY
+
+PREDICTION
+
+Parts Count Reliablllty Predlctlon - This prediction method is applicable during bid proposal
+and early design phases when insufficient information is available to use the part stress analysis models
+shown in the main body of this Handbook. The information needed to apply the method is (1) generic part
+types (including complexity for microcircuits) and quantities, (2) part quality levels, and (3) equipment
+environment. The equipment failure rate is obtained by looking up a generic failure rate in one of the
+following tables, multiplying it by a quality factor, and then summing it with failure rates obtained for other
+components in the equipment. The general mathematical expression for equipment failure rate with this
+met hod is:
+i=n
+‘EQUIP
+
+=
+
+Z
+
+i=l
+
+‘i
+
+@g@i
+
+Equation 1
+
+for a given equipment environment where:
+
+=
+
+Total equipment failure rate (Failures/1 06 Hours)
+
+=
+
+Generic failure rate for the i ‘h generic part (Failures/1 06 Hours)
+
+7tQ
+
+=
+
+Quality factor for the i ‘h generic part
+
+Ni
+
+=
+
+Quantity of i ‘h generic part
+
+n
+
+=
+
+Number of different generic part categories in the equipment
+
+~EQulP
+
+‘9
+
+Equation 1 applies if the entire equipment is being used in one environment. If the equipment
+comprises several units operating In different environments (such as avionics systems with units in
+airborne inhab~ed (Al) and uninhabited (AU) environments), tmn Equat~n 1 shou~ ~ aPPlied to the
+potiions of the equipment in each environment. These “environment-equipment” failure rates should be
+added to determine total equipment failure rate. Environmental symbols are defined in Section 3.
+The quaMy factors to be used with each part type are shown with the applicable ~ tables and are not
+necessarily the same values that are used in the Part Stress Analysis. M“crocircuits”have an additional
+rnuttip~ing factor, ~L, which aOCOuntsfor the matudty of the manUfaCt@ng process. For devices in
+productiontwo years or more, no modif’mtbn Is needed. For those in production less than two years,
+h
+should be multipliedby the appropriate XL faotor (See page A-4).
+It shouldbe noted that no generic failure rates are shown for hybrid microcimuits. Each hybrid is a fairly
+unique device. Since none of these devices have been standardized, their complexity cannot be
+determined from their name or function. Identically or similarfy named hybrids can have a wide range of
+complexitythat thwarts categorization for pufposes of this prediction method. If hybrids are anticipated for
+a design, their use and construction should be thoroughly investigated on an individual basis with
+application of the prediction model in Section 5.
+The failure rates shown in this Appendix were calculated by assigning model default values to the
+failure rate models of Section 5 through 23. The specific defautt values used for the model parameters are
+shown with the kg Tables for microcircuits. Defautt parameters for all other part classes are summarized in
+
+the tables stafling on Page A-12. For parts with characteristics which differ significantly fmm the assumed
+defaults, or parts used in large quantities, the underlying models in the main body of this Handbook can
+be used.
+
+A-1
+
+MIL-HDBK-217F
+
+NOTICE 2
+
+APPENDIX
+
+PARTS
+
+A:
+
+COUNT
+i
+
+..mtw
+
+1
+
+I
+
+i
+
+1
+
+-wow
+.
+.-mri
+
+Nmm
+
+r-.-04
+II
+
+OJ
+
+re-mo
+.
+
+0--’=
+
+.
+
+I
+
+.
+
+In
+
+c
+9
+
+ZS8
+
+1%
+
+.
+
+in
+
+In
+
+*
+
+Lr
+
+u’
+
+m
+
+IA?
+
+m
+
+*
+
+Supersedes
+
+A-2
+— ———
+
+.
+
+page A-20f
+
+Notice 1
+
+MIL-HDBK-217F
+NOTICE 2
+APPENDIX
+
+.efwm
+. . . .
+
+Cwlo Qo
+.P.r)
+. .
+. .
+
+QNN
+*W*SJ
+
+or-mm
+
+to
+-Nsrl
+
+0000
+
+0000
+
+0000
+
+-mmo
+
+FF)mo
+-.-N
+.,.
+
+.
+
+9-..04
+.,.
+
+mmmm
+.
+
+000.
+
+.-mm
+. . .
+
+A:
+
+PARTS
+
+COUNT
+
+o--m
+
+-Wol
+r-mm%
+000.
+
+Omoe
+.Pmm
+.
+.
+
+.
+
+.
+
+Inulo)c
+*WOO
+Oooc
+
+mmea
+m@@o
+Oooc
+
+CVWF)N
+Cwmlou)
+
+mcwea
+-NNC
+
+0000
+
+000<
+
+of-Qe
+F-WU
+Oooc
+
+.
+
+N
+
+m
+
+I
+
+u
+
+N
+
+N
+
+n
+
+Lo
+
+Lc
+
+Supersedes
+
+page A-3 of Notice 1
+
+I
+
+(
+
+A-3
+
+MIL-HDBK-217F
+
+APPENDIX
+
+A:
+
+PARTS
+
+COUNT
+
+c?’
+0
+
+e-i
+
+P
+
+Ii
+
+w
+
+I
+
+I
+
+9“””
+-GJR9416
+
+k
+
+OQ!QCNO
+
+w-
+
+.
+
+.
+
+.
+
+0
+
+m
+
+u)
+W
+
+0
+
+64
+N
+
+>
+
+—
+
+A-4
+
+MIL-HDBK-217F
+NOTICE 2
+APPENDIX
+
+A:
+
+PARTS
+
+COUNT
+
+1
+
+I
+
+.
+
+:
+
+9
+
+:
+I
+
+I
+
+A-5
+Supersedes
+
+page A-5 of Notice 1
+----
+
+MIL-HDBK-217F
+NOTICE
+
+APPENDIX
+
+PARTS
+
+A:
+
+1
+
+COUNT
+I
+
+I
+
+—
+
+1
+
+>
+9
+
+n
+
+I
+
+?4
+
+m
+z!
+0
+o
+N
+
+o
+m
+
+,
+,
+
+,
+
+.
+r
+
+rU)
+0
+0
+
+c
+c
+
+in
+
+0<
+m
+
+o
+
+m
+
+o
+i
+
+o
+
+o
+
+4
+
+r)
+
+a
+
+t
+
+w
+m.
+
+4
+
+0
+
+$
+8
+
+Iii
+
+i
+u
+c
+
+c<
+
+c
+*
+
+3=
+
+I
+
+0“
+
+r+
+
+0
+
+m
+0
+
+e
+0,
+rOA
+0.
+
+“l-Fl-
+
+1
+
+2!
+
+II
+
+Ill
+
+z
+
+2!
+?!
+
+persedes
+
+eviSIO!l
+
+MIL-HDBK-217F
+NOTICE 2
+APPENDIX
+
+A:
+
+PARTS COUNT
+1
+
+I
+
+1
+
+,<
+
+I
+
+Ln
+
+c
+r
+
+0
+
+8
+(
+1
+
+Q
+
+(
+
+L
+
+I
+
+-.
+-mm
+
+Supersedes
+
+A-7
+
+page A-7 of Notice 1
+1
+
+I
+
+I
+
+MIL-HDBK-217F
+NOTICE 2
+APPENDIX
+
+A:
+
+PARTS
+
+COUNT
+
+I
+
+r
+
+U7
+
+m
+
+o
+m
+
+?
+
+m
+
+1-
+
+8
+
+g
+
+m
+
+Q
+e’+
+
+m
+
+m
+
+g)
+
+N
+
+s
+o
+
+Q
+
+!!M.
+.
+
+?-
+
+mf
+9,
+
+.*-S
+. .
+
+-w
+
+6
+
+Ji
+w
+L
+
+A-8
+
+Supersedes
+
+page A-80f
+
+Nottce 1
+
+MIL-HDBK-217F
+NOTICE 2
+APPENDIX
+
+A:
+
+PARTS
+
+COUNT
+
+. . . . .
+
+f--
+
+q.-
+
+ul-rQ”ti
+
+o~elyo
+-CM-N.
+
+.
+i.
+
+1
+i?
+(i
+G
+
+.
+
+-----------
+
+Supersedes
+
+.(-UCU
+-----
+
+page A-90f
+
+Revision
+
+F
+
+----
+
+--
+
+mmmmr)mm
+----
+
+---
+
+N
+
+-----
+
+- - N
+
+U-imbf)inmbnlr)m
+-------
+
+A-9
+
+MIL-HDBK-217F
+NOTICE 2
+APPENDIX
+
+A:
+r
+
+PARTS
+.
+
+.
+
+.
+
+0
+*
+
+m
+
+m=
+A-IO
+
+.m
+
+I
+
+m“
+
+I
+
+11 1
+r
+
+r
+
+Supersedes
+
+page A-10 of Notice 1
+
+MIL-HDBK-217F
+NOTICE 2
+APPENDIX
+
+Supersedes
+..
+
+..
+
+-.
+
+page
+
+A-1 1 of Notice 1
+
+A:
+
+PARTS
+
+COUNT
+
+A-II
+
+MIL-HDBK-217F
+NOTICE 2
+APPENDIX
+
+0
+.
+~
+
+PARTS
+
+A:
+
+4
+
+COUNT
+
+I
+I
+
+u
+II
+
+—
+.
+
+.--a
+
+0
+----
+
+0.
+
+0.
+
+0.0.
+
+--
+
+0.
+
+0.
+
+r-
+
+00
+. .
+
+0000
+. . . .
+
+b.
+
+.
+
+0.
+T-
+
+VIA
+-- -u t
+L
+tt{
+LLI.L
+
+3“30
+u
+
+0
+m
+
+A-12
+
+Supersedes
+
+page A-120f
+
+Notice I
+
+MIL-HDBK-217F
+NOTICE 1
+APPENDIX
+
+Supersedes
+
+page A-1 3 of Rewsion F
+
+A:
+
+PARTS
+
+COUNT
+
+A-13
+
+MIL-HDBK-217F
+NOTICE 2
+
+APPENDIX
+
+C:
+
+26.
+
+‘VHSIC Impact on System Reliability,” RADC-TR-88-1 3, AD B122629.
+
+27.
+
+‘Reliability Assessment of Surface Mount Technology,’
+
+28.
+
+‘Reliability
+
+Prediction
+
+Models
+
+for Discrete
+
+RADC-TR-88-72,
+
+Semiconductor
+
+Devices,”
+
+BIBL1OGRAPHY
+
+AD A193759.
+RADC-TR-88-97,
+
+AD
+
+A200529.
+This study developed new failure rate prediction models for GaAs Power FETS, Transient
+Suppressor Diodes, infrared LEDs, Diode Array Displays and Current Regulator Diodes.
+
+29.
+
+“Impact
+
+of Fiber
+
+Optics
+
+on System
+
+Reliability
+
+and Maintainability,”
+
+AD
+
+RADC-TR-88-124,
+
+A201946.
+30.
+
+‘Vl+SIC/Vl-tSIC
+
+Like Reliability Prediction
+
+Modeling,” RADC-TR-89-1
+
+71, AD AZ 4601.
+
+This study provides the basis for the VHSIC model appearing in MIL-HDBK-217F,
+5.
+31.
+
+‘Reliability
+
+Assessment
+
+Using Finite Element Techniques,” RADC-TR-89-281,
+
+Section
+
+AD MI 6907.
+
+This study addresses surface mounted solder interconnections
+and microwire board’s platedThe report gives a detailed account of the factors to be
+through-hole
+(PTH) connections.
+
+considered when performing an FEA and the procedure used to transfer the results to a
+reliability figure-of-merit.
+32.
+
+“Reliability Analysis/Assessment
+
+of Advanced Technologies,”
+
+RADC-TR-90-72,
+
+ADA 223647.
+
+This study provides the basis for the revised microcircuit models (except VHSIC and Bubble
+IUemories) appearing in MIL-HDBK-217F, Section 5.
+33.
+
+‘Improved Reliability Prediction Model for Field-Access Magnetic Bubble Devices,” AFWAL-TR81-1052.
+
+34.
+
+“Reliability/Design Thermal Applications,”
+
+35.
+
+“NASA Parts Application Handbook,” MIL-HDBK-978-B (NASA).
+This handbook is a five volume series which discusses a full range of electrical, electronic and
+electromechanical component parts. It provides extensive detailed technical information for
+each component
+derating,
+failure
+
+MIL-HDBK-251.
+
+part such as: definitions,
+screening
+mechanisms,
+
+construction
+
+details,
+
+techniques,
+
+standard
+
+operating
+
+parts,
+
+characteristics,
+
+environmental
+
+considerations, and circuit application.
+36.
+
+“Nonelectronic Parts Reliability Data 1991 ,“ NPRD-91.
+This report contains field failure rate data on a variety of electrical,
+mechanical,
+electromechanical and microwave parts and assemblies (1400 different pafi types). It is
+available from the Reliability Analysis Center, PO Box 4700, Rome, NY 13440-8200,
+Phone: (31 5) 337-0900.
+
+37.
+
+“Reliability Assessment of Critical Electronic Components,” RL-TR-92-1 97, AD-A256996.
+This study is the basis for new or revised failure rate models in MIL-HDBK-217F, Notice 2,
+resistors, capacitors, transformers, coils, motors,
+for the following device categories:
+relays, switches, circuit breakers, connectors, printed circuit boards and surface mount
+technology.
+
+Supersedes
+
+page C-3 of Revision
+
+F
+
+c-3
+
+‘
+
+MI L-HDBK-217F
+NOTICE 2
+
+APPENDIX
+
+C:
+
+BIBLIOGRAPHY
+
+38. ‘Handbook of Reliability Prediction Procedures for Mechanical Equipment,” NSWC-94/L07.
+This Handbook includes a methodology for nineteen basic mechanical components for
+evaluating a design for R&M that considers the material properties, operating environment
+
+and critical failure modes. It is available from the Carderock Division, Naval Surface Warfare
+Center, Bethesda, MD 20084-5000, Phone @Ol ) 227-1694.
+
+Custodians:
+Army - CR
+Navy - EC
+Air Force -17
+
+Preparing Activity:
+Air Force -17
+Pro)ect No. RELI-0074
+
+Review Activities:
+Army - Ml, AV, ER
+Navy - St-i, AS, OS
+Air Force -11, 13, 15, 19, 99
+User Activities:
+Army - AT, ME, GL
+
+Navy - CG, MC, YD, TO
+Air Force -85
+
+c-4
+
+Supersedes
+
+page C-4 of Revision
+
+F
+
+STANDARDIZATION
+DOCUMENT
+
+NAME OF SU8MlTflNG
+
+Reliability
+
+hJotlce 2
+
+4.
+
+ORGANRATION
+
+Pred~ctlon of Electronic
+
+TYPE OF ORGANKATtON
+
+n
+ADDRESS
+
+(Street, Ory, State, 21P Code)
+
+❑
+
+Ib
+
+Recommended
+
+@Padfy)
+
+c.
+
+Raaaon/l?a@wle
+forRacommetition:
+
+Wording
+
+6.
+
+REMARKS
+
+7a.
+
+NAME OF SUBM1’lTER
+
+c.
+
+MAILINQ ADDRESS
+
+I
+
+nuawbw9
+
+,
+
+- -.
+
+‘ b.
+
+(fJiSf,
+FIrsf,
+Ml) - @hOfld
+
+(Streef, Ctfy, Sfafe, ZIP Code) - Optional
+
+DD 82‘“”M
+MAR 1426
+l-*4a
+
+OTHER
+
+PROBLEM AREAS
+a
+Pamgraph Number and Wording
+
+.
+
+1
+
+USER
+
+MANUFACTURER
+
+c1
+1.
+
+Equipment
+
+(Marx one)
+
+VENDOR
+
+n
+
+b.
+
+PROPOSAL
+
+DOCUMENT TfTLE
+
+NUMBER
+
+MIL-HDBK-217F,
+●.
+
+DOCUMENT
+IMPROVEMENT
+(See /nstrucfion -Reveme Side)
+
+.-—
+
+----
+
+WORK TELEPHONE NUMBER
+(hciude Ama Code]. 00 tonal
+
+8.
+
+DATE Of SU6MtSS10f4
+
+----
+
+---
+
+(YYMkVDO)
+
+------
+
+-—.
+I
+
+—.
+
+INSTRUCTION S In a comlnumg eftorf to make our 8tMIdarctMtton
+documents
+better, the 000 Provtdes thts form for u6e in 6ubmlttkyj
+comments
+Thw hxrn may be
+and sug ostlons tor Irnprrwemrmts
+All users
+of m!lltaw stanctardlzallon
+documents
+are Wted lo provloe surJgestlons
+along me t(nos md(catod IaDed along the 100se edge (DO NOT STAPLE, I dnd Molded In bIocK 5, be as spectflc as poss!blo
+de(ache 2 IOIOW
+about particular problem areas such as wofdln
+wtvctI required Inlerprelahon, was 100 ngla, resmctwe, loose, amtxcyous. or was mcompaoble,
+Enter m block 6 any remarks nol relarea to a spectfic paragraph of the
+wordm changes winch wou5 alleviate the problems
+and give Proposed
+were recewed
+If block 7 IS II ! ed out, an acknowledgement WIIIbe mahd 10 you MM! 30 days 10 let you know that your COmmenlS
+document
+and are tremg cons(aerea
+NOTE.
+This form may not be used to request copies
+Comments
+6utrmltted
+requirements on current contracts
+referenced
+
+document(s)
+
+or ?0 amend
+
+(XWW6C’IMI
+
+of documents, nor
+on
+
+thh
+
+fofm
+
+do
+
+to request
+
+not
+
+con611tute
+
+wawers, dev!atlons. or c~anf!cat~on of specil~catlon
+or Imply aumotiza!lon to waive anyPortion
+of the
+
+requirements
+
+(Fold along this line)
+
+(Fold a/ong fhk he)
+
+DEPARTMENT OF THE AIR FORCE
+RIJERSS
+Griffiss AFB, NY 13441-5700
+
+OFFICIAL BUSINESS
+PENAllY
+
+FOR PRIVATE USE S300
+
+NO POSTAGE
+
+111111
+*BUSINESS REPLY MAIL n
+,~,
+
+NECESSARY
+IF MAILED
+iN THE
+UNITED STATES
+
+PERMIT NO. 73236
+WASHINGTON D.C.
+FIRST CLASS
+*
+POSTAG E WLL BE P No BY THE DEP ARTMENT OF THk AIR FORCE
+
+Rome Laboratory/ERSR
+AlTN: Seymour F. Morris
+525 Brooks Rd.
+Griffiss AFB, NY 13441-4505
+.
+
+—
+
+

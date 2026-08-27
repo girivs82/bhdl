@@ -1,0 +1,32 @@
+import { BuckStage, LdoStage, BuckExtStage, PreregStage, BoostStage } from "bhdl-stdlib/power/stages.bhdl";
+entity PdnSoc() {
+    pin 1: power in;
+    pin GND: ground;
+    domain VDD pins="1" v=3.3V i_nom=0.5A i_max=0.8A
+        zmask="100kHz:200m 10MHz:200m" pdn_r=1m pdn_l=1n
+        source="FIXTURE — autopdn probe";
+}
+board AutoPdn {
+    power VIN12 = 12V @ 3A;
+    port V33: power out = 3.3V @ 1A;
+    ground GND;
+    soc: PdnSoc();
+    @V33 -> soc.1; soc.GND -> @GND;
+
+
+
+    // ── BEGIN GENERATED POWER TREE (bhdl powertree --emit — regenerate, never hand-edit) ──
+    // option "max-efficiency" — bucks everywhere; noise rails get minimal-headroom intermediates + post-LDOs
+    // assumptions are CONSERVATIVE ESTIMATES (stated per stage); the real part swapped in must MEET OR BEAT them
+
+    u_v33: BuckStage(vout=3.3V, i_max=0.8A, vin=12V);
+    @VIN12 -> u_v33.VIN;
+    u_v33.VOUT -> @V33;
+    u_v33.GND -> @GND;
+    attribute u_v33.powertree_eff_assumed_pct = "85.0";
+    attribute u_v33.powertree_noise_assumed_uvrms = "500";
+    attribute u_v33.powertree_rating_required_a = "1.000";
+    attribute u_v33.powertree_basis = "estimate: conservative buck band at 0.50A; ratio 3.6:1 penalty 0pt";
+    attribute u_v33.powertree_serves = "soc.VDD";
+    // ── END GENERATED POWER TREE ──
+}

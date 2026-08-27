@@ -107,3 +107,51 @@ board BigBoard {
     // and the search never exceeded the clamp (no runaway bulk value)
     assert!(!text.contains("1408µF") && !text.contains("2816µF"), "search escaped the envelope:\n{text}");
 }
+
+/// Shortlist bulk (§7.5 addendum 4): with a project `decap_lib`, the
+/// fixpoint's bulk is STACKED FROM the characterized library — every
+/// capacitor on the rail becomes a shortlisted, orderable, curve-aware
+/// part — instead of a bare farad value.
+#[test]
+fn emit_bulk_from_characterized_shortlist() {
+    let root = workspace_root();
+    let dir = std::env::temp_dir().join("bhdl_emit_shortlist_bulk_test");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let board = format!(r#"
+board ShortlistBulk {{
+    requirements {{ decap_lib: "{}/tests/circuits/realistic/decap_lib_fixture.bhdl"; }}
+    power VBAT = 3.6V @ 10A;
+    port V50: power out = 5V @ 5A;
+    ground GND;
+    soc: SlSoc();
+    @V50 -> soc.1; soc.GND -> @GND;
+}}
+entity SlSoc() {{
+    pin 1: power in;
+    pin GND: ground;
+    domain VDD_MAIN pins="1" v=5V i_nom=200mA i_max=1A step=4.5A rise=10us dur=200us droop_max=3% source="FIXTURE — shortlist bulk probe";
+}}
+"#, root.display());
+    let f = dir.join("sl.bhdl");
+    std::fs::write(&f, board).unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_bhdl-cli"));
+    cmd.current_dir(&dir)
+        .env_remove("BHDL_LIB_PATH")
+        .args(["-I", root.to_str().unwrap()])
+        .arg(&f)
+        .args(["powertree", "--input", "VBAT", "--emit", "1"]);
+    let out = cmd.output().expect("spawn bhdl-cli");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(text.contains("bulk source: shortlist part DecapBulk100u"), "shortlist not used:\n{}", text.lines().rev().take(15).collect::<Vec<_>>().join("\n"));
+    let emitted = std::fs::read_to_string(&f).unwrap();
+    assert!(emitted.contains("seqbulk_v50_1: DecapBulk100u()"), "no stacked library bulk:\n{emitted}");
+    assert!(emitted.contains("import { DecapBulk100u }"), "library import missing");
+    // the emitted bank passed the stability envelope + timeline — no
+    // STABILITY finding printed
+    assert!(!text.contains("STABILITY:"), "{}", text.lines().rev().take(15).collect::<Vec<_>>().join("\n"));
+}

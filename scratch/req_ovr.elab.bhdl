@@ -1,0 +1,78 @@
+// ELABORATED bhdl — generated from req_ovr.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// synthesized imports: expansion children reference these
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Diode } from "bhdl-stdlib/passives/diode.bhdl";
+import { Ind } from "bhdl-stdlib/passives/inductor.bhdl";
+import { TPS54331 } from "bhdl-stdlib/power/tps54331.bhdl";
+
+import { BuckStage } from "bhdl-stdlib/power/stages.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Buck_TPS54331 } from "bhdl-stdlib/power/tps54331.bhdl";
+
+board ReqProbe {
+    power V5 = 5V @ 2A;
+    power VIN = 12V @ 3A;
+    ground GND;
+
+    R_LOAD: Res(2.5Ω, 5%, 10W);
+    u1: Buck_TPS54331(5V, 12V, 2A, 570kHz);
+    attribute u1.expansion_applied = "true";
+    attribute u1.powertree_rating_required_a = "2.5000";
+    attribute u1.stage_binding = "override";
+    attribute u1.stage_bound = "Buck_TPS54331";
+    attribute u1.stage_requirement = "vout=5V, i_max=2A, vin=12V";
+    attribute u1.stage_trait = "BuckStage";
+    // WARNING: param 'value' has no exported attribute and no default — round-trip may differ
+    u1_C_boot: Cap();
+    attribute u1_C_boot.composed_parent = "u1";
+    attribute u1_C_boot.composed_role = "series";
+    // WARNING: param 'value' has no exported attribute and no default — round-trip may differ
+    u1_C_in: Cap();
+    attribute u1_C_in.composed_parent = "u1";
+    attribute u1_C_in.composed_role = "shunt";
+    // WARNING: param 'value' has no exported attribute and no default — round-trip may differ
+    u1_C_out: Cap();
+    attribute u1_C_out.composed_parent = "u1";
+    attribute u1_C_out.composed_role = "shunt";
+    u1_D_catch: Diode(0.7V);
+    attribute u1_D_catch.composed_parent = "u1";
+    attribute u1_D_catch.composed_role = "shunt";
+    // WARNING: param 'value' has no exported attribute and no default — round-trip may differ
+    u1_L_out: Ind();
+    attribute u1_L_out.composed_parent = "u1";
+    attribute u1_L_out.composed_role = "series";
+    u1_R_bot: Res(10kΩ, 1%, 0.25W);
+    attribute u1_R_bot.composed_parent = "u1";
+    attribute u1_R_bot.composed_role = "shunt";
+    u1_R_top: Res(52500.000, 1%, 0.25W);
+    attribute u1_R_top.composed_parent = "u1";
+    attribute u1_R_top.composed_role = "series";
+    u1_u: TPS54331();
+    attribute u1_u.composed_parent = "u1";
+    attribute u1_u.composed_role = "shunt";
+    R_LOAD.2 -> @GND;
+    u1.GND -> @GND;
+    u1_C_in.2 -> @GND;
+    u1_C_out.2 -> @GND;
+    u1_D_catch.A -> @GND;
+    u1_R_bot.2 -> @GND;
+    u1_u.GND -> @GND;
+    @V5 -> R_LOAD.1;
+    @VIN -> u1.VIN;
+    @VIN -> u1_C_in.1;
+    @VIN -> u1_u.VIN;
+    u1.EN -> u1_u.EN;  // net u1_EN
+    u1.VOUT -> u1_C_out.1;  // net u1_VOUT
+    u1.VOUT -> u1_L_out.2;  // net u1_VOUT
+    u1.VOUT -> u1_R_top.1;  // net u1_VOUT
+    u1_R_bot.1 -> u1_R_top.2;  // net u1_auto_13
+    u1_R_bot.1 -> u1_u.FB;  // net u1_auto_13
+    u1_C_boot.1 -> u1_u.BOOT;  // net u1_auto_16
+    u1_C_boot.2 -> u1_D_catch.K;  // net u1_auto_6
+    u1_C_boot.2 -> u1_L_out.1;  // net u1_auto_6
+    u1_C_boot.2 -> u1_u.SW;  // net u1_auto_6
+}

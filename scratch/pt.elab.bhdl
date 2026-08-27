@@ -1,0 +1,152 @@
+// ELABORATED bhdl — generated from pt.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// synthesized imports: expansion children reference these
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Diode } from "bhdl-stdlib/passives/diode.bhdl";
+import { Ind } from "bhdl-stdlib/passives/inductor.bhdl";
+import { TPS54331 } from "bhdl-stdlib/power/tps54331.bhdl";
+
+// bhdl-sweep: skip — powertree-harvest fixture, not a layout target.
+// FUNCTION-FIRST partial board: parts instantiated and signal-wired,
+// rails declared but UNDRIVEN — exactly the state the power tree is
+// designed from. `bhdl-cli ... powertree` harvests the loads below;
+// ERC028's undriven-rail findings are the same worklist. All domain
+// numbers are FIXTURE values standing in for datasheet data.
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { BuckStage, LdoStage } from "bhdl-stdlib/power/stages.bhdl";
+import { GenericBuckExt, GenericPrereg } from "bhdl-stdlib/power/generic_regulators.bhdl";
+import { Buck_TPS54331 } from "bhdl-stdlib/power/tps54331.bhdl";
+import { GenericBuck } from "bhdl-stdlib/power/generic_regulators.bhdl";
+import { GenericLdo } from "bhdl-stdlib/power/generic_regulators.bhdl";
+
+entity SocCore() {
+    pin 1: power in;
+    pin 2: signal inout;
+    pin 3: ground;
+    pin 4: power in;
+    attribute component_class = "ic";
+    attribute kicad_symbol = "Device:U";
+    domain VDD_CORE pins="1" v=1.0V tol=3% i_nom=2A i_max=4A
+        source="FIXTURE — stands in for NDA vendor data";
+    domain VDD_IO pins="4" v=3.3V tol=5% i_nom=0.4A i_max=0.6A
+        source="FIXTURE — stands in for NDA vendor data";
+}
+
+// Analog part with a rail NOISE target — the input that drives
+// buck-vs-LDO / post-regulation in the tree calculator.
+entity PllBlock() {
+    pin 1: power in;
+    pin 2: ground;
+    attribute component_class = "ic";
+    attribute kicad_symbol = "Device:U";
+    domain VDDA pins="1" v=1.8V tol=2% i_nom=50mA i_max=80mA noise=100uV
+        source="FIXTURE — stands in for NDA vendor data";
+}
+
+board PowertreeDemo {
+    power V1V0 = 1V;
+    power V1V8 = 1.8V;
+    power V3V3 = 3.3V;
+    power VIN = 12V @ 3A;
+    ground GND;
+
+    pll: PllBlock();
+    r_pull: Res(10kΩ, 5%, 0.25W);
+    soc: SocCore();
+    u_v1v0: GenericBuck(12V, 1V, 4A);
+    attribute u_v1v0.powertree_basis = "estimate: conservative buck band at 2.00A; ratio 12.0:1 penalty 4pt";
+    attribute u_v1v0.powertree_eff_assumed_pct = "84.0";
+    attribute u_v1v0.powertree_noise_assumed_uvrms = "500";
+    attribute u_v1v0.powertree_rating_required_a = "5.000";
+    attribute u_v1v0.powertree_serves = "soc.VDD_CORE";
+    attribute u_v1v0.stage_binding = "unresolved";
+    attribute u_v1v0.stage_bound = "";
+    attribute u_v1v0.stage_requirement = "vout=1V, i_max=4A, vin=12V";
+    attribute u_v1v0.stage_trait = "BuckStage";
+    u_v1v8: GenericLdo(3.3V, 1.8V, 0.08A);
+    attribute u_v1v8.powertree_basis = "physics: Vout/Vin";
+    attribute u_v1v8.powertree_eff_assumed_pct = "54.5";
+    attribute u_v1v8.powertree_noise_assumed_uvrms = "30";
+    attribute u_v1v8.powertree_rating_required_a = "0.100";
+    attribute u_v1v8.powertree_serves = "pll.VDDA";
+    attribute u_v1v8.stage_binding = "unresolved";
+    attribute u_v1v8.stage_bound = "";
+    attribute u_v1v8.stage_requirement = "vout=1.8V, i_max=0.08A, vin=3.3V, noise=30uV";
+    attribute u_v1v8.stage_trait = "LdoStage";
+    u_v3v3: Buck_TPS54331(3.3V, 12V, 0.68A, 570kHz);
+    attribute u_v3v3.expansion_applied = "true";
+    attribute u_v3v3.powertree_basis = "estimate: conservative buck band at 0.45A";
+    attribute u_v3v3.powertree_eff_assumed_pct = "85.0";
+    attribute u_v3v3.powertree_noise_assumed_uvrms = "500";
+    attribute u_v3v3.powertree_rating_required_a = "0.850";
+    attribute u_v3v3.powertree_serves = "soc.VDD_IO, V1V8";
+    attribute u_v3v3.stage_binding = "lock";
+    attribute u_v3v3.stage_bound = "Buck_TPS54331";
+    attribute u_v3v3.stage_requirement = "vout=3.3V, i_max=0.68A, vin=12V";
+    attribute u_v3v3.stage_trait = "BuckStage";
+    // WARNING: param 'value' has no exported attribute and no default — round-trip may differ
+    u_v3v3_C_boot: Cap();
+    attribute u_v3v3_C_boot.composed_parent = "u_v3v3";
+    attribute u_v3v3_C_boot.composed_role = "series";
+    // WARNING: param 'value' has no exported attribute and no default — round-trip may differ
+    u_v3v3_C_in: Cap();
+    attribute u_v3v3_C_in.composed_parent = "u_v3v3";
+    attribute u_v3v3_C_in.composed_role = "shunt";
+    // WARNING: param 'value' has no exported attribute and no default — round-trip may differ
+    u_v3v3_C_out: Cap();
+    attribute u_v3v3_C_out.composed_parent = "u_v3v3";
+    attribute u_v3v3_C_out.composed_role = "shunt";
+    u_v3v3_D_catch: Diode(0.7V);
+    attribute u_v3v3_D_catch.composed_parent = "u_v3v3";
+    attribute u_v3v3_D_catch.composed_role = "shunt";
+    // WARNING: param 'value' has no exported attribute and no default — round-trip may differ
+    u_v3v3_L_out: Ind();
+    attribute u_v3v3_L_out.composed_parent = "u_v3v3";
+    attribute u_v3v3_L_out.composed_role = "series";
+    u_v3v3_R_bot: Res(10kΩ, 1%, 0.25W);
+    attribute u_v3v3_R_bot.composed_parent = "u_v3v3";
+    attribute u_v3v3_R_bot.composed_role = "shunt";
+    u_v3v3_R_top: Res(31250.000, 1%, 0.25W);
+    attribute u_v3v3_R_top.composed_parent = "u_v3v3";
+    attribute u_v3v3_R_top.composed_role = "series";
+    u_v3v3_u: TPS54331();
+    attribute u_v3v3_u.composed_parent = "u_v3v3";
+    attribute u_v3v3_u.composed_role = "shunt";
+    pll.2 -> @GND;
+    soc.3 -> @GND;
+    u_v1v0.GND -> @GND;
+    u_v1v8.GND -> @GND;
+    u_v3v3.GND -> @GND;
+    u_v3v3_C_in.2 -> @GND;
+    u_v3v3_C_out.2 -> @GND;
+    u_v3v3_D_catch.A -> @GND;
+    u_v3v3_R_bot.2 -> @GND;
+    u_v3v3_u.GND -> @GND;
+    @V1V0 -> soc.1;
+    @V1V0 -> u_v1v0.VOUT;
+    @V1V8 -> pll.1;
+    @V1V8 -> r_pull.2;
+    @V1V8 -> u_v1v8.VOUT;
+    @V3V3 -> soc.4;
+    @V3V3 -> u_v1v8.VIN;
+    @V3V3 -> u_v3v3.VOUT;
+    @V3V3 -> u_v3v3_C_out.1;
+    @V3V3 -> u_v3v3_L_out.2;
+    @V3V3 -> u_v3v3_R_top.1;
+    @VIN -> u_v1v0.VIN;
+    @VIN -> u_v3v3.VIN;
+    @VIN -> u_v3v3_C_in.1;
+    @VIN -> u_v3v3_u.VIN;
+    r_pull.1 -> soc.2;  // net auto_soc_2
+    u_v3v3.EN -> u_v3v3_u.EN;  // net u_v3v3_EN
+    u_v3v3_R_bot.1 -> u_v3v3_R_top.2;  // net u_v3v3_auto_13
+    u_v3v3_R_bot.1 -> u_v3v3_u.FB;  // net u_v3v3_auto_13
+    u_v3v3_C_boot.1 -> u_v3v3_u.BOOT;  // net u_v3v3_auto_16
+    u_v3v3_C_boot.2 -> u_v3v3_D_catch.K;  // net u_v3v3_auto_6
+    u_v3v3_C_boot.2 -> u_v3v3_L_out.1;  // net u_v3v3_auto_6
+    u_v3v3_C_boot.2 -> u_v3v3_u.SW;  // net u_v3v3_auto_6
+}

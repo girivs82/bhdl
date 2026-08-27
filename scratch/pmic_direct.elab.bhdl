@@ -1,0 +1,72 @@
+// ELABORATED bhdl — generated from pmic_direct.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// synthesized imports: expansion children reference these
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Ind } from "bhdl-stdlib/passives/inductor.bhdl";
+import { TPS65217B } from "bhdl-stdlib/power/tps65217.bhdl";
+
+import { Pmic_TPS65217B } from "bhdl-stdlib/power/tps65217.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+board PmicDirect {
+    power V11 = 1.1V @ 0.9A;
+    power V18 = 1.8V @ 0.8A;
+    power V33 = 3.3V @ 0.08A;
+    power VSYS = 3.7V @ 5A;
+    ground GND;
+
+    R1: Res(2.25Ω, 5%, 2W);
+    R2: Res(1.25Ω, 5%, 2W);
+    R3: Res(42Ω, 5%, 1W);
+    pm: Pmic_TPS65217B();
+    attribute pm.expansion_applied = "true";
+    attribute pm.gated_pins = "VOUT_DCDC1,VOUT_DCDC2,VOUT_DCDC3,VOUT_LDO1,VOUT_LDO2,VOUT_LDO3,VOUT_LDO4";
+    pm_C_dc1: Cap(22µF, 50V);
+    attribute pm_C_dc1.composed_parent = "pm";
+    attribute pm_C_dc1.composed_role = "shunt";
+    pm_C_dc2: Cap(22µF, 50V);
+    attribute pm_C_dc2.composed_parent = "pm";
+    attribute pm_C_dc2.composed_role = "shunt";
+    pm_C_l2: Cap(2.2µF, 50V);
+    attribute pm_C_l2.composed_parent = "pm";
+    attribute pm_C_l2.composed_role = "shunt";
+    pm_L_dc1: Ind(2.2µH, 1.6A);
+    attribute pm_L_dc1.composed_parent = "pm";
+    attribute pm_L_dc1.composed_role = "series";
+    pm_L_dc2: Ind(2.2µH, 1.6A);
+    attribute pm_L_dc2.composed_parent = "pm";
+    attribute pm_L_dc2.composed_role = "series";
+    pm_u: TPS65217B();
+    attribute pm_u.composed_parent = "pm";
+    attribute pm_u.composed_role = "shunt";
+    R1.2 -> @GND;
+    R2.2 -> @GND;
+    R3.2 -> @GND;
+    pm.GND -> @GND;
+    pm_C_dc1.2 -> @GND;
+    pm_C_dc2.2 -> @GND;
+    pm_C_l2.2 -> @GND;
+    pm_u.GND -> @GND;
+    @V11 -> R2.1;
+    @V11 -> pm.VOUT_DCDC2;
+    @V11 -> pm_C_dc2.1;
+    @V11 -> pm_L_dc2.2;
+    @V11 -> pm_u.VDCDC2;
+    @V18 -> R1.1;
+    @V18 -> pm.VOUT_DCDC1;
+    @V18 -> pm_C_dc1.1;
+    @V18 -> pm_L_dc1.2;
+    @V18 -> pm_u.VDCDC1;
+    @V33 -> R3.1;
+    @V33 -> pm.VOUT_LDO2;
+    @V33 -> pm_C_l2.1;
+    @V33 -> pm_u.VLDO2;
+    @VSYS -> pm.VIN;
+    @VSYS -> pm_u.SYS;
+    pm.PWR_EN -> pm_u.PWR_EN;  // net pm_PWR_EN
+    pm_L_dc1.1 -> pm_u.L1;  // net pm_auto_4
+    pm_L_dc2.1 -> pm_u.L2;  // net pm_auto_9
+}

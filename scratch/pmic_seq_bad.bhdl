@@ -1,0 +1,28 @@
+import { BuckStage, LdoStage } from "bhdl-stdlib/power/stages.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+entity SeqSoc2() {
+    pin 1: power in;
+    pin 2: power in;
+    pin GND: ground;
+    domain VDD18 pins="1" v=1.8V i_nom=100mA after="VDD33" source="FIXTURE — strict gate probe";
+    domain VDD33 pins="2" v=3.3V i_nom=50mA source="FIXTURE — strict gate probe";
+}
+board PmicCommit {
+    power VSYS = 3.7V @ 5A;
+    port V18: power out = 1.8V @ 0.8A;
+    port V11: power out = 1.1V @ 0.9A;
+    port V33: power out = 3.3V @ 80mA;
+    ground GND;
+    @VSYS -> u1: BuckStage(vout=1.8V, i_max=0.8A, vin=3.7V).VIN;
+    u1.GND -> @GND; u1.VOUT -> @V18;
+    @VSYS -> u2: BuckStage(vout=1.1V, i_max=0.9A, vin=3.7V).VIN;
+    u2.GND -> @GND; u2.VOUT -> @V11;
+    @VSYS -> u3: LdoStage(vout=3.3V, i_max=80mA, vin=3.7V).VIN;
+    u3.GND -> @GND; u3.VOUT -> @V33;
+    @V18 -> R1: Res(2.25Ω, wattage=2W).1; R1.2 -> @GND;
+    @V11 -> R2: Res(1.25Ω, wattage=2W).1; R2.2 -> @GND;
+    @V33 -> R3: Res(42Ω, wattage=1W).1; R3.2 -> @GND;
+    soc: SeqSoc2();
+    @V18 -> soc.1; @V33 -> soc.2; soc.GND -> @GND;
+    resolve u1, u2, u3 = Pmic_TPS65217B;
+}

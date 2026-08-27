@@ -1,0 +1,552 @@
+{
+  "board": "FttiRc",
+  "mission": {
+    "ambient_c": 40.0,
+    "on_hours": null,
+    "cycles": null,
+    "environment": null,
+    "quality": null,
+    "profile": null,
+    "phases": [],
+    "time_basis": null,
+    "lifetime_h": 15000.0
+  },
+  "scopes": [
+    {
+      "path": "",
+      "entity": "FttiRc",
+      "ns": "brd",
+      "goals": [
+        {
+          "name": "SG_MID",
+          "path": "SG_MID",
+          "library_type": null,
+          "level": "AsilB",
+          "title": "mid node stays below its ceiling",
+          "id": "SG-RC-1",
+          "ftti": null,
+          "safe_state": null,
+          "effects": [
+            {
+              "name": "overvoltage",
+              "expr": "brd.r_bot.1>8V",
+              "severity": "S2",
+              "refs": [
+                "r_bot.1"
+              ]
+            }
+          ],
+          "refines": null
+        }
+      ],
+      "mechanisms": [
+        {
+          "instance": "r_m2",
+          "handle": "brd.r_m2",
+          "kind": "Psm",
+          "goal": "SG_MID",
+          "detects": [
+            "overvoltage"
+          ],
+          "protects": null,
+          "claimed_dc": 0.9,
+          "dc_source": "FIXTURE claim",
+          "interval": null,
+          "latency": "50us",
+          "detected_when": "brd.r_m2.1>4V",
+          "measured_dc": 1.0,
+          "measured_note": "2 dangerous fault(s), λ-weighted basis (equal mode split — mode fractions are unmeasured data)"
+        }
+      ],
+      "faults": [
+        {
+          "kind": "short",
+          "targets": [
+            "r_top.1",
+            "r_top.2"
+          ],
+          "expect": "SG_MID.overvoltage",
+          "detected_by": "r_m2",
+          "within": "500us",
+          "run": true,
+          "fired": [
+            "SG_MID.overvoltage"
+          ],
+          "expectation_met": true,
+          "note": "FTTI MEASURED: board path settles 0.2175ms after the fault (transient from the healthy operating point, step 0.0025ms — resolution = one step) + 0.0500ms declared chip-internal latency+interval = 0.2675ms total",
+          "timing_met": true
+        },
+        {
+          "kind": "open",
+          "targets": [
+            "r_bot"
+          ],
+          "expect": "SG_MID.overvoltage",
+          "detected_by": "r_m2",
+          "within": "100us",
+          "run": true,
+          "fired": [
+            "SG_MID.overvoltage"
+          ],
+          "expectation_met": true,
+          "note": "FTTI MEASURED: no detection predicate settles TRUE within 0.2000ms of the fault (transient)",
+          "timing_met": false
+        }
+      ],
+      "waivers": [],
+      "assumptions": [],
+      "metrics": {
+        "lambda_total_fit": 50.3883567314943,
+        "lambda_residual_fit": -0.0,
+        "lambda_latent_fit": 2.6357843675772274,
+        "unmeasured_faults": 0,
+        "spfm": 1.0,
+        "lfm": 0.9476906067482495,
+        "pmhf_fit": 0.00012153182635751009,
+        "pmhf_dual_fit": 0.00012153182635751009,
+        "target_level": "AsilB",
+        "targets": [
+          0.9,
+          0.6,
+          100.0
+        ],
+        "pass": true
+      }
+    }
+  ],
+  "parts": [
+    {
+      "instance": "c_f",
+      "type_name": "Cap",
+      "parent": null,
+      "data": {
+        "Handbook": {
+          "class": "cap_ceramic_chip",
+          "source": "MIL-HDBK-217F §10.11 ceramic chip (CDR model)",
+          "per": "MILHDBK217F",
+          "fit": 4.710929777588868,
+          "fit_basis": "λ=4.7 FIT = 1000·λb(0.00020)·π_CV(2.35@100000pF)·π_Q(10 lower)·π_E(1 GB) @ S=0.06, Ta=40°C per MILHDBK217F [MIL-HDBK-217F N2 §10.11 (CDR MIL-C-55681, 125°C-rated model), p.10-20]"
+        }
+      },
+      "domains": []
+    },
+    {
+      "instance": "r_bot",
+      "type_name": "Res",
+      "parent": null,
+      "data": {
+        "Handbook": {
+          "class": "res_fixed_film",
+          "source": "MIL-HDBK-217F §9.2 fixed film (RL/RLR model)",
+          "per": "MILHDBK217F",
+          "fit": 12.1965515378793,
+          "fit_basis": "λ=12.2 FIT = 1000·λb(0.00081)·π_R(1.0@1000Ω)·π_Q(15 lower)·π_E(1 GB) @ S=0.14, Ta=40°C per MILHDBK217F [MIL-HDBK-217F N2 §9.2 (RL MIL-R-22684 / RLR MIL-R-39017), p.9-3/9-4]"
+        }
+      },
+      "domains": []
+    },
+    {
+      "instance": "r_m1",
+      "type_name": "Res",
+      "parent": null,
+      "data": {
+        "Handbook": {
+          "class": "res_fixed_film",
+          "source": "MIL-HDBK-217F §9.2 fixed film (RL/RLR model)",
+          "per": "MILHDBK217F",
+          "fit": 10.54313747030891,
+          "fit_basis": "λ=10.5 FIT = 1000·λb(0.00070)·π_R(1.0@10000Ω)·π_Q(15 lower)·π_E(1 GB) @ S=0.00, Ta=40°C per MILHDBK217F [MIL-HDBK-217F N2 §9.2 (RL MIL-R-22684 / RLR MIL-R-39017), p.9-3/9-4]"
+        }
+      },
+      "domains": []
+    },
+    {
+      "instance": "r_m2",
+      "type_name": "Res",
+      "parent": null,
+      "data": {
+        "Handbook": {
+          "class": "res_fixed_film",
+          "source": "MIL-HDBK-217F §9.2 fixed film (RL/RLR model)",
+          "per": "MILHDBK217F",
+          "fit": 10.54313747030891,
+          "fit_basis": "λ=10.5 FIT = 1000·λb(0.00070)·π_R(1.0@10000Ω)·π_Q(15 lower)·π_E(1 GB) @ S=0.00, Ta=40°C per MILHDBK217F [MIL-HDBK-217F N2 §9.2 (RL MIL-R-22684 / RLR MIL-R-39017), p.9-3/9-4]"
+        }
+      },
+      "domains": []
+    },
+    {
+      "instance": "r_top",
+      "type_name": "Res",
+      "parent": null,
+      "data": {
+        "Handbook": {
+          "class": "res_fixed_film",
+          "source": "MIL-HDBK-217F §9.2 fixed film (RL/RLR model)",
+          "per": "MILHDBK217F",
+          "fit": 12.394600475408296,
+          "fit_basis": "λ=12.4 FIT = 1000·λb(0.00083)·π_R(1.0@1000Ω)·π_Q(15 lower)·π_E(1 GB) @ S=0.15, Ta=40°C per MILHDBK217F [MIL-HDBK-217F N2 §9.2 (RL MIL-R-22684 / RLR MIL-R-39017), p.9-3/9-4]"
+        }
+      },
+      "domains": []
+    }
+  ],
+  "universe": [
+    {
+      "scope": "",
+      "part": "c_f",
+      "mode": "short",
+      "targets": [
+        "c_f.1",
+        "c_f.2"
+      ],
+      "ran": true,
+      "fired": [],
+      "detected": [],
+      "false_alarm": false,
+      "latent": false,
+      "latent_exposed_fit": 0.0,
+      "weight_fit": 1.177732444397217,
+      "note": null
+    },
+    {
+      "scope": "",
+      "part": "c_f",
+      "mode": "open",
+      "targets": [
+        "c_f"
+      ],
+      "ran": true,
+      "fired": [],
+      "detected": [],
+      "false_alarm": false,
+      "latent": false,
+      "latent_exposed_fit": 0.0,
+      "weight_fit": 1.177732444397217,
+      "note": null
+    },
+    {
+      "scope": "",
+      "part": "c_f",
+      "mode": "drift_high",
+      "targets": [
+        "c_f",
+        "+0.1%"
+      ],
+      "ran": true,
+      "fired": [],
+      "detected": [],
+      "false_alarm": false,
+      "latent": false,
+      "latent_exposed_fit": 0.0,
+      "weight_fit": 1.177732444397217,
+      "note": "probes: ±0.1% (declared tolerance) and 0.5×/2× (FMEDA convention, not vendor data); λ = equal 4-way mode split"
+    },
+    {
+      "scope": "",
+      "part": "c_f",
+      "mode": "drift_low",
+      "targets": [
+        "c_f",
+        "-0.1%"
+      ],
+      "ran": true,
+      "fired": [],
+      "detected": [],
+      "false_alarm": false,
+      "latent": false,
+      "latent_exposed_fit": 0.0,
+      "weight_fit": 1.177732444397217,
+      "note": "probes: ±0.1% (declared tolerance) and 0.5×/2× (FMEDA convention, not vendor data); λ = equal 4-way mode split"
+    },
+    {
+      "scope": "",
+      "part": "r_bot",
+      "mode": "short",
+      "targets": [
+        "r_bot.1",
+        "r_bot.2"
+      ],
+      "ran": true,
+      "fired": [],
+      "detected": [],
+      "false_alarm": false,
+      "latent": false,
+      "latent_exposed_fit": 0.0,
+      "weight_fit": 3.049137884469825,
+      "note": null
+    },
+    {
+      "scope": "",
+      "part": "r_bot",
+      "mode": "open",
+      "targets": [
+        "r_bot"
+      ],
+      "ran": true,
+      "fired": [
+        "SG_MID.overvoltage"
+      ],
+      "detected": [
+        "brd.r_m2"
+      ],
+      "false_alarm": false,
+      "latent": false,
+      "latent_exposed_fit": 0.0,
+      "weight_fit": 3.049137884469825,
+      "note": null
+    },
+    {
+      "scope": "",
+      "part": "r_bot",
+      "mode": "drift_high",
+      "targets": [
+        "r_bot",
+        "+5%"
+      ],
+      "ran": true,
+      "fired": [],
+      "detected": [],
+      "false_alarm": false,
+      "latent": false,
+      "latent_exposed_fit": 0.0,
+      "weight_fit": 3.049137884469825,
+      "note": "probes: ±5% (declared tolerance) and 0.5×/2× (FMEDA convention, not vendor data); λ = equal 4-way mode split"
+    },
+    {
+      "scope": "",
+      "part": "r_bot",
+      "mode": "drift_low",
+      "targets": [
+        "r_bot",
+        "-5%"
+      ],
+      "ran": true,
+      "fired": [],
+      "detected": [],
+      "false_alarm": false,
+      "latent": false,
+      "latent_exposed_fit": 0.0,
+      "weight_fit": 3.049137884469825,
+      "note": "probes: ±5% (declared tolerance) and 0.5×/2× (FMEDA convention, not vendor data); λ = equal 4-way mode split"
+    },
+    {
+      "scope": "",
+      "part": "r_m1",
+      "mode": "short",
+      "targets": [
+        "r_m1.1",
+        "r_m1.2"
+      ],
+      "ran": true,
+      "fired": [],
+      "detected": [
+        "brd.r_m2"
+      ],
+      "false_alarm": true,
+      "latent": false,
+      "latent_exposed_fit": 0.0,
+      "weight_fit": 2.6357843675772274,
+      "note": null
+    },
+    {
+      "scope": "",
+      "part": "r_m1",
+      "mode": "open",
+      "targets": [
+        "r_m1"
+      ],
+      "ran": true,
+      "fired": [],
+      "detected": [],
+      "false_alarm": false,
+      "latent": false,
+      "latent_exposed_fit": 0.0,
+      "weight_fit": 2.6357843675772274,
+      "note": null
+    },
+    {
+      "scope": "",
+      "part": "r_m1",
+      "mode": "drift_high",
+      "targets": [
+        "r_m1",
+        "+5%"
+      ],
+      "ran": true,
+      "fired": [],
+      "detected": [],
+      "false_alarm": false,
+      "latent": false,
+      "latent_exposed_fit": 0.0,
+      "weight_fit": 2.6357843675772274,
+      "note": "probes: ±5% (declared tolerance) and 0.5×/2× (FMEDA convention, not vendor data); λ = equal 4-way mode split"
+    },
+    {
+      "scope": "",
+      "part": "r_m1",
+      "mode": "drift_low",
+      "targets": [
+        "r_m1",
+        "-5%"
+      ],
+      "ran": true,
+      "fired": [],
+      "detected": [],
+      "false_alarm": false,
+      "latent": false,
+      "latent_exposed_fit": 0.0,
+      "weight_fit": 2.6357843675772274,
+      "note": "probes: ±5% (declared tolerance) and 0.5×/2× (FMEDA convention, not vendor data); λ = equal 4-way mode split"
+    },
+    {
+      "scope": "",
+      "part": "r_m2",
+      "mode": "short",
+      "targets": [
+        "r_m2.1",
+        "r_m2.2"
+      ],
+      "ran": true,
+      "fired": [],
+      "detected": [],
+      "false_alarm": false,
+      "latent": true,
+      "latent_exposed_fit": 6.1477880033218995,
+      "weight_fit": 2.6357843675772274,
+      "note": "LATENT: with open(r_bot) also injected, the dangerous effect persists UNDETECTED"
+    },
+    {
+      "scope": "",
+      "part": "r_m2",
+      "mode": "open",
+      "targets": [
+        "r_m2"
+      ],
+      "ran": true,
+      "fired": [],
+      "detected": [
+        "brd.r_m2"
+      ],
+      "false_alarm": true,
+      "latent": false,
+      "latent_exposed_fit": 0.0,
+      "weight_fit": 2.6357843675772274,
+      "note": null
+    },
+    {
+      "scope": "",
+      "part": "r_m2",
+      "mode": "drift_high",
+      "targets": [
+        "r_m2",
+        "+5%"
+      ],
+      "ran": true,
+      "fired": [],
+      "detected": [],
+      "false_alarm": false,
+      "latent": false,
+      "latent_exposed_fit": 0.0,
+      "weight_fit": 2.6357843675772274,
+      "note": "probes: ±5% (declared tolerance) and 0.5×/2× (FMEDA convention, not vendor data); λ = equal 4-way mode split"
+    },
+    {
+      "scope": "",
+      "part": "r_m2",
+      "mode": "drift_low",
+      "targets": [
+        "r_m2",
+        "-5%"
+      ],
+      "ran": true,
+      "fired": [],
+      "detected": [],
+      "false_alarm": false,
+      "latent": false,
+      "latent_exposed_fit": 0.0,
+      "weight_fit": 2.6357843675772274,
+      "note": "probes: ±5% (declared tolerance) and 0.5×/2× (FMEDA convention, not vendor data); λ = equal 4-way mode split"
+    },
+    {
+      "scope": "",
+      "part": "r_top",
+      "mode": "short",
+      "targets": [
+        "r_top.1",
+        "r_top.2"
+      ],
+      "ran": true,
+      "fired": [
+        "SG_MID.overvoltage"
+      ],
+      "detected": [
+        "brd.r_m2"
+      ],
+      "false_alarm": false,
+      "latent": false,
+      "latent_exposed_fit": 0.0,
+      "weight_fit": 3.098650118852074,
+      "note": null
+    },
+    {
+      "scope": "",
+      "part": "r_top",
+      "mode": "open",
+      "targets": [
+        "r_top"
+      ],
+      "ran": true,
+      "fired": [],
+      "detected": [],
+      "false_alarm": false,
+      "latent": false,
+      "latent_exposed_fit": 0.0,
+      "weight_fit": 3.098650118852074,
+      "note": null
+    },
+    {
+      "scope": "",
+      "part": "r_top",
+      "mode": "drift_high",
+      "targets": [
+        "r_top",
+        "+5%"
+      ],
+      "ran": true,
+      "fired": [],
+      "detected": [],
+      "false_alarm": false,
+      "latent": false,
+      "latent_exposed_fit": 0.0,
+      "weight_fit": 3.098650118852074,
+      "note": "probes: ±5% (declared tolerance) and 0.5×/2× (FMEDA convention, not vendor data); λ = equal 4-way mode split"
+    },
+    {
+      "scope": "",
+      "part": "r_top",
+      "mode": "drift_low",
+      "targets": [
+        "r_top",
+        "-5%"
+      ],
+      "ran": true,
+      "fired": [],
+      "detected": [],
+      "false_alarm": false,
+      "latent": false,
+      "latent_exposed_fit": 0.0,
+      "weight_fit": 3.098650118852074,
+      "note": "probes: ±5% (declared tolerance) and 0.5×/2× (FMEDA convention, not vendor data); λ = equal 4-way mode split"
+    }
+  ],
+  "gaps": [
+    {
+      "class": "FaultUnrun",
+      "goal": "SG_MID.overvoltage",
+      "subject": "open(r_bot)",
+      "fix": "campaign ran: SG_MID.overvoltage fired and is detected, but the FTTI check FAILED — never detected or the mechanism's declared interval+latency exceeds within 100us"
+    }
+  ],
+  "errors": []
+}

@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "mappings": {
+    "C": {
+      "seqbulk_v50_1": "C3",
+      "seqbulk_v50_2": "C4",
+      "seqbulk_v50_3": "C5",
+      "seqbulk_v50_4": "C6",
+      "seqbulk_v50_5": "C7",
+      "seqbulk_v50_6": "C8",
+      "seqbulk_v50_7": "C9",
+      "seqbulk_v50_8": "C10",
+      "u_v50_C_in": "C1",
+      "u_v50_C_out": "C2"
+    },
+    "L": {
+      "u_v50_L_in": "L1"
+    },
+    "R": {
+      "u_v50_R_bot": "R1",
+      "u_v50_R_top": "R2"
+    },
+    "U": {
+      "soc": "U1",
+      "u_v50": "U2",
+      "u_v50_u": "U3"
+    }
+  }
+}

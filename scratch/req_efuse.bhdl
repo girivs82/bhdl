@@ -1,0 +1,11 @@
+import { PreregStage } from "bhdl-stdlib/power/stages.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+board EfuseProbe {
+    power VIN = 12V @ 2A;
+    port V_PROT: power out = 12V @ 1A;
+    ground GND;
+    @VIN -> fe: PreregStage(vout=12V, i_max=1A, vin=12V, ov_trip=30V, uv_trip=8V, reverse_polarity="true").VIN;
+    fe.GND -> @GND; fe.VOUT -> @V_PROT;
+    resolve fe = Efuse_TPS2660(r_ilim=16.5kΩ);
+    @V_PROT -> R_LOAD: Res(12Ω, wattage=20W).1; R_LOAD.2 -> @GND;
+}

@@ -1,0 +1,12 @@
+import { BuckStage, LdoStage } from "bhdl-stdlib/power/stages.bhdl";
+board FamilyBoard {
+    power VSYS = 3.7V @ 5A;
+    port V15: power out = 1.5V @ 0.8A;
+    port V18L: power out = 1.8V @ 300mA;
+    ground GND;
+    @VSYS -> u1: BuckStage(vout=1.5V, i_max=0.8A, vin=3.7V).VIN;
+    u1.GND -> @GND; u1.VOUT -> @V15;
+    @VSYS -> u2: LdoStage(vout=1.8V, i_max=300mA, vin=3.7V).VIN;
+    u2.GND -> @GND; u2.VOUT -> @V18L;
+    resolve u1, u2 = Pmic_TPS65217;
+}
