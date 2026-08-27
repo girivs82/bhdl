@@ -154,6 +154,20 @@ entity SlSoc() {{
     // the emitted bank passed the stability envelope + timeline — no
     // STABILITY finding printed
     assert!(!text.contains("STABILITY:"), "{}", text.lines().rev().take(15).collect::<Vec<_>>().join("\n"));
+    // §7.5 addendum 6: block-internal application caps are
+    // characterized from the SAME shortlist (smallest candidate ≥ the
+    // datasheet minimum), so the RESONANCE UNCHECKED note is CLOSED —
+    // both asserted, so the closure can never go vacuous
+    assert!(
+        text.contains("characterize u_v50_C_out") && text.contains("from the shortlist"),
+        "block cap not characterized from the shortlist:\n{}",
+        text.lines().filter(|l| l.contains("characterize")).collect::<Vec<_>>().join("\n")
+    );
+    assert!(
+        !text.contains("RESONANCE UNCHECKED"),
+        "resonance gap still open:\n{}",
+        text.lines().filter(|l| l.contains("RESONANCE")).collect::<Vec<_>>().join("\n")
+    );
 }
 
 /// N+1 redundancy knob (`requirements { pdn_redundancy: "n+1"; }`):

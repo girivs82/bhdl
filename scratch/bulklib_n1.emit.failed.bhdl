@@ -40,14 +40,5 @@ board BiBoard {
     
     // decap networks (auto: domains declaring Z(f) masks)
     decouple soc.VDD_MAIN from "./tests/circuits/realistic/decap_lib_fixture.bhdl";
-    
-    // bulk (sized by the power-up/interaction fixpoint — the sim is the sizing oracle)
-    @V50 -> seqbulk_v50_1: DecapBulk100u().1; seqbulk_v50_1.2 -> @GND;
-    @V50 -> seqbulk_v50_2: DecapBulk100u().1; seqbulk_v50_2.2 -> @GND;
-    @V50 -> seqbulk_v50_3: DecapBulk100u().1; seqbulk_v50_3.2 -> @GND;
-    @V50 -> seqbulk_v50_4: DecapBulk100u().1; seqbulk_v50_4.2 -> @GND;
-    @V50 -> seqbulk_v50_5: DecapBulk100u().1; seqbulk_v50_5.2 -> @GND;
-    @V50 -> seqbulk_v50_6: DecapBulk100u().1; seqbulk_v50_6.2 -> @GND;
-    @V50 -> seqbulk_v50_7: DecapBulk100u().1; seqbulk_v50_7.2 -> @GND;
     // ── END GENERATED POWER TREE ──
 }

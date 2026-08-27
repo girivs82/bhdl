@@ -861,6 +861,24 @@ impl NetlistGenerator {
         // selection loop sees a complete board. Infeasibility or a
         // failed margin verification is a HARD synthesis error.
         if let Some(ast) = ast {
+            // Phase 4.68: characterize block-internal generic power
+            // caps from the project shortlist (spec §7.5 addendum 6)
+            // BEFORE the decap sweep, so the sweep, the power-up
+            // engine, spice and the final sanity all see the part
+            // that will physically be placed instead of an ideal
+            // farad. Only runs when the project declares a
+            // `requirements { decap_lib: ... }` shortlist.
+            let src_text = ast.syntax().text().to_string();
+            if let Some(lib) = crate::powertree::project_decap_lib(&src_text) {
+                match crate::decap_synthesis::characterize_block_caps(&mut self.netlist, &lib) {
+                    Ok(notes) => {
+                        for n in notes {
+                            log::info!("{n}");
+                        }
+                    }
+                    Err(e) => return Err(anyhow::anyhow!("{e}")),
+                }
+            }
             let overrides = crate::model_evaluator::evaluate_model_overrides(
                 &self.netlist,
                 &analysis.model_recipes,

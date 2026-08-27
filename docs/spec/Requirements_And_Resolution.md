@@ -1163,3 +1163,25 @@ full-size caps (2C total, stated). Any other value of the key is
 unknown and IGNORED with a statement. The stated line
 (`pdn_redundancy: n+1 — …`) makes the report and the FMEDA agree on
 why the stack is one part larger than the sizing demands.
+
+**Block-internal caps from the shortlist (§7.5 addendum 6).** A
+design block's application circuit instantiates bare `Cap(<farads>)`
+children — the datasheet's required MINIMUM, with no ESR/ESL — so the
+decap verification swept them as IDEAL and the final sanity reported
+their anti-resonances RESONANCE UNCHECKED. With a project shortlist
+declared, the part that will physically be placed IS a shortlist
+part, so a characterization pass (Phase 4.68, before the decap sweep)
+substitutes, for every still-uncharacterized capacitor sitting
+rail↔ground on a POWER-class net, the smallest candidate meeting the
+declared minimum — stamping its value/ESR/ESL/dc_bias plus a
+`cap_resolved` provenance attribute. Every consumer — the decap
+sweep, the power-up engine, spice, the stability/resonance sanity —
+then sims the soldered part, and the resonance note closes because
+the caps ARE characterized, not because the check looked away.
+Signal-net caps (compensation, feed-forward, bootstrap, timing) are
+never touched: substituting upward there changes the loop, not the
+reservoir. A minimum no candidate meets stays uncharacterized with a
+stated gap naming the remedy (add a larger part to the shortlist).
+Values stamp as the library's pretty text — the emit round-trip gate
+compares attribute strings, and a raw float re-emerges from
+elaborated text re-unitized.

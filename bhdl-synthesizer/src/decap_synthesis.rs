@@ -293,6 +293,128 @@ fn load_library(lib_path: &str) -> Result<(Vec<Candidate>, Vec<String>), String>
     Ok((out, skipped))
 }
 
+/// Characterize BLOCK-INTERNAL generic power caps from the project's
+/// shortlist (spec §7.5 addendum 6). A design block's application
+/// circuit instantiates bare `Cap(<farads>)` children — the
+/// datasheet's REQUIRED MINIMUM, with no ESR/ESL — so the decap
+/// verification swept them as IDEAL and the final sanity reported
+/// their anti-resonances RESONANCE UNCHECKED. With a characterized
+/// shortlist declared (`requirements { decap_lib: ... }`), the part
+/// that will PHYSICALLY be placed is a shortlist part: this pass
+/// substitutes, for every still-uncharacterized capacitor sitting
+/// rail↔ground on a POWER-class net, the SMALLEST shortlist candidate
+/// meeting the declared minimum — stamping its value/esr/esl/dc_bias
+/// and a provenance attribute, so every consumer (decap sweep,
+/// power-up engine, spice, sanity) sims what will actually be
+/// soldered. Signal-net caps (compensation, feed-forward, bootstrap,
+/// timing) are NEVER touched — substituting upward there changes the
+/// loop, not the reservoir. A minimum no candidate meets stays
+/// uncharacterized, with a stated gap.
+pub fn characterize_block_caps(netlist: &mut Netlist, lib_path: &str) -> Result<Vec<String>, String> {
+    let (mut cands, _skipped) = load_library(lib_path)?;
+    cands.sort_by(|a, b| a.c_f.partial_cmp(&b.c_f).unwrap());
+    let mut pin_net: HashMap<(bhdl_netlist::types::InstanceId, String), NetId> = Default::default();
+    for pi in netlist.pin_instances.values() {
+        let (Some(net), Some(p)) = (pi.net, netlist.pins.get(pi.pin_def)) else { continue };
+        pin_net.insert((pi.instance, p.name.clone()), net);
+    }
+    // collect targets first (mutation below)
+    struct Target {
+        id: bhdl_netlist::types::InstanceId,
+        name: String,
+        c_min: f64,
+    }
+    let mut targets: Vec<Target> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
+    for (i, inst) in netlist.instances.iter() {
+        let module = netlist
+            .modules
+            .get(inst.definition)
+            .map(|m| m.name.clone())
+            .unwrap_or_default();
+        let is_cap = matches!(module.as_str(), "Cap" | "Capacitor")
+            || inst.attributes.contains_key("capacitance");
+        if !is_cap {
+            continue;
+        }
+        // already characterized (library parts, minted decaps) — skip
+        if inst.attributes.contains_key("esr") && inst.attributes.contains_key("esl") {
+            continue;
+        }
+        let Some(v) = inst
+            .attributes
+            .get("value")
+            .or_else(|| inst.attributes.get("capacitance"))
+            .and_then(|t| crate::stage_acceptance::parse_si(t))
+        else {
+            continue;
+        };
+        // one pin on GROUND, the other on a POWER-class net — the
+        // reservoir shape; anything else is a loop/timing element
+        let (Some(n1), Some(n2)) = (
+            pin_net.get(&(i, "1".to_string())),
+            pin_net.get(&(i, "2".to_string())),
+        ) else { continue };
+        let class = |n: NetId| netlist.nets.get(n).map(|x| x.net_class.clone());
+        let reservoir = [(n1, n2), (n2, n1)].iter().any(|(a, b)| {
+            matches!(class(**b), Some(NetClass::Ground))
+                && matches!(class(**a), Some(NetClass::Power { .. }))
+        });
+        if !reservoir {
+            continue;
+        }
+        targets.push(Target { id: i, name: inst.name.clone(), c_min: v });
+    }
+    for t in targets {
+        // the block's value is the datasheet's minimum requirement;
+        // the placed part is the smallest shortlist candidate meeting it
+        let Some(c) = cands.iter().find(|c| c.c_f >= t.c_min * (1.0 - 1e-6)) else {
+            notes.push(format!(
+                "characterize {}: no shortlist candidate in '{lib_path}' meets the {:.2}µF application minimum — stays uncharacterized (RESONANCE gap remains, stated; add a larger part to the shortlist)",
+                t.name,
+                t.c_min * 1e6
+            ));
+            continue;
+        };
+        let Some(inst) = netlist.instances.get_mut(t.id) else { continue };
+        // the PRETTY text for both keys: this is a stdlib Cap whose
+        // value flows through the normal unit-aware paths, and the
+        // emit round-trip gate compares attribute STRINGS — a raw
+        // float here re-emerges from elaborated text as "10µF" and
+        // fails the gate
+        inst.attributes.insert("value".into(), c.c_text.clone());
+        inst.attributes.insert("capacitance".into(), c.c_text.clone());
+        inst.attributes.insert("esr".into(), format!("{}", c.esr_ohm));
+        inst.attributes.insert("esl".into(), format!("{}", c.esl_h));
+        if !c.dc_bias.is_empty() {
+            inst.attributes.insert(
+                "dc_bias".into(),
+                c.dc_bias.iter().map(|(v, f)| format!("{v}V:{f}F")).collect::<Vec<_>>().join(","),
+            );
+        }
+        inst.attributes.insert(
+            "cap_resolved".into(),
+            format!(
+                "{} from {} — smallest shortlist candidate ≥ the {:.2}µF application minimum",
+                c.entity,
+                lib_path,
+                t.c_min * 1e6
+            ),
+        );
+        notes.push(format!(
+            "characterize {}: {:.2}µF application minimum → {} ({:.2}µF, esr {:.1}mΩ, esl {:.2}nH{}) from the shortlist",
+            t.name,
+            t.c_min * 1e6,
+            c.entity,
+            c.c_f * 1e6,
+            c.esr_ohm * 1e3,
+            c.esl_h * 1e9,
+            if c.dc_bias.is_empty() { "" } else { ", DC-bias curve" }
+        ));
+    }
+    Ok(notes)
+}
+
 /// Piecewise log-log interpolation of the mask; None outside its span.
 fn mask_at(mask: &[(f64, f64)], f: f64) -> Option<f64> {
     if mask.len() < 2 || f < mask[0].0 || f > mask[mask.len() - 1].0 {
