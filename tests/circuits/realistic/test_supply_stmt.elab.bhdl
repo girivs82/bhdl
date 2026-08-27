@@ -1,0 +1,68 @@
+// ELABORATED bhdl — generated from test_supply_stmt.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// synthesized imports: expansion children reference these
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Diode } from "bhdl-stdlib/passives/diode.bhdl";
+import { Ind } from "bhdl-stdlib/passives/inductor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { TPS54331 } from "bhdl-stdlib/power/tps54331.bhdl";
+
+import { Buck_TPS54331 } from "bhdl-stdlib/power/tps54331.bhdl";
+
+board SupplyStmtS1 {
+    power VCC_3V3 = 3.3V @ 1.5A;
+    power VIN = 12V @ 3A;
+    ground GND;
+
+    psu_vcc_3v3: Buck_TPS54331(3.3V, 12V, 1.5A, 570kHz);
+    attribute psu_vcc_3v3.expansion_applied = "true";
+    attribute psu_vcc_3v3.gated_pins = "EN";
+    psu_vcc_3v3_C_boot: Cap(100nF, 50V);
+    attribute psu_vcc_3v3_C_boot.composed_parent = "psu_vcc_3v3";
+    attribute psu_vcc_3v3_C_boot.composed_role = "series";
+    psu_vcc_3v3_C_in: Cap(0.0000034978070175438597, 50V);
+    attribute psu_vcc_3v3_C_in.composed_parent = "psu_vcc_3v3";
+    attribute psu_vcc_3v3_C_in.composed_role = "shunt";
+    psu_vcc_3v3_C_out: Cap(0.000003289473684210526, 50V);
+    attribute psu_vcc_3v3_C_out.composed_parent = "psu_vcc_3v3";
+    attribute psu_vcc_3v3_C_out.composed_role = "shunt";
+    psu_vcc_3v3_D_catch: Diode(0.45V);
+    attribute psu_vcc_3v3_D_catch.composed_parent = "psu_vcc_3v3";
+    attribute psu_vcc_3v3_D_catch.composed_role = "shunt";
+    psu_vcc_3v3_L_out: Ind(0.000009327485380116959, 2.760);
+    attribute psu_vcc_3v3_L_out.composed_parent = "psu_vcc_3v3";
+    attribute psu_vcc_3v3_L_out.composed_role = "series";
+    psu_vcc_3v3_R_bot: Res(10kΩ, 1%, 0.25W);
+    attribute psu_vcc_3v3_R_bot.composed_parent = "psu_vcc_3v3";
+    attribute psu_vcc_3v3_R_bot.composed_role = "shunt";
+    psu_vcc_3v3_R_top: Res(31250.000, 1%, 0.25W);
+    attribute psu_vcc_3v3_R_top.composed_parent = "psu_vcc_3v3";
+    attribute psu_vcc_3v3_R_top.composed_role = "series";
+    psu_vcc_3v3_u: TPS54331();
+    attribute psu_vcc_3v3_u.composed_parent = "psu_vcc_3v3";
+    attribute psu_vcc_3v3_u.composed_role = "shunt";
+    psu_vcc_3v3.GND -> @GND;
+    psu_vcc_3v3_C_in.2 -> @GND;
+    psu_vcc_3v3_C_out.2 -> @GND;
+    psu_vcc_3v3_D_catch.A -> @GND;
+    psu_vcc_3v3_R_bot.2 -> @GND;
+    psu_vcc_3v3_u.GND -> @GND;
+    @VCC_3V3 -> psu_vcc_3v3.VOUT;
+    @VCC_3V3 -> psu_vcc_3v3_C_out.1;
+    @VCC_3V3 -> psu_vcc_3v3_L_out.2;
+    @VCC_3V3 -> psu_vcc_3v3_R_top.1;
+    @VIN -> psu_vcc_3v3.EN;
+    @VIN -> psu_vcc_3v3.VIN;
+    @VIN -> psu_vcc_3v3_C_in.1;
+    @VIN -> psu_vcc_3v3_u.EN;
+    @VIN -> psu_vcc_3v3_u.VIN;
+    psu_vcc_3v3_R_bot.1 -> psu_vcc_3v3_R_top.2;  // net psu_vcc_3v3_auto_13
+    psu_vcc_3v3_R_bot.1 -> psu_vcc_3v3_u.FB;  // net psu_vcc_3v3_auto_13
+    psu_vcc_3v3_C_boot.1 -> psu_vcc_3v3_u.BOOT;  // net psu_vcc_3v3_auto_16
+    psu_vcc_3v3_C_boot.2 -> psu_vcc_3v3_D_catch.K;  // net psu_vcc_3v3_auto_6
+    psu_vcc_3v3_C_boot.2 -> psu_vcc_3v3_L_out.1;  // net psu_vcc_3v3_auto_6
+    psu_vcc_3v3_C_boot.2 -> psu_vcc_3v3_u.SW;  // net psu_vcc_3v3_auto_6
+}

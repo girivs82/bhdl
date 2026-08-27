@@ -1,0 +1,112 @@
+// ELABORATED bhdl — generated from stm32_blue_pill.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// synthesized imports: expansion children reference these
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+// Minimal Blue Pill board: STM32F103C8T6 on a 3.3V rail, with I²C1
+// in use. Exercises the new STM32 stdlib entity through the same
+// pipeline that handles AVR chips — proving the infrastructure is
+// arch-independent.
+
+import { STM32F103Cx } from "bhdl-stdlib/actives/stm32f103cx.bhdl";
+import { Cap, Res } from "bhdl-stdlib/passives/capacitor.bhdl";
+
+board STM32_Blue_Pill {
+    power VDD = 3.3V @ 0.1A;
+    ground GND;
+
+    mcu: STM32F103Cx(STM32F103C8T6, 64, 20, "MCU_ST_STM32F1:STM32F103C8Tx");
+    attribute mcu.expansion_applied = "true";
+    mcu_C_bulk: Cap(4.7µF, 50V);
+    attribute mcu_C_bulk.expansion_parent = "mcu";
+    attribute mcu_C_bulk.expansion_role = "series";
+    attribute mcu_C_bulk.vpin_parent = "mcu";
+    attribute mcu_C_bulk.vpin_role = "series";
+    mcu_C_nrst: Cap(100nF, 50V);
+    attribute mcu_C_nrst.expansion_parent = "mcu";
+    attribute mcu_C_nrst.expansion_role = "series";
+    attribute mcu_C_nrst.vpin_parent = "mcu";
+    attribute mcu_C_nrst.vpin_role = "series";
+    mcu_C_vbat: Cap(100nF, 50V);
+    attribute mcu_C_vbat.expansion_parent = "mcu";
+    attribute mcu_C_vbat.expansion_role = "series";
+    attribute mcu_C_vbat.vpin_parent = "mcu";
+    attribute mcu_C_vbat.vpin_role = "series";
+    mcu_C_vdd1: Cap(100nF, 50V);
+    attribute mcu_C_vdd1.expansion_parent = "mcu";
+    attribute mcu_C_vdd1.expansion_role = "series";
+    attribute mcu_C_vdd1.vpin_parent = "mcu";
+    attribute mcu_C_vdd1.vpin_role = "series";
+    mcu_C_vdd2: Cap(100nF, 50V);
+    attribute mcu_C_vdd2.expansion_parent = "mcu";
+    attribute mcu_C_vdd2.expansion_role = "series";
+    attribute mcu_C_vdd2.vpin_parent = "mcu";
+    attribute mcu_C_vdd2.vpin_role = "series";
+    mcu_C_vdd3: Cap(100nF, 50V);
+    attribute mcu_C_vdd3.expansion_parent = "mcu";
+    attribute mcu_C_vdd3.expansion_role = "series";
+    attribute mcu_C_vdd3.vpin_parent = "mcu";
+    attribute mcu_C_vdd3.vpin_role = "series";
+    mcu_C_vdda1: Cap(1µF, 50V);
+    attribute mcu_C_vdda1.expansion_parent = "mcu";
+    attribute mcu_C_vdda1.expansion_role = "series";
+    attribute mcu_C_vdda1.vpin_parent = "mcu";
+    attribute mcu_C_vdda1.vpin_role = "series";
+    mcu_C_vdda2: Cap(10nF, 50V);
+    attribute mcu_C_vdda2.expansion_parent = "mcu";
+    attribute mcu_C_vdda2.expansion_role = "series";
+    attribute mcu_C_vdda2.vpin_parent = "mcu";
+    attribute mcu_C_vdda2.vpin_role = "series";
+    // WARNING: param 'value' has no exported attribute and no default — round-trip may differ
+    mcu_R_nrst: Res();
+    attribute mcu_R_nrst.expansion_parent = "mcu";
+    attribute mcu_R_nrst.expansion_role = "series";
+    attribute mcu_R_nrst.vpin_parent = "mcu";
+    attribute mcu_R_nrst.vpin_role = "series";
+    // WARNING: param 'value' has no exported attribute and no default — round-trip may differ
+    mcu_R_pu_scl1: Res();
+    attribute mcu_R_pu_scl1.expansion_parent = "mcu";
+    attribute mcu_R_pu_scl1.expansion_role = "series";
+    attribute mcu_R_pu_scl1.vpin_parent = "mcu";
+    attribute mcu_R_pu_scl1.vpin_role = "series";
+    // WARNING: param 'value' has no exported attribute and no default — round-trip may differ
+    mcu_R_pu_sda1: Res();
+    attribute mcu_R_pu_sda1.expansion_parent = "mcu";
+    attribute mcu_R_pu_sda1.expansion_role = "series";
+    attribute mcu_R_pu_sda1.vpin_parent = "mcu";
+    attribute mcu_R_pu_sda1.vpin_role = "series";
+    mcu.VSSA -> @GND;
+    mcu.VSS_1 -> @GND;
+    mcu.VSS_2 -> @GND;
+    mcu.VSS_3 -> @GND;
+    mcu_C_bulk.2 -> @GND;
+    mcu_C_nrst.2 -> @GND;
+    mcu_C_vbat.2 -> @GND;
+    mcu_C_vdd1.2 -> @GND;
+    mcu_C_vdd2.2 -> @GND;
+    mcu_C_vdd3.2 -> @GND;
+    mcu_C_vdda1.2 -> @GND;
+    mcu_C_vdda2.2 -> @GND;
+    mcu.PB6 -> mcu_R_pu_scl1.1;  // net SCL_BUS
+    mcu.PB7 -> mcu_R_pu_sda1.1;  // net SDA_BUS
+    @VDD -> mcu.VBAT;
+    @VDD -> mcu.VDDA;
+    @VDD -> mcu.VDD_1;
+    @VDD -> mcu.VDD_2;
+    @VDD -> mcu.VDD_3;
+    @VDD -> mcu_C_bulk.1;
+    @VDD -> mcu_C_vbat.1;
+    @VDD -> mcu_C_vdd1.1;
+    @VDD -> mcu_C_vdd2.1;
+    @VDD -> mcu_C_vdd3.1;
+    @VDD -> mcu_C_vdda1.1;
+    @VDD -> mcu_C_vdda2.1;
+    @VDD -> mcu_R_nrst.1;
+    @VDD -> mcu_R_pu_scl1.2;
+    @VDD -> mcu_R_pu_sda1.2;
+    mcu.NRST -> mcu_C_nrst.1;  // net mcu_NRST
+    mcu.NRST -> mcu_R_nrst.2;  // net mcu_NRST
+}

@@ -1,0 +1,139 @@
+// ELABORATED bhdl — generated from test_595_ladder.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// synthesized imports: expansion children reference these
+import { NE555 } from "bhdl-stdlib/actives/ne555.bhdl";
+
+// The classic 555-clocked 595 LED ladder — the hobbyist's first shift-
+// register circuit, here as the corpus board proving the SN74HC595 at
+// full fidelity: the NE555 astable clocks SRCLK/RCLK, SER ties high so
+// a walking-ones pattern marches down QA..QH, and each output drives an
+// LED through its resistor. A scheduled edge on QA exercises the
+// DERIVED family IBIS (the 595's [Component] entry) through the
+// measured-edge chain at board scale.
+//
+// Power entry + per-part decoupling carried from the start (the
+// blinker fixture's ERC lessons, applied preemptively).
+
+import { NE555Astable } from "bhdl-stdlib/actives/ne555.bhdl";
+import { SN74HC595 } from "bhdl-stdlib/actives/logic_74hc595.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
+import { Pin_Header_01x03 } from "bhdl-stdlib/connectors/pin_header.bhdl";
+
+layout Ladder595 {
+    layer_stackup 2;
+    outline rect 55 40;
+}
+
+board Ladder595 {
+    power VCC = 5V @ 0.2A;
+    ground GND;
+
+    J1: Pin_Header_01x03();
+    c_555: Cap(100nF, 50V);
+    c_595: Cap(100nF, 50V);
+    c_bulk: Cap(10µF, 50V);
+    clk: NE555Astable();
+    attribute clk.expansion_applied = "true";
+    clk_c_cont: Cap(10nF, 50V);
+    attribute clk_c_cont.expansion_parent = "clk";
+    attribute clk_c_cont.expansion_role = "shunt";
+    attribute clk_c_cont.vpin_parent = "clk";
+    attribute clk_c_cont.vpin_role = "shunt";
+    clk_c_t: Cap(10µF, 50V);
+    attribute clk_c_t.expansion_parent = "clk";
+    attribute clk_c_t.expansion_role = "shunt";
+    attribute clk_c_t.vpin_parent = "clk";
+    attribute clk_c_t.vpin_role = "shunt";
+    clk_r_a: Res(10kΩ, 5%, 0.25W);
+    attribute clk_r_a.expansion_parent = "clk";
+    attribute clk_r_a.expansion_role = "series";
+    attribute clk_r_a.vpin_parent = "clk";
+    attribute clk_r_a.vpin_role = "series";
+    clk_r_b: Res(33kΩ, 5%, 0.25W);
+    attribute clk_r_b.expansion_parent = "clk";
+    attribute clk_r_b.expansion_role = "series";
+    attribute clk_r_b.vpin_parent = "clk";
+    attribute clk_r_b.vpin_role = "series";
+    clk_timer: NE555();
+    attribute clk_timer.expansion_parent = "clk";
+    attribute clk_timer.expansion_role = "shunt";
+    attribute clk_timer.vpin_parent = "clk";
+    attribute clk_timer.vpin_role = "shunt";
+    led_a: LED(red);
+    led_b: LED(red);
+    led_c: LED(yellow);
+    led_d: LED(yellow);
+    led_e: LED(green);
+    led_f: LED(green);
+    led_g: LED(blue);
+    led_h: LED(blue);
+    r_a: Res(1kΩ, 5%, 0.25W);
+    r_b: Res(1kΩ, 5%, 0.25W);
+    r_c: Res(1kΩ, 5%, 0.25W);
+    r_d: Res(1kΩ, 5%, 0.25W);
+    r_e: Res(1kΩ, 5%, 0.25W);
+    r_f: Res(1kΩ, 5%, 0.25W);
+    r_g: Res(1kΩ, 5%, 0.25W);
+    r_h: Res(1kΩ, 5%, 0.25W);
+    sr: SN74HC595();
+    J1.2 -> @GND;
+    J1.3 -> @GND;
+    c_555.2 -> @GND;
+    c_595.2 -> @GND;
+    c_bulk.2 -> @GND;
+    clk.GND -> @GND;
+    clk_c_cont.2 -> @GND;
+    clk_c_t.2 -> @GND;
+    clk_timer.GND -> @GND;
+    led_a.K -> @GND;
+    led_b.K -> @GND;
+    led_c.K -> @GND;
+    led_d.K -> @GND;
+    led_e.K -> @GND;
+    led_f.K -> @GND;
+    led_g.K -> @GND;
+    led_h.K -> @GND;
+    sr.GND -> @GND;
+    sr.OE -> @GND;
+    @VCC -> J1.1;
+    @VCC -> c_555.1;
+    @VCC -> c_595.1;
+    @VCC -> c_bulk.1;
+    @VCC -> clk.VCC;
+    @VCC -> clk_r_a.1;
+    @VCC -> clk_timer.RESET;
+    @VCC -> clk_timer.VCC;
+    @VCC -> sr.SER;
+    @VCC -> sr.SRCLR;
+    @VCC -> sr.VCC;
+    clk.OUT -> clk_timer.OUT;  // net auto_clk_OUT
+    clk.OUT -> sr.RCLK;  // net auto_clk_OUT
+    clk.OUT -> sr.SRCLK;  // net auto_clk_OUT
+    led_a.A -> r_a.2;  // net auto_r_a_2
+    led_b.A -> r_b.2;  // net auto_r_b_2
+    led_c.A -> r_c.2;  // net auto_r_c_2
+    led_d.A -> r_d.2;  // net auto_r_d_2
+    led_e.A -> r_e.2;  // net auto_r_e_2
+    led_f.A -> r_f.2;  // net auto_r_f_2
+    led_g.A -> r_g.2;  // net auto_r_g_2
+    led_h.A -> r_h.2;  // net auto_r_h_2
+    r_a.1 -> sr.QA;  // net auto_sr_QA
+    r_b.1 -> sr.QB;  // net auto_sr_QB
+    r_c.1 -> sr.QC;  // net auto_sr_QC
+    r_d.1 -> sr.QD;  // net auto_sr_QD
+    r_e.1 -> sr.QE;  // net auto_sr_QE
+    r_f.1 -> sr.QF;  // net auto_sr_QF
+    r_g.1 -> sr.QG;  // net auto_sr_QG
+    r_h.1 -> sr.QH;  // net auto_sr_QH
+    clk_c_cont.1 -> clk_timer.CONT;  // net clk_auto_12
+    clk_r_a.2 -> clk_r_b.1;  // net clk_auto_6
+    clk_r_a.2 -> clk_timer.DISCH;  // net clk_auto_6
+    clk_c_t.1 -> clk_r_b.2;  // net clk_auto_8
+    clk_c_t.1 -> clk_timer.THRES;  // net clk_auto_8
+    clk_c_t.1 -> clk_timer.TRIG;  // net clk_auto_8
+}

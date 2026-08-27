@@ -1,0 +1,58 @@
+// ELABORATED bhdl — generated from test_model_draws_demo.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+entity EffBuck() {
+    pin VIN:  power in;
+    pin VOUT: power out;
+    pin GND:  ground;
+
+    attribute component_class = "switching_regulator";
+    attribute output_voltage  = 5.0V;
+    attribute v_out           = 5.0V;
+    attribute v_in            = 12.0V;
+    attribute efficiency      = 0.9;
+    // Loss-model params in plain base units (the decomposition's req_param
+    // reads these with a bare f64 parse, not a unit-aware one):
+    attribute i_quiescent     = 0.005;      // 5 mA
+    attribute rds_on          = 0.03;       // 30 mΩ  (generic physics default,
+    attribute f_sw            = 500000.0;   // 500 kHz  superseded by draws here)
+    attribute t_sw            = 0.00000002; // 20 ns
+
+    simulation {
+        model {
+            node VOUT source = self.v_out;
+            node VIN  draws  = i_out * self.v_out / (self.v_in * efficiency);
+        }
+    }
+}
+
+entity Cap(value: capacitance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+}
+
+entity Res(value: resistance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+}
+
+board ModelDrawsDemo {
+    power VIN = 12V @ 2A;
+    power VOUT = 5V @ 1A;
+    ground GND;
+
+    // WARNING: param 'value' has no exported attribute and no default — round-trip may differ
+    c_out: Cap();
+    // WARNING: param 'value' has no exported attribute and no default — round-trip may differ
+    r_load: Res();
+    reg: EffBuck();
+    c_out.2 -> @GND;
+    r_load.2 -> @GND;
+    reg.GND -> @GND;
+    @VIN -> reg.VIN;
+    @VOUT -> c_out.1;
+    @VOUT -> r_load.1;
+    @VOUT -> reg.VOUT;
+}

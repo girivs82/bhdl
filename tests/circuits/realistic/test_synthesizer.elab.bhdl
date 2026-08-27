@@ -1,0 +1,21 @@
+// ELABORATED bhdl — generated from test_synthesizer.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+board TestSynthesizer {
+    power VCC = 5V @ 1A;
+    ground GND;
+
+    C1: Cap(100n, 50V);
+    R1: Res(10k, 5%, 0.25W);
+    R2: Res(10k, 5%, 0.25W);
+    C1.2 -> @GND;
+    R2.2 -> @GND;
+    @VCC -> C1.1;
+    @VCC -> R1.1;
+    R1.2 -> R2.1;  // net divider
+}

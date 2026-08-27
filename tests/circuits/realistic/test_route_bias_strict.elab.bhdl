@@ -1,0 +1,50 @@
+// ELABORATED bhdl — generated from test_route_bias_strict.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// route_bias STRICT corpus lock: a small all-THT board whose signal
+// copper must live ENTIRELY on B.Cu with zero vias (the hand-routed
+// single-sided idiom the ecc83 demo uses — the router detours around
+// obstacles instead of jumping layers). This fixture exists so the
+// strict tier stays exercised by the oracle gate without the GND-pour
+// experiment: ecc83 itself completes strict only with the pour
+// absorbing its ground routing.
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { TerminalBlock_1x02 } from "bhdl-stdlib/connectors/pin_header.bhdl";
+
+layout Res { package Axial-P7.62; }
+layout Cap { package Disc-P5.00; }
+
+layout TestRouteBiasStrict {
+    layer_stackup 2;
+    route_bias bottom strict;
+    outline rect 40 30;
+}
+
+board TestRouteBiasStrict {
+    power VIN = 12V @ 0.1A;
+    ground GND;
+
+    J_IN: TerminalBlock_1x02();
+    J_OUT: TerminalBlock_1x02();
+    c1: Cap(100nF, 50V);
+    c2: Cap(100nF, 50V);
+    r1: Res(10kΩ, 5%, 0.25W);
+    r2: Res(10kΩ, 5%, 0.25W);
+    r3: Res(47kΩ, 5%, 0.25W);
+    J_IN.2 -> @GND;
+    J_OUT.2 -> @GND;
+    c1.2 -> @GND;
+    c2.2 -> @GND;
+    r2.2 -> @GND;
+    @VIN -> J_IN.1;
+    @VIN -> r1.1;
+    c1.1 -> r1.2;  // net auto_r1_2
+    c1.1 -> r2.1;  // net auto_r1_2
+    c1.1 -> r3.1;  // net auto_r1_2
+    J_OUT.1 -> c2.1;  // net auto_r3_2
+    J_OUT.1 -> r3.2;  // net auto_r3_2
+}

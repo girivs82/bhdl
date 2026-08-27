@@ -1,0 +1,49 @@
+// ELABORATED bhdl — generated from test_model_block_demo.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+entity DemoLDO() {
+    pin VIN:  power in;
+    pin VOUT: power out;   // direct output pin (drives the VOUT rail)
+    pin GND:  ground;
+
+    attribute component_class = "voltage_regulator";  // → recognised as a regulator
+    attribute output_voltage  = 3.3V;                 // hardcoded-decomposition baseline
+    attribute v_out           = 5.0V;                 // the model's self.v_out
+    attribute i_quiescent     = 0.005;                // 5 mA (plain base units: the
+                                                      // decomposition's req_param is a bare f64 parse)
+
+    simulation {
+        model {
+            node VOUT source = self.v_out;   // authored output source (§5)
+        }
+    }
+}
+
+entity Cap(value: capacitance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+}
+
+entity Res(value: resistance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+}
+
+board ModelSourceDemo {
+    power VIN = 12V @ 1A;
+    ground GND;
+
+    // WARNING: param 'value' has no exported attribute and no default — round-trip may differ
+    c_out: Cap();
+    // WARNING: param 'value' has no exported attribute and no default — round-trip may differ
+    r_load: Res();
+    reg: DemoLDO();
+    c_out.2 -> @GND;
+    r_load.2 -> @GND;
+    reg.GND -> @GND;
+    @VIN -> reg.VIN;
+    c_out.1 -> r_load.1;  // net VOUT
+    c_out.1 -> reg.VOUT;  // net VOUT
+}

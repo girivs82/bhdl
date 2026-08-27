@@ -1,0 +1,18 @@
+// ELABORATED bhdl — generated from test_simple_led.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+board SimpleLED {
+    power VCC = 12V @ 1A;
+    ground GND;
+
+    LED1: LED(red);
+    R1: Res(value, 5%, 0.25W);
+    LED1.K -> @GND;
+    @VCC -> R1.1;
+    LED1.A -> R1.2;  // net net_R1_2
+}

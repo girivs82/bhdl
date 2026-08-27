@@ -1,0 +1,70 @@
+// ELABORATED bhdl — generated from test_iface_lvds.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// Interface-FIELD materialization fixture: the same LVDS link as
+// test_diff_pair, but the constraints come from the interface's own
+// `constraints {}` block and the entities carry `interface Lvds tx;`
+// FIELDS — the full v0.8 surface, end to end: field pins materialize
+// as tx.P/tx.N, board connections bind nets to them, the constraint
+// attributes flow into the typed catalog, and the sign-off report
+// grades the routed pair.
+
+interface Lvds {
+    signal P: inout;
+    signal N: inout;
+    constraints {
+        *:      differential 100ohm;
+        *:      noise_budget 40mV;
+        P -> N: length_match 6.5ps;
+    }
+}
+
+entity LvdsDriver() {
+    interface Lvds tx;
+    pin VCC: power in;
+    pin GND: ground;
+
+    attribute component_class = "ic";
+}
+
+layout LvdsDriver {
+    package SOIC-8;
+}
+
+entity LvdsSink() {
+    interface Lvds rx;
+    pin VCC: power in;
+    pin GND: ground;
+
+    attribute component_class = "ic";
+}
+
+layout LvdsSink {
+    package SOIC-8;
+}
+
+layout IfaceLvds {
+    // Rogers 4350B: lower εr than FR4 — the impedance floor computes a
+    // WIDER trace (0.17mm, now binding above the 0.15 default) and the
+    // delay grading runs faster ps/mm.
+    layer_stackup 4 material rogers4350b;
+    outline rect 40 25;
+    // Slot aperture in the rect-fill path: planes punch the exact rect.
+    cutout rect (14, 16) (30, 18);
+}
+
+board IfaceLvds {
+    power VCC = 3.3V @ 0.1A;
+    ground GND;
+
+    drv: LvdsDriver();
+    snk: LvdsSink();
+    drv.GND -> @GND;
+    snk.GND -> @GND;
+    @VCC -> drv.VCC;
+    @VCC -> snk.VCC;
+    drv.tx.N -> snk.rx.N;  // net auto_drv_tx_N
+    drv.tx.P -> snk.rx.P;  // net auto_drv_tx_P
+}

@@ -1,0 +1,120 @@
+// ELABORATED bhdl — generated from test_supply_tree.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// S4b supply tree — cascaded supplies with rail-budget propagation.
+// 12V → 5V (TPS54302, bare entity: S4a emits the full application circuit
+// incl. bootstrap + FB divider) → 3.3V (chooser picks TPS54331, a
+// self-expanding entity: its OWN expansion materializes the circuit, S4a
+// stands down). Each generated regulator stamps its computed INPUT draw as
+// i_supply (switcher: V_out·I_out/(η·V_in) from the datasheet efficiency),
+// so ERC016 gates every intermediate rail: shrink VCC_5V's budget below
+// ~371mA and the build reports exactly which cascade overloads it.
+import { Mcu } from "bhdl-stdlib/actives/mcu.bhdl";
+import { Barrel_Jack_Switch } from "bhdl-stdlib/connectors/barrel_jack.bhdl";
+import { Buck_TPS54302 } from "bhdl-stdlib/power/tps54302.bhdl";
+import { TPS54302 } from "bhdl-stdlib/power/tps54302.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Ind } from "bhdl-stdlib/passives/inductor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+board SupplyTree {
+    power VCC_3V3 = 3.3V @ 0.5A;
+    power VCC_5V = 5V @ 2A;
+    power VIN_12V = 12V @ 3A;
+    ground GND;
+
+    j1: Barrel_Jack_Switch();
+    mcu: Mcu(0.05);
+    attribute mcu.expansion_applied = "true";
+    mcu_C_bulk: Cap(10uF, 50V);
+    attribute mcu_C_bulk.expansion_parent = "mcu";
+    attribute mcu_C_bulk.expansion_role = "shunt";
+    attribute mcu_C_bulk.vpin_parent = "mcu";
+    attribute mcu_C_bulk.vpin_role = "shunt";
+    mcu_C_hf: Cap(100nF, 50V);
+    attribute mcu_C_hf.expansion_parent = "mcu";
+    attribute mcu_C_hf.expansion_role = "shunt";
+    attribute mcu_C_hf.vpin_parent = "mcu";
+    attribute mcu_C_hf.vpin_role = "shunt";
+    psu_vcc_3v3: Buck_TPS54302(3.3V, 5V, 500mA, 500kHz);
+    attribute psu_vcc_3v3.expansion_applied = "true";
+    attribute psu_vcc_3v3.gated_pins = "EN";
+    psu_vcc_3v3_C_boot: Cap(100nF, 50V);
+    attribute psu_vcc_3v3_C_boot.composed_parent = "psu_vcc_3v3";
+    attribute psu_vcc_3v3_C_boot.composed_role = "series";
+    psu_vcc_3v3_C_in: Cap(0.0000014960000000000002, 50V);
+    attribute psu_vcc_3v3_C_in.composed_parent = "psu_vcc_3v3";
+    attribute psu_vcc_3v3_C_in.composed_role = "shunt";
+    psu_vcc_3v3_C_out: Cap(0.0000014583333333333333, 50V);
+    attribute psu_vcc_3v3_C_out.composed_parent = "psu_vcc_3v3";
+    attribute psu_vcc_3v3_C_out.composed_role = "shunt";
+    psu_vcc_3v3_L_out: Ind(0.000012822857142857141, 0.940);
+    attribute psu_vcc_3v3_L_out.composed_parent = "psu_vcc_3v3";
+    attribute psu_vcc_3v3_L_out.composed_role = "series";
+    psu_vcc_3v3_R_bot: Res(10kΩ, 1%, 0.25W);
+    attribute psu_vcc_3v3_R_bot.composed_parent = "psu_vcc_3v3";
+    attribute psu_vcc_3v3_R_bot.composed_role = "shunt";
+    psu_vcc_3v3_R_top: Res(45000.000, 1%, 0.25W);
+    attribute psu_vcc_3v3_R_top.composed_parent = "psu_vcc_3v3";
+    attribute psu_vcc_3v3_R_top.composed_role = "series";
+    psu_vcc_3v3_u: TPS54302();
+    attribute psu_vcc_3v3_u.composed_parent = "psu_vcc_3v3";
+    attribute psu_vcc_3v3_u.composed_role = "shunt";
+    psu_vcc_5v: TPS54302();
+    psu_vcc_5v_c_boot: Cap(100nF, 50V);
+    attribute psu_vcc_5v_c_boot.expansion_parent = "psu_vcc_5v";
+    psu_vcc_5v_c_in1: Cap(22uF, 50V);
+    attribute psu_vcc_5v_c_in1.expansion_parent = "psu_vcc_5v";
+    psu_vcc_5v_c_out1: Cap(47uF, 50V);
+    attribute psu_vcc_5v_c_out1.expansion_parent = "psu_vcc_5v";
+    psu_vcc_5v_l_out: Ind(10uH, 0A);
+    attribute psu_vcc_5v_l_out.expansion_parent = "psu_vcc_5v";
+    psu_vcc_5v_r_fb_bot: Res(10k, 5%, 0.25W);
+    attribute psu_vcc_5v_r_fb_bot.expansion_parent = "psu_vcc_5v";
+    psu_vcc_5v_r_fb_top: Res(73.2k, 5%, 0.25W);
+    attribute psu_vcc_5v_r_fb_top.expansion_parent = "psu_vcc_5v";
+    j1.SLEEVE -> @GND;
+    mcu.GND -> @GND;
+    mcu_C_bulk.2 -> @GND;
+    mcu_C_hf.2 -> @GND;
+    psu_vcc_3v3.GND -> @GND;
+    psu_vcc_3v3_C_in.2 -> @GND;
+    psu_vcc_3v3_C_out.2 -> @GND;
+    psu_vcc_3v3_R_bot.2 -> @GND;
+    psu_vcc_3v3_u.GND -> @GND;
+    psu_vcc_5v.GND -> @GND;
+    psu_vcc_5v_c_in1.2 -> @GND;
+    psu_vcc_5v_c_out1.2 -> @GND;
+    psu_vcc_5v_r_fb_bot.2 -> @GND;
+    @VCC_3V3 -> mcu.VCC;
+    @VCC_3V3 -> mcu_C_bulk.1;
+    @VCC_3V3 -> mcu_C_hf.1;
+    @VCC_3V3 -> psu_vcc_3v3.VOUT;
+    @VCC_3V3 -> psu_vcc_3v3_C_out.1;
+    @VCC_3V3 -> psu_vcc_3v3_L_out.2;
+    @VCC_3V3 -> psu_vcc_3v3_R_top.1;
+    @VCC_5V -> psu_vcc_3v3.EN;
+    @VCC_5V -> psu_vcc_3v3.VIN;
+    @VCC_5V -> psu_vcc_3v3_C_in.1;
+    @VCC_5V -> psu_vcc_3v3_u.EN;
+    @VCC_5V -> psu_vcc_3v3_u.VIN;
+    @VCC_5V -> psu_vcc_5v_c_out1.1;
+    @VCC_5V -> psu_vcc_5v_l_out.2;
+    @VCC_5V -> psu_vcc_5v_r_fb_top.1;
+    @VIN_12V -> j1.TIP;
+    @VIN_12V -> psu_vcc_5v.EN;
+    @VIN_12V -> psu_vcc_5v.VIN;
+    @VIN_12V -> psu_vcc_5v_c_in1.1;
+    psu_vcc_5v.BOOT -> psu_vcc_5v_c_boot.1;  // net auto_psu_vcc_5v_BOOT
+    psu_vcc_5v.SW -> psu_vcc_5v_c_boot.2;  // net auto_psu_vcc_5v_c_boot_2
+    psu_vcc_5v.SW -> psu_vcc_5v_l_out.1;  // net auto_psu_vcc_5v_c_boot_2
+    psu_vcc_5v.FB -> psu_vcc_5v_r_fb_bot.1;  // net auto_psu_vcc_5v_r_fb_top_2
+    psu_vcc_5v.FB -> psu_vcc_5v_r_fb_top.2;  // net auto_psu_vcc_5v_r_fb_top_2
+    psu_vcc_3v3_R_bot.1 -> psu_vcc_3v3_R_top.2;  // net psu_vcc_3v3_auto_11
+    psu_vcc_3v3_R_bot.1 -> psu_vcc_3v3_u.FB;  // net psu_vcc_3v3_auto_11
+    psu_vcc_3v3_C_boot.1 -> psu_vcc_3v3_u.BOOT;  // net psu_vcc_3v3_auto_14
+    psu_vcc_3v3_C_boot.2 -> psu_vcc_3v3_L_out.1;  // net psu_vcc_3v3_auto_6
+    psu_vcc_3v3_C_boot.2 -> psu_vcc_3v3_u.SW;  // net psu_vcc_3v3_auto_6
+}

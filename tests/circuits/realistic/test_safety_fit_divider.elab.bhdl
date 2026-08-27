@@ -1,0 +1,81 @@
+// ELABORATED bhdl — generated from test_safety_fit_divider.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// bhdl-sweep: skip — safety-engine fixture, not a layout target
+// Reliability-engine fixture (docs/spec/Functional_Safety.md §2.8):
+// a board whose GLACIER DC solve converges, so passive handbook FITs
+// are COMPUTED (and the semiconductor rows demonstrate the honest
+// FIT_UNCOMPUTED gaps) — λ from the IEC62380-shaped table
+// (bhdl-stdlib/safety/iec62380.toml, FIXTURE coefficients), the
+// mission profile below, and the SIM-DERIVED power stress ratio.
+//
+//   r_easy: 12V across 1kΩ rated 1W    → 144 mW, S = 0.14 (cool)
+//   r_hot:  12V across 470Ω rated 0.25W → 306 mW, S = 1.23 (over-stressed:
+//           the sign-off table flags it AND its computed FIT is higher)
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { TVSDiode } from "bhdl-stdlib/protection/tvs.bhdl";
+import { Ind } from "bhdl-stdlib/passives/inductor.bhdl";
+
+// §6.1 TVS with the thermal path DECLARED (θ_JA is a FIXTURE value for
+// the pipeline demo — a real part takes it from the package datasheet).
+entity DemoTvs(voltage: voltage) {
+    pin A: signal in;
+    pin K: signal out;
+    attribute component_class = "tvs_diode";
+    attribute breakdown_voltage = voltage;
+    attribute theta_ja = 100;   // °C/W — FIXTURE (SMA-class shape)
+    attribute kicad_symbol = "Device:D_TVS";
+    safety {
+        handbook class="diode_tvs" per="MILHDBK217F" source="MIL-HDBK-217F §6.1 transient suppressor";
+    }
+}
+
+// §11.2 coil with the winding rise DECLARED (FIXTURE value; a real part
+// takes ΔT from its temperature-rise test data).
+entity DemoCoil(value: inductance) {
+    pin 1: signal inout;
+    pin 2: signal inout;
+    attribute component_class = "inductor";
+    attribute inductance = value;
+    attribute temp_rise = 15;   // °C average winding rise — FIXTURE
+    attribute kicad_symbol = "Device:L";
+    safety {
+        handbook class="coil_fixed" per="MILHDBK217F" source="MIL-HDBK-217F §11.2 fixed coil (class B model)";
+    }
+}
+
+safety FitDemo as brd {
+    // Named mission profile (project tunable, bhdl-stdlib/safety/
+    // mission_profiles.toml): temperature/time histogram + π_E/π_Q
+    // defaults. λ = time-weighted over powered phases, per operating
+    // hour. Explicit items here would override the profile's fields.
+    mission { profile = passenger_compartment; }
+}
+
+board FitDemo {
+    power V12 = 12V @ 1A;
+    ground GND;
+
+    c_filt: Cap(100nF, 50V);
+    l_filt: DemoCoil(10uH);
+    r_easy: Res(1kΩ, 5%, 1W);
+    r_hot: Res(470Ω, 5%, 0.25W);
+    tvs_gap: TVSDiode(24V);
+    tvs_ok: DemoTvs(24V);
+    c_filt.2 -> @GND;
+    l_filt.2 -> @GND;
+    r_easy.2 -> @GND;
+    r_hot.2 -> @GND;
+    tvs_gap.A -> @GND;
+    tvs_ok.A -> @GND;
+    @V12 -> c_filt.1;
+    @V12 -> l_filt.1;
+    @V12 -> r_easy.1;
+    @V12 -> r_hot.1;
+    @V12 -> tvs_gap.K;
+    @V12 -> tvs_ok.K;
+}

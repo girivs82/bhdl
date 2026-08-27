@@ -1,0 +1,97 @@
+// ELABORATED bhdl — generated from test_noise_budget.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// P4 stage 4 — measured-noise gate, END TO END: the aggressor's edge
+// is SOLVED (ibis_wave schedules a rise of the test_buffer.ibs CMOS
+// buffer; the transient solver measures the swing at the driven net),
+// the victim declares a noise budget through its interface, and the
+// sign-off gates k_b × measured-swing against it. No assumed logic
+// levels anywhere — remove the ibis_wave directive and the row
+// honestly degrades to "ungradable".
+//
+// Placement pulls the victim run beside the aggressor (tiny board,
+// both nets cross the same channel) so the coupled length is real.
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+
+entity TestEdgeDriver() {
+    pin VCC:  power in;
+    pin OUT1: signal out;
+    pin GND:  ground;
+
+    attribute component_class = "ic_logic";
+    attribute i_quiescent = 1mA;
+
+    simulation {
+        model {
+            ibis "test_buffer.ibs" component "TESTCHIP" corner typ;
+        }
+    }
+}
+
+interface Quiet {
+    signal V: inout;
+    constraints {
+        *: noise_budget 40mV;
+        *: layer top;
+    }
+}
+
+entity QuietSrc() {
+    interface Quiet q;
+    pin VCC: power in;
+    pin GND: ground;
+
+    attribute component_class = "ic";
+}
+
+layout QuietSrc {
+    package SOIC-8;
+}
+
+layout NoiseBudget {
+    // 2-layer ribbon: no inner layers to escape to and one narrow
+    // channel — the two links MUST run parallel, so the coupled
+    // stretch exists by construction (a 4-layer version routed them
+    // 7mm apart and the gate correctly had nothing to grade).
+    layer_stackup 2;
+    outline rect 30 10;
+    // A wall with ONE narrow pass: every left-right net must squeeze
+    // through the top channel, so the aggressor and victim run
+    // adjacent there BY CONSTRUCTION — no routing style can separate
+    // them, which is the whole point of the fixture.
+    // TWO passes: a 0.5mm bottom slot (GND's lane) and a ~0.9mm top
+    // channel that fits exactly the two signals — adjacency by
+    // construction.
+    cutout rect (17, 0.5) (19, 8.0);
+    // Endpoints pinned on OPPOSITE sides of the wall: both links must
+    // cross through the one channel above it.
+    place u1 at (4.2, 5);
+    place src at (11.8, 5);
+    place r_v at (23, 5);
+    place r_load at (27, 3);
+}
+
+board NoiseBudget {
+    power VCC = 5V @ 0.1A;
+    ground GND;
+
+    c_load: Cap(100pF, 50V);
+    r_load: Res(125Ω, 5%, 0.25W);
+    r_v: Res(1k, 5%, 0.25W);
+    src: QuietSrc();
+    u1: TestEdgeDriver();
+    c_load.2 -> @GND;
+    r_load.2 -> @GND;
+    r_v.2 -> @GND;
+    src.GND -> @GND;
+    u1.GND -> @GND;
+    @VCC -> src.VCC;
+    @VCC -> u1.VCC;
+    r_v.1 -> src.q.V;  // net auto_src_q_V
+    c_load.1 -> r_load.1;  // net load_node
+    c_load.1 -> u1.OUT1;  // net load_node
+}

@@ -1,0 +1,45 @@
+// ELABORATED bhdl — generated from test_mlcc_bias.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// The MLCC DC-bias trap, as a board: a 10 µF / 6.3 V / X5R 0603 bulk
+// cap on a 5 V rail. On paper the rail has 10 µF of bulk; per the
+// part's OWN datasheet curve it has 3.2 µF (factor 0.32 at 5 V) —
+// the sign-off's "MLCC DC-bias derating" section reads the curve at
+// the SOLVED bias and says SIZE-UP. The 100 nF (generic Cap, no
+// curve carried) deliberately prints nothing there: absence over
+// invention. LED load keeps the rail solve live.
+
+import { CC0603_X5R_10uF_6V3 } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
+import { Pin_Header_01x03 } from "bhdl-stdlib/connectors/pin_header.bhdl";
+
+layout MlccBias {
+    layer_stackup 2;
+    outline rect 25 18;
+    place J_PWR at (2.6, 9);
+}
+
+board MlccBias {
+    power VCC = 5V @ 0.05A;
+    ground GND;
+
+    J_PWR: Pin_Header_01x03();
+    c_bulk: CC0603_X5R_10uF_6V3(CC0603MRX5R5BB106);
+    c_hf: Cap(100nF, 50V);
+    d_on: LED(green);
+    r_led: Res(330Ω, 5%, 0.25W);
+    J_PWR.2 -> @GND;
+    J_PWR.3 -> @GND;
+    c_bulk.2 -> @GND;
+    c_hf.2 -> @GND;
+    d_on.K -> @GND;
+    @VCC -> J_PWR.1;
+    @VCC -> c_bulk.1;
+    @VCC -> c_hf.1;
+    @VCC -> r_led.1;
+    d_on.A -> r_led.2;  // net auto_r_led_2
+}

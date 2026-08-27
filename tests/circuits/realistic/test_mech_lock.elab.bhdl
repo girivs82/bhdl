@@ -1,0 +1,53 @@
+// ELABORATED bhdl — generated from test_mech_lock.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// Mechanical-contract fixture (P2 v1): a chassis-locked connector, a
+// declared rectangular outline, mounting holes and a keepout — the
+// mechanical truth PnR must place-and-route WITHIN, never override.
+// The locked part's exported coordinates are the oracle-checkable
+// contract: they must land EXACTLY where the layout block says.
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
+
+entity PwrJack() {
+    pin VIN: power out;
+    pin GND: ground;
+
+    attribute component_class = "connector";
+}
+
+layout PwrJack {
+    package SOT-223;
+}
+
+layout MechLock {
+    layer_stackup 2;
+    outline rect 46 32;
+    place j_pwr at (4, 15) rot 90;
+    // Status LED on the BACK (chassis light-pipe from below).
+    place led1 at (5, 15) rot 0 side back;
+    mounting_hole (42, 4) drill 3.2 keepout 2.0;
+    mounting_hole (42, 28) drill 3.2 keepout 2.0;
+    keepout rect (36, 13) (46, 19);
+    place r_load in rect (14, 20) (26, 28);
+}
+
+board MechLock {
+    power VCC = 5V @ 0.1A;
+    ground GND;
+
+    j_pwr: PwrJack();
+    led1: LED(green);
+    r_led: Res(220, 5%, 0.25W);
+    r_load: Res(100, 5%, 0.25W);
+    j_pwr.GND -> @GND;
+    r_led.2 -> @GND;
+    r_load.2 -> @GND;
+    @VCC -> j_pwr.VIN;
+    @VCC -> led1.A;
+    @VCC -> r_load.1;
+    led1.K -> r_led.1;  // net auto_led1_K
+}

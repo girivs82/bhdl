@@ -1,0 +1,63 @@
+// ELABORATED bhdl — generated from 555_astable_oscillator.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// 555 Timer Astable Oscillator Circuit
+// Generates a square wave output with adjustable frequency and duty cycle.
+// Rewritten to the v2 language: the v1 `component ... { pin 1: ... }` /
+// `instance U1 of Timer555;` / `connect` dialect is retired — the timer is
+// now a top-level entity with named pins and the board uses v2 flow
+// statements.
+
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
+
+// 555 Timer IC (NE555, DIP8). Named pins map the v1 numbered pins:
+// 1=GND 2=TRIG 3=OUT 4=RST 5=CTRL 6=THR 7=DISCH 8=VCC.
+entity Timer555() {
+    pin GND:   ground;
+    pin TRIG:  signal in;
+    pin OUT:   signal out;
+    pin RST:   signal in;
+    pin CTRL:  signal in;
+    pin THR:   signal in;
+    pin DISCH: signal out;
+    pin VCC:   power in;
+
+    attribute component_class = "timer";
+    attribute spice_model = "timer_555";
+    attribute package_name = "DIP8"; // (`package` is a v2 keyword)
+}
+
+board Oscillator555 {
+    power VCC = 5V @ 0.1A;
+    ground GND;
+
+    c_ctrl: Cap(10nF, 50V);
+    c_dec: Cap(100nF, 50V);
+    c_t: Cap(100nF, 50V);
+    led1: LED(red);
+    r1: Res(1k, 5%, 0.25W);
+    r2: Res(10k, 5%, 0.25W);
+    r_led: Res(470, 5%, 0.25W);
+    u1: Timer555();
+    c_ctrl.2 -> @GND;
+    c_dec.2 -> @GND;
+    c_t.2 -> @GND;
+    led1.K -> @GND;
+    u1.GND -> @GND;
+    @VCC -> c_dec.1;
+    @VCC -> r1.1;
+    @VCC -> u1.RST;
+    @VCC -> u1.VCC;
+    r1.2 -> r2.1;  // net auto_r1_2
+    r1.2 -> u1.DISCH;  // net auto_r1_2
+    c_t.1 -> r2.2;  // net auto_r2_2
+    c_t.1 -> u1.THR;  // net auto_r2_2
+    c_t.1 -> u1.TRIG;  // net auto_r2_2
+    led1.A -> r_led.2;  // net auto_r_led_2
+    c_ctrl.1 -> u1.CTRL;  // net auto_u1_CTRL
+    r_led.1 -> u1.OUT;  // net auto_u1_OUT
+}

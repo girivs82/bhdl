@@ -1,0 +1,69 @@
+// ELABORATED bhdl — generated from test_supply_shared_bank.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+import { TPS54302 } from "bhdl-stdlib/power/tps54302.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Ind } from "bhdl-stdlib/passives/inductor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+board SharedBank {
+    power VCC_3V3 = 3.3V @ 1A;
+    power VCC_5V = 5V @ 1A;
+    power VIN_12V = 12V @ 4A;
+    ground GND;
+
+    psu_vcc_3v3: TPS54302();
+    psu_vcc_3v3_c_boot: Cap(100nF, 50V);
+    attribute psu_vcc_3v3_c_boot.expansion_parent = "psu_vcc_3v3";
+    psu_vcc_3v3_c_out1: Cap(47uF, 50V);
+    attribute psu_vcc_3v3_c_out1.expansion_parent = "psu_vcc_3v3";
+    psu_vcc_3v3_l_out: Ind(15uH, 0A);
+    attribute psu_vcc_3v3_l_out.expansion_parent = "psu_vcc_3v3";
+    psu_vcc_3v3_r_fb_bot: Res(10k, 5%, 0.25W);
+    attribute psu_vcc_3v3_r_fb_bot.expansion_parent = "psu_vcc_3v3";
+    psu_vcc_3v3_r_fb_top: Res(45.3k, 5%, 0.25W);
+    attribute psu_vcc_3v3_r_fb_top.expansion_parent = "psu_vcc_3v3";
+    psu_vcc_5v: TPS54302();
+    psu_vcc_5v_c_boot: Cap(100nF, 50V);
+    attribute psu_vcc_5v_c_boot.expansion_parent = "psu_vcc_5v";
+    psu_vcc_5v_c_in1: Cap(47uF, 50V);
+    attribute psu_vcc_5v_c_in1.expansion_parent = "psu_vcc_5v";
+    psu_vcc_5v_c_out1: Cap(47uF, 50V);
+    attribute psu_vcc_5v_c_out1.expansion_parent = "psu_vcc_5v";
+    psu_vcc_5v_l_out: Ind(18uH, 0A);
+    attribute psu_vcc_5v_l_out.expansion_parent = "psu_vcc_5v";
+    psu_vcc_5v_r_fb_bot: Res(10k, 5%, 0.25W);
+    attribute psu_vcc_5v_r_fb_bot.expansion_parent = "psu_vcc_5v";
+    psu_vcc_5v_r_fb_top: Res(73.2k, 5%, 0.25W);
+    attribute psu_vcc_5v_r_fb_top.expansion_parent = "psu_vcc_5v";
+    psu_vcc_3v3.GND -> @GND;
+    psu_vcc_3v3_c_out1.2 -> @GND;
+    psu_vcc_3v3_r_fb_bot.2 -> @GND;
+    psu_vcc_5v.GND -> @GND;
+    psu_vcc_5v_c_in1.2 -> @GND;
+    psu_vcc_5v_c_out1.2 -> @GND;
+    psu_vcc_5v_r_fb_bot.2 -> @GND;
+    @VCC_3V3 -> psu_vcc_3v3_c_out1.1;
+    @VCC_3V3 -> psu_vcc_3v3_l_out.2;
+    @VCC_3V3 -> psu_vcc_3v3_r_fb_top.1;
+    @VCC_5V -> psu_vcc_5v_c_out1.1;
+    @VCC_5V -> psu_vcc_5v_l_out.2;
+    @VCC_5V -> psu_vcc_5v_r_fb_top.1;
+    @VIN_12V -> psu_vcc_3v3.EN;
+    @VIN_12V -> psu_vcc_3v3.VIN;
+    @VIN_12V -> psu_vcc_5v.EN;
+    @VIN_12V -> psu_vcc_5v.VIN;
+    @VIN_12V -> psu_vcc_5v_c_in1.1;
+    psu_vcc_3v3.BOOT -> psu_vcc_3v3_c_boot.1;  // net auto_psu_vcc_3v3_BOOT
+    psu_vcc_3v3.SW -> psu_vcc_3v3_c_boot.2;  // net auto_psu_vcc_3v3_c_boot_2
+    psu_vcc_3v3.SW -> psu_vcc_3v3_l_out.1;  // net auto_psu_vcc_3v3_c_boot_2
+    psu_vcc_3v3.FB -> psu_vcc_3v3_r_fb_bot.1;  // net auto_psu_vcc_3v3_r_fb_top_2
+    psu_vcc_3v3.FB -> psu_vcc_3v3_r_fb_top.2;  // net auto_psu_vcc_3v3_r_fb_top_2
+    psu_vcc_5v.BOOT -> psu_vcc_5v_c_boot.1;  // net auto_psu_vcc_5v_BOOT
+    psu_vcc_5v.SW -> psu_vcc_5v_c_boot.2;  // net auto_psu_vcc_5v_c_boot_2
+    psu_vcc_5v.SW -> psu_vcc_5v_l_out.1;  // net auto_psu_vcc_5v_c_boot_2
+    psu_vcc_5v.FB -> psu_vcc_5v_r_fb_bot.1;  // net auto_psu_vcc_5v_r_fb_top_2
+    psu_vcc_5v.FB -> psu_vcc_5v_r_fb_top.2;  // net auto_psu_vcc_5v_r_fb_top_2
+}

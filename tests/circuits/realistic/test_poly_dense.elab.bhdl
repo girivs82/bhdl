@@ -1,0 +1,160 @@
+// ELABORATED bhdl — generated from test_poly_dense.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// DENSE polygon-outline fixture: an LQFP-48 placed near the inner
+// corner of an L-shaped 4-layer board, with resistor loads fanning
+// out of the pin rows. The sparse poly fixture (test_poly_planes)
+// never exercises the poly fill path's hole classification under a
+// real via field — this board pushes drop vias and signal vias
+// against the outline notch edges where the v1 path's hazards live
+// (octagon-vertex crossing, sub-clearance webs, notch-overlap
+// slit walks).
+
+import { STM32F103Cx } from "bhdl-stdlib/actives/stm32f103cx.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+layout PolyDense {
+    layer_stackup 4;
+    // L-shape: 50x50 with the (34..50, 32..50) corner cut away — the
+    // MCU sits just inside the inner corner so its escape/via field
+    // presses against both notch edges.
+    outline polygon (0,0) (50,0) (50,32) (34,32) (34,50) (0,50);
+    place mcu at (28, 25);
+    // Slot near the fill interior plus a near-edge aperture: both
+    // fill-punch classes active on the same board.
+    cutout rect (8, 30) (18, 32);
+    mounting_hole (44, 6) drill 3.2 keepout 2.0;
+}
+
+board PolyDense {
+    power VDD = 3.3V @ 0.1A;
+    ground GND;
+
+    c1: Cap(100nF, 50V);
+    c2: Cap(100nF, 50V);
+    c3: Cap(100nF, 50V);
+    c4: Cap(4.7uF, 50V);
+    mcu: STM32F103Cx(STM32F103C8T6, 64, 20, "MCU_ST_STM32F1:STM32F103C8Tx");
+    attribute mcu.expansion_applied = "true";
+    mcu_C_bulk: Cap(4.7µF, 50V);
+    attribute mcu_C_bulk.expansion_parent = "mcu";
+    attribute mcu_C_bulk.expansion_role = "series";
+    attribute mcu_C_bulk.vpin_parent = "mcu";
+    attribute mcu_C_bulk.vpin_role = "series";
+    mcu_C_nrst: Cap(100nF, 50V);
+    attribute mcu_C_nrst.expansion_parent = "mcu";
+    attribute mcu_C_nrst.expansion_role = "series";
+    attribute mcu_C_nrst.vpin_parent = "mcu";
+    attribute mcu_C_nrst.vpin_role = "series";
+    mcu_C_vbat: Cap(100nF, 50V);
+    attribute mcu_C_vbat.expansion_parent = "mcu";
+    attribute mcu_C_vbat.expansion_role = "series";
+    attribute mcu_C_vbat.vpin_parent = "mcu";
+    attribute mcu_C_vbat.vpin_role = "series";
+    mcu_C_vdd1: Cap(100nF, 50V);
+    attribute mcu_C_vdd1.expansion_parent = "mcu";
+    attribute mcu_C_vdd1.expansion_role = "series";
+    attribute mcu_C_vdd1.vpin_parent = "mcu";
+    attribute mcu_C_vdd1.vpin_role = "series";
+    mcu_C_vdd2: Cap(100nF, 50V);
+    attribute mcu_C_vdd2.expansion_parent = "mcu";
+    attribute mcu_C_vdd2.expansion_role = "series";
+    attribute mcu_C_vdd2.vpin_parent = "mcu";
+    attribute mcu_C_vdd2.vpin_role = "series";
+    mcu_C_vdd3: Cap(100nF, 50V);
+    attribute mcu_C_vdd3.expansion_parent = "mcu";
+    attribute mcu_C_vdd3.expansion_role = "series";
+    attribute mcu_C_vdd3.vpin_parent = "mcu";
+    attribute mcu_C_vdd3.vpin_role = "series";
+    mcu_C_vdda1: Cap(1µF, 50V);
+    attribute mcu_C_vdda1.expansion_parent = "mcu";
+    attribute mcu_C_vdda1.expansion_role = "series";
+    attribute mcu_C_vdda1.vpin_parent = "mcu";
+    attribute mcu_C_vdda1.vpin_role = "series";
+    mcu_C_vdda2: Cap(10nF, 50V);
+    attribute mcu_C_vdda2.expansion_parent = "mcu";
+    attribute mcu_C_vdda2.expansion_role = "series";
+    attribute mcu_C_vdda2.vpin_parent = "mcu";
+    attribute mcu_C_vdda2.vpin_role = "series";
+    mcu_R_nrst: Res(10kΩ, 5%, 0.25W);
+    attribute mcu_R_nrst.expansion_parent = "mcu";
+    attribute mcu_R_nrst.expansion_role = "series";
+    attribute mcu_R_nrst.vpin_parent = "mcu";
+    attribute mcu_R_nrst.vpin_role = "series";
+    mcu_R_pu_scl1: Res(4.7kΩ, 5%, 0.25W);
+    attribute mcu_R_pu_scl1.expansion_parent = "mcu";
+    attribute mcu_R_pu_scl1.expansion_role = "series";
+    attribute mcu_R_pu_scl1.vpin_parent = "mcu";
+    attribute mcu_R_pu_scl1.vpin_role = "series";
+    mcu_R_pu_sda1: Res(4.7kΩ, 5%, 0.25W);
+    attribute mcu_R_pu_sda1.expansion_parent = "mcu";
+    attribute mcu_R_pu_sda1.expansion_role = "series";
+    attribute mcu_R_pu_sda1.vpin_parent = "mcu";
+    attribute mcu_R_pu_sda1.vpin_role = "series";
+    r0: Res(1k, 5%, 0.25W);
+    r1: Res(1k, 5%, 0.25W);
+    r2: Res(2.2k, 5%, 0.25W);
+    r3: Res(2.2k, 5%, 0.25W);
+    r4: Res(4.7k, 5%, 0.25W);
+    r5: Res(4.7k, 5%, 0.25W);
+    r6: Res(10k, 5%, 0.25W);
+    r7: Res(10k, 5%, 0.25W);
+    c1.2 -> @GND;
+    c2.2 -> @GND;
+    c3.2 -> @GND;
+    c4.2 -> @GND;
+    mcu.VSSA -> @GND;
+    mcu.VSS_1 -> @GND;
+    mcu.VSS_2 -> @GND;
+    mcu.VSS_3 -> @GND;
+    mcu_C_bulk.2 -> @GND;
+    mcu_C_nrst.2 -> @GND;
+    mcu_C_vbat.2 -> @GND;
+    mcu_C_vdd1.2 -> @GND;
+    mcu_C_vdd2.2 -> @GND;
+    mcu_C_vdd3.2 -> @GND;
+    mcu_C_vdda1.2 -> @GND;
+    mcu_C_vdda2.2 -> @GND;
+    r0.2 -> @GND;
+    r1.2 -> @GND;
+    r2.2 -> @GND;
+    r3.2 -> @GND;
+    r4.2 -> @GND;
+    r5.2 -> @GND;
+    mcu.PB6 -> mcu_R_pu_scl1.1;  // net SCL_BUS
+    mcu.PB7 -> mcu_R_pu_sda1.1;  // net SDA_BUS
+    @VDD -> c1.1;
+    @VDD -> c2.1;
+    @VDD -> c3.1;
+    @VDD -> c4.1;
+    @VDD -> mcu.VBAT;
+    @VDD -> mcu.VDDA;
+    @VDD -> mcu.VDD_1;
+    @VDD -> mcu.VDD_2;
+    @VDD -> mcu.VDD_3;
+    @VDD -> mcu_C_bulk.1;
+    @VDD -> mcu_C_vbat.1;
+    @VDD -> mcu_C_vdd1.1;
+    @VDD -> mcu_C_vdd2.1;
+    @VDD -> mcu_C_vdd3.1;
+    @VDD -> mcu_C_vdda1.1;
+    @VDD -> mcu_C_vdda2.1;
+    @VDD -> mcu_R_nrst.1;
+    @VDD -> mcu_R_pu_scl1.2;
+    @VDD -> mcu_R_pu_sda1.2;
+    @VDD -> r6.2;
+    @VDD -> r7.2;
+    mcu.PA0 -> r0.1;  // net auto_mcu_PA0
+    mcu.PA1 -> r1.1;  // net auto_mcu_PA1
+    mcu.PA2 -> r2.1;  // net auto_mcu_PA2
+    mcu.PA3 -> r3.1;  // net auto_mcu_PA3
+    mcu.PA8 -> r6.1;  // net auto_mcu_PA8
+    mcu.PA9 -> r7.1;  // net auto_mcu_PA9
+    mcu.PB0 -> r4.1;  // net auto_mcu_PB0
+    mcu.PB1 -> r5.1;  // net auto_mcu_PB1
+    mcu.NRST -> mcu_C_nrst.1;  // net mcu_NRST
+    mcu.NRST -> mcu_R_nrst.2;  // net mcu_NRST
+}

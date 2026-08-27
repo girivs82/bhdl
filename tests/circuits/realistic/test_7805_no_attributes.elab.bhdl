@@ -1,0 +1,74 @@
+// ELABORATED bhdl — generated from test_7805_no_attributes.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// synthesized imports: expansion children reference these
+import { LM7805 } from "bhdl-stdlib/power/lm7805.bhdl";
+
+// Realistic 7805 Linear Regulator Circuit - BHDL v2.0
+// A complete 12V to 5V power supply with proper filtering and protection
+
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
+import { Cap, ElectrolyticCap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Ldo_LM7805 } from "bhdl-stdlib/power/lm7805.bhdl";
+
+import { TestPoint } from "bhdl-stdlib/connectors/testpoint.bhdl";
+import { Fuse, TVSDiode } from "bhdl-stdlib/protection/tvs.bhdl";
+
+board PowerSupply_7805 {
+    power VCC = 5V @ 1A;
+    power VIN = 12V @ 1A;
+    ground GND;
+
+    c_in1: ElectrolyticCap(100µF, 25V);
+    c_in2: Cap(0.1µF, 50V);
+    c_out1: ElectrolyticCap(10µF, 16V);
+    c_out2: Cap(0.1µF, 50V);
+    fuse: Fuse(1A, 10mΩ);
+    led: LED(green);
+    protected_vin: TVSDiode(15V);
+    r_led: Res(330Ω, 5%, 0.25W);
+    reg: Ldo_LM7805(5V, 500mA, 12V);
+    attribute reg.expansion_applied = "true";
+    reg_C_in: Cap(0.33µF, 50V);
+    attribute reg_C_in.composed_parent = "reg";
+    attribute reg_C_in.composed_role = "shunt";
+    reg_C_out: Cap(0.1µF, 50V);
+    attribute reg_C_out.composed_parent = "reg";
+    attribute reg_C_out.composed_role = "shunt";
+    reg_u: LM7805(5V);
+    attribute reg_u.composed_parent = "reg";
+    attribute reg_u.composed_role = "shunt";
+    tp_gnd: TestPoint();
+    tp_vin: TestPoint();
+    tp_vout: TestPoint();
+    c_in1.neg -> @GND;
+    c_in2.2 -> @GND;
+    c_out1.neg -> @GND;
+    c_out2.2 -> @GND;
+    led.K -> @GND;
+    protected_vin.A -> @GND;
+    reg.GND -> @GND;
+    reg_C_in.2 -> @GND;
+    reg_C_out.2 -> @GND;
+    reg_u.GND -> @GND;
+    tp_gnd.1 -> @GND;
+    @VCC -> c_out1.pos;
+    @VCC -> c_out2.1;
+    @VCC -> r_led.1;
+    @VCC -> reg.VOUT;
+    @VCC -> reg_C_out.1;
+    @VCC -> reg_u.VOUT;
+    @VCC -> tp_vout.1;
+    @VIN -> fuse.1;
+    led.A -> r_led.2;  // net auto_r_led_2
+    c_in1.pos -> c_in2.1;  // net net_protected_vin_K
+    c_in1.pos -> fuse.2;  // net net_protected_vin_K
+    c_in1.pos -> protected_vin.K;  // net net_protected_vin_K
+    c_in1.pos -> reg.VIN;  // net net_protected_vin_K
+    c_in1.pos -> reg_C_in.1;  // net net_protected_vin_K
+    c_in1.pos -> reg_u.VIN;  // net net_protected_vin_K
+    c_in1.pos -> tp_vin.1;  // net net_protected_vin_K
+}

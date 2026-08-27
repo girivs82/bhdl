@@ -1,0 +1,415 @@
+// ELABORATED bhdl — generated from arduino_uno_r3.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// synthesized imports: expansion children reference these
+import { LP2985 } from "bhdl-stdlib/power/lp2985.bhdl";
+import { NCP1117 } from "bhdl-stdlib/power/ncp1117.bhdl";
+import { TVSDiode } from "bhdl-stdlib/protection/tvs.bhdl";
+
+// Arduino Uno R3 — a real, shipping design transcribed from the published
+// schematic (arduino.cc, Uno R3 reference design). USB-C in place of the
+// original USB-B (the one liberty taken; modern clones ship exactly this).
+//
+// This board exists as the generality test: the corpus grew up alongside
+// the toolchain, this design did not. Everything here is faithful to the
+// R3: the barrel-jack → M7 → NCP1117 5V path, the LMV358 power-mux
+// comparator driving the FDN340P that gates USB VBUS onto the 5V rail,
+// the LP2985 3.3V LDO, the ATmega16U2 USB bridge with its 16 MHz crystal,
+// the ATmega328P with its ceramic resonator, the auto-reset DTR network,
+// the crossed UART with series 1k resistors, the pin-13 LED buffered by
+// the LMV358's second half, and all seven headers.
+
+import { Ldo_NCP1117 } from "bhdl-stdlib/power/ncp1117.bhdl";
+import { Ldo_LP2985 } from "bhdl-stdlib/power/lp2985.bhdl";
+import { LMV358 } from "bhdl-stdlib/actives/lmv358.bhdl";
+import { ATmega328P_DIP28 } from "bhdl-stdlib/actives/atmega328p.bhdl";
+import { ATmega16U2_QFN32 } from "bhdl-stdlib/actives/atmega16u2.bhdl";
+import { MOSFET } from "bhdl-stdlib/actives/mosfet.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Diode } from "bhdl-stdlib/passives/diode.bhdl";
+import { Crystal, Crystal_GND2 } from "bhdl-stdlib/passives/crystal.bhdl";
+import { Varistor } from "bhdl-stdlib/passives/varistor.bhdl";
+import { Fuse } from "bhdl-stdlib/protection/tvs.bhdl";
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
+import { SW_Push } from "bhdl-stdlib/electromechanical/switch.bhdl";
+import { Barrel_Jack_Switch } from "bhdl-stdlib/connectors/barrel_jack.bhdl";
+import { USB_C_Receptacle_USB2_16P } from "bhdl-stdlib/connectors/usb_c.bhdl";
+import { Pin_Header_01x06, Pin_Header_01x08, Pin_Header_01x10, Pin_Header_02x03 } from "bhdl-stdlib/connectors/pin_header.bhdl";
+
+layout ArduinoUnoR3 {
+    // REAL Uno R3 mechanical identity: the official 68.58 x 53.34
+    // outline with every connector pinned where the real board puts
+    // it (y-down, origin at the top-left corner). This is the
+    // realism contract: the router must reach edge-pinned connectors
+    // exactly like on the shipping product — free placement of
+    // connectors was hiding the hard part of the problem.
+    outline rect 68.58 53.34;
+    // Left edge: USB receptacle (top) and barrel jack (bottom).
+    place J_USB at (5.6, 11.4) rot 270;
+    place X1 at (7.0, 45.5) rot 270;
+    // Top edge: the two digital shield headers (rows horizontal).
+    place J_D2 at (28.9, 2.6) rot 90;
+    place J_D1 at (53.3, 2.6) rot 90;
+    // Bottom edge: power and analog shield headers.
+    place J_PWR at (26.7, 50.7) rot 90;
+    place J_AD at (49.5, 50.7) rot 90;
+    // Right edge: main ICSP (vertical); the 16U2's ICSP lies flat by
+    // the USB bridge.
+    place ICSP1 at (64.9, 27.9);
+    place ICSP2 at (27.5, 9.0) rot 90;
+    // Realism contract: ONLY mechanicals are pinned. The MCUs (and
+    // everything else) belong to the placer — any placement passing
+    // all rules is correct, exactly as on a real board where the
+    // enclosure imposes connector positions and nothing else.
+}
+
+board ArduinoUnoR3 {
+    power DC_IN = 9V @ 1A;
+    power VBUS = 5V @ 0.5A;
+    power VCC_3V3 = 3.3V @ 0.15A;
+    power VCC_5V = 5V @ 1A;
+    ground GND;
+
+    C10: Cap(1µF, 50V);
+    C11: Cap(22pF, 50V);
+    C12: Cap(22pF, 50V);
+    C13: Cap(100nF, 50V);
+    C14: Cap(100nF, 50V);
+    C6: Cap(100nF, 50V);
+    C7: Cap(100nF, 50V);
+    C9: Cap(1µF, 50V);
+    D1: Diode(0.7V);
+    D2: Diode(0.7V);
+    F1: Fuse(500mA, 150mΩ);
+    ICSP1: Pin_Header_02x03();
+    ICSP2: Pin_Header_02x03();
+    J_AD: Pin_Header_01x06();
+    J_D1: Pin_Header_01x08();
+    J_D2: Pin_Header_01x10();
+    J_PWR: Pin_Header_01x08();
+    J_USB: USB_C_Receptacle_USB2_16P();
+    LED_L: LED(yellow);
+    LED_ON: LED(green);
+    LED_RX: LED(yellow);
+    LED_TX: LED(yellow);
+    PC1: Cap(47µF, 25V);
+    PC2: Cap(47µF, 16V);
+    R10: Res(10kΩ, 5%, 0.25W);
+    R11: Res(10kΩ, 5%, 0.25W);
+    R22A: Res(22Ω, 5%, 0.25W);
+    R22B: Res(22Ω, 5%, 0.25W);
+    RL1: Res(1kΩ, 5%, 0.25W);
+    R_cc1: Res(5.1kΩ, 5%, 0.25W);
+    R_cc2: Res(5.1kΩ, 5%, 0.25W);
+    R_hwb: Res(10kΩ, 5%, 0.25W);
+    R_on: Res(1kΩ, 5%, 0.25W);
+    R_rst1: Res(10kΩ, 5%, 0.25W);
+    R_rst2: Res(10kΩ, 5%, 0.25W);
+    R_rx1: Res(1kΩ, 5%, 0.25W);
+    R_rx2: Res(1kΩ, 5%, 0.25W);
+    R_tx1: Res(1kΩ, 5%, 0.25W);
+    R_tx2: Res(1kΩ, 5%, 0.25W);
+    R_xt: Res(1MΩ, 5%, 0.25W);
+    S1: SW_Push();
+    T1: MOSFET(FDN340P, pmos, 20V, 2A, 50mΩ, 1V, 400mW, 6.0, 460.0);
+    U1: Ldo_NCP1117(5V, 500mA, 9V);
+    attribute U1.expansion_applied = "true";
+    U1_C_in: Cap(10µF, 50V);
+    attribute U1_C_in.composed_parent = "U1";
+    attribute U1_C_in.composed_role = "shunt";
+    U1_C_out: Cap(10µF, 50V);
+    attribute U1_C_out.composed_parent = "U1";
+    attribute U1_C_out.composed_role = "shunt";
+    U1_u: NCP1117(5V);
+    attribute U1_u.composed_parent = "U1";
+    attribute U1_u.composed_role = "shunt";
+    U2: Ldo_LP2985(3.3V, 100mA, 5V);
+    attribute U2.expansion_applied = "true";
+    attribute U2.gated_pins = "EN";
+    U2_C_bp: Cap(0.01µF, 50V);
+    attribute U2_C_bp.composed_parent = "U2";
+    attribute U2_C_bp.composed_role = "shunt";
+    U2_C_in: Cap(1µF, 50V);
+    attribute U2_C_in.composed_parent = "U2";
+    attribute U2_C_in.composed_role = "shunt";
+    U2_C_out: Cap(2.2µF, 50V);
+    attribute U2_C_out.composed_parent = "U2";
+    attribute U2_C_out.composed_role = "shunt";
+    U2_u: LP2985(3.3V);
+    attribute U2_u.composed_parent = "U2";
+    attribute U2_u.composed_role = "shunt";
+    U3: ATmega16U2_QFN32("ATMEGA16U2-MU");
+    attribute U3.expansion_applied = "true";
+    U3_C_avcc: Cap(100nF, 50V);
+    attribute U3_C_avcc.expansion_parent = "U3";
+    attribute U3_C_avcc.expansion_role = "shunt";
+    attribute U3_C_avcc.vpin_parent = "U3";
+    attribute U3_C_avcc.vpin_role = "shunt";
+    U3_C_bulk: Cap(10µF, 50V);
+    attribute U3_C_bulk.expansion_parent = "U3";
+    attribute U3_C_bulk.expansion_role = "shunt";
+    attribute U3_C_bulk.vpin_parent = "U3";
+    attribute U3_C_bulk.vpin_role = "shunt";
+    U3_C_ucap: Cap(1µF, 50V);
+    attribute U3_C_ucap.expansion_parent = "U3";
+    attribute U3_C_ucap.expansion_role = "series";
+    attribute U3_C_ucap.vpin_parent = "U3";
+    attribute U3_C_ucap.vpin_role = "series";
+    U3_C_uvcc: Cap(100nF, 50V);
+    attribute U3_C_uvcc.expansion_parent = "U3";
+    attribute U3_C_uvcc.expansion_role = "series";
+    attribute U3_C_uvcc.vpin_parent = "U3";
+    attribute U3_C_uvcc.vpin_role = "series";
+    U3_C_vcc: Cap(100nF, 50V);
+    attribute U3_C_vcc.expansion_parent = "U3";
+    attribute U3_C_vcc.expansion_role = "shunt";
+    attribute U3_C_vcc.vpin_parent = "U3";
+    attribute U3_C_vcc.vpin_role = "shunt";
+    U3_TVS_dn: TVSDiode(5V);
+    attribute U3_TVS_dn.expansion_parent = "U3";
+    attribute U3_TVS_dn.expansion_role = "series";
+    attribute U3_TVS_dn.vpin_parent = "U3";
+    attribute U3_TVS_dn.vpin_role = "series";
+    U3_TVS_dp: TVSDiode(5V);
+    attribute U3_TVS_dp.expansion_parent = "U3";
+    attribute U3_TVS_dp.expansion_role = "series";
+    attribute U3_TVS_dp.vpin_parent = "U3";
+    attribute U3_TVS_dp.vpin_role = "series";
+    U4: ATmega328P_DIP28("ATMEGA328P-PU");
+    attribute U4.expansion_applied = "true";
+    U4_C_aref: Cap(100nF, 50V);
+    attribute U4_C_aref.expansion_parent = "U4";
+    attribute U4_C_aref.expansion_role = "series";
+    attribute U4_C_aref.vpin_parent = "U4";
+    attribute U4_C_aref.vpin_role = "series";
+    U4_C_avcc: Cap(100nF, 50V);
+    attribute U4_C_avcc.expansion_parent = "U4";
+    attribute U4_C_avcc.expansion_role = "series";
+    attribute U4_C_avcc.vpin_parent = "U4";
+    attribute U4_C_avcc.vpin_role = "series";
+    U4_C_bulk: Cap(10µF, 50V);
+    attribute U4_C_bulk.expansion_parent = "U4";
+    attribute U4_C_bulk.expansion_role = "series";
+    attribute U4_C_bulk.vpin_parent = "U4";
+    attribute U4_C_bulk.vpin_role = "series";
+    U4_C_vcc: Cap(100nF, 50V);
+    attribute U4_C_vcc.expansion_parent = "U4";
+    attribute U4_C_vcc.expansion_role = "series";
+    attribute U4_C_vcc.vpin_parent = "U4";
+    attribute U4_C_vcc.vpin_role = "series";
+    U4_R_pu_scl: Res(4.7kΩ, 5%, 0.25W);
+    attribute U4_R_pu_scl.expansion_parent = "U4";
+    attribute U4_R_pu_scl.expansion_role = "series";
+    attribute U4_R_pu_scl.vpin_parent = "U4";
+    attribute U4_R_pu_scl.vpin_role = "series";
+    U4_R_pu_sda: Res(4.7kΩ, 5%, 0.25W);
+    attribute U4_R_pu_sda.expansion_parent = "U4";
+    attribute U4_R_pu_sda.expansion_role = "series";
+    attribute U4_R_pu_sda.vpin_parent = "U4";
+    attribute U4_R_pu_sda.vpin_role = "series";
+    U5: LMV358(LMV358IDGKR);
+    X1: Barrel_Jack_Switch();
+    Y1: Crystal(16MHz, 16.0);
+    Y2: Crystal_GND2("CSTCE16M0V53-R0", 16.0);
+    Z1: Varistor("CG0603MLC-05E");
+    Z2: Varistor("CG0603MLC-05E");
+    R10.2 -> R11.1;  // net CMP
+    R10.2 -> U5.IN_A_P;  // net CMP
+    @DC_IN -> D1.A;
+    @DC_IN -> X1.TIP;
+    C10.2 -> @GND;
+    C11.2 -> @GND;
+    C12.2 -> @GND;
+    C13.2 -> @GND;
+    C6.2 -> @GND;
+    C7.2 -> @GND;
+    C9.2 -> @GND;
+    ICSP1.6 -> @GND;
+    ICSP2.6 -> @GND;
+    J_D2.7 -> @GND;
+    J_PWR.6 -> @GND;
+    J_PWR.7 -> @GND;
+    J_USB.A1 -> @GND;
+    J_USB.A12 -> @GND;
+    J_USB.B1 -> @GND;
+    J_USB.B12 -> @GND;
+    J_USB.S1 -> @GND;
+    LED_L.K -> @GND;
+    LED_ON.K -> @GND;
+    PC1.2 -> @GND;
+    PC2.2 -> @GND;
+    R11.2 -> @GND;
+    R_cc1.2 -> @GND;
+    R_cc2.2 -> @GND;
+    R_hwb.2 -> @GND;
+    S1.B -> @GND;
+    U1.GND -> @GND;
+    U1_C_in.2 -> @GND;
+    U1_C_out.2 -> @GND;
+    U1_u.GND -> @GND;
+    U2.GND -> @GND;
+    U2_C_bp.2 -> @GND;
+    U2_C_in.2 -> @GND;
+    U2_C_out.2 -> @GND;
+    U2_u.GND -> @GND;
+    U3.GND -> @GND;
+    U3.PAD -> @GND;
+    U3.UGND -> @GND;
+    U3_C_avcc.2 -> @GND;
+    U3_C_bulk.2 -> @GND;
+    U3_C_ucap.2 -> @GND;
+    U3_C_uvcc.2 -> @GND;
+    U3_C_vcc.2 -> @GND;
+    U3_TVS_dn.A -> @GND;
+    U3_TVS_dp.A -> @GND;
+    U4.GND1 -> @GND;
+    U4.GND2 -> @GND;
+    U4_C_aref.2 -> @GND;
+    U4_C_avcc.2 -> @GND;
+    U4_C_bulk.2 -> @GND;
+    U4_C_vcc.2 -> @GND;
+    U5.V_MINUS -> @GND;
+    X1.SLEEVE -> @GND;
+    X1.SWITCH -> @GND;
+    Y2.GND2 -> @GND;
+    Z1.B -> @GND;
+    Z2.B -> @GND;
+    C14.2 -> D2.A;  // net RESET
+    C14.2 -> ICSP1.5;  // net RESET
+    C14.2 -> J_PWR.3;  // net RESET
+    C14.2 -> R_rst1.2;  // net RESET
+    C14.2 -> S1.A;  // net RESET
+    C14.2 -> U4.PC6;  // net RESET
+    ICSP2.5 -> R_rst2.2;  // net RESET2
+    ICSP2.5 -> U3.PC1;  // net RESET2
+    ICSP1.3 -> J_D2.6;  // net SCK
+    ICSP1.3 -> U4.PB5;  // net SCK
+    ICSP1.3 -> U5.IN_B_P;  // net SCK
+    U2_C_bp.1 -> U2_u.BP;  // net U2_auto_9
+    F1.2 -> T1.S;  // net USBVCC
+    J_USB.A7 -> J_USB.B7;  // net USB_DM
+    J_USB.A7 -> R22B.1;  // net USB_DM
+    J_USB.A7 -> Z2.A;  // net USB_DM
+    J_USB.A6 -> J_USB.B6;  // net USB_DP
+    J_USB.A6 -> R22A.1;  // net USB_DP
+    J_USB.A6 -> Z1.A;  // net USB_DP
+    @VBUS -> F1.1;
+    @VBUS -> J_USB.A4;
+    @VBUS -> J_USB.A9;
+    @VBUS -> J_USB.B4;
+    @VBUS -> J_USB.B9;
+    @VCC_3V3 -> C9.1;
+    @VCC_3V3 -> J_PWR.4;
+    @VCC_3V3 -> U2.VOUT;
+    @VCC_3V3 -> U2_C_out.1;
+    @VCC_3V3 -> U2_u.VOUT;
+    @VCC_3V3 -> U5.IN_A_N;
+    @VCC_5V -> C7.1;
+    @VCC_5V -> D2.K;
+    @VCC_5V -> ICSP1.2;
+    @VCC_5V -> ICSP2.2;
+    @VCC_5V -> J_PWR.2;
+    @VCC_5V -> J_PWR.5;
+    @VCC_5V -> LED_RX.A;
+    @VCC_5V -> LED_TX.A;
+    @VCC_5V -> PC2.1;
+    @VCC_5V -> R_on.1;
+    @VCC_5V -> R_rst1.1;
+    @VCC_5V -> R_rst2.1;
+    @VCC_5V -> T1.D;
+    @VCC_5V -> U1.VOUT;
+    @VCC_5V -> U1_C_out.1;
+    @VCC_5V -> U1_u.VOUT;
+    @VCC_5V -> U2.EN;
+    @VCC_5V -> U2.VIN;
+    @VCC_5V -> U2_C_in.1;
+    @VCC_5V -> U2_u.EN;
+    @VCC_5V -> U2_u.VIN;
+    @VCC_5V -> U3.AVCC;
+    @VCC_5V -> U3.UVCC;
+    @VCC_5V -> U3.VCC;
+    @VCC_5V -> U3_C_avcc.1;
+    @VCC_5V -> U3_C_bulk.1;
+    @VCC_5V -> U3_C_uvcc.1;
+    @VCC_5V -> U3_C_vcc.1;
+    @VCC_5V -> U4.AVCC;
+    @VCC_5V -> U4.VCC;
+    @VCC_5V -> U4_C_avcc.1;
+    @VCC_5V -> U4_C_bulk.1;
+    @VCC_5V -> U4_C_vcc.1;
+    @VCC_5V -> U4_R_pu_scl.2;
+    @VCC_5V -> U4_R_pu_sda.2;
+    @VCC_5V -> U5.V_PLUS;
+    C6.1 -> D1.K;  // net VIN
+    C6.1 -> J_PWR.8;  // net VIN
+    C6.1 -> PC1.1;  // net VIN
+    C6.1 -> R10.1;  // net VIN
+    C6.1 -> U1.VIN;  // net VIN
+    C6.1 -> U1_C_in.1;  // net VIN
+    C6.1 -> U1_u.VIN;  // net VIN
+    J_USB.A5 -> R_cc1.1;  // net auto_J_USB_A5
+    J_USB.B5 -> R_cc2.1;  // net auto_J_USB_B5
+    LED_RX.K -> R_rx2.1;  // net auto_LED_RX_K
+    LED_TX.K -> R_tx2.1;  // net auto_LED_TX_K
+    R22A.2 -> U3.D_P;  // net auto_R22A_2
+    R22A.2 -> U3_TVS_dp.K;  // net auto_R22A_2
+    R22B.2 -> U3.D_N;  // net auto_R22B_2
+    R22B.2 -> U3_TVS_dn.K;  // net auto_R22B_2
+    LED_L.A -> RL1.2;  // net auto_RL1_2
+    LED_ON.A -> R_on.2;  // net auto_R_on_2
+    R_rx1.2 -> U3.PD2;  // net auto_R_rx1_2
+    R_rx2.2 -> U3.PD4;  // net auto_R_rx2_2
+    J_D1.1 -> R_tx1.2;  // net auto_R_tx1_2
+    J_D1.1 -> U4.PD0;  // net auto_R_tx1_2
+    R_tx2.2 -> U3.PD5;  // net auto_R_tx2_2
+    C12.1 -> R_xt.2;  // net auto_R_xt_2
+    C12.1 -> U3.PC0;  // net auto_R_xt_2
+    C12.1 -> Y1.B;  // net auto_R_xt_2
+    ICSP2.3 -> U3.PB1;  // net auto_U3_PB1
+    ICSP2.4 -> U3.PB2;  // net auto_U3_PB2
+    ICSP2.1 -> U3.PB3;  // net auto_U3_PB3
+    R_tx1.1 -> U3.PD3;  // net auto_U3_PD3
+    C14.1 -> R_hwb.1;  // net auto_U3_PD7
+    C14.1 -> U3.PD7;  // net auto_U3_PD7
+    C10.1 -> U3.UCAP;  // net auto_U3_UCAP
+    C10.1 -> U3_C_ucap.1;  // net auto_U3_UCAP
+    C11.1 -> R_xt.1;  // net auto_U3_XTAL1
+    C11.1 -> U3.XTAL1;  // net auto_U3_XTAL1
+    C11.1 -> Y1.A;  // net auto_U3_XTAL1
+    C13.1 -> J_D2.8;  // net auto_U4_AREF
+    C13.1 -> U4.AREF;  // net auto_U4_AREF
+    C13.1 -> U4_C_aref.1;  // net auto_U4_AREF
+    J_D2.1 -> U4.PB0;  // net auto_U4_PB0
+    J_D2.2 -> U4.PB1;  // net auto_U4_PB1
+    J_D2.3 -> U4.PB2;  // net auto_U4_PB2
+    ICSP1.4 -> J_D2.4;  // net auto_U4_PB3
+    ICSP1.4 -> U4.PB3;  // net auto_U4_PB3
+    ICSP1.1 -> J_D2.5;  // net auto_U4_PB4
+    ICSP1.1 -> U4.PB4;  // net auto_U4_PB4
+    U4.PB6 -> Y2.A;  // net auto_U4_PB6
+    J_AD.1 -> U4.PC0;  // net auto_U4_PC0
+    J_AD.2 -> U4.PC1;  // net auto_U4_PC1
+    J_AD.3 -> U4.PC2;  // net auto_U4_PC2
+    J_AD.4 -> U4.PC3;  // net auto_U4_PC3
+    J_AD.5 -> J_D2.9;  // net auto_U4_PC4
+    J_AD.5 -> U4.PC4;  // net auto_U4_PC4
+    J_AD.5 -> U4_R_pu_sda.1;  // net auto_U4_PC4
+    J_AD.6 -> J_D2.10;  // net auto_U4_PC5
+    J_AD.6 -> U4.PC5;  // net auto_U4_PC5
+    J_AD.6 -> U4_R_pu_scl.1;  // net auto_U4_PC5
+    J_D1.2 -> R_rx1.1;  // net auto_U4_PD1
+    J_D1.2 -> U4.PD1;  // net auto_U4_PD1
+    J_D1.3 -> U4.PD2;  // net auto_U4_PD2
+    J_D1.4 -> U4.PD3;  // net auto_U4_PD3
+    J_D1.5 -> U4.PD4;  // net auto_U4_PD4
+    J_D1.6 -> U4.PD5;  // net auto_U4_PD5
+    J_D1.7 -> U4.PD6;  // net auto_U4_PD6
+    J_D1.8 -> U4.PD7;  // net auto_U4_PD7
+    T1.G -> U5.OUT_A;  // net auto_U5_OUT_A
+    RL1.1 -> U5.IN_B_N;  // net auto_U5_OUT_B
+    RL1.1 -> U5.OUT_B;  // net auto_U5_OUT_B
+    U4.PB7 -> Y2.B;  // net auto_Y2_B
+}

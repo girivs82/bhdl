@@ -3274,9 +3274,22 @@ async fn run_safety(
             let circuit = converter.convert(faulted).map_err(|e| format!("spice convert: {e}"))?;
             let (result, circuit_ref) = bhdl_spice::input_draw::solve_dc_with_input_draws(circuit, &regulator_hints(faulted))
                 .map_err(|e| format!("{e}"))?;
-            let ann = build_simulation_annotations(&result, &circuit_ref);
+            // COMPLETE map from the raw solve — the same reason the
+            // HEALTHY path above builds it raw: build_simulation_
+            // annotations is a RENDERER helper that unions inductor-
+            // bridged nets and deletes the "internal" side, so a real
+            // net behind a real inductor silently vanished and effect
+            // predicates on it errored out ("no solved voltage on the
+            // faulted board") — blinding DC classification for those
+            // open-fault rows.
+            let mut volts: HashMap<String, f64> = result
+                .node_voltages
+                .iter()
+                .filter_map(|(idx, v)| circuit_ref.get_node_name(*idx).map(|n| (n.to_string(), *v)))
+                .collect();
+            volts.entry("GND".to_string()).or_insert(0.0);
             if std::env::var("BHDL_SAFETY_DEBUG").map(|v| v == "1").unwrap_or(false) {
-                let mut vs: Vec<_> = ann.net_voltages.iter().collect();
+                let mut vs: Vec<_> = volts.iter().collect();
                 vs.sort_by(|a, b| a.0.cmp(b.0));
                 eprintln!("safety debug: faulted solve ({} nets in netlist): {:?}", faulted.nets.len(), vs);
                 for (_, b) in circuit_ref.branches() {
@@ -3284,7 +3297,7 @@ async fn run_safety(
                     eprintln!("  branch {} {} nodes={:?} val={}", b.component_type, b.name, names, b.value);
                 }
             }
-            Ok(ann.net_voltages)
+            Ok(volts)
         };
         // Transient engine for FTTI measurement: the FAULTED circuit
         // relaxes from the HEALTHY operating point (initial conditions)

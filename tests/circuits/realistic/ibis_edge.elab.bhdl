@@ -1,0 +1,51 @@
+// ELABORATED bhdl — generated from ibis_edge.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// Transient IBIS — the HDL surface for scheduled buffer edges.
+//
+// TestEdgeDriver references the hand-authored test_buffer.ibs beside this
+// board (clearly-synthetic data). The `ibis_wave_OUT1="rise@2n"` directive
+// schedules a Low→High transition of the CMOS_OUT buffer 2ns in; the
+// `transient` command solves the board through time while the buffer's
+// composed I-V sweeps along the file's [Ramp]-derived Ku/Kd coefficients.
+//
+// Endpoints are the two DC operating points of the load line: LOW at 0V
+// (pulldown vs 124Ω), HIGH at v where 0.016·v − 0.08 = −v/124 ⇒ 3.3243V.
+// The 100pF load and the buffer's own C_comp shape the edge in between.
+//
+//   bhdl tests/circuits/realistic/ibis_edge.bhdl transient -o trace.csv
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+
+entity TestEdgeDriver() {
+    pin VCC:  power in;
+    pin OUT1: signal out;
+    pin GND:  ground;
+
+    attribute component_class = "ic_logic";
+    attribute i_quiescent = 1mA;
+
+    simulation {
+        model {
+            ibis "test_buffer.ibs" component "TESTCHIP" corner typ;
+        }
+    }
+}
+
+board IbisEdge {
+    power VCC = 5V @ 0.1A;
+    ground GND;
+
+    c_load: Cap(100pF, 50V);
+    r_load: Res(125Ω, 5%, 0.25W);
+    u1: TestEdgeDriver();
+    c_load.2 -> @GND;
+    r_load.2 -> @GND;
+    u1.GND -> @GND;
+    @VCC -> u1.VCC;
+    c_load.1 -> r_load.1;  // net load_node
+    c_load.1 -> u1.OUT1;  // net load_node
+}

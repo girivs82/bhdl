@@ -1,0 +1,10 @@
+// ELABORATED bhdl — generated from test_v2_minimal.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+board MinimalTest {
+    power VCC = 5V @ 1A;
+    ground GND;
+
+}

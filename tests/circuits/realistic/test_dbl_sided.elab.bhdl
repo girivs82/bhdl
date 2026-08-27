@@ -1,0 +1,55 @@
+// ELABORATED bhdl — generated from test_dbl_sided.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// Double-sided assembly fixture: a deliberately tight board where the
+// four pull resistors cannot all fit around the IC on the top —
+// `assembly double_sided;` lets detailed placement flip free SMD
+// parts to the back at their connection centroid (the classic
+// decoupler-under-the-IC idiom, found by the optimizer, not declared).
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+entity Mcu() {
+    pin A: signal out;
+    pin B: signal out;
+    pin C: signal out;
+    pin D: signal out;
+    pin VCC: power in;
+    pin GND: ground;
+
+    attribute component_class = "ic";
+}
+
+layout Mcu {
+    package SOIC-8;
+}
+
+layout DblSided {
+    layer_stackup 2;
+    outline rect 12 10;
+    place u1 at (6, 5) rot 0;
+    assembly double_sided;
+}
+
+board DblSided {
+    power VCC = 3.3V @ 0.1A;
+    ground GND;
+
+    ra: Res(10000, 5%, 0.25W);
+    rb: Res(10000, 5%, 0.25W);
+    rc: Res(10000, 5%, 0.25W);
+    rd: Res(10000, 5%, 0.25W);
+    u1: Mcu();
+    ra.2 -> @GND;
+    rb.2 -> @GND;
+    rc.2 -> @GND;
+    rd.2 -> @GND;
+    u1.GND -> @GND;
+    @VCC -> u1.VCC;
+    ra.1 -> u1.A;  // net auto_u1_A
+    rb.1 -> u1.B;  // net auto_u1_B
+    rc.1 -> u1.C;  // net auto_u1_C
+    rd.1 -> u1.D;  // net auto_u1_D
+}

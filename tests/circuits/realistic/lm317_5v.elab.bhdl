@@ -1,0 +1,57 @@
+// ELABORATED bhdl — generated from lm317_5v.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// synthesized imports: expansion children reference these
+import { LM317 } from "bhdl-stdlib/power/lm317.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+// Minimal LM317 board: 12V input, regulate to 5V output.
+//
+// Exercises the v0.7c Phase 4.5 expansion + the stdlib LM317
+// entity's combined `design { }` + `expansion { }` blocks:
+//   - design { } computes R1 from the user's v_out=5V
+//     (R1 = 240 × (5 − 1.25) / 1.25 = 720Ω).
+//   - expansion { } materialises C_in, C_out, R1, R2 on the
+//     correct nets.
+
+import { Ldo_LM317 } from "bhdl-stdlib/power/lm317.bhdl";
+import { Cap, Res } from "bhdl-stdlib/passives/capacitor.bhdl";
+
+board LM317_5V_Test {
+    power VIN = 12V @ 0.5A;
+    power VOUT = 5V @ 0.5A;
+    ground GND;
+
+    U1: Ldo_LM317(5V, 500mA, 12V);
+    attribute U1.expansion_applied = "true";
+    U1_C_in: Cap(10µF, 50V);
+    attribute U1_C_in.composed_parent = "U1";
+    attribute U1_C_in.composed_role = "shunt";
+    U1_C_out: Cap(22µF, 50V);
+    attribute U1_C_out.composed_parent = "U1";
+    attribute U1_C_out.composed_role = "shunt";
+    U1_R1: Res(720.000, 5%, 0.25W);
+    attribute U1_R1.composed_parent = "U1";
+    attribute U1_R1.composed_role = "series";
+    U1_R2: Res(240Ω, 5%, 0.25W);
+    attribute U1_R2.composed_parent = "U1";
+    attribute U1_R2.composed_role = "shunt";
+    U1_u: LM317();
+    attribute U1_u.composed_parent = "U1";
+    attribute U1_u.composed_role = "series";
+    U1.GND -> @GND;
+    U1_C_in.2 -> @GND;
+    U1_C_out.2 -> @GND;
+    U1_R2.2 -> @GND;
+    U1_R1.2 -> U1_R2.1;  // net U1_auto_8
+    U1_R1.2 -> U1_u.ADJ;  // net U1_auto_8
+    @VIN -> U1.VIN;
+    @VIN -> U1_C_in.1;
+    @VIN -> U1_u.VIN;
+    @VOUT -> U1.VOUT;
+    @VOUT -> U1_C_out.1;
+    @VOUT -> U1_R1.1;
+    @VOUT -> U1_u.VOUT;
+}

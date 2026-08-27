@@ -1,0 +1,40 @@
+// ELABORATED bhdl — generated from test_7805_cli_simple.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// synthesized imports: expansion children reference these
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { LM7805 } from "bhdl-stdlib/power/lm7805.bhdl";
+
+// Simple 7805 voltage regulator test for CLI pipeline
+
+import { Ldo_LM7805 } from "bhdl-stdlib/power/lm7805.bhdl";
+
+board VoltageRegulator {
+    power VIN = 12V @ 0.5A;
+    power VOUT = 5V @ 0.4A;
+    ground GND;
+
+    U1: Ldo_LM7805(5V, 500mA, 12V);
+    attribute U1.expansion_applied = "true";
+    U1_C_in: Cap(0.33µF, 50V);
+    attribute U1_C_in.composed_parent = "U1";
+    attribute U1_C_in.composed_role = "shunt";
+    U1_C_out: Cap(0.1µF, 50V);
+    attribute U1_C_out.composed_parent = "U1";
+    attribute U1_C_out.composed_role = "shunt";
+    U1_u: LM7805(5V);
+    attribute U1_u.composed_parent = "U1";
+    attribute U1_u.composed_role = "shunt";
+    U1.GND -> @GND;
+    U1_C_in.2 -> @GND;
+    U1_C_out.2 -> @GND;
+    U1_u.GND -> @GND;
+    @VIN -> U1.VIN;
+    @VIN -> U1_C_in.1;
+    @VIN -> U1_u.VIN;
+    @VOUT -> U1.VOUT;
+    @VOUT -> U1_C_out.1;
+    @VOUT -> U1_u.VOUT;
+}

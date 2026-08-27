@@ -1,0 +1,151 @@
+// ELABORATED bhdl — generated from test_ftdi_breakout.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// synthesized imports: expansion children reference these
+import { TVSDiode } from "bhdl-stdlib/protection/tvs.bhdl";
+
+// The classic FTDI USB-UART breakout — the FT232R datasheet's own
+// Figure 11 bus-powered application (DS_FT232R v1.04 §7.1): USB-C in,
+// ferrite bead on VBUS, VCCIO strapped to VCC for 5 V logic, TEST
+// grounded, TX/RX activity LEDs on CBUS0/CBUS1, and the 6-pin
+// FTDI-cable UART header. The entity's expansion carries the
+// datasheet decoupling network, reset RC, and USB ESD parts.
+//
+// Fidelity: the FT232RL rides its datasheet-DERIVED IBIS
+// (ft232r_vccio5.ibs) — the scheduled edge on TXD proves the WEAK
+// 200 Ω-class UART driver (Table 7) through the measured-edge chain,
+// a materially different SI character than MCU pins.
+
+import { FT232RL } from "bhdl-stdlib/actives/ft232rl.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Bead } from "bhdl-stdlib/passives/inline_passives.bhdl";
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
+import { USB_C_Receptacle_USB2_16P } from "bhdl-stdlib/connectors/usb_c.bhdl";
+import { Pin_Header_01x06 } from "bhdl-stdlib/connectors/pin_header.bhdl";
+
+layout FtdiBreakout {
+    layer_stackup 2;
+    outline rect 40 22;
+    // Breakout mechanicals: USB in on the left edge, UART header on
+    // the right — the classic dongle form factor.
+    place J_USB at (5.6, 11) rot 270;
+    place J_UART at (37.5, 11);
+}
+
+board FtdiBreakout {
+    power VBUS = 5V @ 0.1A;
+    ground GND;
+
+    C_vb: Cap(10nF, 50V);
+    FB1: Bead();
+    J_UART: Pin_Header_01x06();
+    J_USB: USB_C_Receptacle_USB2_16P();
+    LED_RX: LED(yellow);
+    LED_TX: LED(green);
+    R_cc1: Res(5.1kΩ, 5%, 0.25W);
+    R_cc2: Res(5.1kΩ, 5%, 0.25W);
+    R_rx: Res(1kΩ, 5%, 0.25W);
+    R_tx: Res(1kΩ, 5%, 0.25W);
+    U1: FT232RL(FT232RL);
+    attribute U1.expansion_applied = "true";
+    U1_C_bulk: Cap(10µF, 50V);
+    attribute U1_C_bulk.expansion_parent = "U1";
+    attribute U1_C_bulk.expansion_role = "series";
+    attribute U1_C_bulk.vpin_parent = "U1";
+    attribute U1_C_bulk.vpin_role = "series";
+    U1_C_reset: Cap(100nF, 50V);
+    attribute U1_C_reset.expansion_parent = "U1";
+    attribute U1_C_reset.expansion_role = "series";
+    attribute U1_C_reset.vpin_parent = "U1";
+    attribute U1_C_reset.vpin_role = "series";
+    U1_C_v3out: Cap(100nF, 50V);
+    attribute U1_C_v3out.expansion_parent = "U1";
+    attribute U1_C_v3out.expansion_role = "series";
+    attribute U1_C_v3out.vpin_parent = "U1";
+    attribute U1_C_v3out.vpin_role = "series";
+    U1_C_vcc: Cap(100nF, 50V);
+    attribute U1_C_vcc.expansion_parent = "U1";
+    attribute U1_C_vcc.expansion_role = "series";
+    attribute U1_C_vcc.vpin_parent = "U1";
+    attribute U1_C_vcc.vpin_role = "series";
+    U1_C_vccio: Cap(100nF, 50V);
+    attribute U1_C_vccio.expansion_parent = "U1";
+    attribute U1_C_vccio.expansion_role = "series";
+    attribute U1_C_vccio.vpin_parent = "U1";
+    attribute U1_C_vccio.vpin_role = "series";
+    U1_R_reset: Res(10kΩ, 5%, 0.25W);
+    attribute U1_R_reset.expansion_parent = "U1";
+    attribute U1_R_reset.expansion_role = "series";
+    attribute U1_R_reset.vpin_parent = "U1";
+    attribute U1_R_reset.vpin_role = "series";
+    // WARNING: param 'voltage' has no exported attribute and no default — round-trip may differ
+    U1_TVS_dn: TVSDiode();
+    attribute U1_TVS_dn.expansion_parent = "U1";
+    attribute U1_TVS_dn.expansion_role = "series";
+    attribute U1_TVS_dn.vpin_parent = "U1";
+    attribute U1_TVS_dn.vpin_role = "series";
+    // WARNING: param 'voltage' has no exported attribute and no default — round-trip may differ
+    U1_TVS_dp: TVSDiode();
+    attribute U1_TVS_dp.expansion_parent = "U1";
+    attribute U1_TVS_dp.expansion_role = "series";
+    attribute U1_TVS_dp.vpin_parent = "U1";
+    attribute U1_TVS_dp.vpin_role = "series";
+    C_vb.2 -> @GND;
+    J_UART.1 -> @GND;
+    J_USB.A1 -> @GND;
+    J_USB.A12 -> @GND;
+    J_USB.B1 -> @GND;
+    J_USB.B12 -> @GND;
+    J_USB.S1 -> @GND;
+    R_cc1.2 -> @GND;
+    R_cc2.2 -> @GND;
+    U1.AGND -> @GND;
+    U1.GND1 -> @GND;
+    U1.GND2 -> @GND;
+    U1.GND3 -> @GND;
+    U1.TEST -> @GND;
+    U1_C_bulk.2 -> @GND;
+    U1_C_reset.2 -> @GND;
+    U1_C_v3out.2 -> @GND;
+    U1_C_vcc.2 -> @GND;
+    U1_C_vccio.2 -> @GND;
+    U1_TVS_dn.A -> @GND;
+    U1_TVS_dp.A -> @GND;
+    U1.RESET_N -> U1_C_reset.1;  // net U1_RESET_N
+    U1.RESET_N -> U1_R_reset.2;  // net U1_RESET_N
+    U1.V3OUT -> U1_C_v3out.1;  // net U1_V3OUT
+    J_USB.A7 -> J_USB.B7;  // net USB_DM
+    J_USB.A7 -> U1.USBDM;  // net USB_DM
+    J_USB.A7 -> U1_TVS_dn.K;  // net USB_DM
+    J_USB.A6 -> J_USB.B6;  // net USB_DP
+    J_USB.A6 -> U1.USBDP;  // net USB_DP
+    J_USB.A6 -> U1_TVS_dp.K;  // net USB_DP
+    @VBUS -> FB1.A;
+    @VBUS -> J_USB.A4;
+    @VBUS -> J_USB.A9;
+    @VBUS -> J_USB.B4;
+    @VBUS -> J_USB.B9;
+    C_vb.1 -> FB1.B;  // net VCC_5V
+    C_vb.1 -> J_UART.3;  // net VCC_5V
+    C_vb.1 -> LED_RX.A;  // net VCC_5V
+    C_vb.1 -> LED_TX.A;  // net VCC_5V
+    C_vb.1 -> U1.VCC;  // net VCC_5V
+    C_vb.1 -> U1.VCCIO;  // net VCC_5V
+    C_vb.1 -> U1_C_bulk.1;  // net VCC_5V
+    C_vb.1 -> U1_C_vcc.1;  // net VCC_5V
+    C_vb.1 -> U1_C_vccio.1;  // net VCC_5V
+    C_vb.1 -> U1_R_reset.1;  // net VCC_5V
+    J_USB.A5 -> R_cc1.1;  // net auto_J_USB_A5
+    J_USB.B5 -> R_cc2.1;  // net auto_J_USB_B5
+    LED_RX.K -> R_rx.1;  // net auto_LED_RX_K
+    LED_TX.K -> R_tx.1;  // net auto_LED_TX_K
+    R_rx.2 -> U1.CBUS1;  // net auto_R_rx_2
+    R_tx.2 -> U1.CBUS0;  // net auto_R_tx_2
+    J_UART.2 -> U1.CTS_N;  // net auto_U1_CTS_N
+    J_UART.6 -> U1.RTS_N;  // net auto_U1_RTS_N
+    J_UART.5 -> U1.RXD;  // net auto_U1_RXD
+    J_UART.4 -> U1.TXD;  // net auto_U1_TXD
+}

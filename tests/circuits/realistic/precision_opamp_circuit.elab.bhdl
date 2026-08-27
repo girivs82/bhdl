@@ -1,0 +1,83 @@
+// ELABORATED bhdl — generated from precision_opamp_circuit.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// Precision op-amp signal chain on ±12V rails — regenerated to v2 from the
+// v1 structural-entity dialect (nested entity blocks with embedded
+// connections, `where` layout clauses, V+/V− pin names, type=/package=
+// reserved-word args). The v1 offset-trim stage (Potentiometer +
+// VoltageReference) is dropped pending stdlib entities for those parts.
+//
+// Chain: input RC conditioning → unity buffer → ×10 non-inverting gain
+// (0.1% feedback pair, declared as a precision path) → output RC filter →
+// buffered, current-sensed, clamped output.
+// Exercises: negative rail declaration (`power VEE = -12V`), ERC023
+// precision-path gating (0.1% parts in a 0.1% path — compliant), Schottky
+// rail clamps.
+
+import { OpAmp } from "bhdl-stdlib/actives/opamp.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { SchottkyDiode } from "bhdl-stdlib/passives/diode.bhdl";
+import { TestPoint } from "bhdl-stdlib/connectors/testpoint.bhdl";
+
+board PrecisionAmplifier {
+    power VCC = 12V @ 0.05A;
+    power VEE = -12V @ 0.05A;
+    ground GND;
+
+    c_comp: Cap(22pF, 50V);
+    c_filt: Cap(1nF, 50V);
+    c_in: Cap(100nF, 50V);
+    c_vcc1: Cap(100nF, 50V);
+    c_vee1: Cap(100nF, 50V);
+    d1: SchottkyDiode(0.32V);
+    d2: SchottkyDiode(0.32V);
+    r_f: Res(90k, 0.1%, 0.25W);
+    r_filt: Res(100, 5%, 0.25W);
+    r_g: Res(10k, 0.1%, 0.25W);
+    attribute r_g.stage_name = "precision_measurement";
+    r_in: Res(1k, 0.1%, 0.25W);
+    r_out: Res(50, 5%, 0.25W);
+    r_sense: Res(10, 5%, 0.25W);
+    tp_in: TestPoint();
+    tp_out: TestPoint();
+    u1: OpAmp(LM741, 1MHz, 0.5, 2mV, 1.7mA, 1, 200000, 2MΩ, 75Ω);
+    u2: OpAmp(LM741, 1MHz, 0.5, 2mV, 1.7mA, 1, 200000, 2MΩ, 75Ω);
+    u3: OpAmp(LM741, 1MHz, 0.5, 2mV, 1.7mA, 1, 200000, 2MΩ, 75Ω);
+    c_filt.2 -> @GND;
+    c_in.2 -> @GND;
+    c_vcc1.2 -> @GND;
+    c_vee1.2 -> @GND;
+    r_g.2 -> @GND;
+    r_in.1 -> tp_in.1;  // net SIG_IN
+    d1.A -> d2.K;  // net SIG_OUT
+    d1.A -> r_out.2;  // net SIG_OUT
+    d1.A -> tp_out.1;  // net SIG_OUT
+    @VCC -> c_vcc1.1;
+    @VCC -> d1.K;
+    @VCC -> u1.VCC;
+    @VCC -> u2.VCC;
+    @VCC -> u3.VCC;
+    @VEE -> c_vee1.1;
+    @VEE -> d2.A;
+    @VEE -> u1.VEE;
+    @VEE -> u2.VEE;
+    @VEE -> u3.VEE;
+    c_comp.2 -> r_f.2;  // net auto_c_comp_2
+    c_comp.2 -> r_g.1;  // net auto_c_comp_2
+    c_comp.2 -> u2.INN;  // net auto_c_comp_2
+    c_filt.1 -> r_filt.2;  // net auto_r_filt_2
+    c_filt.1 -> u3.INP;  // net auto_r_filt_2
+    c_in.1 -> r_in.2;  // net auto_r_in_2
+    c_in.1 -> u1.INP;  // net auto_r_in_2
+    r_out.1 -> r_sense.2;  // net auto_r_sense_2
+    r_out.1 -> u3.OUT;  // net auto_r_sense_2
+    u1.INN -> u1.OUT;  // net auto_u1_INN
+    u1.INN -> u2.INP;  // net auto_u1_INN
+    c_comp.1 -> r_f.1;  // net auto_u2_OUT
+    c_comp.1 -> r_filt.1;  // net auto_u2_OUT
+    c_comp.1 -> u2.OUT;  // net auto_u2_OUT
+    r_sense.1 -> u3.INN;  // net auto_u3_INN
+}

@@ -1,0 +1,100 @@
+// ELABORATED bhdl — generated from buck_converter_lm2596.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// synthesized imports: expansion children reference these
+import { Diode } from "bhdl-stdlib/passives/diode.bhdl";
+import { Ind } from "bhdl-stdlib/passives/inductor.bhdl";
+
+// Buck Converter using LM2596 with Virtual Pin
+// Handles are DESCRIPTIVE on purpose (u_buck, input_bulk_cap, …):
+// this board regression-tests the handle-vs-refdes split — any
+// consumer that leaks handles onto a fab surface (BOM, labels)
+// prints 'input_bulk_cap' instead of 'C1' and is caught on sight.
+// Doctrine: docs/spec/Handles_And_Refdes.md.
+// Tests virtual pin expansion for LM2596
+// 24V to 12V @ 2A
+
+import { LM2596 } from "bhdl-stdlib/components/power/switching_regulators/LM2596.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { TestPoint } from "bhdl-stdlib/connectors/testpoint.bhdl";
+
+board BuckConverterLM2596 {
+    power VIN = 24V @ 3A;
+    power VOUT_12V = 12V @ 2A;
+    ground GND;
+
+    input_bulk_cap: Cap(680µF, 35V);
+    input_hf_cap: Cap(0.1µF, 35V);
+    r_load: Res(6Ω, 5%, 25W);
+    tp_feedback: TestPoint();
+    tp_switch_node: TestPoint();
+    tp_vout: TestPoint();
+    u_buck: LM2596(12V);
+    attribute u_buck.expansion_applied = "true";
+    u_buck_C_ff: Cap(100pF, 50V);
+    attribute u_buck_C_ff.expansion_parent = "u_buck";
+    attribute u_buck_C_ff.expansion_role = "series";
+    attribute u_buck_C_ff.vpin_parent = "u_buck";
+    attribute u_buck_C_ff.vpin_role = "series";
+    u_buck_C_out: Cap(0.000009999999999999999, 50V);
+    attribute u_buck_C_out.expansion_parent = "u_buck";
+    attribute u_buck_C_out.expansion_role = "shunt";
+    attribute u_buck_C_out.vpin_parent = "u_buck";
+    attribute u_buck_C_out.vpin_role = "shunt";
+    u_buck_C_out2: Cap(0.1µF, 50V);
+    attribute u_buck_C_out2.expansion_parent = "u_buck";
+    attribute u_buck_C_out2.expansion_role = "shunt";
+    attribute u_buck_C_out2.vpin_parent = "u_buck";
+    attribute u_buck_C_out2.vpin_role = "shunt";
+    u_buck_D_catch: Diode(0.7V);
+    attribute u_buck_D_catch.expansion_parent = "u_buck";
+    attribute u_buck_D_catch.expansion_role = "shunt";
+    attribute u_buck_D_catch.vpin_parent = "u_buck";
+    attribute u_buck_D_catch.vpin_role = "shunt";
+    // WARNING: param 'value' has no exported attribute and no default — round-trip may differ
+    u_buck_L_out: Ind();
+    attribute u_buck_L_out.expansion_parent = "u_buck";
+    attribute u_buck_L_out.expansion_role = "series";
+    attribute u_buck_L_out.vpin_parent = "u_buck";
+    attribute u_buck_L_out.vpin_role = "series";
+    u_buck_R_bot: Res(1kΩ, 1%, 0.25W);
+    attribute u_buck_R_bot.expansion_parent = "u_buck";
+    attribute u_buck_R_bot.expansion_role = "shunt";
+    attribute u_buck_R_bot.vpin_parent = "u_buck";
+    attribute u_buck_R_bot.vpin_role = "shunt";
+    u_buck_R_top: Res(8756.098, 1%, 0.25W);
+    attribute u_buck_R_top.expansion_parent = "u_buck";
+    attribute u_buck_R_top.expansion_role = "series";
+    attribute u_buck_R_top.vpin_parent = "u_buck";
+    attribute u_buck_R_top.vpin_role = "series";
+    input_bulk_cap.2 -> @GND;
+    input_hf_cap.2 -> @GND;
+    r_load.2 -> @GND;
+    u_buck.GND -> @GND;
+    u_buck_C_out.2 -> @GND;
+    u_buck_C_out2.2 -> @GND;
+    u_buck_D_catch.A -> @GND;
+    u_buck_R_bot.2 -> @GND;
+    @VIN -> input_bulk_cap.1;
+    @VIN -> input_hf_cap.1;
+    @VIN -> u_buck.EN;
+    @VIN -> u_buck.VIN;
+    @VOUT_12V -> r_load.1;
+    @VOUT_12V -> tp_vout.1;
+    @VOUT_12V -> u_buck.VOUT;
+    @VOUT_12V -> u_buck_C_ff.1;
+    @VOUT_12V -> u_buck_C_out.1;
+    @VOUT_12V -> u_buck_C_out2.1;
+    @VOUT_12V -> u_buck_L_out.2;
+    @VOUT_12V -> u_buck_R_top.1;
+    tp_feedback.1 -> u_buck.FB;  // net auto_u_buck_FB
+    tp_feedback.1 -> u_buck_C_ff.2;  // net auto_u_buck_FB
+    tp_feedback.1 -> u_buck_R_bot.1;  // net auto_u_buck_FB
+    tp_feedback.1 -> u_buck_R_top.2;  // net auto_u_buck_FB
+    tp_switch_node.1 -> u_buck.SW;  // net auto_u_buck_SW
+    tp_switch_node.1 -> u_buck_D_catch.K;  // net auto_u_buck_SW
+    tp_switch_node.1 -> u_buck_L_out.1;  // net auto_u_buck_SW
+}

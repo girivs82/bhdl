@@ -1,0 +1,58 @@
+// ELABORATED bhdl — generated from adjustable_regulator_lm317.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// synthesized imports: expansion children reference these
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { LM317 } from "bhdl-stdlib/power/lm317.bhdl";
+
+import { Ldo_LM317 } from "bhdl-stdlib/power/lm317.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
+
+board AdjustableRegulatorBoard {
+    power VIN = 12V @ 1A;
+    power VOUT_9V = 9V @ 0.5A;
+    ground GND;
+    ground U1_GND;
+
+    D_LED: LED(green);
+    R_LED: Res(470, 5%, 0.25W);
+    R_LOAD: Res(18, 5%, 0.25W);
+    U1: Ldo_LM317(9V, 500mA, 12V);
+    attribute U1.expansion_applied = "true";
+    U1_C_in: Cap(10µF, 50V);
+    attribute U1_C_in.composed_parent = "U1";
+    attribute U1_C_in.composed_role = "shunt";
+    U1_C_out: Cap(22µF, 50V);
+    attribute U1_C_out.composed_parent = "U1";
+    attribute U1_C_out.composed_role = "shunt";
+    U1_R1: Res(1488.000, 5%, 0.25W);
+    attribute U1_R1.composed_parent = "U1";
+    attribute U1_R1.composed_role = "series";
+    U1_R2: Res(240Ω, 5%, 0.25W);
+    attribute U1_R2.composed_parent = "U1";
+    attribute U1_R2.composed_role = "shunt";
+    U1_u: LM317();
+    attribute U1_u.composed_parent = "U1";
+    attribute U1_u.composed_role = "series";
+    D_LED.K -> @GND;
+    R_LOAD.2 -> @GND;
+    U1.GND -> @U1_GND;
+    U1_C_in.2 -> @U1_GND;
+    U1_C_out.2 -> @U1_GND;
+    U1_R2.2 -> @U1_GND;
+    U1_R1.2 -> U1_R2.1;  // net U1_auto_8
+    U1_R1.2 -> U1_u.ADJ;  // net U1_auto_8
+    @VIN -> U1.VIN;
+    @VIN -> U1_C_in.1;
+    @VIN -> U1_u.VIN;
+    @VOUT_9V -> R_LED.1;
+    @VOUT_9V -> R_LOAD.1;
+    @VOUT_9V -> U1.VOUT;
+    @VOUT_9V -> U1_C_out.1;
+    @VOUT_9V -> U1_R1.1;
+    @VOUT_9V -> U1_u.VOUT;
+    D_LED.A -> R_LED.2;  // net auto_R_LED_2
+}

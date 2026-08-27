@@ -1,0 +1,187 @@
+// ELABORATED bhdl — generated from test_stm32_vb_panel.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// synthesized imports: expansion children reference these
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+
+// STM32F103VB control-panel core — the LQFP-100 V package on 3.3 V.
+// This fixture exercises what only the V package HAS: the Port E
+// bank (PE8..PE11, the TIM1-remap complementary-PWM pins, driving a
+// 4-LED status bar), the Port D bank (PD8/PD9 = USART3 remap, out to
+// a comms header), and the dedicated VREF+/VREF− reference pins
+// (VREF− to analog ground, VREF+ fed from VDDA — the expansion's
+// 1 µF + 10 nF reference decoupling lands across them). PA0-WKUP and
+// PC13-ANTI_TAMP ride the suffixed IBIS maps on the VBT component,
+// same proof as board 89 but against f103vbt.ibs.
+
+import { STM32F103Vx } from "bhdl-stdlib/actives/stm32f103vx.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
+import { Pin_Header_01x03 } from "bhdl-stdlib/connectors/pin_header.bhdl";
+import { Pin_Header_01x04 } from "bhdl-stdlib/connectors/pin_header.bhdl";
+
+layout Stm32VbPanel {
+    layer_stackup 2;
+    outline rect 62 50;
+    place J_BTN at (2.6, 14);
+    place J_COM at (2.6, 38);
+    place J_SWD at (59.4, 25);
+}
+
+board Stm32VbPanel {
+    power VDD = 3.3V @ 0.15A;
+    ground GND;
+
+    J_BTN: Pin_Header_01x03();
+    J_COM: Pin_Header_01x04();
+    J_SWD: Pin_Header_01x04();
+    d_e10: LED(yellow);
+    d_e11: LED(red);
+    d_e8: LED(green);
+    d_e9: LED(yellow);
+    d_rtc: LED(green);
+    mcu: STM32F103Vx(STM32F103VBT6, 128, 20, "MCU_ST_STM32F1:STM32F103VBTx");
+    attribute mcu.expansion_applied = "true";
+    mcu_C_bulk: Cap(4.7µF, 50V);
+    attribute mcu_C_bulk.expansion_parent = "mcu";
+    attribute mcu_C_bulk.expansion_role = "series";
+    attribute mcu_C_bulk.vpin_parent = "mcu";
+    attribute mcu_C_bulk.vpin_role = "series";
+    mcu_C_nrst: Cap(100nF, 50V);
+    attribute mcu_C_nrst.expansion_parent = "mcu";
+    attribute mcu_C_nrst.expansion_role = "series";
+    attribute mcu_C_nrst.vpin_parent = "mcu";
+    attribute mcu_C_nrst.vpin_role = "series";
+    mcu_C_vbat: Cap(100nF, 50V);
+    attribute mcu_C_vbat.expansion_parent = "mcu";
+    attribute mcu_C_vbat.expansion_role = "series";
+    attribute mcu_C_vbat.vpin_parent = "mcu";
+    attribute mcu_C_vbat.vpin_role = "series";
+    mcu_C_vdd1: Cap(100nF, 50V);
+    attribute mcu_C_vdd1.expansion_parent = "mcu";
+    attribute mcu_C_vdd1.expansion_role = "series";
+    attribute mcu_C_vdd1.vpin_parent = "mcu";
+    attribute mcu_C_vdd1.vpin_role = "series";
+    mcu_C_vdd2: Cap(100nF, 50V);
+    attribute mcu_C_vdd2.expansion_parent = "mcu";
+    attribute mcu_C_vdd2.expansion_role = "series";
+    attribute mcu_C_vdd2.vpin_parent = "mcu";
+    attribute mcu_C_vdd2.vpin_role = "series";
+    mcu_C_vdd3: Cap(100nF, 50V);
+    attribute mcu_C_vdd3.expansion_parent = "mcu";
+    attribute mcu_C_vdd3.expansion_role = "series";
+    attribute mcu_C_vdd3.vpin_parent = "mcu";
+    attribute mcu_C_vdd3.vpin_role = "series";
+    mcu_C_vdd4: Cap(100nF, 50V);
+    attribute mcu_C_vdd4.expansion_parent = "mcu";
+    attribute mcu_C_vdd4.expansion_role = "series";
+    attribute mcu_C_vdd4.vpin_parent = "mcu";
+    attribute mcu_C_vdd4.vpin_role = "series";
+    mcu_C_vdd5: Cap(100nF, 50V);
+    attribute mcu_C_vdd5.expansion_parent = "mcu";
+    attribute mcu_C_vdd5.expansion_role = "series";
+    attribute mcu_C_vdd5.vpin_parent = "mcu";
+    attribute mcu_C_vdd5.vpin_role = "series";
+    mcu_C_vdda1: Cap(1µF, 50V);
+    attribute mcu_C_vdda1.expansion_parent = "mcu";
+    attribute mcu_C_vdda1.expansion_role = "series";
+    attribute mcu_C_vdda1.vpin_parent = "mcu";
+    attribute mcu_C_vdda1.vpin_role = "series";
+    mcu_C_vdda2: Cap(10nF, 50V);
+    attribute mcu_C_vdda2.expansion_parent = "mcu";
+    attribute mcu_C_vdda2.expansion_role = "series";
+    attribute mcu_C_vdda2.vpin_parent = "mcu";
+    attribute mcu_C_vdda2.vpin_role = "series";
+    mcu_C_vref1: Cap(1µF, 50V);
+    attribute mcu_C_vref1.expansion_parent = "mcu";
+    attribute mcu_C_vref1.expansion_role = "series";
+    attribute mcu_C_vref1.vpin_parent = "mcu";
+    attribute mcu_C_vref1.vpin_role = "series";
+    mcu_C_vref2: Cap(10nF, 50V);
+    attribute mcu_C_vref2.expansion_parent = "mcu";
+    attribute mcu_C_vref2.expansion_role = "series";
+    attribute mcu_C_vref2.vpin_parent = "mcu";
+    attribute mcu_C_vref2.vpin_role = "series";
+    mcu_R_nrst: Res(10kΩ, 5%, 0.25W);
+    attribute mcu_R_nrst.expansion_parent = "mcu";
+    attribute mcu_R_nrst.expansion_role = "series";
+    attribute mcu_R_nrst.vpin_parent = "mcu";
+    attribute mcu_R_nrst.vpin_role = "series";
+    r_e10: Res(1kΩ, 5%, 0.25W);
+    r_e11: Res(1kΩ, 5%, 0.25W);
+    r_e8: Res(1kΩ, 5%, 0.25W);
+    r_e9: Res(1kΩ, 5%, 0.25W);
+    r_rtc: Res(1kΩ, 5%, 0.25W);
+    r_wkup: Res(10kΩ, 5%, 0.25W);
+    J_BTN.2 -> @GND;
+    J_BTN.3 -> @GND;
+    J_COM.4 -> @GND;
+    J_SWD.4 -> @GND;
+    mcu.VREF_N -> @GND;
+    mcu.VSSA -> @GND;
+    mcu.VSS_1 -> @GND;
+    mcu.VSS_2 -> @GND;
+    mcu.VSS_3 -> @GND;
+    mcu.VSS_4 -> @GND;
+    mcu.VSS_5 -> @GND;
+    mcu_C_bulk.2 -> @GND;
+    mcu_C_nrst.2 -> @GND;
+    mcu_C_vbat.2 -> @GND;
+    mcu_C_vdd1.2 -> @GND;
+    mcu_C_vdd2.2 -> @GND;
+    mcu_C_vdd3.2 -> @GND;
+    mcu_C_vdd4.2 -> @GND;
+    mcu_C_vdd5.2 -> @GND;
+    mcu_C_vdda1.2 -> @GND;
+    mcu_C_vdda2.2 -> @GND;
+    mcu_C_vref1.2 -> @GND;
+    mcu_C_vref2.2 -> @GND;
+    @VDD -> J_COM.1;
+    @VDD -> J_SWD.1;
+    @VDD -> mcu.VBAT;
+    @VDD -> mcu.VDDA;
+    @VDD -> mcu.VDD_1;
+    @VDD -> mcu.VDD_2;
+    @VDD -> mcu.VDD_3;
+    @VDD -> mcu.VDD_4;
+    @VDD -> mcu.VDD_5;
+    @VDD -> mcu.VREF_P;
+    @VDD -> mcu_C_bulk.1;
+    @VDD -> mcu_C_vbat.1;
+    @VDD -> mcu_C_vdd1.1;
+    @VDD -> mcu_C_vdd2.1;
+    @VDD -> mcu_C_vdd3.1;
+    @VDD -> mcu_C_vdd4.1;
+    @VDD -> mcu_C_vdd5.1;
+    @VDD -> mcu_C_vdda1.1;
+    @VDD -> mcu_C_vdda2.1;
+    @VDD -> mcu_C_vref1.1;
+    @VDD -> mcu_C_vref2.1;
+    @VDD -> mcu_R_nrst.1;
+    @VDD -> r_e10.1;
+    @VDD -> r_e11.1;
+    @VDD -> r_e8.1;
+    @VDD -> r_e9.1;
+    @VDD -> r_rtc.1;
+    @VDD -> r_wkup.1;
+    J_BTN.1 -> mcu.PA0;  // net WKUP
+    J_BTN.1 -> r_wkup.2;  // net WKUP
+    d_e10.K -> mcu.PE10;  // net auto_d_e10_K
+    d_e11.K -> mcu.PE11;  // net auto_d_e11_K
+    d_e8.K -> mcu.PE8;  // net auto_d_e8_K
+    d_e9.K -> mcu.PE9;  // net auto_d_e9_K
+    d_rtc.K -> mcu.PC13;  // net auto_d_rtc_K
+    J_SWD.2 -> mcu.PA13;  // net auto_mcu_PA13
+    J_SWD.3 -> mcu.PA14;  // net auto_mcu_PA14
+    J_COM.2 -> mcu.PD8;  // net auto_mcu_PD8
+    J_COM.3 -> mcu.PD9;  // net auto_mcu_PD9
+    d_e10.A -> r_e10.2;  // net auto_r_e10_2
+    d_e11.A -> r_e11.2;  // net auto_r_e11_2
+    d_e8.A -> r_e8.2;  // net auto_r_e8_2
+    d_e9.A -> r_e9.2;  // net auto_r_e9_2
+    d_rtc.A -> r_rtc.2;  // net auto_r_rtc_2
+    mcu.NRST -> mcu_C_nrst.1;  // net mcu_NRST
+    mcu.NRST -> mcu_R_nrst.2;  // net mcu_NRST
+}

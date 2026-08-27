@@ -1,0 +1,53 @@
+// ELABORATED bhdl — generated from atmega328p_gpio_aliases.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// v0.9a function-alias demo: a board that uses `mcu.gpio11` and
+// `mcu.gpio12` instead of `mcu.PB3` and `mcu.PB4`. The board
+// author writes Arduino-friendly pin names; the synthesizer
+// resolves them to the chip's port pins via the entity's
+// `aliases { }` block.
+
+import { ATmega328P_DIP28 } from "bhdl-stdlib/actives/atmega328p.bhdl";
+import { Cap, Res } from "bhdl-stdlib/passives/capacitor.bhdl";
+
+board ATmega328P_GPIO_Alias_Test {
+    power VCC = 5V @ 0.2A;
+    ground GND;
+
+    mcu: ATmega328P_DIP28("ATMEGA328P-PU");
+    attribute mcu.expansion_applied = "true";
+    mcu_C_aref: Cap(100nF, 50V);
+    attribute mcu_C_aref.expansion_parent = "mcu";
+    attribute mcu_C_aref.expansion_role = "series";
+    attribute mcu_C_aref.vpin_parent = "mcu";
+    attribute mcu_C_aref.vpin_role = "series";
+    mcu_C_avcc: Cap(100nF, 50V);
+    attribute mcu_C_avcc.expansion_parent = "mcu";
+    attribute mcu_C_avcc.expansion_role = "series";
+    attribute mcu_C_avcc.vpin_parent = "mcu";
+    attribute mcu_C_avcc.vpin_role = "series";
+    mcu_C_bulk: Cap(10µF, 50V);
+    attribute mcu_C_bulk.expansion_parent = "mcu";
+    attribute mcu_C_bulk.expansion_role = "series";
+    attribute mcu_C_bulk.vpin_parent = "mcu";
+    attribute mcu_C_bulk.vpin_role = "series";
+    mcu_C_vcc: Cap(100nF, 50V);
+    attribute mcu_C_vcc.expansion_parent = "mcu";
+    attribute mcu_C_vcc.expansion_role = "series";
+    attribute mcu_C_vcc.vpin_parent = "mcu";
+    attribute mcu_C_vcc.vpin_role = "series";
+    mcu.GND1 -> @GND;
+    mcu.GND2 -> @GND;
+    mcu_C_aref.2 -> @GND;
+    mcu_C_avcc.2 -> @GND;
+    mcu_C_bulk.2 -> @GND;
+    mcu_C_vcc.2 -> @GND;
+    @VCC -> mcu.AVCC;
+    @VCC -> mcu.VCC;
+    @VCC -> mcu_C_avcc.1;
+    @VCC -> mcu_C_bulk.1;
+    @VCC -> mcu_C_vcc.1;
+    mcu.AREF -> mcu_C_aref.1;  // net mcu_AREF
+}

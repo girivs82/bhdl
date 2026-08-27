@@ -1,0 +1,84 @@
+// ELABORATED bhdl — generated from test_line_buffer.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// Single-supply stereo line buffer — the textbook single-rail audio
+// stage: a stiff VCC/2 bias node (10k/10k divider, 10 µF hold-down),
+// AC-coupled inputs biased to it, TL072 unity followers, AC-coupled
+// outputs. Proves the audio-opamp entities end-to-end: the JFET
+// followers load the bias node with picoamps (i_bias 65 pA — the
+// divider needs no buffering, WHY this classic works), the draws
+// model puts the 2.8 mA package draw on the rail, and the board
+// routes through the standard gates.
+
+import { TL072 } from "bhdl-stdlib/actives/audio_opamps.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { ElectrolyticCap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Pin_Header_01x03 } from "bhdl-stdlib/connectors/pin_header.bhdl";
+
+layout LineBuffer {
+    layer_stackup 2;
+    outline rect 45 30;
+    place J_PWR at (5, 26) rot 90;
+    place J_IN at (2.6, 12);
+    place J_OUT at (42.4, 12);
+}
+
+board LineBuffer {
+    power VCC = 9V @ 0.05A;
+    ground GND;
+
+    J_IN: Pin_Header_01x03();
+    J_OUT: Pin_Header_01x03();
+    J_PWR: Pin_Header_01x03();
+    U1: TL072(TL072CP);
+    c_bias: ElectrolyticCap(10µF, 16V);
+    c_bulk: ElectrolyticCap(100µF, 16V);
+    c_inl: Cap(1µF, 50V);
+    c_inr: Cap(1µF, 50V);
+    c_op: Cap(100nF, 50V);
+    c_outl: ElectrolyticCap(10µF, 16V);
+    c_outr: ElectrolyticCap(10µF, 16V);
+    r_b1: Res(10kΩ, 5%, 0.25W);
+    r_b2: Res(10kΩ, 5%, 0.25W);
+    r_bl: Res(100kΩ, 5%, 0.25W);
+    r_br: Res(100kΩ, 5%, 0.25W);
+    r_ol: Res(100kΩ, 5%, 0.25W);
+    r_or: Res(100kΩ, 5%, 0.25W);
+    J_IN.3 -> @GND;
+    J_OUT.3 -> @GND;
+    J_PWR.2 -> @GND;
+    J_PWR.3 -> @GND;
+    U1.V_MINUS -> @GND;
+    c_bias.neg -> @GND;
+    c_bulk.neg -> @GND;
+    c_op.2 -> @GND;
+    r_b2.2 -> @GND;
+    r_ol.2 -> @GND;
+    r_or.2 -> @GND;
+    c_bias.pos -> r_b1.2;  // net VBIAS
+    c_bias.pos -> r_b2.1;  // net VBIAS
+    c_bias.pos -> r_bl.2;  // net VBIAS
+    c_bias.pos -> r_br.2;  // net VBIAS
+    @VCC -> J_PWR.1;
+    @VCC -> U1.V_PLUS;
+    @VCC -> c_bulk.pos;
+    @VCC -> c_op.1;
+    @VCC -> r_b1.1;
+    U1.IN_A_N -> U1.OUT_A;  // net auto_U1_OUT_A
+    U1.IN_A_N -> c_outl.pos;  // net auto_U1_OUT_A
+    U1.IN_B_N -> U1.OUT_B;  // net auto_U1_OUT_B
+    U1.IN_B_N -> c_outr.pos;  // net auto_U1_OUT_B
+    U1.IN_A_P -> c_inl.2;  // net in_l
+    U1.IN_A_P -> r_bl.1;  // net in_l
+    J_IN.1 -> c_inl.1;  // net in_l_raw
+    U1.IN_B_P -> c_inr.2;  // net in_r
+    U1.IN_B_P -> r_br.1;  // net in_r
+    J_IN.2 -> c_inr.1;  // net in_r_raw
+    J_OUT.1 -> c_outl.neg;  // net out_l
+    J_OUT.1 -> r_ol.1;  // net out_l
+    J_OUT.2 -> c_outr.neg;  // net out_r
+    J_OUT.2 -> r_or.1;  // net out_r
+}

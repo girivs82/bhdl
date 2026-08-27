@@ -1,0 +1,56 @@
+// ELABORATED bhdl — generated from test_power_domain_scalability_simple.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+//! Simple test for power domain scalability with basic components
+//! Uses only components defined in bhdl-stdlib
+
+import { Resistor } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Capacitor } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Inductor } from "bhdl-stdlib/passives/inductor.bhdl";
+
+board SimplePowerTest {
+    power VCC_5V = 3.3V @ 1A;
+    ground GND;
+
+    // WARNING: no ctor signature for this entity — emitted bare; round-trip unverified
+    C_DECOUP_1: Capacitor();
+    // WARNING: no ctor signature for this entity — emitted bare; round-trip unverified
+    C_DECOUP_2: Capacitor();
+    // WARNING: no ctor signature for this entity — emitted bare; round-trip unverified
+    C_DECOUP_3: Capacitor();
+    // WARNING: no ctor signature for this entity — emitted bare; round-trip unverified
+    C_DECOUP_4: Capacitor();
+    // WARNING: no ctor signature for this entity — emitted bare; round-trip unverified
+    C_DECOUP_5: Capacitor();
+    // WARNING: no ctor signature for this entity — emitted bare; round-trip unverified
+    C_DECOUP_6: Capacitor();
+    // WARNING: no ctor signature for this entity — emitted bare; round-trip unverified
+    inductor: Inductor();
+    // WARNING: no ctor signature for this entity — emitted bare; round-trip unverified
+    resistor_0: Resistor();
+    // WARNING: no ctor signature for this entity — emitted bare; round-trip unverified
+    resistor_1: Resistor();
+    // WARNING: no ctor signature for this entity — emitted bare; round-trip unverified
+    resistor_2: Resistor();
+    // WARNING: no ctor signature for this entity — emitted bare; round-trip unverified
+    resistor_3: Resistor();
+    C_DECOUP_1.2 -> @GND;
+    C_DECOUP_2.2 -> @GND;
+    C_DECOUP_3.2 -> @GND;
+    C_DECOUP_4.2 -> @GND;
+    C_DECOUP_5.2 -> @GND;
+    C_DECOUP_6.2 -> @GND;
+    @VCC_5V -> C_DECOUP_1.1;
+    @VCC_5V -> C_DECOUP_2.1;
+    @VCC_5V -> C_DECOUP_3.1;
+    @VCC_5V -> C_DECOUP_4.1;
+    @VCC_5V -> C_DECOUP_5.1;
+    @VCC_5V -> C_DECOUP_6.1;
+    @VCC_5V -> inductor.1;
+    @VCC_5V -> resistor_0.1;
+    @VCC_5V -> resistor_1.1;
+    @VCC_5V -> resistor_2.1;
+    @VCC_5V -> resistor_3.1;
+}

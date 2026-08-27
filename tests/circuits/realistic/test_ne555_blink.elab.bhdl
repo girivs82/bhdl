@@ -1,0 +1,108 @@
+// ELABORATED bhdl — generated from test_ne555_blink.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// synthesized imports: expansion children reference these
+import { NE555 } from "bhdl-stdlib/actives/ne555.bhdl";
+
+// The classic first circuit, as a data-fidelity proof: a 555 astable
+// blinker gated by a 74HC08 AND — two part classes that have NO
+// vendor simulation models anywhere, now carried in the stdlib with
+// their datasheets AS the model (TI SLFS022I / SCLS081). The
+// composite's expansion places the REAL timing network (RA, RB, CT,
+// CONT cap), the DC solve draws the real quiescent currents, the
+// timing cap's 2/3·VCC peak lands in the stress ledger, and the
+// whole thing routes through the standard gates like any board.
+//
+//   f = 1.44 / ((4.7k + 2·100k) · 10µF) ≈ 0.70 Hz — a visible blink.
+
+import { NE555Astable } from "bhdl-stdlib/actives/ne555.bhdl";
+import { SN74HC08 } from "bhdl-stdlib/actives/logic_74hc.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
+import { Pin_Header_01x03 } from "bhdl-stdlib/connectors/pin_header.bhdl";
+
+layout Ne555Blink {
+    outline rect 40 30;
+}
+
+board Ne555Blink {
+    power VCC = 5V @ 0.1A;
+    ground GND;
+
+    J1: Pin_Header_01x03();
+    blinker: NE555Astable();
+    attribute blinker.expansion_applied = "true";
+    blinker_c_cont: Cap(10nF, 50V);
+    attribute blinker_c_cont.expansion_parent = "blinker";
+    attribute blinker_c_cont.expansion_role = "shunt";
+    attribute blinker_c_cont.vpin_parent = "blinker";
+    attribute blinker_c_cont.vpin_role = "shunt";
+    blinker_c_t: Cap(10µF, 50V);
+    attribute blinker_c_t.expansion_parent = "blinker";
+    attribute blinker_c_t.expansion_role = "shunt";
+    attribute blinker_c_t.vpin_parent = "blinker";
+    attribute blinker_c_t.vpin_role = "shunt";
+    blinker_r_a: Res(4.7kΩ, 5%, 0.25W);
+    attribute blinker_r_a.expansion_parent = "blinker";
+    attribute blinker_r_a.expansion_role = "series";
+    attribute blinker_r_a.vpin_parent = "blinker";
+    attribute blinker_r_a.vpin_role = "series";
+    blinker_r_b: Res(100kΩ, 5%, 0.25W);
+    attribute blinker_r_b.expansion_parent = "blinker";
+    attribute blinker_r_b.expansion_role = "series";
+    attribute blinker_r_b.vpin_parent = "blinker";
+    attribute blinker_r_b.vpin_role = "series";
+    blinker_timer: NE555();
+    attribute blinker_timer.expansion_parent = "blinker";
+    attribute blinker_timer.expansion_role = "shunt";
+    attribute blinker_timer.vpin_parent = "blinker";
+    attribute blinker_timer.vpin_role = "shunt";
+    c_555: Cap(100nF, 50V);
+    c_bulk: Cap(10µF, 50V);
+    c_gate: Cap(100nF, 50V);
+    gate: SN74HC08();
+    led_blink: LED(red);
+    r_en: Res(10kΩ, 5%, 0.25W);
+    r_led: Res(680Ω, 5%, 0.25W);
+    J1.2 -> @GND;
+    J1.3 -> @GND;
+    blinker.GND -> @GND;
+    blinker_c_cont.2 -> @GND;
+    blinker_c_t.2 -> @GND;
+    blinker_timer.GND -> @GND;
+    c_555.2 -> @GND;
+    c_bulk.2 -> @GND;
+    c_gate.2 -> @GND;
+    gate.A2 -> @GND;
+    gate.A3 -> @GND;
+    gate.A4 -> @GND;
+    gate.B2 -> @GND;
+    gate.B3 -> @GND;
+    gate.B4 -> @GND;
+    gate.GND -> @GND;
+    led_blink.K -> @GND;
+    @VCC -> J1.1;
+    @VCC -> blinker.VCC;
+    @VCC -> blinker_r_a.1;
+    @VCC -> blinker_timer.RESET;
+    @VCC -> blinker_timer.VCC;
+    @VCC -> c_555.1;
+    @VCC -> c_bulk.1;
+    @VCC -> c_gate.1;
+    @VCC -> gate.VCC;
+    @VCC -> r_en.1;
+    blinker.OUT -> blinker_timer.OUT;  // net auto_blinker_OUT
+    blinker.OUT -> gate.A1;  // net auto_blinker_OUT
+    gate.Y1 -> r_led.1;  // net auto_gate_Y1
+    gate.B1 -> r_en.2;  // net auto_r_en_2
+    led_blink.A -> r_led.2;  // net auto_r_led_2
+    blinker_c_cont.1 -> blinker_timer.CONT;  // net blinker_auto_12
+    blinker_r_a.2 -> blinker_r_b.1;  // net blinker_auto_6
+    blinker_r_a.2 -> blinker_timer.DISCH;  // net blinker_auto_6
+    blinker_c_t.1 -> blinker_r_b.2;  // net blinker_auto_8
+    blinker_c_t.1 -> blinker_timer.THRES;  // net blinker_auto_8
+    blinker_c_t.1 -> blinker_timer.TRIG;  // net blinker_auto_8
+}

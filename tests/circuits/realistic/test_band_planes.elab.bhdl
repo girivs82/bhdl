@@ -1,0 +1,74 @@
+// ELABORATED bhdl — generated from test_band_planes.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// BAND-REGION + THT fixture: two power rails clustered left/right so
+// the split-plane separability gate passes and the Power layer
+// carries BAND REGIONS — with THT header rows crossing the band
+// boundaries. Reproduces the region-fill hole machinery outside the
+// full uno (s7's 22v family: unpunched holes in band fills).
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Pin_Header_01x06 } from "bhdl-stdlib/connectors/pin_header.bhdl";
+
+layout BandPlanes {
+    layer_stackup 4;
+    outline rect 50 30;
+    // Headers pinned: left/right vertical at the cluster hearts, the
+    // middle one straddling the future band boundary.
+    place ja at (6.0, 15.0);
+    place jb at (44.0, 15.0);
+    place jm at (25.0, 15.0);
+}
+
+board BandPlanes {
+    power VCC_A = 5V @ 0.2A;
+    power VCC_B = 3.3V @ 0.2A;
+    ground GND;
+
+    ca1: Cap(100nF, 50V);
+    ca2: Cap(1uF, 50V);
+    cb1: Cap(100nF, 50V);
+    cb2: Cap(1uF, 50V);
+    ja: Pin_Header_01x06();
+    jb: Pin_Header_01x06();
+    jm: Pin_Header_01x06();
+    ra1: Res(1k, 5%, 0.25W);
+    ra2: Res(2.2k, 5%, 0.25W);
+    ra3: Res(4.7k, 5%, 0.25W);
+    rb1: Res(1k, 5%, 0.25W);
+    rb2: Res(2.2k, 5%, 0.25W);
+    rb3: Res(4.7k, 5%, 0.25W);
+    ca1.2 -> @GND;
+    ca2.2 -> @GND;
+    cb1.2 -> @GND;
+    cb2.2 -> @GND;
+    ja.2 -> @GND;
+    jb.2 -> @GND;
+    jm.3 -> @GND;
+    jm.6 -> @GND;
+    ra1.2 -> @GND;
+    ra2.2 -> @GND;
+    ra3.2 -> @GND;
+    rb1.2 -> @GND;
+    rb2.2 -> @GND;
+    rb3.2 -> @GND;
+    @VCC_A -> ca1.1;
+    @VCC_A -> ca2.1;
+    @VCC_A -> ja.1;
+    @VCC_A -> jm.1;
+    @VCC_A -> ra3.1;
+    @VCC_B -> cb1.1;
+    @VCC_B -> cb2.1;
+    @VCC_B -> jb.1;
+    @VCC_B -> jm.2;
+    @VCC_B -> rb3.1;
+    ja.3 -> ra1.1;  // net auto_ja_3
+    ja.4 -> ra2.1;  // net auto_ja_4
+    jb.3 -> rb1.1;  // net auto_jb_3
+    jb.4 -> rb2.1;  // net auto_jb_4
+    ja.5 -> jm.4;  // net auto_jm_4
+    jb.5 -> jm.5;  // net auto_jm_5
+}

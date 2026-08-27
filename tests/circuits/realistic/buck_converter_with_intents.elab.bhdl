@@ -1,0 +1,45 @@
+// ELABORATED bhdl — generated from buck_converter_with_intents.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// Buck Converter with Intent-Driven Design
+// Demonstrates control loop, current limiting, and precision measurement intents
+
+import { TVSDiode } from "bhdl-stdlib/protection/tvs.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Inductor } from "bhdl-stdlib/passives/inductor.bhdl";
+import { TPS54302 } from "bhdl-stdlib/power/tps54302.bhdl";
+
+board BuckConverter {
+    power VIN = 12V @ 2A;
+    power VOUT = 5V @ 1.5A;
+    ground GND;
+
+    Cin: Cap(100u, 50V);
+    attribute Cin.stage_name = "noise_filtering";
+    Cout: Cap(47u, 50V);
+    attribute Cout.stage_name = "noise_filtering";
+    // WARNING: no ctor signature for this entity — emitted bare; round-trip unverified
+    L1: Inductor();
+    R1: Res(10k, 5%, 0.25W);
+    attribute R1.stage_name = "precision_measurement";
+    Rload: Res(3.3, 5%, 0.25W);
+    attribute Rload.stage_name = "precision_measurement";
+    ctrl: TPS54302();
+    tvs: TVSDiode(18V);
+    attribute tvs.stage_name = "input_protection";
+    Cin.2 -> @GND;
+    Cout.2 -> @GND;
+    R1.2 -> @GND;
+    Rload.2 -> @GND;
+    ctrl.FB -> @GND;
+    ctrl.GND -> @GND;
+    tvs.A -> @GND;
+    Cout.1 -> L1.2;  // net fb_node
+    Cout.1 -> R1.1;  // net fb_node
+    L1.1 -> ctrl.SW;  // net switch_node
+    Cin.1 -> ctrl.VIN;  // net vin_filtered
+    Cin.1 -> tvs.K;  // net vin_filtered
+}

@@ -1,0 +1,80 @@
+// ELABORATED bhdl — generated from test_supply_ldo.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// synthesized imports: expansion children reference these
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Diode } from "bhdl-stdlib/passives/diode.bhdl";
+import { Ind } from "bhdl-stdlib/passives/inductor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+import { LM2596 } from "bhdl-stdlib/components/power/switching_regulators/LM2596.bhdl";
+
+board SupplyLdoS3 {
+    power VCC_3V3 = 3.3V @ 0.1A;
+    power VIN_5V = 5V @ 1A;
+    ground GND;
+
+    psu_vcc_3v3: LM2596(3.3V);
+    attribute psu_vcc_3v3.expansion_applied = "true";
+    // WARNING: param 'value' has no exported attribute and no default — round-trip may differ
+    psu_vcc_3v3_C_ff: Cap();
+    attribute psu_vcc_3v3_C_ff.expansion_parent = "psu_vcc_3v3";
+    attribute psu_vcc_3v3_C_ff.expansion_role = "series";
+    attribute psu_vcc_3v3_C_ff.vpin_parent = "psu_vcc_3v3";
+    attribute psu_vcc_3v3_C_ff.vpin_role = "series";
+    // WARNING: param 'value' has no exported attribute and no default — round-trip may differ
+    psu_vcc_3v3_C_out: Cap();
+    attribute psu_vcc_3v3_C_out.expansion_parent = "psu_vcc_3v3";
+    attribute psu_vcc_3v3_C_out.expansion_role = "shunt";
+    attribute psu_vcc_3v3_C_out.vpin_parent = "psu_vcc_3v3";
+    attribute psu_vcc_3v3_C_out.vpin_role = "shunt";
+    // WARNING: param 'value' has no exported attribute and no default — round-trip may differ
+    psu_vcc_3v3_C_out2: Cap();
+    attribute psu_vcc_3v3_C_out2.expansion_parent = "psu_vcc_3v3";
+    attribute psu_vcc_3v3_C_out2.expansion_role = "shunt";
+    attribute psu_vcc_3v3_C_out2.vpin_parent = "psu_vcc_3v3";
+    attribute psu_vcc_3v3_C_out2.vpin_role = "shunt";
+    psu_vcc_3v3_D_catch: Diode(0.7V);
+    attribute psu_vcc_3v3_D_catch.expansion_parent = "psu_vcc_3v3";
+    attribute psu_vcc_3v3_D_catch.expansion_role = "shunt";
+    attribute psu_vcc_3v3_D_catch.vpin_parent = "psu_vcc_3v3";
+    attribute psu_vcc_3v3_D_catch.vpin_role = "shunt";
+    // WARNING: param 'value' has no exported attribute and no default — round-trip may differ
+    psu_vcc_3v3_L_out: Ind();
+    attribute psu_vcc_3v3_L_out.expansion_parent = "psu_vcc_3v3";
+    attribute psu_vcc_3v3_L_out.expansion_role = "series";
+    attribute psu_vcc_3v3_L_out.vpin_parent = "psu_vcc_3v3";
+    attribute psu_vcc_3v3_L_out.vpin_role = "series";
+    // WARNING: param 'value' has no exported attribute and no default — round-trip may differ
+    psu_vcc_3v3_R_bot: Res();
+    attribute psu_vcc_3v3_R_bot.expansion_parent = "psu_vcc_3v3";
+    attribute psu_vcc_3v3_R_bot.expansion_role = "shunt";
+    attribute psu_vcc_3v3_R_bot.vpin_parent = "psu_vcc_3v3";
+    attribute psu_vcc_3v3_R_bot.vpin_role = "shunt";
+    // WARNING: param 'value' has no exported attribute and no default — round-trip may differ
+    psu_vcc_3v3_R_top: Res();
+    attribute psu_vcc_3v3_R_top.expansion_parent = "psu_vcc_3v3";
+    attribute psu_vcc_3v3_R_top.expansion_role = "series";
+    attribute psu_vcc_3v3_R_top.vpin_parent = "psu_vcc_3v3";
+    attribute psu_vcc_3v3_R_top.vpin_role = "series";
+    psu_vcc_3v3.GND -> @GND;
+    psu_vcc_3v3_C_out.2 -> @GND;
+    psu_vcc_3v3_C_out2.2 -> @GND;
+    psu_vcc_3v3_D_catch.A -> @GND;
+    psu_vcc_3v3_R_bot.2 -> @GND;
+    @VCC_3V3 -> psu_vcc_3v3.VOUT;
+    @VCC_3V3 -> psu_vcc_3v3_C_ff.1;
+    @VCC_3V3 -> psu_vcc_3v3_C_out.1;
+    @VCC_3V3 -> psu_vcc_3v3_C_out2.1;
+    @VCC_3V3 -> psu_vcc_3v3_L_out.2;
+    @VCC_3V3 -> psu_vcc_3v3_R_top.1;
+    @VIN_5V -> psu_vcc_3v3.EN;
+    @VIN_5V -> psu_vcc_3v3.VIN;
+    psu_vcc_3v3.FB -> psu_vcc_3v3_C_ff.2;  // net psu_vcc_3v3_FB
+    psu_vcc_3v3.FB -> psu_vcc_3v3_R_bot.1;  // net psu_vcc_3v3_FB
+    psu_vcc_3v3.FB -> psu_vcc_3v3_R_top.2;  // net psu_vcc_3v3_FB
+    psu_vcc_3v3.SW -> psu_vcc_3v3_D_catch.K;  // net psu_vcc_3v3_SW
+    psu_vcc_3v3.SW -> psu_vcc_3v3_L_out.1;  // net psu_vcc_3v3_SW
+}

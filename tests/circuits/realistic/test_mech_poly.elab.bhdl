@@ -1,0 +1,47 @@
+// ELABORATED bhdl — generated from test_mech_poly.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// Polygon-outline fixture (P2 v2): an L-shaped board — the top-right
+// corner is cut away for a chassis fitting. Everything (placement,
+// routing, silk) must stay inside the polygon; the notch is off-board.
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
+
+entity PwrJack() {
+    pin VIN: power out;
+    pin GND: ground;
+
+    attribute component_class = "connector";
+}
+
+layout PwrJack {
+    package SOT-223;
+}
+
+layout MechPoly {
+    layer_stackup 2;
+    // L-shape: 40x30 with the (28..40, 18..30) corner cut away.
+    outline polygon (0,0) (40,0) (40,18) (28,18) (28,30) (0,30);
+    place j_pwr at (4, 15) rot 90;
+    mounting_hole (36, 4) drill 3.2 keepout 2.0;
+    // Cable slot — must match the DXF's interior polyline exactly.
+    cutout rect (16, 4) (22, 6);
+    mech_check "test_mech_poly.dxf";
+}
+
+board MechPoly {
+    power VCC = 5V @ 0.1A;
+    ground GND;
+
+    j_pwr: PwrJack();
+    led1: LED(green);
+    r_led: Res(220, 5%, 0.25W);
+    j_pwr.GND -> @GND;
+    r_led.2 -> @GND;
+    @VCC -> j_pwr.VIN;
+    @VCC -> led1.A;
+    led1.K -> r_led.1;  // net auto_led1_K
+}

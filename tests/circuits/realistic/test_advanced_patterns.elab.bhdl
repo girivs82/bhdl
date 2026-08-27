@@ -1,0 +1,76 @@
+// ELABORATED bhdl — generated from test_advanced_patterns.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// Test circuit for Advanced Pattern Matching feature
+// Tests even/odd keywords, explicit lists, and stepped ranges
+
+// Board-local test entity: minimal analog temp-sensor shape.
+entity TempSensor() {
+    pin VCC: power in;
+    pin GND: ground;
+    pin OUT: signal out;
+
+    attribute component_class = "sensor";
+}
+
+board AdvancedPatternTest {
+    power VCC_ALL = 3.3V @ 5A;
+    power VCC_EVEN = 3.3V @ 2A;
+    power VCC_ODD = 3.3V @ 2A;
+    power VCC_RANGE = 3.3V @ 1A;
+    power VCC_SAMPLED = 3.3V @ 1A;
+    power VCC_SINGLE = 3.3V @ 1A;
+    power VCC_SPECIAL = 3.3V @ 1A;
+    ground GND;
+
+    sensor_0: TempSensor();
+    sensor_1: TempSensor();
+    sensor_10: TempSensor();
+    sensor_11: TempSensor();
+    sensor_12: TempSensor();
+    sensor_13: TempSensor();
+    sensor_14: TempSensor();
+    sensor_15: TempSensor();
+    sensor_2: TempSensor();
+    sensor_3: TempSensor();
+    sensor_4: TempSensor();
+    sensor_5: TempSensor();
+    sensor_6: TempSensor();
+    sensor_7: TempSensor();
+    sensor_8: TempSensor();
+    sensor_9: TempSensor();
+    sensor_0.GND -> @GND;
+    sensor_1.GND -> @GND;
+    sensor_10.GND -> @GND;
+    sensor_11.GND -> @GND;
+    sensor_12.GND -> @GND;
+    sensor_13.GND -> @GND;
+    sensor_14.GND -> @GND;
+    sensor_15.GND -> @GND;
+    sensor_2.GND -> @GND;
+    sensor_3.GND -> @GND;
+    sensor_4.GND -> @GND;
+    sensor_5.GND -> @GND;
+    sensor_6.GND -> @GND;
+    sensor_7.GND -> @GND;
+    sensor_8.GND -> @GND;
+    sensor_9.GND -> @GND;
+    @VCC_ALL -> sensor_0.VCC;
+    @VCC_ALL -> sensor_1.VCC;
+    @VCC_ALL -> sensor_10.VCC;
+    @VCC_ALL -> sensor_11.VCC;
+    @VCC_ALL -> sensor_12.VCC;
+    @VCC_ALL -> sensor_13.VCC;
+    @VCC_ALL -> sensor_14.VCC;
+    @VCC_ALL -> sensor_15.VCC;
+    @VCC_ALL -> sensor_2.VCC;
+    @VCC_ALL -> sensor_3.VCC;
+    @VCC_ALL -> sensor_4.VCC;
+    @VCC_ALL -> sensor_5.VCC;
+    @VCC_ALL -> sensor_6.VCC;
+    @VCC_ALL -> sensor_7.VCC;
+    @VCC_ALL -> sensor_8.VCC;
+    @VCC_ALL -> sensor_9.VCC;
+}

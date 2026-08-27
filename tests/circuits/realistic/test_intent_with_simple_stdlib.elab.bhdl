@@ -1,0 +1,71 @@
+// ELABORATED bhdl — generated from test_intent_with_simple_stdlib.bhdl; DO NOT EDIT.
+// The round-trip gate re-synthesizes this file and requires the
+// IDENTICAL netlist. Every synthesized element carries a
+// provenance comment naming the intent that produced it.
+
+// synthesized imports: expansion children reference these
+import { LinearRegulatorIc } from "bhdl-stdlib/power/regulator.bhdl";
+
+// Intent-driven layout test with simplified stdlib
+// Uses v2.0-compatible simplified components
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap, ElectrolyticCap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { LED } from "bhdl-stdlib/optoelectronic/led.bhdl";
+import { TVSDiode, Fuse } from "bhdl-stdlib/protection/tvs.bhdl";
+import { LM7805 } from "bhdl-stdlib/power/regulator.bhdl";
+
+board IntentDrivenPowerSupply {
+    power VCC = 5V @ 0.5A;
+    power VIN = 12V @ 1A;
+    ground GND;
+
+    c_in: ElectrolyticCap(100µF, 25V);
+    attribute c_in.stage_name = "noise_filtering";
+    c_out: ElectrolyticCap(10µF, 10V);
+    attribute c_out.stage_name = "noise_filtering";
+    fuse: Fuse(1A, 10mΩ);
+    attribute fuse.stage_name = "input_protection";
+    led: LED(green);
+    attribute led.stage_name = "current_limiting";
+    r_led: Res(330, 5%, 0.25W);
+    // WARNING: no ctor signature for this entity — emitted bare; round-trip unverified
+    reg: LM7805();
+    attribute reg.expansion_applied = "true";
+    attribute reg.gated_pins = "EN";
+    attribute reg.stage_name = "voltage_regulation";
+    reg_C_in: Cap(0.33µF, 50V);
+    attribute reg_C_in.composed_parent = "reg";
+    attribute reg_C_in.composed_role = "shunt";
+    reg_C_out: Cap(0.1µF, 50V);
+    attribute reg_C_out.composed_parent = "reg";
+    attribute reg_C_out.composed_role = "shunt";
+    reg_u: LinearRegulatorIc(5V, 2V, 5mA);
+    attribute reg_u.composed_parent = "reg";
+    attribute reg_u.composed_role = "shunt";
+    sense: Res(0.1, 5%, 0.25W);
+    attribute sense.stage_name = "current_sensing";
+    tvs: TVSDiode(15V);
+    c_in.neg -> @GND;
+    c_out.neg -> @GND;
+    led.K -> @GND;
+    reg.GND -> @GND;
+    reg_C_in.2 -> @GND;
+    reg_C_out.2 -> @GND;
+    reg_u.GND -> @GND;
+    tvs.A -> @GND;
+    @VIN -> fuse.1;
+    c_in.pos -> fuse.2;  // net filtered_in
+    c_in.pos -> reg.VIN;  // net filtered_in
+    c_in.pos -> reg_C_in.1;  // net filtered_in
+    c_in.pos -> reg_u.EN;  // net filtered_in
+    c_in.pos -> reg_u.VIN;  // net filtered_in
+    c_in.pos -> tvs.K;  // net filtered_in
+    c_out.pos -> r_led.1;  // net filtered_out
+    c_out.pos -> reg.VOUT;  // net filtered_out
+    c_out.pos -> reg_C_out.1;  // net filtered_out
+    c_out.pos -> reg_u.VOUT;  // net filtered_out
+    led.A -> r_led.2;  // net sensed
+    led.A -> sense.1;  // net sensed
+    led.A -> sense.2;  // net sensed
+}
