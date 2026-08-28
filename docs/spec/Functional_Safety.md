@@ -587,6 +587,44 @@ Table 3 (high demand / continuous mode): SIL1 ≤10⁴ FIT, SIL2 ≤10³,
 SIL3 ≤10², SIL4 ≤10. IEC has no LFM equivalent (still reported,
 ungated for SIL goals).
 
+### 2.13 Dependent-failure analysis (DFA) *(implemented)*
+
+The whole-universe campaign is SINGLE-fault (plus the latent
+double-probe); independence between a mechanism and the function it
+monitors is an assumption the campaign never tests. The classic
+violation is structural — the supervisor is powered from the very
+rail it supervises — and structure is what the netlist can honestly
+check. The DFA pass walks it (ISO 26262-9 shape):
+
+- **DF-SUPPLY** *(strong → DEPENDENT_FAILURE gap)* — the mechanism's
+  supply chain (its powered pins, walked up through the driving
+  stages) shares a rail with the supply chain of its goal's effect
+  nets, beyond the board input. One supply fault produces the hazard
+  AND blinds its detection; the fix line says: separate the supplies
+  or record the independence argument. Sharing ONLY the input rail is
+  the informational case — every element shares its source, the
+  disposition is a review argument, stated.
+- **DF-DIE** *(strong)* — the mechanism instance and a function
+  element are the same instance, or children of the same die/package
+  (same composed/expansion parent): a die fault defeats both.
+- **DF-PMIC** *(info)* — one die supplying two or more rails: every
+  goal leaning on any of them shares that die as a common cause. The
+  aggregation trade recorded the sharing; the DFA names it.
+- **CCF-IDENTICAL** *(info)* — identical-part redundancy groups this
+  tool itself places (seqbulk stacks, decap margin parts): the count
+  cannot mitigate a common lot/process/soldering cause. β is designer
+  data this library does not carry — the initiator is named, never
+  quantified.
+
+Strong findings land as `DEPENDENT_FAILURE` gaps (dispositioned in
+review like any gap); informational findings print in the DFA section
+only. Out of scope, stated: quantified β-factors, physical-proximity
+coupling (layout is parked), shared-clock initiators. The fixture
+proves the walk tracks topology: the supervisor divider fed from the
+supervised rail is a strong DF-SUPPLY naming that rail; moving that
+ONE wire to the independent rail downgrades it to the input-only
+note.
+
 ## 3. Semantic model
 
 `bhdl_common::safety::SafetyModel`, built by the synthesizer after the

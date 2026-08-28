@@ -155,6 +155,7 @@ pub mod safety_model;
 pub mod decap_synthesis;
 pub mod powertree;
 pub mod reliability;
+pub mod dfa;
 pub mod fault_campaign;
 
 // Analysis-runner methods (`run_compatibility_analysis`,

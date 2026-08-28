@@ -3769,6 +3769,24 @@ async fn run_safety(
         bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solver, &geo_adjacency, Some(&tran), Some(&pdn_check), boot_opt);
         // FMEDA metrics from the measured universe.
         bhdl_synthesizer::fault_campaign::compute_metrics(&mut model);
+        // DFA (spec 2.13): structural dependent-failure initiators —
+        // shared supplies/die between mechanisms and their functions,
+        // one-die multi-rail sources, identical-part redundancy.
+        let dfa = bhdl_synthesizer::dfa::dfa_report(&netlist, &model);
+        if !dfa.is_empty() {
+            println!("\n  DFA (dependent failures, ISO 26262-9 shape):");
+            for f in &dfa {
+                println!("    [{}{}] {}", f.class, if f.strong { "" } else { " info" }, f.text);
+                if f.strong {
+                    model.gaps.push(bhdl_common::safety::Gap {
+                        class: bhdl_common::safety::GapClass::DependentFailure,
+                        goal: String::new(),
+                        subject: f.subject.clone(),
+                        fix: f.text.clone(),
+                    });
+                }
+            }
+        }
     }
 
     // ── PDN (power-domain) checks ────────────────────────────────────

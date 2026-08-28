@@ -404,6 +404,12 @@ pub struct Part {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum GapClass {
+    /// A dependent-failure initiator (ISO 26262-9 DFA): a mechanism
+    /// shares a supply rail or a die with the function it monitors —
+    /// one fault produces the hazard AND blinds detection. Requires a
+    /// disposition (separate supplies, or a recorded independence
+    /// argument), never a silent pass.
+    DependentFailure,
     EffectUndetected,
     PsmWithoutLsm,
     DcUnsourced,
@@ -430,6 +436,7 @@ pub enum GapClass {
 impl GapClass {
     pub fn as_str(self) -> &'static str {
         match self {
+            GapClass::DependentFailure => "DEPENDENT_FAILURE",
             GapClass::EffectUndetected => "EFFECT_UNDETECTED",
             GapClass::PsmWithoutLsm => "PSM_WITHOUT_LSM",
             GapClass::DcUnsourced => "DC_UNSOURCED",
