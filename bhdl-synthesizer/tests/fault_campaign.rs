@@ -3899,8 +3899,9 @@ async fn pdn_recheck_classifies_cap_open_and_drift_as_dangerous() {
     // contract is violated when c_bulk is missing OR reduced, and —
     // deliberately — when ANY other instance is missing (r_load open
     // would report if the campaign invoked the check for it).
-    let pdn = |mutated: &bhdl_netlist::Netlist| -> Vec<(String, String)> {
-        let mut out = vec![("always.BROKEN".to_string(), "violated healthy too".to_string())];
+    let pdn = |mutated: &bhdl_netlist::Netlist| -> bhdl_synthesizer::fault_campaign::PdnCheckResult {
+        let mut out = bhdl_synthesizer::fault_campaign::PdnCheckResult::default();
+        out.violations.push(("always.BROKEN".to_string(), "violated healthy too".to_string()));
         let n_inst = mutated.instances.iter().count();
         let full = netlist.instances.iter().count();
         let degraded = match cap_num(mutated) {
@@ -3908,7 +3909,7 @@ async fn pdn_recheck_classifies_cap_open_and_drift_as_dangerous() {
             Some(c) => c < 0.9 * healthy_c, // c_bulk drifted low
         } || n_inst < full; // ANY instance missing
         if degraded {
-            out.push(("soc.VDD".to_string(), "droop 9.99% > 4% under the 2A step".to_string()));
+            out.violations.push(("soc.VDD".to_string(), "droop 9.99% > 4% under the 2A step".to_string()));
         }
         out
     };

@@ -519,7 +519,23 @@ pub type TranSolver<'a> =
 /// which are invisible to the DC operating point (a cap is an open at
 /// DC) yet can defeat the dynamic contract the safety case leans on —
 /// without this, their FIT weight lands silently in the safe bucket.
-pub type PdnCheck<'a> = dyn Fn(&Netlist) -> Vec<(String, String)> + 'a;
+pub type PdnCheck<'a> = dyn Fn(&Netlist) -> PdnCheckResult + 'a;
+
+/// What the PDN recheck hands back: the violated contracts AND the
+/// sampled net-voltage maps of the transients that found them. The
+/// samples are what makes detection HONEST: a supervisor's
+/// `detected_when` predicate is evaluated at every sample, so a
+/// monitor that trips DURING the droop/overshoot transient counts as
+/// measured detection — where the DC operating point alone would have
+/// called the fault residual.
+#[derive(Default)]
+pub struct PdnCheckResult {
+    /// (`<instance>.<domain>`, detail) per violated contract
+    pub violations: Vec<(String, String)>,
+    /// sampled net→voltage maps across the transient solves (already
+    /// downsampled by the caller; GND present)
+    pub samples: Vec<HashMap<String, f64>>,
+}
 
 /// FAULT-AT-BOOT recheck: (mutated netlist) → the power-up timeline's
 /// VIOLATED declarations (the engine's Sev::Error finding texts). The
@@ -1198,7 +1214,7 @@ pub fn run_universe(
     // healthy carries its own AouViolated gap — only NEW violations
     // are the fault's doing.
     let pdn_baseline: std::collections::HashSet<String> = match pdn {
-        Some(chk) => chk(netlist).into_iter().map(|(aref, _)| aref).collect(),
+        Some(chk) => chk(netlist).violations.into_iter().map(|(aref, _)| aref).collect(),
         None => std::collections::HashSet::new(),
     };
     // Fold NEW violations of the mutated board into a fault row: a
@@ -1206,17 +1222,24 @@ pub fn run_universe(
     // monitors cannot see a dynamic violation, so with no mechanism
     // detecting it the row classifies RESIDUAL — exactly the exposure
     // this recheck exists to surface).
-    let pdn_recheck = |faulted: &Netlist, uf: &mut UniverseFault| {
+    // mechanisms per scope for TRANSIENT-VISIBLE detection are bound
+    // at the call sites (the scope tables are built further down);
+    // the closure receives them as (prefix, ns, mechs).
+    let pdn_recheck = |faulted: &Netlist,
+                       uf: &mut UniverseFault,
+                       scope_ctx: (&str, &str, &[(String, Vec<String>, Option<String>)])| {
         let Some(chk) = pdn else { return };
-        for (aref, detail) in chk(faulted) {
-            if pdn_baseline.contains(&aref) {
+        let (prefix, ns, mechs) = scope_ctx;
+        let out = chk(faulted);
+        let mut any_new = false;
+        for (aref, detail) in &out.violations {
+            if pdn_baseline.contains(aref) {
                 continue;
             }
-            if pdn_assumed.contains(&aref) {
+            if pdn_assumed.contains(aref) {
+                any_new = true;
                 uf.fired.push(format!("pdn:{aref}"));
-                let n = format!(
-                    "PDN contract VIOLATED under this fault: {detail} — dynamic violation, invisible to DC monitors (a supervisor would only see it during the transient itself)"
-                );
+                let n = format!("PDN contract VIOLATED under this fault: {detail}");
                 uf.note = Some(match uf.note.take() { Some(p) => format!("{p}; {n}"), None => n });
             } else {
                 let n = format!(
@@ -1225,6 +1248,40 @@ pub fn run_universe(
                 uf.note = Some(match uf.note.take() { Some(p) => format!("{p}; {n}"), None => n });
             }
         }
+        if !any_new {
+            return;
+        }
+        // TRANSIENT-VISIBLE detection: evaluate each mechanism's
+        // detected_when at every sample of the faulted transient — a
+        // supervisor trips DURING the droop/overshoot, exactly where
+        // the DC operating point shows nothing. Measured, not claimed.
+        let alias: HashMap<String, String> = HashMap::new();
+        let mut seen_transient = false;
+        for (handle, _d, dw) in mechs {
+            let Some(pred) = dw else { continue };
+            if uf.detected.iter().any(|d| d.starts_with(handle.as_str())) {
+                continue;
+            }
+            let tripped = out
+                .samples
+                .iter()
+                .any(|volts| matches!(eval_effect(pred, prefix, ns, &view, &alias, volts), Ok(true)));
+            if tripped {
+                uf.detected.push(format!("{handle} (transient)"));
+                seen_transient = true;
+            }
+        }
+        let tail = if seen_transient {
+            "detected TRANSIENT-VISIBLY: a detected_when predicate fired during the faulted transient (measured over the sampled solve, not claimed)".to_string()
+        } else if out.samples.is_empty() {
+            "dynamic violation — no transient samples supplied, DC monitors cannot see it (stated)".to_string()
+        } else {
+            format!(
+                "dynamic violation — no detected_when fired at any of the {} transient samples either: residual, measured",
+                out.samples.len()
+            )
+        };
+        uf.note = Some(match uf.note.take() { Some(p) => format!("{p}; {tail}"), None => tail });
     };
     // (instance, state name) → behavior, for state-mode (re-)application
     let state_behaviors: HashMap<(String, String), Option<String>> = model
@@ -1571,7 +1628,8 @@ pub fn run_universe(
                     let mut refaulted = netlist.clone();
                     if apply_drift(&mut refaulted, &view, &inst, &format!("{wpct:+}%")).is_ok() {
                         if is_capacitor(&inst) {
-                            pdn_recheck(&refaulted, &mut uf);
+                            let sc2 = &scopes[si];
+                            pdn_recheck(&refaulted, &mut uf, (&sc2.prefix, &sc2.ns, &sc2.mechs));
                         }
                         if uf.ran && uf.fired.is_empty() {
                             boot_recheck(&refaulted, &mut uf);
@@ -1694,7 +1752,8 @@ pub fn run_universe(
             // single-open margin exempts BULK parts, stated there;
             // this is where that exemption gets its honest verdict)
             if mode == "open" && is_capacitor(&part.instance) {
-                pdn_recheck(&faulted, &mut uf);
+                let sc2 = &scopes[si];
+                pdn_recheck(&faulted, &mut uf, (&sc2.prefix, &sc2.ns, &sc2.mechs));
                 if !uf.fired.is_empty() {
                     uf.false_alarm = false;
                 }

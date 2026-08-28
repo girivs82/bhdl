@@ -138,3 +138,53 @@ fn fault_at_boot_campaign_classifies_startup_breakers() {
     let rdel = row("R_del short(R_del.1, R_del.2)");
     assert!(rdel.contains("boot:soc") && rdel.contains("before slot 1"), "{rdel}");
 }
+
+/// Transient-visible detection (spec §2.11): a supervisor whose
+/// detected_when threshold (11.4V) sits BETWEEN the healthy droop
+/// floor (~11.64V) and the faulted one (~11.1V) trips only during
+/// the faulted transient — the recheck must count that as MEASURED
+/// detection. And the same monitor measurably MISSES the shallower
+/// drift_low droop (~11.45V): that row stays residual with the
+/// sample count in its note. Both verdicts from one monitor is the
+/// vacuity guard: detection tracks the physics, not the wiring.
+#[test]
+fn transient_visible_detection_is_measured_both_ways() {
+    let root = workspace_root();
+    let src = std::fs::read_to_string(root.join("tests/circuits/realistic/test_safety_pdn_recheck.bhdl")).unwrap();
+    let with_mon = src.replace(
+        r#"    goal SG: ASIL_B "rail stays in window" (id="SG-PDNRC-1") {
+        effect uv = brd.r_load.1 < 10V severity S2;
+    }"#,
+        r#"    goal SG: ASIL_B "rail stays in window" (id="SG-PDNRC-1") {
+        effect uv = brd.r_load.1 < 10V severity S2;
+    }
+    mechanism brd.r_load: psm(SG, detects=[uv], detected_when = brd.r_load.1 < 11.4V, dc=0.9, source="FIXTURE supervisor");"#,
+    );
+    assert_ne!(with_mon, src, "fixture shape changed — update the replace");
+    let dir = std::env::temp_dir().join("bhdl_transient_det_test");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let f = dir.join("tv.bhdl");
+    std::fs::write(&f, with_mon).unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_bhdl-cli"));
+    cmd.current_dir(&root).arg("-I").arg(&root).arg(&f).arg("safety");
+    let out = cmd.output().expect("spawn");
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let open_row = text
+        .lines()
+        .find(|l| l.contains("c_bulk open(c_bulk)"))
+        .unwrap_or_else(|| panic!("no open row:\n{text}"));
+    assert!(
+        open_row.contains("(transient)") && open_row.contains("TRANSIENT-VISIBLY"),
+        "deep droop must be transient-detected: {open_row}"
+    );
+    assert!(!open_row.contains("RESIDUAL"), "detected row must not be residual: {open_row}");
+    let drift_row = text
+        .lines()
+        .find(|l| l.contains("c_bulk drift_low"))
+        .unwrap_or_else(|| panic!("no drift row:\n{text}"));
+    assert!(
+        drift_row.contains("RESIDUAL") && drift_row.contains("transient samples either: residual, measured"),
+        "shallow droop must be measurably MISSED: {drift_row}"
+    );
+}

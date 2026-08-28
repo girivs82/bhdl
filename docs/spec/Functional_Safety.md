@@ -728,12 +728,19 @@ versus the healthy baseline (a contract already broken healthy
 carries its own gap and is not the fault's doing):
 
 - of a contract the case consumes via `assume pdn(...)` — fires the
-  synthetic effect `pdn:<inst>.<domain>` on the fault row. No DC
-  monitor can see a dynamic violation (a supervisor only trips during
-  the transient itself, a path the DC classification structurally
-  cannot model — stated in the row note), so with no mechanism
-  detecting it the row classifies RESIDUAL and the exposure lands in
-  SPFM where it belongs.
+  synthetic effect `pdn:<inst>.<domain>` on the fault row, and then
+  detection is judged TRANSIENT-VISIBLY: the recheck hands back the
+  sampled net-voltage maps of the very transients that found the
+  violation, and every mechanism's `detected_when` predicate is
+  evaluated at each sample. A supervisor that trips DURING the
+  faulted droop/overshoot — exactly where the DC operating point
+  shows nothing — counts as MEASURED detection (`<handle>
+  (transient)` on the row); a monitor whose threshold the faulted
+  waveform never crosses leaves the row RESIDUAL with the sample
+  count in its note. The discrimination is real: on the recheck
+  fixture one supervisor detects the deep bulk-open droop and
+  measurably MISSES the shallower drift_low droop — both verdicts
+  from the same monitor, both from the solve, neither claimed.
 - of a contract the case never consumed — a design-only note on the
   row, stated.
 

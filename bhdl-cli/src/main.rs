@@ -3624,8 +3624,8 @@ async fn run_safety(
             .iter()
             .flat_map(|p| p.domains.iter().map(|d| (p.instance.clone(), d.clone())))
             .collect();
-        let pdn_check = |mutated: &bhdl_netlist::Netlist| -> Vec<(String, String)> {
-            let mut out = Vec::new();
+        let pdn_check = |mutated: &bhdl_netlist::Netlist| -> bhdl_synthesizer::fault_campaign::PdnCheckResult {
+            let mut out = bhdl_synthesizer::fault_campaign::PdnCheckResult::default();
             if pdn_domains.is_empty() {
                 return out;
             }
@@ -3676,14 +3676,14 @@ async fn run_safety(
                         }
                         if let Some((r, f)) = worst {
                             if r > 1.0 {
-                                out.push((aref.clone(), format!("|Z| exceeds the mask {r:.2}x at {:.2}MHz", f / 1e6)));
+                                out.violations.push((aref.clone(), format!("|Z| exceeds the mask {r:.2}x at {:.2}MHz", f / 1e6)));
                                 continue; // the domain's verdict is settled
                             }
                         }
                     }
                 }
                 if std::env::var("BHDL_PDN_RECHECK_DEBUG").is_ok() {
-                    eprintln!("pdn_recheck debug: domain {aref} net {net} zmask_pts={} out_so_far={}", dom.zmask.len(), out.len());
+                    eprintln!("pdn_recheck debug: domain {aref} net {net} zmask_pts={} out_so_far={}", dom.zmask.len(), out.violations.len());
                 }
                 if let (Some(step), Some(dm)) = (dom.step_a, dom.droop_max_pct) {
                     let rise = dom.step_rise_s.unwrap_or(1e-6);
@@ -3703,6 +3703,24 @@ async fn run_safety(
                         t_end: dur,
                     }]);
                     if let Ok(r) = bhdl_spice::ibis_transient::run_transient_ibis_ic(&circ, &params, &[], Some(&healthy_volts)) {
+                        // sample the whole solve (every 4th step ≈ 100
+                        // maps) for TRANSIENT-VISIBLE detection: the
+                        // campaign evaluates detected_when predicates
+                        // at each sample, so a supervisor that trips
+                        // DURING the droop/overshoot is measured
+                        // detection, not a stated blind spot
+                        for (idx, _t) in r.times.iter().enumerate() {
+                            if idx % 4 != 0 {
+                                continue;
+                            }
+                            let mut m: HashMap<String, f64> = r
+                                .probe_voltages
+                                .iter()
+                                .filter_map(|(n, tr)| tr.get(idx).map(|v| (n.clone(), *v)))
+                                .collect();
+                            m.entry("GND".to_string()).or_insert(0.0);
+                            out.samples.push(m);
+                        }
                         if let Some(tr) = r.probe_voltages.get(&net) {
                             let v0 = tr.first().copied().unwrap_or(dom.v_nom);
                             let vmin = tr.iter().cloned().fold(f64::MAX, f64::min);
@@ -3710,7 +3728,7 @@ async fn run_safety(
                                 + dom.pdn_l_h.unwrap_or(0.0) * step / rise;
                             let droop_pct = ((v0 - vmin) + extra) / dom.v_nom * 100.0;
                             if droop_pct > dm {
-                                out.push((aref.clone(), format!("droop {droop_pct:.2}% > {dm}% under the {step}A step")));
+                                out.violations.push((aref.clone(), format!("droop {droop_pct:.2}% > {dm}% under the {step}A step")));
                             } else if let Some(om) = dom.overshoot_max_pct.or(dom.tol_pct) {
                                 // release overshoot, same trace (see the
                                 // PDN section for the basis) — a lost
@@ -3718,7 +3736,7 @@ async fn run_safety(
                                 let vmax = tr.iter().cloned().fold(f64::MIN, f64::max);
                                 let over_pct = ((vmax - v0).max(0.0) + extra) / dom.v_nom * 100.0;
                                 if over_pct > om {
-                                    out.push((aref.clone(), format!("load-release overshoot {over_pct:.2}% > {om}% after the {step}A step")));
+                                    out.violations.push((aref.clone(), format!("load-release overshoot {over_pct:.2}% > {om}% after the {step}A step")));
                                 }
                             }
                         }
