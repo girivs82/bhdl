@@ -3828,6 +3828,46 @@ async fn run_safety(
                 netlist.nets.get(pi.net?)?.name.clone()
             })
         };
+        // DECLARED-draw operating points (the recorded increment):
+        // every domain's declared current stamped as a sink at its
+        // rail, all domains together, solved once — the CONTRACT's
+        // operating point. Stamped IN ADDITION to whatever loads the
+        // netlist models (a stand-in load stays) — conservative,
+        // stated. i_nom = the static-window verdict point; i_max =
+        // the worst-case IR line.
+        let declared_solve = |pick: &dyn Fn(&bhdl_common::safety::PowerDomain) -> Option<f64>| -> Option<(HashMap<String, f64>, f64)> {
+            let circ = circuit.as_ref()?;
+            let mut c = circ.clone();
+            let gnd = c.nodes().find(|(_, n)| n.is_ground).map(|(_, n)| n.name.clone())?;
+            let mut total = 0.0;
+            let mut k = 0usize;
+            for part in model.parts.iter().filter(|p| !p.domains.is_empty()) {
+                for dom in &part.domains {
+                    let Some(i) = pick(dom).filter(|i| *i > 0.0) else { continue };
+                    let Some(net) = dom.pins.first().and_then(|p0| pin_net(&part.instance, p0)) else { continue };
+                    k += 1;
+                    total += i;
+                    // CurrentSource convention (see input_draw): a DRAW
+                    // from the rail is nodes = [GND, rail]
+                    c.add_branch(format!("__decl_draw_{k}"), &gnd, &net, "CurrentSource".to_string(), i, None);
+                }
+            }
+            if k == 0 {
+                return None;
+            }
+            let result = bhdl_spice::GlacierDcSolver::new().solve(c.clone()).ok()?;
+            // RAW node map — build_simulation_annotations is a renderer
+            // helper (the recorded trap)
+            let mut volts: HashMap<String, f64> = result
+                .node_voltages
+                .iter()
+                .filter_map(|(idx, v)| c.get_node_name(*idx).map(|n| (n.to_string(), *v)))
+                .collect();
+            volts.entry("GND".to_string()).or_insert(0.0);
+            Some((volts, total))
+        };
+        let nom_draw = declared_solve(&|d| d.i_nom_a);
+        let max_draw = declared_solve(&|d| d.i_max_a);
         let mut assumed_refs: Vec<(String, String)> = Vec::new(); // (ref, instance)
         for part in model.parts.iter().filter(|p| !p.domains.is_empty()) {
             for dom in &part.domains {
@@ -3850,23 +3890,52 @@ async fn run_safety(
                 } else {
                     pdn_out!("      safety case: NOT consumed (no assume pdn({aref})) — design-only check, stated");
                 }
-                // static window at the healthy operating point (loads =
-                // whatever the netlist models; declared-draw stamping is a
-                // later increment, stated)
-                if let (Some(v), Some(tol)) = (healthy_volts.get(&net), dom.tol_pct) {
+                // static window at the DECLARED operating point: the
+                // domain's i_nom stamped as a sink (all domains
+                // together), in addition to modeled loads —
+                // conservative, stated; boards declaring no i_nom
+                // fall back to the healthy point, stated.
+                if let Some(tol) = dom.tol_pct {
                     let lo = dom.v_nom * (1.0 - tol / 100.0);
                     let hi = dom.v_nom * (1.0 + tol / 100.0);
-                    let ok = *v >= lo && *v <= hi;
-                    if !ok {
-                        model.gaps.push(bhdl_common::safety::Gap {
-                            class: bhdl_common::safety::GapClass::AouViolated,
-                            goal: dom.name.clone(),
-                            subject: format!("{} static window", part.instance),
-                            fix: format!("rail {v:.3}V outside [{lo:.3}, {hi:.3}] at the healthy operating point — fix the supply or the declared window"),
-                        });
+                    let (v, basis) = match (&nom_draw, dom.i_nom_a) {
+                        (Some((m, tot)), Some(_)) => (
+                            m.get(&net).copied(),
+                            format!("DECLARED-draw operating point: Σ {tot:.2}A i_nom stamped as sinks in addition to modeled loads — conservative, stated"),
+                        ),
+                        _ => (
+                            healthy_volts.get(&net).copied(),
+                            "healthy operating point — no i_nom declared to stamp, stated".to_string(),
+                        ),
+                    };
+                    if let Some(v) = v {
+                        let ok = v >= lo && v <= hi;
+                        if !ok {
+                            model.gaps.push(bhdl_common::safety::Gap {
+                                class: bhdl_common::safety::GapClass::AouViolated,
+                                goal: dom.name.clone(),
+                                subject: format!("{} static window", part.instance),
+                                fix: format!("rail {v:.3}V outside [{lo:.3}, {hi:.3}] under the declared draws — stiffen the feed or renegotiate the window"),
+                            });
+                        }
+                        pdn_out!("      static: rail {v:.3}V vs window [{lo:.3}, {hi:.3}] ({basis}) → {}",
+                            if ok { "OK".green().to_string() } else { "VIOLATED".red().to_string() });
                     }
-                    pdn_out!("      static: rail {v:.3}V vs window [{lo:.3}, {hi:.3}] (healthy operating point) → {}",
-                        if ok { "OK".green().to_string() } else { "VIOLATED".red().to_string() });
+                    if let (Some((m, tot)), Some(_)) = (&max_draw, dom.i_max_a) {
+                        if let Some(vm) = m.get(&net) {
+                            let ok = *vm >= lo && *vm <= hi;
+                            if !ok {
+                                model.gaps.push(bhdl_common::safety::Gap {
+                                    class: bhdl_common::safety::GapClass::AouViolated,
+                                    goal: dom.name.clone(),
+                                    subject: format!("{} static window", part.instance),
+                                    fix: format!("rail {vm:.3}V outside [{lo:.3}, {hi:.3}] under the declared I_MAX draws (Σ {tot:.2}A) — the feed IR cannot carry the worst case"),
+                                });
+                            }
+                            pdn_out!("      static @ i_max: rail {vm:.3}V vs the same window (Σ {tot:.2}A I_MAX stamped — worst-case IR) → {}",
+                                if ok { "OK".green().to_string() } else { "VIOLATED".red().to_string() });
+                        }
+                    }
                 }
                 // supply capability: i_max vs the board's declared
                 // supply rating — checkable only when the board has

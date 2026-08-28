@@ -807,8 +807,13 @@ pdn_r=<Ω> pdn_l=<H> source="..";` — all numbers VENDOR data
 repo; in-repo examples are FIXTURE-labelled). Checks, each skipped
 with a statement when its datum is absent:
 
-- **Static window** — the rail's healthy-operating-point voltage vs
-  `v ± tol` (measured; declared-draw stamping is a later increment).
+- **Static window** — the rail voltage vs `v ± tol` at the DECLARED
+  operating point: every domain's `i_nom` stamped as a current sink
+  (all domains together, on top of whatever loads the netlist models
+  — conservative, stated), solved once. A second line judges the
+  same window under the stamped `i_max` draws — the worst-case feed
+  IR. A board declaring no `i_nom` falls back to the healthy
+  operating point, stated.
 - **Target-impedance mask** — a small-signal AC impedance sweep of the
   WHOLE tree (1 A injection at the domain net, DC sources as AC
   grounds), 100 kHz–50 MHz — the board's band of responsibility

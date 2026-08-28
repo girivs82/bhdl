@@ -188,3 +188,40 @@ fn transient_visible_detection_is_measured_both_ways() {
         "shallow droop must be measurably MISSED: {drift_row}"
     );
 }
+
+/// Declared-draw stamping (the recorded increment): the static window
+/// is judged at the CONTRACT operating point — every domain i_nom
+/// stamped as a sink on top of modeled loads (conservative, stated) —
+/// and the i_max worst-case IR line. On the 50 mΩ-fed fixture the
+/// numbers are hand-checkable: 11.95 − 1A·50mΩ = 11.90 V passes,
+/// 11.95 − 12A·50mΩ ≈ 11.35 V < 11.40 V VIOLATED.
+#[test]
+fn declared_draw_stamping_static_window() {
+    let root = workspace_root();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_bhdl-cli"));
+    cmd.current_dir(&root)
+        .arg(root.join("tests/circuits/realistic/test_safety_pdn.bhdl"))
+        .arg("safety");
+    let out = cmd.output().expect("spawn");
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let stat = text
+        .lines()
+        .find(|l| l.contains("static: rail"))
+        .unwrap_or_else(|| panic!("no static line:\n{text}"));
+    assert!(
+        stat.contains("11.900V") && stat.contains("DECLARED-draw operating point: Σ 1.00A") && stat.contains("OK"),
+        "i_nom point wrong: {stat}"
+    );
+    let wc = text
+        .lines()
+        .find(|l| l.contains("static @ i_max"))
+        .unwrap_or_else(|| panic!("no i_max line:\n{text}"));
+    assert!(
+        wc.contains("11.353V") && wc.contains("Σ 12.00A") && wc.contains("VIOLATED"),
+        "i_max worst case wrong: {wc}"
+    );
+    assert!(
+        text.contains("the feed IR cannot carry the worst case"),
+        "worst-case gap missing"
+    );
+}
