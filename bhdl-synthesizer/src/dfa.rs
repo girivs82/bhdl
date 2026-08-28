@@ -33,6 +33,7 @@ use bhdl_netlist::types::{InstanceId, NetId};
 use bhdl_netlist::Netlist;
 use std::collections::{HashMap, HashSet};
 
+#[derive(Clone)]
 pub struct DfaFinding {
     /// "DF-SUPPLY" | "DF-DIE" | "DF-PMIC" | "CCF-IDENTICAL"
     pub class: &'static str,

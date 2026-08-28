@@ -269,6 +269,12 @@ enum Commands {
         /// it as <stem>_mechanisms.csv and <stem>_metrics.csv.
         #[arg(long)]
         fmeda: Option<PathBuf>,
+        /// Write the SAFETY-CASE capstone report (markdown for the
+        /// assessor: goals, claimed-vs-measured mechanisms, the fault
+        /// universe, metrics vs targets, PDN discharge, DFA,
+        /// assumptions and the gap register) to this path.
+        #[arg(long)]
+        report: Option<PathBuf>,
     },
 
     /// Generate interactive schematic visualization (HTML)
@@ -753,8 +759,8 @@ async fn main() -> Result<()> {
             run_trace(&source_file, &input_content, &cli.input, cli.no_elaborate, json, safety).await?;
         }
 
-        Some(Commands::Safety { baseline, update_baseline, json, fmeda }) => {
-            run_safety(&source_file, &input_content, &cli.input, cli.no_elaborate, baseline, update_baseline, json, fmeda).await?;
+        Some(Commands::Safety { baseline, update_baseline, json, fmeda, report }) => {
+            run_safety(&source_file, &input_content, &cli.input, cli.no_elaborate, baseline, update_baseline, json, fmeda, report).await?;
         }
         
         Some(Commands::Visualize { output, json, svg_v4, binder }) => {
@@ -3081,6 +3087,7 @@ async fn run_safety(
     update_baseline: bool,
     json_out: Option<PathBuf>,
     fmeda_out: Option<PathBuf>,
+    report_out: Option<PathBuf>,
 ) -> Result<()> {
     use bhdl_common::safety::{AssumptionStatus, Baseline, Delta, MechanismKind, PartData};
     use bhdl_synthesizer::safety_model::build_safety_model;
@@ -3439,6 +3446,7 @@ async fn run_safety(
     // evaluated on the FAULTED operating point. Gated on the HEALTHY
     // solve converging: a board the solver cannot model gives the
     // campaign nothing honest to compare against.
+    let mut dfa_findings: Vec<bhdl_synthesizer::dfa::DfaFinding> = Vec::new();
     if healthy_solved {
         let overrides = bhdl_synthesizer::model_evaluator::evaluate_model_overrides(
             &netlist,
@@ -3773,6 +3781,7 @@ async fn run_safety(
         // shared supplies/die between mechanisms and their functions,
         // one-die multi-rail sources, identical-part redundancy.
         let dfa = bhdl_synthesizer::dfa::dfa_report(&netlist, &model);
+        dfa_findings = dfa.iter().cloned().collect();
         if !dfa.is_empty() {
             println!("\n  DFA (dependent failures, ISO 26262-9 shape):");
             for f in &dfa {
@@ -4288,6 +4297,18 @@ async fn run_safety(
 
     for l in &pdn_lines {
         println!("{l}");
+    }
+
+    // ── Safety-case capstone report (spec 2.14) ──────────────────────
+    if let Some(rp) = report_out {
+        let md = bhdl_synthesizer::safety_report::render(
+            &model,
+            &pdn_lines,
+            &dfa_findings,
+            &source_path.display().to_string(),
+        );
+        fs::write(&rp, md)?;
+        println!("  safety case report: {}", rp.display());
     }
 
     // ── Baseline / delta ─────────────────────────────────────────────

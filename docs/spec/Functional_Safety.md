@@ -625,6 +625,35 @@ supervised rail is a strong DF-SUPPLY naming that rail; moving that
 ONE wire to the independent rail downgrades it to the input-only
 note.
 
+### 2.14 The safety-case capstone report *(implemented)*
+
+`bhdl <board> safety --report <path>` writes ONE markdown document
+for the assessor — the `pdreport` analog for the safety case. It
+RENDERS the model the safety flow just computed; it never re-derives,
+and the same source regenerates it byte-for-byte. Sections:
+
+1. Mission profile & the stated analysis scope (what is measured,
+   what the engines' models cover, what is out of scope by name).
+2. Safety goals per scope — levels, FTTI, safe states, and every
+   effect predicate VERBATIM.
+3. Mechanisms — claimed DC with its source NEXT TO the measured DC
+   (measured wins; an unsourced claim is labelled the gap it is).
+4. Parts and failure data — behavioral / SEooC / handbook / waived /
+   no-data counts, and each part's FIT with its full basis string.
+5. The measured fault universe — totals, then every dangerous row
+   with its fired effects (synthetic `pdn:`/`boot:` included),
+   detection (`(transient)` marked), and the full campaign note.
+6. Hardware architectural metrics vs the ASIL targets, with the
+   unmeasured-fault caveat, and the overall verdict.
+7. The PDN contract verification lines verbatim (ANSI-stripped) —
+   the machine discharge story for `assume pdn(...)`.
+8. The DFA table with per-finding disposition status.
+9. Assumptions of use with their status.
+10. The gap register — the assessor's to-do, one row per open gap.
+
+The FMEDA CSV package (`--fmeda`) remains the worksheet; this report
+is the narrative that references it.
+
 ## 3. Semantic model
 
 `bhdl_common::safety::SafetyModel`, built by the synthesizer after the
