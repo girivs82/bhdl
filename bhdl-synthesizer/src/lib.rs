@@ -870,7 +870,8 @@ impl NetlistGenerator {
             // `requirements { decap_lib: ... }` shortlist.
             let src_text = ast.syntax().text().to_string();
             if let Some(lib) = crate::powertree::project_decap_lib(&src_text) {
-                match crate::decap_synthesis::characterize_block_caps(&mut self.netlist, &lib) {
+                let derate = crate::powertree::project_cap_v_derating(&src_text);
+                match crate::decap_synthesis::characterize_block_caps(&mut self.netlist, &lib, derate) {
                     Ok(notes) => {
                         for n in notes {
                             log::info!("{n}");

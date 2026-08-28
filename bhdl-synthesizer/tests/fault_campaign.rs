@@ -3949,3 +3949,65 @@ async fn pdn_recheck_classifies_cap_open_and_drift_as_dangerous() {
         assert!(!u.note.as_deref().unwrap_or("").contains("always.BROKEN"), "{u:#?}");
     }
 }
+
+/// Voltage-rating gate (spec §7.5 addendum 7): every decap candidate
+/// must be RATED for the rail it serves. The fixture library carries
+/// a deliberately underrated jumbo (220µF but 3.3V) that raw
+/// capacitance-greed would pick first — the gate must exclude it on
+/// a 12V rail, and every minted decap must carry the rating it was
+/// selected under. A rail no candidate covers is a HARD error naming
+/// the remedy, never a silently-underrated network.
+#[tokio::test]
+async fn decap_voltage_gate_excludes_underrated_candidates() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let src = std::fs::read_to_string(ws.join("tests/circuits/realistic/test_decap_synthesis.bhdl")).unwrap();
+    let pr = parse(&src);
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let n1 = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synth");
+    let minted: Vec<_> = n1
+        .instances
+        .iter()
+        .filter(|(_, i)| i.attributes.contains_key("decap_origin"))
+        .map(|(_, i)| i.clone())
+        .collect();
+    assert!(!minted.is_empty(), "sweep minted nothing");
+    for i in &minted {
+        // the 3.3V jumbo must NEVER appear on the 12V rail — and this
+        // is non-vacuous because its 220µF would top pure c-greed
+        assert!(
+            !i.attributes.get("capacitance").map(|c| c.contains("220µF")).unwrap_or(false),
+            "underrated jumbo minted: {i:?}"
+        );
+        // every minted decap carries the rating it was selected under
+        let vr = i.attributes.get("voltage_rating").expect("minted decap lacks voltage_rating");
+        let v: f64 = vr.trim_end_matches('V').parse().expect("numeric rating");
+        assert!(v >= 12.0, "minted decap rated {v}V < 12V rail: {i:?}");
+    }
+    // the 10V-rated DecapBiased47u is likewise excluded on 12V
+    for i in &minted {
+        assert!(
+            !i.attributes.get("capacitance").map(|c| c.contains("47µF")).unwrap_or(false),
+            "10V-rated part minted on the 12V rail: {i:?}"
+        );
+    }
+
+    // A rail NO candidate covers: same board, domain raised to 30V —
+    // the sweep must refuse loudly, naming the remedy.
+    let src30 = src.replace("v=12V", "v=30V");
+    let pr30 = parse(&src30);
+    let sf30 = SourceFile::cast(pr30.syntax()).unwrap();
+    let analysis30 = analyze(&sf30);
+    let mut gen30 = NetlistGenerator::new();
+    let err = gen30
+        .generate_from_ast_and_analysis(&sf30, &analysis30)
+        .await
+        .expect_err("a 30V rail with a max-25V library must refuse");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("voltage-EXCLUDED") && msg.contains("add rated parts"),
+        "refusal must name the voltage gate and the remedy: {msg}"
+    );
+}

@@ -24,6 +24,10 @@ board BiBoard {
 
 
 
+
+
+
+
     // ── BEGIN GENERATED POWER TREE (bhdl powertree --emit — regenerate, never hand-edit) ──
     // option "max-efficiency" — bucks everywhere; noise rails get minimal-headroom intermediates + post-LDOs
     // assumptions are CONSERVATIVE ESTIMATES (stated per stage); the real part swapped in must MEET OR BEAT them

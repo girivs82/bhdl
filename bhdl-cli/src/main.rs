@@ -2198,18 +2198,27 @@ async fn run_powertree(
                 // library's largest characterized part instead of a bare
                 // farad value — every capacitor on the rail is then a
                 // shortlisted, orderable, curve-aware part
-                let bulk_part = bhdl_synthesizer::powertree::project_decap_lib(input_content)
-                    .and_then(|lib| bhdl_synthesizer::powertree::project_decap_lib(input_content).map(|l| (lib, l)))
-                    .and_then(|(lib, _)| {
-                        bhdl_synthesizer::decap_synthesis::bulk_part_from_library(&lib).map(|(e, c, curve)| (lib, e, c, curve))
-                    });
-                match &bulk_part {
-                    Some((lib, e, c, curve)) => println!(
-                        "  bulk source: shortlist part {e} ({:.0}µF nominal{}, {lib})",
-                        c * 1e6,
-                        if curve.is_empty() { "" } else { ", DC-bias curve declared" }
+                // The pick is PER RAIL: the largest candidate whose
+                // voltage_rating covers that rail (times the project
+                // derating policy) — one global pick cannot be
+                // voltage-safe on every rail.
+                let bulk_lib = bhdl_synthesizer::powertree::project_decap_lib(input_content);
+                let bulk_cands: Vec<(String, f64, f64, Vec<(f64, f64)>)> = bulk_lib
+                    .as_deref()
+                    .map(bhdl_synthesizer::decap_synthesis::bulk_parts_from_library)
+                    .unwrap_or_default();
+                let cap_v_derate = bhdl_synthesizer::powertree::project_cap_v_derating(input_content);
+                match (&bulk_lib, bulk_cands.is_empty()) {
+                    (Some(lib), false) => println!(
+                        "  bulk source: shortlist {lib} ({} candidate(s); per-rail pick = largest with voltage_rating ≥ rail{})",
+                        bulk_cands.len(),
+                        match cap_v_derate {
+                            Some(d) => format!(" / {:.0}% derating", d * 100.0),
+                            None => " (no cap_v_derating declared — 100% of rating, stated)".to_string(),
+                        }
                     ),
-                    None => println!("  bulk source: bare Cap (no project decap_lib shortlist — stated; declare one to make bulk a characterized, orderable part)"),
+                    (Some(lib), true) => println!("  bulk source: bare Cap — {lib} has no usable candidates (capacitance+esr+esl+voltage_rating all required), stated"),
+                    (None, _) => println!("  bulk source: bare Cap (no project decap_lib shortlist — stated; declare one to make bulk a characterized, orderable part)"),
                 }
                 // N+1 redundancy knob (safety): one extra bulk part per
                 // rail so ANY single open leaves the proven-sufficient
@@ -2238,9 +2247,17 @@ async fn run_powertree(
                 let mut bulk_pass: std::collections::BTreeMap<String, f64> = Default::default();
                 let mut bisect_left: std::collections::BTreeMap<String, u32> = Default::default();
                 let mut last_pass_text: Option<String> = None;
+                // rail name → voltage, refreshed from every iteration's
+                // built netlist (the driving stage's output_voltage on
+                // the rail's VOUT pin — the same source powerup and the
+                // sanity use; Power net class as fallback). last_built
+                // is only assigned on the BREAK paths, so the voltage
+                // gate cannot lean on it mid-fixpoint.
+                let mut rail_volt_map: std::collections::HashMap<String, f64> = Default::default();
                 for iter in 0..16 {
                     let mut region = base_region.clone();
                     let mut extra = String::new();
+                    let mut used_bulk_ents: std::collections::BTreeSet<String> = Default::default();
                     if !chains.is_empty() {
                         extra.push_str("\n    // sequencing chains (auto: declared domain ordering — verified by ERC033 + `bhdl powerup`)\n");
                         for c in &chains {
@@ -2250,10 +2267,33 @@ async fn run_powertree(
                     if !bulk.is_empty() {
                         extra.push_str("\n    // bulk (sized by the power-up/interaction fixpoint — the sim is the sizing oracle)\n");
                         for (r, c) in &bulk {
-                            match &bulk_part {
-                                Some((_, ent, nom, _)) => {
+                            // rail voltage from the last built netlist —
+                            // the voltage gate needs it; unknown rail
+                            // voltage = no shortlist pick (stated), the
+                            // bare-Cap placeholder carries the value
+                            let rail_v = rail_volt_map.get(r.as_str()).copied();
+                            // candidates come LARGEST-first, so the first
+                            // rating-adequate one is the pick
+                            let pick = rail_v.and_then(|rv| {
+                                let v_req = rv / cap_v_derate.unwrap_or(1.0);
+                                bulk_cands.iter().find(|(_, _, vr, _)| *vr >= v_req - 1e-9)
+                            });
+                            if pick.is_none() && !bulk_cands.is_empty() {
+                                match rail_v {
+                                    Some(rv) => println!(
+                                        "  bulk on {r}: NO shortlist candidate rated for the {rv:.2}V rail (required ≥ {:.2}V) — bare Cap placeholder emitted, stated (add a higher-rated part to the shortlist)",
+                                        rv / cap_v_derate.unwrap_or(1.0)
+                                    ),
+                                    None => println!(
+                                        "  bulk on {r}: rail voltage unknown to the emitter — shortlist rating unverifiable, bare Cap placeholder emitted, stated"
+                                    ),
+                                }
+                            }
+                            match pick {
+                                Some((ent, nom, _, _)) => {
                                     let n_parts = (c / nom).ceil().max(1.0) as usize
                                         + if n_plus_1 { 1 } else { 0 };
+                                    used_bulk_ents.insert(ent.clone());
                                     for k in 1..=n_parts {
                                         extra.push_str(&format!(
                                             "    @{r} -> seqbulk_{lr}_{k}: {ent}().1; seqbulk_{lr}_{k}.2 -> @{gnd};\n",
@@ -2290,8 +2330,11 @@ async fn run_powertree(
                     }
                     let mut new_text = bhdl_synthesizer::powertree::splice_power_region(&disk, &region)
                         .map_err(|e| anyhow::anyhow!("{e}"))?;
-                    if let Some((lib, ent, _, _)) = &bulk_part {
-                        if !bulk.is_empty() && !new_text.lines().any(|l| l.trim_start().starts_with("import") && l.contains(ent.as_str())) {
+                    if let Some(lib) = &bulk_lib {
+                        for ent in &used_bulk_ents {
+                            if new_text.lines().any(|l| l.trim_start().starts_with("import") && l.contains(ent.as_str())) {
+                                continue;
+                            }
                             let mut insert_at = 0usize;
                             let mut o3 = 0usize;
                             for line in new_text.split_inclusive('\n') {
@@ -2327,6 +2370,26 @@ async fn run_powertree(
                             );
                         }
                     };
+                    for pi in netlist2.pin_instances.values() {
+                        let (Some(net), Some(p)) = (pi.net, netlist2.pins.get(pi.pin_def)) else { continue };
+                        if p.name != "VOUT" {
+                            continue;
+                        }
+                        let Some(rn) = netlist2.nets.get(net).and_then(|n| n.name.clone()) else { continue };
+                        if let Some(v) = netlist2
+                            .instances
+                            .get(pi.instance)
+                            .and_then(|i| i.attributes.get("output_voltage"))
+                            .and_then(|v| bhdl_synthesizer::stage_acceptance::parse_si(v))
+                        {
+                            rail_volt_map.insert(rn, v);
+                        }
+                    }
+                    for (_, n) in netlist2.nets.iter() {
+                        if let (Some(rn), bhdl_netlist::types::NetClass::Power { voltage, .. }) = (n.name.clone(), n.net_class.clone()) {
+                            rail_volt_map.entry(rn).or_insert(voltage);
+                        }
+                    }
                     // sequencing chains: discovered once from the first
                     // RESOLVED build (PG exposure / en_vih come from the
                     // bound blocks, not the requirements)

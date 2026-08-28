@@ -13,6 +13,7 @@ entity DecapBulk100u() {
     attribute capacitance = 100µF;
     attribute esr = 20mΩ;
     attribute esl = 5nH;
+    attribute voltage_rating = 25V; // FIXTURE
     attribute kicad_symbol = "Device:C";
 }
 
@@ -23,6 +24,7 @@ entity DecapMid10u() {
     attribute capacitance = 10µF;
     attribute esr = 5mΩ;
     attribute esl = 1nH;
+    attribute voltage_rating = 16V; // FIXTURE
     attribute kicad_symbol = "Device:C";
 }
 
@@ -33,6 +35,7 @@ entity DecapHf100n() {
     attribute capacitance = 100nF;
     attribute esr = 10mΩ;
     attribute esl = 0.5nH;
+    attribute voltage_rating = 16V; // FIXTURE
     attribute kicad_symbol = "Device:C";
 }
 
@@ -55,6 +58,21 @@ entity DecapBiased47u() {
     attribute capacitance = 47µF;
     attribute esr = 8mΩ;
     attribute esl = 1.2nH;
+    attribute voltage_rating = 10V; // FIXTURE
     attribute dc_bias = "0V:47µF,2V:39µF,3.3V:31µF,5V:22µF"; // FIXTURE curve
     attribute source = "FIXTURE — dc-bias consumption test";
+}
+
+// Deliberately UNDERRATED: the largest capacitance in the library but
+// rated only 3.3V — the voltage gate must EXCLUDE it on any higher
+// rail (without the gate its size would make it the bulk pick).
+entity DecapJumbo220uLow3v3() {
+    pin 1: signal inout;
+    pin 2: signal inout;
+    attribute component_class = "capacitor";
+    attribute capacitance = 220µF;
+    attribute esr = 15mΩ;
+    attribute esl = 4nH;
+    attribute voltage_rating = 3.3V; // FIXTURE — the exclusion case
+    attribute kicad_symbol = "Device:C";
 }

@@ -147,10 +147,21 @@ entity SlSoc() {{
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(text.contains("bulk source: shortlist part DecapBulk100u"), "shortlist not used:\n{}", text.lines().rev().take(15).collect::<Vec<_>>().join("\n"));
+    assert!(
+        text.contains("bulk source: shortlist") && text.contains("per-rail pick = largest with voltage_rating"),
+        "shortlist not used (or the voltage-gated pick line vanished):\n{}",
+        text.lines().rev().take(15).collect::<Vec<_>>().join("\n")
+    );
     let emitted = std::fs::read_to_string(&f).unwrap();
     assert!(emitted.contains("seqbulk_v50_1: DecapBulk100u()"), "no stacked library bulk:\n{emitted}");
     assert!(emitted.contains("import { DecapBulk100u }"), "library import missing");
+    // voltage gate (§7.5 addendum 7): the 220µF jumbo is the library's
+    // LARGEST candidate but rated 3.3V — capacitance-greed would pick
+    // it; the gate must keep it off the 5V rail
+    assert!(
+        !emitted.contains("DecapJumbo220uLow3v3"),
+        "underrated jumbo emitted on the 5V rail:\n{emitted}"
+    );
     // the emitted bank passed the stability envelope + timeline — no
     // STABILITY finding printed
     assert!(!text.contains("STABILITY:"), "{}", text.lines().rev().take(15).collect::<Vec<_>>().join("\n"));

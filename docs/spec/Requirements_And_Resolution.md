@@ -1185,3 +1185,22 @@ stated gap naming the remedy (add a larger part to the shortlist).
 Values stamp as the library's pretty text — the emit round-trip gate
 compares attribute strings, and a raw float re-emerges from
 elaborated text re-unitized.
+
+**Capacitor voltage rating (§7.5 addendum 7).** An undeclared rating
+is not infinite: `voltage_rating` joins capacitance/ESR/ESL as
+REQUIRED library data (a candidate without one is skipped, stated),
+and every selection path is voltage-gated per RAIL — the decap sweep
+excludes candidates rated below the domain voltage (a rail no
+candidate covers is a HARD error naming the remedy), the fixpoint's
+bulk pick is per rail (largest candidate whose rating covers that
+rail — one global pick cannot be voltage-safe on every rail; no
+adequate candidate falls back to the bare-Cap placeholder, stated),
+and the block-cap characterization requires the rating alongside the
+application minimum. Minted and characterized instances carry the
+rating they were selected under, and the final sanity audits EVERY
+cap on a swept rail: rated below the rail = a RATING finding;
+undeclared = RATING UNCHECKED by name. The derating POLICY is
+designer data: `requirements { cap_v_derating: "80%"; }` tightens
+every gate to `rating × derate ≥ rail`; undeclared = checked at
+100 % of rating, stated — the tool never invents the 80 % rule on
+the designer's behalf.

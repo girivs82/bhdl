@@ -65,6 +65,10 @@ struct Candidate {
     esr_ohm: f64,
     esl_h: f64,
     c_text: String,
+    /// Rated DC working voltage (V) — REQUIRED library data: an
+    /// undeclared rating is not infinite, so a candidate without one
+    /// is skipped with a stated reason, exactly like missing ESR/ESL.
+    v_rating: f64,
     /// DC-bias derating curve (V, F) breakpoints — the vendor tool's
     /// export, declared per part; empty = no curve (nominal used,
     /// stated). Effective C at the rail voltage = linear interpolation.
@@ -229,12 +233,15 @@ fn parse_unit(v: &str, mults: &[(&str, f64)]) -> Option<f64> {
 /// farad value, so every capacitor on the rail is a shortlisted,
 /// characterized, orderable part. Returns (entity, nominal F,
 /// dc_bias curve).
-pub fn bulk_part_from_library(lib_path: &str) -> Option<(String, f64, Vec<(f64, f64)>)> {
-    let (cands, _skipped) = load_library(lib_path).ok()?;
-    cands
-        .into_iter()
-        .max_by(|a, b| a.c_f.partial_cmp(&b.c_f).unwrap())
-        .map(|c| (c.entity, c.c_f, c.dc_bias))
+/// The shortlist's bulk candidates, LARGEST capacitance first, each
+/// carrying its rated voltage: (entity, c_f, v_rating, dc_bias). The
+/// caller picks per RAIL — the largest candidate whose rating covers
+/// that rail's voltage (times the project derating policy) — because
+/// one global pick cannot be voltage-safe on every rail.
+pub fn bulk_parts_from_library(lib_path: &str) -> Vec<(String, f64, f64, Vec<(f64, f64)>)> {
+    let Ok((mut cands, _skipped)) = load_library(lib_path) else { return Vec::new() };
+    cands.sort_by(|a, b| b.c_f.partial_cmp(&a.c_f).unwrap());
+    cands.into_iter().map(|c| (c.entity, c.c_f, c.v_rating, c.dc_bias)).collect()
 }
 
 fn load_library(lib_path: &str) -> Result<(Vec<Candidate>, Vec<String>), String> {
@@ -282,10 +289,22 @@ fn load_library(lib_path: &str) -> Result<(Vec<Candidate>, Vec<String>), String>
             skipped.push(format!("{name}: esl '{esl_text}' unparseable"));
             continue;
         };
+        // rated DC working voltage — REQUIRED: an undeclared rating is
+        // not infinite (the same Real-Data stance as ESR/ESL)
+        let Some(vr_text) = attrs.get("voltage_rating").cloned() else {
+            info!("decouple: library entity '{name}' skipped — no voltage_rating declared (an undeclared rating is not infinite)");
+            skipped.push(format!("{name}: voltage_rating not declared"));
+            continue;
+        };
+        let Some(v_rating) = parse_unit(&vr_text, &[("mV", 1e-3), ("V", 1.0)]) else {
+            info!("decouple: library entity '{name}' skipped — voltage_rating '{vr_text}' unparseable");
+            skipped.push(format!("{name}: voltage_rating '{vr_text}' unparseable"));
+            continue;
+        };
         // optional per-part DC-bias curve (the vendor tool's export);
         // absence = nominal, stated in the synthesis notes
         let dc_bias = attrs.get("dc_bias").map(|t| parse_dc_bias(t)).unwrap_or_default();
-        out.push(Candidate { entity: name, c_f, esr_ohm, esl_h, c_text, dc_bias });
+        out.push(Candidate { entity: name, c_f, esr_ohm, esl_h, c_text, v_rating, dc_bias });
     }
     if out.is_empty() {
         return Err(format!("decouple: library '{lib_path}' has no usable candidates (capacitance+esr+esl declared)"));
@@ -310,7 +329,11 @@ fn load_library(lib_path: &str) -> Result<(Vec<Candidate>, Vec<String>), String>
 /// timing) are NEVER touched — substituting upward there changes the
 /// loop, not the reservoir. A minimum no candidate meets stays
 /// uncharacterized, with a stated gap.
-pub fn characterize_block_caps(netlist: &mut Netlist, lib_path: &str) -> Result<Vec<String>, String> {
+pub fn characterize_block_caps(
+    netlist: &mut Netlist,
+    lib_path: &str,
+    v_derate: Option<f64>,
+) -> Result<Vec<String>, String> {
     let (mut cands, _skipped) = load_library(lib_path)?;
     cands.sort_by(|a, b| a.c_f.partial_cmp(&b.c_f).unwrap());
     let mut pin_net: HashMap<(bhdl_netlist::types::InstanceId, String), NetId> = Default::default();
@@ -323,6 +346,7 @@ pub fn characterize_block_caps(netlist: &mut Netlist, lib_path: &str) -> Result<
         id: bhdl_netlist::types::InstanceId,
         name: String,
         c_min: f64,
+        rail_v: f64,
     }
     let mut targets: Vec<Target> = Vec::new();
     let mut notes: Vec<String> = Vec::new();
@@ -356,23 +380,35 @@ pub fn characterize_block_caps(netlist: &mut Netlist, lib_path: &str) -> Result<
             pin_net.get(&(i, "2".to_string())),
         ) else { continue };
         let class = |n: NetId| netlist.nets.get(n).map(|x| x.net_class.clone());
-        let reservoir = [(n1, n2), (n2, n1)].iter().any(|(a, b)| {
-            matches!(class(**b), Some(NetClass::Ground))
-                && matches!(class(**a), Some(NetClass::Power { .. }))
+        let rail_v = [(n1, n2), (n2, n1)].iter().find_map(|(a, b)| {
+            if !matches!(class(**b), Some(NetClass::Ground)) {
+                return None;
+            }
+            match class(**a) {
+                Some(NetClass::Power { voltage, .. }) => Some(voltage),
+                _ => None,
+            }
         });
-        if !reservoir {
-            continue;
-        }
-        targets.push(Target { id: i, name: inst.name.clone(), c_min: v });
+        let Some(rail_v) = rail_v else { continue };
+        targets.push(Target { id: i, name: inst.name.clone(), c_min: v, rail_v });
     }
     for t in targets {
         // the block's value is the datasheet's minimum requirement;
-        // the placed part is the smallest shortlist candidate meeting it
-        let Some(c) = cands.iter().find(|c| c.c_f >= t.c_min * (1.0 - 1e-6)) else {
+        // the placed part is the smallest shortlist candidate meeting
+        // BOTH the minimum and the rail's voltage (times the project
+        // derating policy — undeclared = 100 % of rating, stated)
+        let v_req = t.rail_v / v_derate.unwrap_or(1.0);
+        let Some(c) = cands
+            .iter()
+            .find(|c| c.c_f >= t.c_min * (1.0 - 1e-6) && c.v_rating >= v_req - 1e-9)
+        else {
             notes.push(format!(
-                "characterize {}: no shortlist candidate in '{lib_path}' meets the {:.2}µF application minimum — stays uncharacterized (RESONANCE gap remains, stated; add a larger part to the shortlist)",
+                "characterize {}: no shortlist candidate in '{lib_path}' meets the {:.2}µF application minimum AND a voltage_rating ≥ {:.2}V for the {:.2}V rail{} — stays uncharacterized (RESONANCE gap remains, stated; add a larger/higher-rated part to the shortlist)",
                 t.name,
-                t.c_min * 1e6
+                t.c_min * 1e6,
+                v_req,
+                t.rail_v,
+                match v_derate { Some(d) => format!(" (cap_v_derating {:.0}%)", d * 100.0), None => " (no cap_v_derating declared — 100% of rating, stated)".to_string() }
             ));
             continue;
         };
@@ -386,6 +422,7 @@ pub fn characterize_block_caps(netlist: &mut Netlist, lib_path: &str) -> Result<
         inst.attributes.insert("capacitance".into(), c.c_text.clone());
         inst.attributes.insert("esr".into(), format!("{}", c.esr_ohm));
         inst.attributes.insert("esl".into(), format!("{}", c.esl_h));
+        inst.attributes.insert("voltage_rating".into(), format!("{}V", c.v_rating));
         if !c.dc_bias.is_empty() {
             inst.attributes.insert(
                 "dc_bias".into(),
@@ -402,13 +439,15 @@ pub fn characterize_block_caps(netlist: &mut Netlist, lib_path: &str) -> Result<
             ),
         );
         notes.push(format!(
-            "characterize {}: {:.2}µF application minimum → {} ({:.2}µF, esr {:.1}mΩ, esl {:.2}nH{}) from the shortlist",
+            "characterize {}: {:.2}µF application minimum → {} ({:.2}µF, esr {:.1}mΩ, esl {:.2}nH, rated {:.1}V ≥ {:.2}V required{}) from the shortlist",
             t.name,
             t.c_min * 1e6,
             c.entity,
             c.c_f * 1e6,
             c.esr_ohm * 1e3,
             c.esl_h * 1e9,
+            c.v_rating,
+            v_req,
             if c.dc_bias.is_empty() { "" } else { ", DC-bias curve" }
         ));
     }
@@ -513,6 +552,7 @@ fn mint_decap(
         }
         inst.attributes.insert("esr".into(), format!("{}", cand.esr_ohm));
         inst.attributes.insert("esl".into(), format!("{}", cand.esl_h));
+        inst.attributes.insert("voltage_rating".into(), format!("{}V", cand.v_rating));
         inst.attributes.insert("kicad_symbol".into(), "Device:C".into());
         inst.attributes
             .insert("decap_origin".into(), format!("decouple {}.{}", stmt.instance, stmt.domain));
@@ -769,10 +809,38 @@ pub fn run_decap_synthesis(
             }
         }
 
-        let (cands, cand_skips) = load_library(&stmt.lib)?;
+        let (cands, mut cand_skips) = load_library(&stmt.lib)?;
+        // VOLTAGE-RATING gate: a candidate must be rated for THIS rail
+        // (times the project's derating policy where one is declared —
+        // undeclared policy = checked at 100 % of rating, stated).
+        let derate = crate::powertree::project_cap_v_derating(&sf.syntax().text().to_string());
+        let v_req = dom.v_nom / derate.unwrap_or(1.0);
+        let n_before = cands.len();
+        let cands: Vec<Candidate> = cands
+            .into_iter()
+            .filter(|c| {
+                let ok = c.v_rating >= v_req - 1e-9;
+                if !ok {
+                    info!(
+                        "decouple {}.{}: candidate '{}' EXCLUDED — voltage_rating {:.1}V < required {:.2}V for the {:.2}V rail{}",
+                        stmt.instance, stmt.domain, c.entity, c.v_rating, v_req, dom.v_nom,
+                        match derate { Some(d) => format!(" (cap_v_derating {:.0}%)", d * 100.0), None => " (no cap_v_derating declared — 100% of rating, stated)".to_string() }
+                    );
+                    cand_skips.push(format!("{}: voltage_rating {:.1}V < {:.2}V required", c.entity, c.v_rating, v_req));
+                }
+                ok
+            })
+            .collect();
+        if cands.is_empty() && n_before > 0 {
+            return Err(format!(
+                "decouple {}.{}: every library candidate is voltage-EXCLUDED for the {:.2}V rail (required rating ≥ {:.2}V{}) — add rated parts to the shortlist",
+                stmt.instance, stmt.domain, dom.v_nom, v_req,
+                match derate { Some(d) => format!(", cap_v_derating {:.0}%", d * 100.0), None => String::new() }
+            ));
+        }
         info!(
-            "decouple {}.{} @ net {}: {} candidate(s) from {}, mask {} breakpoints, max_parts {}",
-            stmt.instance, stmt.domain, rail_name, cands.len(), stmt.lib, dom.zmask.len(), stmt.max_parts
+            "decouple {}.{} @ net {}: {} candidate(s) from {} (voltage-gated ≥ {:.2}V), mask {} breakpoints, max_parts {}",
+            stmt.instance, stmt.domain, rail_name, cands.len(), stmt.lib, v_req, dom.zmask.len(), stmt.max_parts
         );
 
         // Greedy: trial every candidate, commit the argmin of the worst

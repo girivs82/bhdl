@@ -1396,7 +1396,8 @@ pub fn synthesize_seq_chains(netlist: &Netlist, sf: &SourceFile, gnd: &str) -> C
 ///   IDEAL by the decap verification — their anti-resonances with the
 ///   characterized network are UNCHECKED and SAY SO (the close: pick
 ///   bulk from a characterized library).
-pub fn final_pdn_sanity(netlist: &Netlist, _sf: &SourceFile) -> Vec<String> {
+pub fn final_pdn_sanity(netlist: &Netlist, sf: &SourceFile) -> Vec<String> {
+    let v_derate = project_cap_v_derating(&sf.syntax().text().to_string());
     use bhdl_netlist::types::{InstanceId, NetId};
     let mut out = Vec::new();
     let mut pin_net: std::collections::HashMap<(InstanceId, String), NetId> = Default::default();
@@ -1423,6 +1424,9 @@ pub fn final_pdn_sanity(netlist: &Netlist, _sf: &SourceFile) -> Vec<String> {
     let mut cap_hi: std::collections::HashMap<NetId, f64> = Default::default();
     let mut cap_nom: std::collections::HashMap<NetId, f64> = Default::default();
     let mut uncharacterized: std::collections::HashMap<NetId, Vec<String>> = Default::default();
+    // (name, rating) per rail — rating None = undeclared (an audit
+    // gap, stated; an undeclared rating is not infinite)
+    let mut cap_ratings: std::collections::HashMap<NetId, Vec<(String, Option<f64>)>> = Default::default();
     let mut caps_raw: Vec<(NetId, f64, Option<String>, String)> = Vec::new();
     for (i, inst) in netlist.instances.iter() {
         // stdlib Cap OR any characterized part declaring capacitance
@@ -1445,6 +1449,10 @@ pub fn final_pdn_sanity(netlist: &Netlist, _sf: &SourceFile) -> Vec<String> {
                 if attr_si(i, "esr").is_none() || attr_si(i, "esl").is_none() {
                     uncharacterized.entry(*a).or_default().push(format!("{} ({:.0}µF)", inst.name, v * 1e6));
                 }
+                cap_ratings
+                    .entry(*a)
+                    .or_default()
+                    .push((inst.name.clone(), attr_si(i, "voltage_rating")));
             }
         }
     }
@@ -1513,6 +1521,45 @@ pub fn final_pdn_sanity(netlist: &Netlist, _sf: &SourceFile) -> Vec<String> {
                 rail,
                 unc.join(", ")
             ));
+        }
+        // VOLTAGE-RATING audit: every cap on the rail vs the rail
+        // voltage (times the project derating policy — undeclared
+        // policy = 100 % of rating, stated). An undeclared rating is
+        // not infinite: it is an UNCHECKED gap by name.
+        if let Some(rv) = rail_v.get(vout) {
+            let v_req = rv / v_derate.unwrap_or(1.0);
+            let policy = match v_derate {
+                Some(d) => format!("cap_v_derating {:.0}%", d * 100.0),
+                None => "no cap_v_derating declared — 100% of rating, stated".to_string(),
+            };
+            if let Some(rs) = cap_ratings.get(vout) {
+                let under: Vec<String> = rs
+                    .iter()
+                    .filter_map(|(n, r)| r.filter(|r| *r < v_req - 1e-9).map(|r| format!("{n} (rated {r:.1}V)")))
+                    .collect();
+                if !under.is_empty() {
+                    out.push(format!(
+                        "RATING: {} on {} rated BELOW the {:.2}V required for the {:.2}V rail ({policy}) — replace with higher-rated parts",
+                        under.join(", "),
+                        rail,
+                        v_req,
+                        rv
+                    ));
+                }
+                let unrated: Vec<String> = rs
+                    .iter()
+                    .filter(|(_, r)| r.is_none())
+                    .map(|(n, _)| n.clone())
+                    .collect();
+                if !unrated.is_empty() {
+                    out.push(format!(
+                        "RATING UNCHECKED on {}: {} declare no voltage_rating — the {:.2}V rail cannot be verified against them (an undeclared rating is not infinite; declare the datasheet rating)",
+                        rail,
+                        unrated.join(", "),
+                        rv
+                    ));
+                }
+            }
         }
     }
     out.sort();
@@ -1601,6 +1648,23 @@ pub fn project_pdn_redundancy(source: &str) -> Option<String> {
         .into_iter()
         .find(|(k, _)| k == "pdn_redundancy")
         .map(|(_, v)| v.trim_matches('"').to_string())
+}
+
+/// Project knob `requirements { cap_v_derating: "80%"; }` — the
+/// designer's capacitor voltage-derating POLICY (e.g. the classic
+/// 80 % rule): every selection and audit then requires
+/// `voltage_rating × derate ≥ rail voltage`. The policy is designer
+/// data, never invented: undeclared = checked at 100 % of rating,
+/// stated. Returns the fraction (0, 1]; a value outside that range is
+/// unusable and returns None (the caller states it).
+pub fn project_cap_v_derating(source: &str) -> Option<f64> {
+    let masked = crate::stage_resolution::mask_comments(source);
+    crate::stage_resolution::scan_project_requirements(&masked)
+        .into_iter()
+        .find(|(k, _)| k == "cap_v_derating")
+        .and_then(|(_, v)| v.trim_matches('"').trim().trim_end_matches('%').trim().parse::<f64>().ok())
+        .map(|p| p / 100.0)
+        .filter(|f| *f > 0.0 && *f <= 1.0)
 }
 
 pub const EMIT_IMPORT: &str ="import { BuckStage, LdoStage, BuckExtStage, PreregStage, BoostStage } from \"bhdl-stdlib/power/stages.bhdl\";";
