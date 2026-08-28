@@ -524,6 +524,15 @@ table and update each row's `source` before using a computed FIT in a
 real FMEDA. See `tests/circuits/realistic/test_safety_fit_divider.bhdl`
 for the end-to-end demonstration.
 
+**Phases, exercised** *(2026-08-28)*: the phase machinery (inline
+\, named profiles from
+mission_profiles.toml with the 3-tier lookup, the time-weighted λ
+over powered phases with operating/calendar basis, the sum≠1
+refusal) is now test-pinned end to end, the capstone report renders
+the phase table with the weighted-mean ambient, and the inline
+parser bug that swallowed phase names (the keyword itself was taken
+as the name) is fixed.
+
 ### 2.9 Measured FMEDA metrics *(Phase 3 — implemented)*
 
 After the universe runs, each scope gets its architectural metrics —

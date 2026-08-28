@@ -55,10 +55,30 @@ pub fn render(
         Some(m) => {
             let _ = writeln!(
                 w,
-                "- ambient: {} °C; lifetime: {}",
+                "- ambient: {} °C{}; lifetime: {}{}",
                 m.ambient_c,
+                m.profile.as_deref().map(|p| format!(" (time-weighted mean of profile `{p}`)")).unwrap_or_default(),
                 m.lifetime_h.map(|h| format!("{h} h")).unwrap_or_else(|| "UNDECLARED — PMHF stays the single-point approximation, stated".into()),
+                m.time_basis.as_deref().map(|b| format!("; λ basis: {b}")).unwrap_or_default(),
             );
+            if !m.phases.is_empty() {
+                let _ = writeln!(w, "\n| phase | life | ambient | powered |");
+                let _ = writeln!(w, "|---|---|---|---|");
+                for ph in &m.phases {
+                    let _ = writeln!(
+                        w,
+                        "| {} | {:.1}% | {:.0} °C | {} |",
+                        esc(&ph.name),
+                        ph.frac * 100.0,
+                        ph.ambient_c,
+                        if ph.powered { "yes" } else { "no — contributes no operating λ (no dormant term in the shipped models, stated)" },
+                    );
+                }
+                let _ = writeln!(
+                    w,
+                    "\n_Part FITs below are the time-weighted λ over the powered phases (each part's basis string shows the per-phase composition)._"
+                );
+            }
         }
         None => {
             let _ = writeln!(w, "- mission profile UNDECLARED — handbook FITs and the dual-point PMHF term cannot be computed (gap)");

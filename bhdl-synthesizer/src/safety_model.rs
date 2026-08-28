@@ -1128,7 +1128,12 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
                     }
                     // Inline phases: `phase NAME { time = 8%; ambient = 60degC; powered = false; }`
                     for ph in child_nodes(st, SyntaxKind::SAFETY_MISSION_PHASE) {
-                        let pname = idents(&ph).first().cloned().unwrap_or_default();
+                        // the node text starts with the keyword itself —
+                        // the NAME is the first identifier that is not it
+                        let pname = idents(&ph)
+                            .into_iter()
+                            .find(|s| s != "phase")
+                            .unwrap_or_default();
                         let (mut frac, mut amb, mut powered): (Option<f64>, Option<f64>, bool) = (None, None, true);
                         for item in child_nodes(&ph, SyntaxKind::SAFETY_DATA_ITEM) {
                             let t = text_of(&item);
