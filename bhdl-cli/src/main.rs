@@ -3727,7 +3727,28 @@ async fn run_safety(
             }
             out
         };
-        bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solver, &geo_adjacency, Some(&tran), Some(&pdn_check));
+        // FAULT-AT-BOOT recheck (spec 2.12): the power-up timeline on
+        // the MUTATED board — a PG-chain pull-up open never enables
+        // its downstream rail, yet the settled DC solve (no enable
+        // gating modeled) shows the rail healthy. Gated on the healthy
+        // board having a power-up story at all (stages/rails); the
+        // campaign runs it for DC-benign rows only and diffs against
+        // the healthy baseline the closure computes identically.
+        let boot_meaningful = {
+            let rep = bhdl_synthesizer::powerup::simulate_powerup(&netlist, source_file);
+            !rep.rails.is_empty()
+        };
+        let boot_check = |mutated: &bhdl_netlist::Netlist| -> Vec<String> {
+            bhdl_synthesizer::powerup::simulate_powerup(mutated, source_file)
+                .findings
+                .into_iter()
+                .filter(|f| f.sev == bhdl_synthesizer::powerup::Sev::Error)
+                .map(|f| f.text)
+                .collect()
+        };
+        let boot_opt: Option<&bhdl_synthesizer::fault_campaign::BootCheck> =
+            if boot_meaningful { Some(&boot_check) } else { None };
+        bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solver, &geo_adjacency, Some(&tran), Some(&pdn_check), boot_opt);
         // FMEDA metrics from the measured universe.
         bhdl_synthesizer::fault_campaign::compute_metrics(&mut model);
     }

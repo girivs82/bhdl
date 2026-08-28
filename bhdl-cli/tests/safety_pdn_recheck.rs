@@ -101,3 +101,30 @@ fn load_release_overshoot_bound_and_violation() {
         "assumption must NOT discharge under an overshoot violation"
     );
 }
+
+/// Fault-at-boot, end to end (spec §2.12) on the PG-chained cascade:
+/// the RC-enable cap open is a DC no-op (the settled solve models no
+/// enable gating) yet V33 never starts — the campaign must classify
+/// it boot-dangerous; and the R_del short is a pure ORDERING
+/// violation (slot 2 good before slot 1 completes), a hazard class
+/// only the timeline can see.
+#[test]
+fn fault_at_boot_campaign_classifies_startup_breakers() {
+    let root = workspace_root();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_bhdl-cli"));
+    cmd.current_dir(&root)
+        .arg(root.join("tests/circuits/realistic/test_safety_boot.bhdl"))
+        .arg("safety");
+    let out = cmd.output().expect("spawn");
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let row = |needle: &str| -> &str {
+        text.lines().find(|l| l.contains(needle)).unwrap_or_else(|| panic!("no row {needle}:\n{}", text.lines().filter(|l| l.contains("boot:")).collect::<Vec<_>>().join("\n")))
+    };
+    // enable-path cap open: DC-benign, boot-dangerous
+    let cdel = row("C_del open(C_del)");
+    assert!(cdel.contains("boot:soc.VDD_AUX") && cdel.contains("RESIDUAL"), "{cdel}");
+    assert!(cdel.contains("dangerous at start-up"), "{cdel}");
+    // R_del short: the ORDERING violation (slot 2 before slot 1)
+    let rdel = row("R_del short(R_del.1, R_del.2)");
+    assert!(rdel.contains("boot:soc") && rdel.contains("before slot 1"), "{rdel}");
+}

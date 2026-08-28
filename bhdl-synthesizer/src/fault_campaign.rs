@@ -521,6 +521,18 @@ pub type TranSolver<'a> =
 /// without this, their FIT weight lands silently in the safe bucket.
 pub type PdnCheck<'a> = dyn Fn(&Netlist) -> Vec<(String, String)> + 'a;
 
+/// FAULT-AT-BOOT recheck: (mutated netlist) → the power-up timeline's
+/// VIOLATED declarations (the engine's Sev::Error finding texts). The
+/// DC campaign classifies faults at the SETTLED operating point — a
+/// fault that breaks the START-UP contract is invisible there: a
+/// PG-chain pull-up open never enables the downstream rail, yet the
+/// DC solve (which does not model enable gating) shows that rail
+/// healthy. The caller supplies the engine (the CLI wraps the PWL
+/// power-up simulation); the campaign runs it for every DC-BENIGN
+/// fault row and fires the synthetic effect `boot:<ref>` on NEW
+/// violations vs the healthy baseline.
+pub type BootCheck<'a> = dyn Fn(&Netlist) -> Vec<String> + 'a;
+
 /// Split a behavior string into DC mutation ops and transient pulse
 /// ops. `pulse(PIN, <V>, <duration>)` is transient; everything else is
 /// applied as a permanent mutation. Several ';'-separated ops are ONE
@@ -1127,9 +1139,35 @@ pub fn run_universe(
     geo_adjacency: &HashMap<String, Vec<(String, String)>>,
     tran: Option<&TranSolver>,
     pdn: Option<&PdnCheck>,
+    boot: Option<&BootCheck>,
 ) {
     use bhdl_common::safety::{PartData, UniverseFault};
     let view = View::build(netlist);
+    // ── fault-at-boot plumbing ──────────────────────────────────────
+    // A violation's identity is its "<owner>.<domain>"/rail prefix
+    // (the text before ':'): the numbers inside a finding change under
+    // fault, the subject does not. A subject already violated HEALTHY
+    // is the design's problem, not the fault's — suppressed (coarse
+    // per-subject suppression, stated).
+    let boot_key = |t: &str| -> String { t.split(':').next().unwrap_or(t).trim().to_string() };
+    let boot_baseline: std::collections::HashSet<String> = match boot {
+        Some(chk) => chk(netlist).iter().map(|t| boot_key(t)).collect(),
+        None => std::collections::HashSet::new(),
+    };
+    let boot_recheck = |faulted: &Netlist, uf: &mut UniverseFault| {
+        let Some(chk) = boot else { return };
+        for t in chk(faulted) {
+            let key = boot_key(&t);
+            if boot_baseline.contains(&key) {
+                continue;
+            }
+            uf.fired.push(format!("boot:{key}"));
+            let n = format!(
+                "BOOT: power-up under this fault violates a declared contract: {t} — dangerous at start-up; the settled DC solve cannot see an enable/ordering failure (stated)"
+            );
+            uf.note = Some(match uf.note.take() { Some(p) => format!("{p}; {n}"), None => n });
+        }
+    };
     // ── PDN recheck plumbing (capacitor open/drift faults) ──────────
     // A capacitor by the same broadened detection the sizing engines
     // use: module Cap|Capacitor OR a capacitance attribute.
@@ -1527,11 +1565,17 @@ pub fn run_universe(
                     uf.note = Some(notes.join("; "));
                 }
                 // capacitance drift is invisible at DC — recheck the
-                // dynamic PDN contract at the worst probe magnitude
-                if is_capacitor(&inst) {
+                // dynamic PDN contract at the worst probe magnitude,
+                // and the START-UP contract for DC-benign drift
+                if is_capacitor(&inst) || (uf.ran && uf.fired.is_empty()) {
                     let mut refaulted = netlist.clone();
                     if apply_drift(&mut refaulted, &view, &inst, &format!("{wpct:+}%")).is_ok() {
-                        pdn_recheck(&refaulted, &mut uf);
+                        if is_capacitor(&inst) {
+                            pdn_recheck(&refaulted, &mut uf);
+                        }
+                        if uf.ran && uf.fired.is_empty() {
+                            boot_recheck(&refaulted, &mut uf);
+                        }
                         if !uf.fired.is_empty() {
                             uf.false_alarm = false;
                         }
@@ -1651,6 +1695,16 @@ pub fn run_universe(
             // this is where that exemption gets its honest verdict)
             if mode == "open" && is_capacitor(&part.instance) {
                 pdn_recheck(&faulted, &mut uf);
+                if !uf.fired.is_empty() {
+                    uf.false_alarm = false;
+                }
+            }
+            // FAULT-AT-BOOT: a DC-BENIGN fault may still break the
+            // START-UP contract (enable chains, sequencing windows) —
+            // run the power-up timeline on the mutated board for every
+            // row the settled solve called safe
+            if uf.ran && uf.fired.is_empty() {
+                boot_recheck(&faulted, &mut uf);
                 if !uf.fired.is_empty() {
                     uf.false_alarm = false;
                 }

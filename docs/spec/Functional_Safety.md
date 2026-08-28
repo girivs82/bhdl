@@ -744,3 +744,38 @@ counterpart sizing knob is `requirements { pdn_redundancy: "n+1"; }`
 (Requirements_And_Resolution.md §7.5): one extra part per fixpoint
 bulk stack, so any single open leaves the proven-sufficient count —
 turning these residual rows back into no-effect rows by construction.
+
+### 2.12 Fault-at-boot campaign *(implemented)*
+
+The whole-universe campaign classifies faults at the SETTLED
+operating point — an entire hazard class is invisible there: a fault
+that breaks the START-UP contract. The settled DC solve models no
+enable gating, so a PG-chain pull-up open, an RC-delay cap short, or
+a bulk cap whose loss re-opens a sequencing slot through the knee all
+show a perfectly healthy operating point while the board never
+actually reaches it (or reaches it out of order).
+
+The campaign closes this with a **BootCheck** hook: for every fault
+row the settled solve called BENIGN (dangerous rows are already
+counted — re-running the timeline for them changes no metric), the
+PWL power-up engine runs on the MUTATED netlist and its Sev::Error
+findings — never-good rails, violated `after`/`slot` orderings,
+t_min/t_max windows, knee-reopened slots — are diffed against the
+healthy baseline by SUBJECT (the `<owner>.<domain>`/rail prefix: the
+numbers inside a finding change under fault, the subject does not; a
+subject already violated healthy is the design's problem, not the
+fault's — coarse per-subject suppression, stated). A NEW violation
+fires the synthetic effect `boot:<subject>` on the row: dangerous at
+start-up, and with no mechanism detecting it, RESIDUAL — a DC monitor
+structurally cannot see an enable/ordering failure, stated in the
+note. Drift rows re-run at their worst probe magnitude, exactly like
+the PDN recheck. The hook is gated on the healthy board having a
+power-up story at all (no stages/rails = no boot campaign, no cost).
+
+What this catches on the PG-chained cascade fixture, all from the
+previously-benign bucket: the RC-enable cap open/short (downstream
+rail never starts), the pull-up open (both rails dead at boot), the
+pull-up short (a pure ORDERING violation — slot 2 good before slot 1
+completes), and the bulk-cap open whose knee re-opens the slot. The
+PWL engine's model scope applies (no feed inductance, stage dynamics
+as modeled) — its verdicts are the timeline's, stated.

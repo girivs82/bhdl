@@ -90,7 +90,7 @@ async fn declared_faults_run_classify_and_regenerate_gaps() {
     // (+0 states). Under the all-12V mock with alias-following, the
     // classification is deterministic; measured DC exists for the
     // mechanism because the fixture declares detected_when.
-    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve, &HashMap::new(), None, None);
+    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve, &HashMap::new(), None, None, None);
     // 3 generic 2-pin parts × 4 modes (short/open + drift_high/drift_low
     // — value-carrying parts get parametric drift probed at the declared
     // tolerance edge and the labelled 0.5×/2× convention point) +
@@ -201,7 +201,7 @@ safety GeoDemo as g {
 
     // No geometry → ordering fallback: 4 opens + 3 consecutive bridges.
     let mut model = build_safety_model(&netlist, &[&sf]);
-    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve, &HashMap::new(), None, None);
+    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve, &HashMap::new(), None, None, None);
     let bridges: Vec<_> = model.universe.iter().filter(|u| u.mode == "short_adjacent").collect();
     assert_eq!(bridges.len(), 3, "{:#?}", model.universe);
     assert!(
@@ -217,7 +217,7 @@ safety GeoDemo as g {
     let mut geo: HashMap<String, Vec<(String, String)>> = HashMap::new();
     geo.insert("u1".into(), vec![("1".into(), "2".into()), ("3".into(), "4".into())]);
     let mut model2 = build_safety_model(&netlist, &[&sf]);
-    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model2, &solve, &geo, None, None);
+    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model2, &solve, &geo, None, None, None);
     let bridges2: Vec<_> = model2.universe.iter().filter(|u| u.mode == "short_adjacent").collect();
     assert_eq!(bridges2.len(), 2, "{:#?}", model2.universe);
     assert!(
@@ -254,7 +254,7 @@ async fn fmeda_export_serializes_the_measured_model() {
             .collect())
     };
     run_declared_faults(&netlist, &mut model, &solve, None);
-    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve, &HashMap::new(), None, None);
+    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve, &HashMap::new(), None, None, None);
     bhdl_synthesizer::fault_campaign::compute_metrics(&mut model);
     let csvs = bhdl_synthesizer::fault_campaign::export_fmeda(&model);
 
@@ -471,7 +471,7 @@ safety PulseDemo as g {
     assert!(fq.note.as_deref().unwrap_or("").contains("INTERNAL detection"), "{fq:?}");
     assert!(!fq.note.as_deref().unwrap_or("").contains("crossed at"), "external monitor must be blind: {fq:?}");
     // universe: state rows classified over the trace, one λ each
-    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve, &HashMap::new(), Some(&tran), None);
+    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve, &HashMap::new(), Some(&tran), None, None);
     let states: Vec<_> = model.universe.iter().filter(|u| u.mode == "state").collect();
     assert_eq!(states.len(), 2, "{states:#?}");
     assert!(states.iter().all(|u| u.ran && !u.fired.is_empty()), "{states:#?}");
@@ -585,7 +585,7 @@ safety LatentDemo as g {
             .collect();
         Ok((times, traces))
     };
-    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve, &HashMap::new(), Some(&tran), None);
+    bhdl_synthesizer::fault_campaign::run_universe(&netlist, &mut model, &solve, &HashMap::new(), Some(&tran), None, None);
     // base classification: glitch is dangerous + EXTERNALLY detected
     // (flag couples while m intact); quiet detected internally too
     let ug = model.universe.iter().find(|u| u.targets.iter().any(|t| t.contains("glitch"))).unwrap();
@@ -3913,7 +3913,7 @@ async fn pdn_recheck_classifies_cap_open_and_drift_as_dangerous() {
         out
     };
     bhdl_synthesizer::fault_campaign::run_universe(
-        &netlist, &mut model, &solve, &HashMap::new(), None, Some(&pdn),
+        &netlist, &mut model, &solve, &HashMap::new(), None, Some(&pdn), None,
     );
 
     let row = |part: &str, mode: &str| -> &bhdl_common::safety::UniverseFault {
@@ -4067,4 +4067,77 @@ board InrushDemo {
     assert!(bank.contains("808.0µs"), "charge time wrong: {bank}");
     // the soft-start hand-off statement is always present
     assert!(joined.contains("soft-start-limited"), "{joined}");
+}
+
+/// Fault-at-boot recheck (spec §2.12): the DC campaign classifies at
+/// the SETTLED operating point — a fault that breaks the START-UP
+/// contract (enable chains, sequencing windows) is invisible there.
+/// The BootCheck hook runs the power-up engine per DC-BENIGN row; NEW
+/// violations vs the healthy baseline fire `boot:<ref>`. The mock
+/// proves: per-fault mutation drives the verdict, DC-dangerous rows
+/// never invoke it, and healthy-baseline subjects are suppressed.
+#[tokio::test]
+async fn boot_recheck_fires_on_dc_benign_startup_breakers() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let src = std::fs::read_to_string(ws.join("tests/circuits/realistic/test_safety_pdn_recheck.bhdl")).unwrap();
+    let pr = parse(&src);
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let netlist = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+    let mut model = build_safety_model(&netlist, &[&sf]);
+    assert!(model.errors.is_empty(), "{:#?}", model.errors);
+    // all-12V mock: cap opens/drifts are DC-benign, shorts are caught
+    // via the alias machinery (rail merged into GND ⇒ uv fires)
+    let solve = |faulted: &bhdl_netlist::Netlist| -> Result<HashMap<String, f64>, String> {
+        Ok(faulted
+            .nets
+            .iter()
+            .filter_map(|(_, n)| n.name.clone())
+            .map(|name| {
+                let v = if name == "GND" { 0.0 } else { 12.0 };
+                (name, v)
+            })
+            .collect())
+    };
+    // mock BootCheck: "always.BROKEN: healthy too" on EVERY board
+    // (baseline suppression must eat it); a REAL violation only when
+    // c_mid is missing — per-fault mutation drives the verdict
+    let boot = |mutated: &bhdl_netlist::Netlist| -> Vec<String> {
+        let mut out = vec!["always.BROKEN: violated healthy too".to_string()];
+        if !mutated.instances.iter().any(|(_, i)| i.name == "c_mid") {
+            out.push("soc.VDD: rail 'V12' never reached 95% (mock)".to_string());
+        }
+        out
+    };
+    bhdl_synthesizer::fault_campaign::run_universe(
+        &netlist, &mut model, &solve, &HashMap::new(), None, None, Some(&boot),
+    );
+    let row = |part: &str, mode: &str| -> &bhdl_common::safety::UniverseFault {
+        model
+            .universe
+            .iter()
+            .find(|u| u.part == part && u.mode == mode)
+            .unwrap_or_else(|| panic!("no {part} {mode} row: {:#?}", model.universe))
+    };
+    // c_mid open is DC-benign under the mock — the boot recheck fires
+    let cm = row("c_mid", "open");
+    assert!(cm.fired.contains(&"boot:soc.VDD".to_string()), "{cm:#?}");
+    assert!(cm.detected.is_empty(), "{cm:#?}");
+    assert!(cm.note.as_deref().unwrap_or("").contains("dangerous at start-up"), "{cm:#?}");
+    // c_bulk open is also DC-benign but keeps c_mid — the mock reports
+    // nothing new for it: the verdict tracks the MUTATION
+    let cb = row("c_bulk", "open");
+    assert!(!cb.fired.iter().any(|f| f.starts_with("boot:")), "{cb:#?}");
+    // c_mid SHORT is DC-DANGEROUS (alias ⇒ uv fires) — the boot
+    // recheck must NOT run for dangerous rows (cost + attribution)
+    let cs = row("c_mid", "short");
+    assert!(!cs.fired.is_empty(), "{cs:#?}");
+    assert!(!cs.fired.iter().any(|f| f.starts_with("boot:")), "{cs:#?}");
+    // the healthy-violated subject never surfaces anywhere
+    for u in &model.universe {
+        assert!(!u.fired.iter().any(|f| f.contains("always.BROKEN")), "{u:#?}");
+        assert!(!u.note.as_deref().unwrap_or("").contains("always.BROKEN"), "{u:#?}");
+    }
 }
