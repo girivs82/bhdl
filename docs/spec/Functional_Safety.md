@@ -679,6 +679,42 @@ and the same source regenerates it byte-for-byte. Sections:
 The FMEDA CSV package (`--fmeda`) remains the worksheet; this report
 is the narrative that references it.
 
+### 2.15 Clock-input contracts *(implemented)*
+
+An entity declares the clock the board must deliver — vendor data,
+in the entity's safety data block (`clock` is a bhdl keyword, so the
+item head is `clock_in`; a dedicated entity-scope item can follow,
+stated):
+
+```bhdl
+safety {
+    clock_in CLK_MAIN pins="CLK" freq=25MHz rise_max=3ns ppm=50
+             c_in=5pF source="<SoC datasheet>";
+}
+```
+
+The safety case consumes it via `assume clock_in(<inst>.<NAME>)`,
+discharged exactly like the PDN assumptions. The CLOCK section finds
+the DRIVER on the pin's net (the instance declaring `f_out`) and
+checks, each axis skipped by NAME when its datum is absent:
+
+- **drift** *(declared arithmetic)* — the source's frequency offset
+  (ppm) plus its declared `ppm` stability against the contract's
+  budget. A source without `ppm` leaves the budget UNCHECKED, stated.
+- **edge** *(measured against the real net)* — the extracted net
+  capacitance (real cap instances on the net + the contract's
+  `c_in`) behind the driver's declared `r_out`: a single-pole model,
+  exact for one pole (2.2·R·C is the 10–90 % time), root-sum-squared
+  with the driver's own `rise_time` — against `rise_max` (and
+  `fall_max` against the same computed edge; symmetric single-pole,
+  stated). Missing `r_out`/`rise_time` = UNCHECKED by name.
+- **jitter** — declared/structural only, out of measurement scope,
+  stated on every contract.
+
+A violated axis is an AouViolated gap and holds the assumption OPEN.
+The fixture pins the hand math: 1 ns driver ⊕ 2.2·50 Ω·15 pF =
+1.93 ns against a 3 ns limit.
+
 ## 3. Semantic model
 
 `bhdl_common::safety::SafetyModel`, built by the synthesizer after the

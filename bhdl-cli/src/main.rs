@@ -3806,9 +3806,13 @@ async fn run_safety(
     // datum skips its check, stated.
     let mut pdn_lines: Vec<String> = Vec::new();
     macro_rules! pdn_out { ($($a:tt)*) => { pdn_lines.push(format!($($a)*)) } }
-    if healthy_solved && model.parts.iter().any(|p| !p.domains.is_empty()) {
-        pdn_out!("\n  {}", "PDN (power domains)".bold());
-        pdn_out!("    band of responsibility: 100kHz–50MHz (below: regulator control loop per its model; above: package/die — both stated hand-offs)");
+    if healthy_solved
+        && model.parts.iter().any(|p| !p.domains.is_empty() || !p.clocks.is_empty())
+    {
+        if model.parts.iter().any(|p| !p.domains.is_empty()) {
+            pdn_out!("\n  {}", "PDN (power domains)".bold());
+            pdn_out!("    band of responsibility: 100kHz–50MHz (below: regulator control loop per its model; above: package/die — both stated hand-offs)");
+        }
         let overrides2 = bhdl_synthesizer::model_evaluator::evaluate_model_overrides(
             &netlist, &analysis.model_recipes, &analysis.entity_attribute_index);
         let mut conv = NetlistToSpiceConverter::new();
@@ -4025,6 +4029,165 @@ async fn run_safety(
                     }
                 }
             }
+        }
+        // CLOCK contracts (spec 2.15): frequency/drift = DECLARED
+        // arithmetic; the edge = MEASURED against the real net
+        // (single-pole model of the extracted capacitance behind the
+        // driver's declared output impedance — exact for one pole);
+        // jitter = declared/structural only, stated. Discharges
+        // `assume clock(<inst>.<NAME>)` like the PDN checks do.
+        let mut clock_assumed: Vec<(String, String)> = Vec::new(); // (ref, instance)
+        for part in model.parts.iter().filter(|p| !p.clocks.is_empty()) {
+            for ck in &part.clocks {
+                let aref = format!("{}.{}", part.instance, ck.name);
+                let consumed = model
+                    .scopes
+                    .iter()
+                    .any(|sc| sc.assumptions.iter().any(|a| a.id == format!("clock:{aref}")));
+                pdn_out!("\n  CLOCK {} @ {} ({})", aref.bold(), format!("{:.3} MHz", ck.freq_hz / 1e6), ck.source);
+                if consumed {
+                    clock_assumed.push((aref.clone(), part.instance.clone()));
+                    pdn_out!("      safety case: consumed via assume clock_in({aref})");
+                } else {
+                    pdn_out!("      safety case: NOT consumed (no assume clock_in({aref})) — design-only check, stated");
+                }
+                let Some(net) = ck.pins.first().and_then(|p0| pin_net(&part.instance, p0)) else {
+                    pdn_out!("      pins not connected — no clock net, UNCHECKED (stated)");
+                    continue;
+                };
+                // the driver: another instance on the net declaring f_out
+                let net_id = netlist
+                    .nets
+                    .iter()
+                    .find(|(_, n)| n.name.as_deref() == Some(net.as_str()))
+                    .map(|(id, _)| id);
+                let driver = net_id.and_then(|nid| {
+                    netlist.pin_instances.values().find_map(|pi| {
+                        if pi.net != Some(nid) {
+                            return None;
+                        }
+                        let inst = netlist.instances.get(pi.instance)?;
+                        if inst.name == part.instance {
+                            return None;
+                        }
+                        inst.attributes
+                            .get("f_out")
+                            .and_then(|v| bhdl_synthesizer::stage_acceptance::parse_si(v))
+                            .map(|f| (pi.instance, inst.name.clone(), f))
+                    })
+                });
+                let Some((drv_id, drv_name, f_out)) = driver else {
+                    pdn_out!("      no clock DRIVER found on net {net} (an instance declaring `f_out`) — every check UNCHECKED (stated); declare f_out/rise_time/r_out/ppm on the source");
+                    continue;
+                };
+                let dattr = |k: &str| -> Option<f64> {
+                    netlist
+                        .instances
+                        .get(drv_id)
+                        .and_then(|i| i.attributes.get(k))
+                        .and_then(|v| bhdl_synthesizer::stage_acceptance::parse_si(v))
+                };
+                let mut violated = false;
+                // frequency + drift: declared arithmetic
+                let f_err_ppm = ((f_out - ck.freq_hz) / ck.freq_hz).abs() * 1e6;
+                match ck.ppm {
+                    Some(budget) => {
+                        let src_ppm = dattr("ppm");
+                        let total = src_ppm.map(|p| p + f_err_ppm);
+                        match total {
+                            Some(t) => {
+                                let ok = t <= budget + 1e-9;
+                                if !ok { violated = true; }
+                                pdn_out!("      drift: source '{drv_name}' {:.3} MHz (offset {:.1} ppm) + stability {:.0} ppm = {:.1} ppm vs budget {budget:.0} ppm → {}",
+                                    f_out / 1e6, f_err_ppm, src_ppm.unwrap_or(0.0), t,
+                                    if ok { "OK".green().to_string() } else { "VIOLATED".red().to_string() });
+                            }
+                            None => pdn_out!("      drift: source '{drv_name}' declares no `ppm` — the {budget:.0} ppm budget is UNCHECKED (stated; declare the datasheet stability)"),
+                        }
+                    }
+                    None => pdn_out!("      drift: contract declares no ppm budget — info: source offset {:.1} ppm", f_err_ppm),
+                }
+                // edge: MEASURED against the extracted net
+                if let Some(rise_max) = ck.rise_max_s {
+                    let r_out = dattr("r_out");
+                    let t_drv = dattr("rise_time");
+                    match (r_out, t_drv, net_id) {
+                        (Some(r), Some(td), Some(nid)) => {
+                            // extracted net load: real cap instances on
+                            // the net + the contract's declared pin C
+                            let mut c_net = ck.c_in_f.unwrap_or(0.0);
+                            for pi in netlist.pin_instances.values() {
+                                if pi.net != Some(nid) {
+                                    continue;
+                                }
+                                let Some(inst) = netlist.instances.get(pi.instance) else { continue };
+                                let is_cap = netlist
+                                    .modules
+                                    .get(inst.definition)
+                                    .map(|m| matches!(m.name.as_str(), "Cap" | "Capacitor"))
+                                    .unwrap_or(false)
+                                    || inst.attributes.contains_key("capacitance");
+                                if is_cap {
+                                    c_net += inst
+                                        .attributes
+                                        .get("value")
+                                        .or_else(|| inst.attributes.get("capacitance"))
+                                        .and_then(|v| bhdl_synthesizer::stage_acceptance::parse_si(v))
+                                        .unwrap_or(0.0);
+                                }
+                            }
+                            let t_rc = 2.2 * r * c_net;
+                            let t_edge = (td * td + t_rc * t_rc).sqrt();
+                            let ok = t_edge <= rise_max + 1e-15;
+                            if !ok { violated = true; }
+                            pdn_out!("      edge: driver {:.2}ns ⊕ net 2.2·{r:.0}Ω·{:.1}pF = {:.2}ns (10–90%, single-pole model of the extracted net — exact for one pole; root-sum-square, stated) vs rise_max {:.2}ns → {}",
+                                td * 1e9, c_net * 1e12, t_edge * 1e9, rise_max * 1e9,
+                                if ok { "OK".green().to_string() } else { "VIOLATED".red().to_string() });
+                            if let Some(fm) = ck.fall_max_s {
+                                let okf = t_edge <= fm + 1e-15;
+                                if !okf { violated = true; }
+                                pdn_out!("      fall: same computed edge (symmetric single-pole, stated) vs fall_max {:.2}ns → {}",
+                                    fm * 1e9, if okf { "OK".green().to_string() } else { "VIOLATED".red().to_string() });
+                            }
+                        }
+                        _ => pdn_out!("      edge: rise_max {:.2}ns declared but the driver lacks {} — UNCHECKED (stated)",
+                            rise_max * 1e9,
+                            match (r_out, t_drv) { (None, None) => "r_out and rise_time", (None, _) => "r_out", _ => "rise_time" }),
+                    }
+                }
+                pdn_out!("      jitter: declared/structural only — out of measurement scope, stated");
+                if violated {
+                    model.gaps.push(bhdl_common::safety::Gap {
+                        class: bhdl_common::safety::GapClass::AouViolated,
+                        goal: ck.name.clone(),
+                        subject: format!("{} clock", part.instance),
+                        fix: format!("clock contract {aref} violated — see the CLOCK section lines"),
+                    });
+                }
+            }
+        }
+        // discharge consumed clock assumptions the checks did not violate
+        for (aref, inst) in clock_assumed {
+            let violated = model.gaps.iter().any(|g| {
+                matches!(g.class, bhdl_common::safety::GapClass::AouViolated)
+                    && g.subject == format!("{inst} clock")
+            });
+            if violated {
+                continue;
+            }
+            for sc in &mut model.scopes {
+                for a in &mut sc.assumptions {
+                    if a.id == format!("clock:{aref}") {
+                        a.status = bhdl_common::safety::AssumptionStatus::SatisfiedBy(
+                            "machine-verified: CLOCK checks pass (drift arithmetic + measured edge)".to_string(),
+                        );
+                    }
+                }
+            }
+            model.gaps.retain(|g| {
+                !(matches!(g.class, bhdl_common::safety::GapClass::AssumptionOpen)
+                    && g.subject.ends_with(&format!("clock:{aref}")))
+            });
         }
         // DC ACCURACY BUDGET (spec addendum 11): the vendor stack-up
         // (reference tol + FB divider WCA, or the combined output_tol)

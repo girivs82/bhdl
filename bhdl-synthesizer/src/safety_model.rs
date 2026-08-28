@@ -445,6 +445,7 @@ fn parse_domain_item(ename: &str, toks: &[String], d: &mut EntityData) {
 struct EntityData {
     failure_states: Vec<(String, Option<f64>, Option<f64>, String, Option<String>, Option<String>)>, // (name, fit, of, source, behavior, internal_detection)
     power_domains: Vec<bhdl_common::safety::PowerDomain>,
+    clocks: Vec<bhdl_common::safety::ClockContract>,
     seooc: Option<(Option<f64>, Option<f64>, Option<f64>, String)>,  // (lambda, spfm, lfm, source)
     handbook: Option<(String, String, Option<String>)>,              // (class, source, per-standard)
     /// Vendor-data validity configuration: the FMEDA/safety-manual FIT
@@ -460,6 +461,7 @@ impl EntityData {
     fn merge(&mut self, o: EntityData) {
         self.failure_states.extend(o.failure_states);
         self.power_domains.extend(o.power_domains);
+        self.clocks.extend(o.clocks);
         if o.seooc.is_some() { self.seooc = o.seooc; }
         if o.handbook.is_some() { self.handbook = o.handbook; }
         if o.config.is_some() { self.config = o.config; }
@@ -571,6 +573,51 @@ fn collect_entity_data(root: &SyntaxNode) -> HashMap<String, EntityData> {
                              the safety case consumes it via `assume pdn(...)`."
                         ));
                     }
+                    "clock_in" => {
+                        // `clock_in NAME pins="P" freq=<Hz> rise_max=<s>
+                        // [fall_max=<s>] [ppm=<n>] [c_in=<F>] source="..";`
+                        // — the entity's clock-INPUT contract (vendor
+                        // data). v1 home: the safety data block; a
+                        // dedicated entity item can follow, stated.
+                        let name = toks.get(1).cloned().unwrap_or_default();
+                        let kv = kv_from_tokens(&toks[2..]);
+                        let src = kv.get("source").cloned().unwrap_or_default();
+                        if src.is_empty() { d.errors.push(format!("{ename}: clock {name} has no source")); }
+                        let unit = |v: Option<&String>, mults: &[(&str, f64)]| -> Option<f64> {
+                            let v = v?.trim().trim_matches('"').trim();
+                            let end = v.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(v.len());
+                            let num: f64 = v[..end].parse().ok()?;
+                            let suf = v[end..].trim();
+                            if suf.is_empty() { return Some(num); }
+                            mults.iter().find(|(s2, _)| suf.eq_ignore_ascii_case(s2)).map(|(_, m)| num * m)
+                        };
+                        let secs = |k: &str| unit(kv.get(k), &[("s", 1.0), ("ms", 1e-3), ("us", 1e-6), ("ns", 1e-9), ("ps", 1e-12)]);
+                        let farads = |k: &str| unit(kv.get(k), &[("F", 1.0), ("uF", 1e-6), ("nF", 1e-9), ("pF", 1e-12)]);
+                        let freq = unit(kv.get("freq"), &[("Hz", 1.0), ("kHz", 1e3), ("MHz", 1e6), ("GHz", 1e9)]);
+                        let pins: Vec<String> = kv
+                            .get("pins")
+                            .map(|pstr| {
+                                pstr.trim_matches('"')
+                                    .split(|c: char| c == ',' || c.is_whitespace())
+                                    .filter(|t| !t.is_empty())
+                                    .map(String::from)
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        match (freq, pins.is_empty()) {
+                            (Some(f), false) => d.clocks.push(bhdl_common::safety::ClockContract {
+                                name,
+                                pins,
+                                freq_hz: f,
+                                rise_max_s: secs("rise_max"),
+                                fall_max_s: secs("fall_max"),
+                                ppm: unit(kv.get("ppm"), &[("ppm", 1.0)]),
+                                c_in_f: farads("c_in"),
+                                source: src,
+                            }),
+                            _ => d.errors.push(format!("{ename}: clock {name} needs freq=<Hz> and pins=\"..\"")),
+                        }
+                    }
                     "seooc" => {
                         let kv = kv_from_tokens(&toks[1..]);
                         let src = kv.get("source").cloned().unwrap_or_default();
@@ -601,7 +648,7 @@ fn collect_entity_data(root: &SyntaxNode) -> HashMap<String, EntityData> {
                         let text = toks.iter().skip(2).find(|t| t.starts_with('"')).map(|t| t.trim_matches('"').to_string()).unwrap_or_default();
                         d.assumptions.push((id, text));
                     }
-                    other => d.errors.push(format!("{ename}: unknown safety data item '{other}' (failure_state|seooc|handbook|terminal|assumption|config)")),
+                    other => d.errors.push(format!("{ename}: unknown safety data item '{other}' (failure_state|seooc|handbook|terminal|assumption|config|clock_in)")),
                 }
             }
         }
@@ -1183,6 +1230,27 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
                     // section; here it is recorded as the AoU linking the
                     // vendor contract into this scope. The reference is
                     // validated against the parts table after it is built.
+                    if id == "clock_in" {
+                        let (pos, _) = split_call_args(&t);
+                        let Some(arg) = pos.first() else {
+                            model.errors.push(format!("safety {}: assume clock_in(...) needs a <instance>.<CLOCK> argument", blk.name));
+                            continue;
+                        };
+                        let arg = arg.trim_start_matches('@').to_string();
+                        let arg = if arg.starts_with(&format!("{}.", blk.ns)) {
+                            let rest = arg.splitn(2, '.').nth(1).unwrap_or(&arg);
+                            if prefix.is_empty() { rest.to_string() } else { format!("{prefix}.{rest}") }
+                        } else {
+                            arg
+                        };
+                        scope.assumptions.push(Assumption {
+                            path: qual(&format!("clock:{arg}")),
+                            id: format!("clock:{arg}"),
+                            text: format!("the board delivers the clock contract of {arg} — machine-verified in the CLOCK section (frequency/drift arithmetic + measured edge)"),
+                            status: AssumptionStatus::Open,
+                        });
+                        continue;
+                    }
                     if id == "pdn" {
                         let (pos, _) = split_call_args(&t);
                         let Some(arg) = pos.first() else {
@@ -1400,6 +1468,7 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
             parent: view.parent_of.get(inst).cloned(),
             data,
             domains: ed.map(|e| e.power_domains.clone()).unwrap_or_default(),
+            clocks: ed.map(|e| e.clocks.clone()).unwrap_or_default(),
         });
     }
 

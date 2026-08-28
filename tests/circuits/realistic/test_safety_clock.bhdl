@@ -1,0 +1,52 @@
+// bhdl-sweep: skip — clock-contract fixture (spec 2.15), not a layout
+// target. The SoC declares its clock-INPUT contract (vendor data);
+// the oscillator declares its drive (f_out, rise_time, r_out, ppm).
+// Drift = declared arithmetic; the EDGE is measured against the real
+// net (osc r_out into the extracted net C + the pin's c_in). FIXTURE
+// numbers throughout.
+
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+entity ClkOsc() {
+    pin OUT: signal out;
+    pin GND: ground;
+    attribute component_class = "oscillator";
+    attribute f_out     = 25MHz;   // FIXTURE oscillator
+    attribute rise_time = 1ns;     // FIXTURE: driver 10-90% edge
+    attribute r_out     = 50Ω;     // FIXTURE: driver output impedance
+    attribute ppm       = 30;      // FIXTURE: total stability
+    attribute source    = "FIXTURE oscillator datasheet";
+}
+
+entity ClkSoc() {
+    pin 1: power in;
+    pin CLK: signal in;
+    pin GND: ground;
+    attribute component_class = "asic";
+    safety {
+        clock_in CLK_MAIN pins="CLK" freq=25MHz rise_max=3ns ppm=50 c_in=5pF source="FIXTURE SoC clock spec";
+    }
+}
+
+board ClockDemo {
+    power V33 = 3.3V @ 1A;
+    ground GND;
+
+    osc: ClkOsc();
+    osc.GND -> @GND;
+    soc: ClkSoc();
+    @V33 -> soc.1; soc.GND -> @GND;
+    osc.OUT -> soc.CLK;
+    // trace/stray capacitance stand-in on the clock net
+    osc.OUT -> C_trace: Cap(10pF).1; C_trace.2 -> @GND;
+    @V33 -> R_dummy: Res(3.3kΩ).1; R_dummy.2 -> @GND;
+}
+
+safety ClockDemo as brd {
+    mission { ambient = 40degC; lifetime = 15000h; }
+    assume clock_in(brd.soc.CLK_MAIN);
+    goal SG: ASIL_B "core keeps its clock" (id="SG-CLK-1") {
+        effect dead = brd.R_dummy.1 < 3.0V severity S2;
+    }
+}

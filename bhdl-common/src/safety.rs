@@ -299,6 +299,31 @@ pub enum PartData {
 /// must meet. All numbers are VENDOR data (typically NDA'd — they live
 /// in the customer's own files, never this repo); absence of a field
 /// simply skips that check, stated.
+/// A CLOCK-input contract on an entity (vendor data): the board must
+/// deliver this clock. Frequency and stability are DECLARED
+/// arithmetic; the edge is MEASURED against the real net (single-pole
+/// model of the extracted capacitance behind the driver's declared
+/// output impedance — exact for one pole, stated); jitter is
+/// declared/structural only, out of measurement scope.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClockContract {
+    pub name: String,
+    /// Entity pin(s) receiving the clock.
+    pub pins: Vec<String>,
+    /// Required frequency (Hz).
+    pub freq_hz: f64,
+    /// Maximum rise time at the pin (s), 10–90 %.
+    pub rise_max_s: Option<f64>,
+    /// Maximum fall time (s); the single-pole model is symmetric —
+    /// checked against the same computed edge, stated.
+    pub fall_max_s: Option<f64>,
+    /// Total frequency-tolerance budget (ppm) the source must meet.
+    pub ppm: Option<f64>,
+    /// The pin's input capacitance (F) — part of the edge load.
+    pub c_in_f: Option<f64>,
+    pub source: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PowerDomain {
     pub name: String,
@@ -412,6 +437,9 @@ pub struct Part {
     /// Declared power domains (SoC PDN contract), if any.
     #[serde(default)]
     pub domains: Vec<PowerDomain>,
+    /// CLOCK-input contracts declared on the entity (vendor data).
+    #[serde(default)]
+    pub clocks: Vec<ClockContract>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
