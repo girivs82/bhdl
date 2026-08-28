@@ -120,10 +120,20 @@ fn fault_at_boot_campaign_classifies_startup_breakers() {
     let row = |needle: &str| -> &str {
         text.lines().find(|l| l.contains(needle)).unwrap_or_else(|| panic!("no row {needle}:\n{}", text.lines().filter(|l| l.contains("boot:")).collect::<Vec<_>>().join("\n")))
     };
-    // enable-path cap open: DC-benign, boot-dangerous
-    let cdel = row("C_del open(C_del)");
+    // enable-path cap SHORT grounds EN: DC-benign, boot-dangerous
+    let cdel = row("C_del short(C_del.1, C_del.2)");
     assert!(cdel.contains("boot:soc.VDD_AUX") && cdel.contains("RESIDUAL"), "{cdel}");
     assert!(cdel.contains("dangerous at start-up"), "{cdel}");
+    // enable-path cap OPEN only removes the DELAY: the PG still
+    // drives EN, the rail starts promptly and IN ORDER — benign for
+    // this contract (the physics review that fixed the engine: a
+    // mode-based PG starved the algebraic EN re-evaluation and called
+    // the rail NEVER-good; PG is voltage-based now)
+    assert!(
+        !text.lines().any(|l| l.contains("C_del open(C_del)") && l.contains("boot:")),
+        "C_del open must be boot-benign:\n{}",
+        text.lines().filter(|l| l.contains("C_del open")).collect::<Vec<_>>().join("\n")
+    );
     // R_del short: the ORDERING violation (slot 2 before slot 1)
     let rdel = row("R_del short(R_del.1, R_del.2)");
     assert!(rdel.contains("boot:soc") && rdel.contains("before slot 1"), "{rdel}");

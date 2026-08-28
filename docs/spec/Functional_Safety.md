@@ -773,9 +773,20 @@ the PDN recheck. The hook is gated on the healthy board having a
 power-up story at all (no stages/rails = no boot campaign, no cost).
 
 What this catches on the PG-chained cascade fixture, all from the
-previously-benign bucket: the RC-enable cap open/short (downstream
-rail never starts), the pull-up open (both rails dead at boot), the
-pull-up short (a pure ORDERING violation — slot 2 good before slot 1
-completes), and the bulk-cap open whose knee re-opens the slot. The
-PWL engine's model scope applies (no feed inductance, stage dynamics
-as modeled) — its verdicts are the timeline's, stated.
+previously-benign bucket: the RC-enable cap SHORT (EN grounded — the
+downstream rail never starts), EN solder bridges to PGND, the pull-up
+open (an EN left floating), the pull-up short (a pure ORDERING
+violation — slot 2 good before slot 1 completes), and the bulk-cap
+open whose knee re-opens the slot. The RC-enable cap OPEN is
+correctly BENIGN here: it only removes the delay — the PG still
+drives EN and the rail starts promptly, in order. (Getting that
+verdict right required a physics fix in the PWL engine: PG was
+mode-based, and the settle check could exit in the same iteration as
+the upstream mode flip, starving the algebraic-EN re-evaluation and
+calling the chained rail NEVER-good. PG is now VOLTAGE-based — it
+asserts when the source rail is GOOD, which is both what real
+power-good pins monitor and an existing scheduler breakpoint, so the
+release lands on a natural event; and a settle is refused in any
+iteration whose modes changed.) The PWL engine's model scope applies
+(no feed inductance, stage dynamics as modeled) — its verdicts are
+the timeline's, stated.

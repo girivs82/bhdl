@@ -1,0 +1,32 @@
+import { BuckBoost_TPS63020 } from "bhdl-stdlib/power/tps63020.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+entity KneeSoc() {
+    pin 1: power in;
+    pin 2: power in;
+    pin GND: ground;
+    domain VDD_CORE pins="1" v=5V i_nom=300mA slot=1 source="FIXTURE — knee probe";
+    domain VDD_AUX pins="2" v=3.3V i_nom=100mA slot=2 source="FIXTURE — knee probe";
+}
+board KneeBoard {
+    power VBAT = 3.6V @ 8A;
+    port V50: power out = 5V @ 2A;
+    port V33: power out = 3.3V @ 1A;
+    ground GND;
+    @VBAT -> u1: BuckBoost_TPS63020(v_out=5V, i_out_max=1A, v_in=3.6V, v_in_min=3.0V, v_in_max=4.2V).VIN;
+    u1.GND -> @GND; u1.VOUT -> @V50;
+    @V50 -> u3: BuckBoost_TPS63020(v_out=3.3V, i_out_max=0.5A, v_in=5V, v_in_min=4.5V, v_in_max=5.5V).VIN;
+    u3.GND -> @GND; u3.VOUT -> @V33;
+    u1.PG -> u3.EN;
+    @V50 -> R_del: Res(100kΩ).1; R_del.2 -> u3.EN;
+    @V50 -> C_bulk: Cap(1000µF).1; C_bulk.2 -> @GND;
+    soc: KneeSoc();
+    @V50 -> soc.1; @V33 -> soc.2; soc.GND -> @GND;
+}
+
+safety KneeBoard as brd {
+    mission { ambient = 40degC; lifetime = 15000h; }
+    goal SG: ASIL_B "aux rail present when core is up" (id="SG-BOOT-1") {
+        effect aux_uv = brd.soc.2 < 3.0V severity S2;
+    }
+}

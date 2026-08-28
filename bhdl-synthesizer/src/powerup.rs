@@ -390,7 +390,10 @@ impl Model {
             for (en, rc) in &self.en_rc {
                 let pg_low = rc
                     .pg_of
-                    .map(|k| self.stages[k].pg_on_regulation && state.modes[k] != Mode::Regulating)
+                    .map(|k| {
+                        self.stages[k].pg_on_regulation
+                            && volt(&state.v, self.stages[k].vout) < GOOD_FRAC * self.stages[k].v_target
+                    })
                     .unwrap_or(false);
                 let src = if pg_low { 0.0 } else { volt(&state.v, rc.src) };
                 if rc.c <= 0.0 {
@@ -400,6 +403,7 @@ impl Model {
                 }
             }
             // stage enable + coarse mode
+            let mut modes_changed = false;
             for (k, s) in self.stages.iter().enumerate() {
                 let enabled = !forced_off.contains(&k) && match s.en {
                     None => {
@@ -417,7 +421,13 @@ impl Model {
                         s.en_vih.map(|vih| ev >= vih).unwrap_or(ev > 0.0)
                     }
                 };
+                if std::env::var("BHDL_POWERUP_DEBUG").is_ok() && state.t > 0.0138 && state.t < 0.05 {
+                    eprintln!("pud t={:.5}ms {} en={:?} enabled={} mode={:?} vin={:.3} vo={:.3} en_v={:?}",
+                        state.t*1e3, s.name, s.en, enabled, state.modes[k], volt(&state.v, s.vin), volt(&state.v, s.vout),
+                        s.en.and_then(|e| en_v.get(&e).copied()));
+                }
                 let vo = volt(&state.v, s.vout);
+                let mode_before = state.modes[k];
                 state.modes[k] = if !enabled {
                     Mode::Off
                 } else if vo < s.v_target * 0.999 && state.modes[k] != Mode::Regulating && state.modes[k] != Mode::CurrentLimited {
@@ -428,6 +438,9 @@ impl Model {
                 } else {
                     state.modes[k].max_reg()
                 };
+                if state.modes[k] != mode_before {
+                    modes_changed = true;
+                }
             }
             // net current balance
             let mut i_net: HashMap<NetId, f64> = HashMap::new();
@@ -527,7 +540,10 @@ impl Model {
                 }
                 let pg_low = rc
                     .pg_of
-                    .map(|k| self.stages[k].pg_on_regulation && state.modes[k] != Mode::Regulating)
+                    .map(|k| {
+                        self.stages[k].pg_on_regulation
+                            && volt(&state.v, self.stages[k].vout) < GOOD_FRAC * self.stages[k].v_target
+                    })
                     .unwrap_or(false);
                 let src = if pg_low { 0.0 } else { volt(&state.v, rc.src) };
                 en_next.push((*en, rc.r * rc.c, src));
@@ -668,7 +684,12 @@ impl Model {
             // settled?
             let stims_done = stims.iter().all(|s| state.t >= s.end())
                 && self.timed_ideal.values().all(|ti| state.t >= ti.t_on + ti.t_ramp + 1e-9);
+            // a mode that JUST changed invalidates the algebraic EN
+            // values computed earlier in the iteration — the flip
+            // (a PG releasing a chained enable) lands next iteration,
+            // so the board is NOT settled yet
             let settled = stims_done
+                && !modes_changed
                 && self.stages.iter().enumerate().all(|(k, _)| matches!(state.modes[k], Mode::Regulating | Mode::Off))
                 && dvdt.values().all(|r| r.abs() < 1e-6)
                 && en_next.iter().all(|(en, _, src)| (volt(&state.v, *en) - src).abs() < 1e-3);
