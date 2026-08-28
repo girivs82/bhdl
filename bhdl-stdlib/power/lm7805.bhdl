@@ -78,6 +78,10 @@ entity Ldo_LM7805(
     // elaboration emitter can reconstruct the constructor.
     attribute component_class = "ldo";
     attribute output_voltage  = v_out;
+    // DC ACCURACY (TI µA7800 EC table: output voltage 4.75–5.25 V over
+    // 0–125°C, IO 5mA–1A, VI 7–20V = ±5% — the over-temperature band;
+    // 25°C alone is ±4%, stated).
+    attribute output_tol      = 5%;
     attribute v_in            = v_in;
     attribute i_out_max       = i_out_max;
     attribute output_current  = 1.5A;    // TI µA7805

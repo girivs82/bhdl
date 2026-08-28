@@ -90,6 +90,10 @@ entity Buck_AP63205(
 
     attribute component_class = "switching_regulator";
     attribute output_voltage  = v_out;
+    // DC ACCURACY (DS41598: VFB CCM 4.95/5.00/5.05 V for AP63205 =
+    // ±1% — fixed output, internal divider; a COMBINED figure at the
+    // CCM condition, stated).
+    attribute output_tol      = 1%;
     attribute v_in            = v_in;
     attribute i_out_max       = i_out_max;
     attribute output_current  = 2A;

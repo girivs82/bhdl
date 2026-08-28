@@ -79,6 +79,9 @@ entity Ldo_AP2112K(
     // elaboration emitter can reconstruct the constructor.
     attribute component_class = "ldo";
     attribute output_voltage  = v_out;
+    // DC ACCURACY (DS39724: "Output Voltage Accuracy: ±1.5%" — a
+    // COMBINED figure, no divider term).
+    attribute output_tol      = 1.5%;
     attribute v_in            = v_in;
     attribute i_out_max       = i_out_max;
     attribute output_current  = 0.6A;    // AP2112 datasheet

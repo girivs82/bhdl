@@ -82,6 +82,11 @@ entity Ldo_LM317(
 
     attribute component_class  = "ldo";
     attribute output_voltage   = v_out;
+    // DC ACCURACY (TI LM317 EC table: reference voltage 1.20/1.25/1.30 V
+    // over 3V ≤ VIN−VOUT ≤ 40V, 10mA–1.5A, PD ≤ 20W = ±4%). The I_ADJ·R1
+    // term is neglected exactly as the sizing recipe neglects it, stated.
+    attribute v_ref     = 1.25V;
+    attribute v_ref_tol = 4%;
     attribute v_in             = v_in;
     attribute i_out_max        = i_out_max;
     attribute output_current   = 1.5A;   // promise = the part's rating
@@ -122,8 +127,11 @@ entity Ldo_LM317(
     VIN  -> C_in:  Cap(c_in).1;        C_in.2  -> GND;
     u.VOUT -> VOUT;
     VOUT -> C_out: Cap(c_out).1;       C_out.2 -> GND;
-    VOUT -> R1:    Res(r1_value).1;    R1.2    -> u.ADJ;
-    u.ADJ -> R2:   Res(r2_value).1;    R2.2    -> GND;
+    // divider named per the R_top/R_bot convention (the DC accuracy
+    // budget discovers it by name) — 1% parts, the block family's
+    // precision-divider choice
+    VOUT -> R_top: Res(r1_value, tolerance = 1%).1; R_top.2 -> u.ADJ;
+    u.ADJ -> R_bot: Res(r2_value, tolerance = 1%).1; R_bot.2 -> GND;
 }
 
 impl LdoStage for Ldo_LM317 {
