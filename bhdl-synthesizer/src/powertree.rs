@@ -441,6 +441,13 @@ pub struct StagePlan {
     pub i_nom_a: f64,
     /// Worst-case current (sum of served loads' i_max).
     pub i_max_a: f64,
+    /// The PREREG stage's protection spec, verbatim (the front_end
+    /// requirement / --prereg reason): recognized axis tokens
+    /// (reverse_polarity, ov_trip=, uv_trip=, ov_clamp=) become
+    /// requirement arguments the acceptance gates verify; the rest is
+    /// prose, recorded in the basis. None on every other topology.
+    #[serde(default)]
+    pub protection: Option<String>,
     /// The rating the eventual part must carry: i_max / derating
     /// policy (parts never run above that fraction of nameplate —
     /// reliability/FIT). This is the acceptance figure the generic
@@ -538,7 +545,7 @@ pub fn propose_trees_with_policy(
     };
 
     let ldo_stage = |from: &str, v_from: f64, r: &RailSummary, nom: f64, max: f64| -> StagePlan {
-        StagePlan {
+        StagePlan { protection: None,
             topology: Topology::Ldo,
             from: from.to_string(),
             to: r.net.clone(),
@@ -580,7 +587,7 @@ pub fn propose_trees_with_policy(
             )
         };
         let p_out = r.voltage * nom;
-        StagePlan {
+        StagePlan { protection: None,
             topology: topology.clone(),
             from: from.to_string(),
             to: r.net.clone(),
@@ -604,7 +611,7 @@ pub fn propose_trees_with_policy(
     let buck_intermediate = |name: &str, from: &str, v_from: f64, v_int: f64, nom: f64, max: f64, serves: Vec<String>| -> StagePlan {
         let eff = buck_eff_at(nom, v_from, v_int);
         let p_out = v_int * nom;
-        StagePlan {
+        StagePlan { protection: None,
             topology: Topology::Buck,
             from: input.to_string(),
             to: name.to_string(),
@@ -847,7 +854,7 @@ pub fn propose_trees_with_policy(
                 let i_in_max = max * r.voltage / rfeed_v;
                 let eff = boost_eff_at(nom, rfeed_v, r.voltage);
                 let p_out = r.voltage * nom;
-                stages.push(StagePlan {
+                stages.push(StagePlan { protection: None,
                     topology: Topology::Boost,
                     from: rfeed.to_string(),
                     to: r.net.clone(),
@@ -1037,6 +1044,7 @@ pub fn propose_trees_with_policy(
                 .sum();
             stages.push(StagePlan {
                 topology: Topology::Prereg,
+                protection: Some(reason.to_string()),
                 from: input.to_string(),
                 to: feed_name.clone(),
                 vin,
@@ -1667,6 +1675,173 @@ pub fn project_cap_v_derating(source: &str) -> Option<f64> {
         .filter(|f| *f > 0.0 && *f <= 1.0)
 }
 
+/// Project knob `requirements { front_end: "..." }` — the durable
+/// form of `--prereg`: the board itself declares that a protected
+/// front end must sit between the input and every non-always-on rail.
+/// The value is the protection spec: recognized axis tokens
+/// (`reverse_polarity`, `ov_trip=<V>`, `uv_trip=<V>`, `ov_clamp=<V>`)
+/// become requirement arguments the resolver's acceptance gates
+/// verify against real protection blocks; anything else is prose,
+/// recorded as the reason. The CLI flag wins when both are given.
+pub fn project_front_end(source: &str) -> Option<String> {
+    let masked = crate::stage_resolution::mask_comments(source);
+    crate::stage_resolution::scan_project_requirements(&masked)
+        .into_iter()
+        .find(|(k, _)| k == "front_end")
+        .map(|(_, v)| v.trim_matches('"').to_string())
+}
+
+/// Project knob `requirements { source_r: "50m" }` — the SOURCE
+/// impedance at the connector (supply output impedance + harness +
+/// contact resistance), designer data the inrush estimate cannot
+/// exist without: at plug-in the input bank charges limited by
+/// NOTHING but this resistance (until a front end with a current
+/// limit sits in the path). Undeclared = the inrush peak is a NAMED
+/// gap, never a guess.
+pub fn project_source_r(source: &str) -> Option<f64> {
+    let masked = crate::stage_resolution::mask_comments(source);
+    crate::stage_resolution::scan_project_requirements(&masked)
+        .into_iter()
+        .find(|(k, _)| k == "source_r")
+        .and_then(|(_, v)| crate::stage_acceptance::parse_si(v.trim_matches('"')))
+        .filter(|r| *r > 0.0)
+}
+
+/// Plug-in INRUSH report (spec addendum 10) — pure statements from
+/// the final netlist, one line per finding:
+///  - the input-rail bank (caps BEFORE any front end) charges at
+///    connector insertion limited only by the source impedance:
+///    peak = vin/source_r when `requirements { source_r: ... }` is
+///    declared, a NAMED gap otherwise; judged against the front
+///    end's rating when one carries the input.
+///  - a bank BEHIND a front end that declares `i_lim` charges at
+///    that limit (charge time = C·V/I); a fuse-only or i_lim-less
+///    front end limits nothing on that edge, stated (fuse melting is
+///    I²t data this library does not carry).
+///  - banks behind REGULATOR stages are soft-start-limited — the
+///    power-up timeline is the verification (the knee physics), so
+///    this report only states the hand-off.
+pub fn inrush_report(netlist: &Netlist, source: &str, input: &str) -> Vec<String> {
+    use bhdl_netlist::types::{InstanceId, NetId};
+    let mut out = Vec::new();
+    let mut pin_net: std::collections::HashMap<(InstanceId, String), NetId> = Default::default();
+    for pi in netlist.pin_instances.values() {
+        let (Some(net), Some(pd)) = (pi.net, netlist.pins.get(pi.pin_def)) else { continue };
+        pin_net.insert((pi.instance, pd.name.clone()), net);
+    }
+    let attr_si = |i: InstanceId, k: &str| -> Option<f64> {
+        netlist
+            .instances
+            .get(i)
+            .and_then(|x| x.attributes.get(k))
+            .and_then(|v| crate::stage_acceptance::parse_si(v))
+    };
+    let module_of = |i: InstanceId| -> String {
+        netlist
+            .modules
+            .get(netlist.instances.get(i).map(|x| x.definition).unwrap_or_default())
+            .map(|m| m.name.clone())
+            .unwrap_or_default()
+    };
+    let net_named = |name: &str| -> Option<NetId> {
+        netlist
+            .nets
+            .iter()
+            .find(|(_, n)| n.name.as_deref() == Some(name))
+            .map(|(id, _)| id)
+    };
+    let Some(in_net) = net_named(input) else { return out };
+    let vin = netlist
+        .nets
+        .get(in_net)
+        .and_then(|n| match n.net_class {
+            bhdl_netlist::types::NetClass::Power { voltage, .. } => Some(voltage),
+            _ => None,
+        })
+        .unwrap_or(0.0);
+    // ΣC per net (broadened cap detection, nominal values — inrush is
+    // a charge estimate, not a mask check)
+    let bank_c = |net: NetId| -> f64 {
+        let mut c = 0.0;
+        for (i, inst) in netlist.instances.iter() {
+            let is_cap = matches!(module_of(i).as_str(), "Cap" | "Capacitor")
+                || inst.attributes.contains_key("capacitance");
+            if !is_cap {
+                continue;
+            }
+            let (Some(n1), Some(n2)) = (
+                pin_net.get(&(i, "1".to_string())),
+                pin_net.get(&(i, "2".to_string())),
+            ) else { continue };
+            if *n1 == net || *n2 == net {
+                c += attr_si(i, "value")
+                    .or_else(|| attr_si(i, "capacitance"))
+                    .unwrap_or(0.0);
+            }
+        }
+        c
+    };
+    // the front end: a protection-class instance whose VIN sits on the
+    // input rail
+    let fe = netlist.instances.iter().find(|(i, inst)| {
+        inst.attributes
+            .get("component_class")
+            .map(|c| c.trim_matches('"') == "protection")
+            .unwrap_or(false)
+            && pin_net.get(&(*i, "VIN".to_string())) == Some(&in_net)
+    });
+    let source_r = project_source_r(source);
+    let c_in = bank_c(in_net);
+    if c_in > 1e-9 {
+        match source_r {
+            Some(r) => {
+                let i_pk = vin / r;
+                let rating = fe
+                    .and_then(|(i, _)| attr_si(i, "output_current"))
+                    .map(|a| format!(" vs the front end's {a}A rating — {}", if i_pk > a { "EXCEEDS it during the charge transient (an I²t/SOA question this library has no data for — UNCHECKED, stated)" } else { "within rating" }))
+                    .unwrap_or_else(|| " (no front end on the input — the connector and source absorb it, stated)".to_string());
+                out.push(format!(
+                    "inrush: input bank {:.1}µF charges at plug-in — peak ≈ {vin}V / {:.0}mΩ = {:.1}A (source_r, declared){rating}; charge ≈ {:.1}µs (5·RC)",
+                    c_in * 1e6,
+                    r * 1e3,
+                    i_pk,
+                    c_in * r * 5.0 * 1e6
+                ));
+            }
+            None => out.push(format!(
+                "inrush: input bank {:.1}µF charges at plug-in limited ONLY by the source impedance — declare `requirements {{ source_r: \"<Ω>\" }}` (supply + harness + contact) to bound the peak; UNCHECKED, stated",
+                c_in * 1e6
+            )),
+        }
+    }
+    // the bank behind the front end
+    if let Some((fi, fin)) = fe {
+        if let Some(prot_net) = pin_net.get(&(fi, "VOUT".to_string())) {
+            let c_prot = bank_c(*prot_net);
+            if c_prot > 1e-9 {
+                let i_lim = attr_si(fi, "i_lim").filter(|l| *l > 0.0);
+                match i_lim {
+                    Some(l) => out.push(format!(
+                        "inrush: {} bank {:.1}µF behind '{}' charges at its declared {l}A current limit — charge time ≈ {:.1}µs (C·V/I; the device rides its limit for that long — check the datasheet SOA/thermal shutdown window against it, stated)",
+                        netlist.nets.get(*prot_net).and_then(|n| n.name.clone()).unwrap_or_default(),
+                        c_prot * 1e6,
+                        fin.name,
+                        c_prot * vin / l * 1e6
+                    )),
+                    None => out.push(format!(
+                        "inrush: {} bank {:.1}µF behind '{}' — the front end declares NO current limit (a fuse limits nothing on this edge, and an eFuse's r_ilim→i_lim law is not library data): declare `i_lim=<A>` on the block from its datasheet to bound the charge; UNCHECKED, stated",
+                        netlist.nets.get(*prot_net).and_then(|n| n.name.clone()).unwrap_or_default(),
+                        c_prot * 1e6,
+                        fin.name
+                    )),
+                }
+            }
+        }
+    }
+    out.push("inrush: banks behind regulator stages are soft-start-limited — verified by the power-up timeline (the knee physics), not re-estimated here".to_string());
+    out
+}
+
 pub const EMIT_IMPORT: &str ="import { BuckStage, LdoStage, BuckExtStage, PreregStage, BoostStage } from \"bhdl-stdlib/power/stages.bhdl\";";
 
 fn fmt_v(v: f64) -> String {
@@ -1745,8 +1920,29 @@ pub fn emit_power_region(option: &TreeOption, gnd: &str) -> String {
                 } else {
                     String::new()
                 };
+                // PREREG protection axes: recognized tokens of the
+                // front_end spec become requirement arguments the
+                // acceptance gates verify (a block lacking the axis is
+                // rejected in the survey); prose stays in the basis.
+                let protection = match (&st.topology, &st.protection) {
+                    (Topology::Prereg, Some(spec)) => {
+                        let mut args = String::new();
+                        for tok in spec.split(',').map(str::trim).filter(|t| !t.is_empty()) {
+                            if tok.eq_ignore_ascii_case("reverse_polarity") {
+                                args.push_str(", reverse_polarity=true");
+                            } else if let Some((k, v)) = tok.split_once('=') {
+                                let (k, v) = (k.trim(), v.trim());
+                                if matches!(k, "ov_trip" | "uv_trip" | "ov_clamp") && !v.is_empty() {
+                                    args.push_str(&format!(", {k}={v}"));
+                                }
+                            }
+                        }
+                        args
+                    }
+                    _ => String::new(),
+                };
                 out.push_str(&format!(
-                    "\n    {inst}: {iface}(vout={}, i_max={}, vin={}{noise}{phases});\n",
+                    "\n    {inst}: {iface}(vout={}, i_max={}, vin={}{noise}{phases}{protection});\n",
                     fmt_v(st.vout),
                     fmt_a_ceil(st.i_max_a),
                     fmt_v(st.vin),

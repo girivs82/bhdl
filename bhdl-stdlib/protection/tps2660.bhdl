@@ -92,6 +92,7 @@ entity Efuse_TPS2660(
     ov_trip:   voltage    = 30V,     // cut off above this
     uv_trip:   voltage    = 8V,      // hold off below this
     r_ilim:    resistance,           // REQUIRED: from SLVSDG2G for your current limit (no law in this library)
+    i_lim:     current = 0A,         // the limit that r_ilim programs, from the SAME datasheet row — 0A = undeclared (the inrush report then states the gap); declare BOTH so the charge-time estimate exists
     r_bot:     resistance = 10kΩ,    // divider bottom resistor (both dividers)
     c_out:     capacitance = 1µF
 ) as design
@@ -116,6 +117,7 @@ entity Efuse_TPS2660(
     attribute ov_trip          = ov_trip; // promise = the divider below is sized to it
     attribute uv_trip          = uv_trip;
     attribute reverse_polarity = true;    // SLVSDG2G
+    attribute i_lim            = i_lim;   // designer-stated (paired with r_ilim); 0A = undeclared, stated
     attribute rds_on           = 150mΩ;   // SLVSDG2G (internal pass FET — the estimator's protection arm uses it)
     attribute i_quiescent      = 300uA;   // SLVSDG2G
     attribute tj_min           = -40degC;    // SLVSDG2G (junction; thermal path via θ_JA)

@@ -1251,3 +1251,35 @@ hold under transients too — and with neither the release edge is
 info-only, stated. The PWL power-up engine models no feed inductance,
 so its release numbers are the stages' own dynamics only; the SPICE
 PDN checks carry the L physics.
+
+**Front-end synthesis + plug-in inrush (§7.5 addendum 10).** The
+input path joins the plan: `requirements { front_end: "..." }` is the
+durable board-text form of `--prereg` (the flag wins when both are
+given) — a protected front end is planned between the input and every
+non-always-on rail. The value is the protection spec: recognized axis
+tokens (`reverse_polarity`, `ov_trip=<V>`, `uv_trip=<V>`,
+`ov_clamp=<V>`) become arguments of the emitted `PreregStage`
+requirement, so the resolver's acceptance gates verify them against
+real protection blocks (PassiveFrontEnd clamps but has no reverse
+path; IdealDiode_LM74700 reverses but trips nothing;
+Efuse_TPS2660 covers all three but is a TEMPLATE — `r_ilim` is
+designer data, so it binds only via `resolve`); prose beyond the
+tokens is the reason, recorded in the basis.
+
+The inrush report then states what bounds each bank's plug-in charge:
+the INPUT bank (before any front end) charges limited by nothing but
+the source impedance — `requirements { source_r: "<Ω>" }` (supply +
+harness + contact, designer data) turns that into a peak
+(`vin/source_r`, judged against the front end's rating, with I²t/SOA
+a named gap — no such data in the library) and a 5·RC charge
+estimate; undeclared, the peak is a NAMED gap, never a guess. A bank
+BEHIND a front end charges at the device's current limit when it
+declares one — the eFuse block gains an optional `i_lim` argument
+paired with `r_ilim` (the same datasheet row; the r_ilim→i_lim law
+is not library data), and the report computes the charge time C·V/I
+with the SOA window named as the designer's check; a fuse-only or
+i_lim-less front end limits nothing on that edge, stated. Banks
+behind regulator stages are soft-start-limited — the power-up
+timeline is the verification (the knee physics), and the report only
+states the hand-off. N+1 bulk makes every one of these numbers
+bigger; that is exactly why they are printed next to the sizing.

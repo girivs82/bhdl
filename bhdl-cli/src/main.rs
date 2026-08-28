@@ -1987,6 +1987,15 @@ async fn run_powertree(
     prereg: Option<String>,
     emit: Option<usize>,
 ) -> Result<()> {
+    // Durable front-end policy: `requirements { front_end: ... }` is
+    // the board-text form of --prereg (the flag wins when both given).
+    let prereg = prereg.or_else(|| {
+        let fe = bhdl_synthesizer::powertree::project_front_end(input_content);
+        if let Some(spec) = &fe {
+            println!("  front_end requirement: protected front end planned for every non-always-on rail ({spec})");
+        }
+        fe
+    });
     // Regeneration: an existing generated region drives the rails and
     // would empty its own worklist — strip it and replan from the
     // hand-authored board when emitting.
@@ -2519,6 +2528,13 @@ async fn run_powertree(
                         } else {
                             println!("  sanity: {l}");
                         }
+                    }
+                    // plug-in inrush (spec addendum 10): statements
+                    // from the FINAL netlist — the input bank, the
+                    // bank behind any front end, and the hand-off to
+                    // the soft-start-verified downstream
+                    for l in bhdl_synthesizer::powertree::inrush_report(nl, input_content, &input) {
+                        println!("  {l}");
                     }
                 }
                 let Some(final_text) = converged else {

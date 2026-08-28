@@ -4011,3 +4011,60 @@ async fn decap_voltage_gate_excludes_underrated_candidates() {
         "refusal must name the voltage gate and the remedy: {msg}"
     );
 }
+
+/// Inrush report, the i_lim-declared arm (spec §7.5 addendum 10): a
+/// front end whose designer paired `i_lim` with `r_ilim` bounds the
+/// protected bank's plug-in charge — the report computes the charge
+/// time (C·V/I) instead of naming a gap; the input-side bank gets the
+/// declared-source peak against the front end's rating.
+#[tokio::test]
+async fn inrush_report_with_declared_current_limit() {
+    let ws = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    std::env::set_current_dir(ws).unwrap();
+    let src = r#"
+import { Efuse_TPS2660 } from "bhdl-stdlib/protection/tps2660.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+
+board InrushDemo {
+    requirements { source_r: "50m"; }
+    power V12 = 12V @ 3A;
+    power VPROT = 12V;
+    ground GND;
+
+    @V12 -> C_conn: Cap(4.7µF).1; C_conn.2 -> @GND;
+    fe: Efuse_TPS2660(v_in=12V, i_out_max=1A, ov_trip=30V, uv_trip=8V, r_ilim=10kΩ, i_lim=1.5A);
+    @V12 -> fe.VIN; fe.GND -> @GND;
+    fe.VOUT -> @VPROT;
+    @VPROT -> C_bank: Cap(100µF).1; C_bank.2 -> @GND;
+    @VPROT -> R_load: Res(24Ω).1; R_load.2 -> @GND;
+}
+"#;
+    let pr = parse(src);
+    assert!(pr.errors().is_empty(), "parse: {:?}", pr.errors());
+    let sf = SourceFile::cast(pr.syntax()).unwrap();
+    let analysis = analyze(&sf);
+    let mut gen = NetlistGenerator::new();
+    let netlist = gen.generate_from_ast_and_analysis(&sf, &analysis).await.expect("synthesize");
+    let lines = bhdl_synthesizer::powertree::inrush_report(&netlist, src, "V12");
+    let joined = lines.join("\n");
+    // input bank: declared-source peak vs the front end's rating
+    assert!(
+        joined.contains("input bank") && joined.contains("source_r, declared"),
+        "input-bank arm missing:\n{joined}"
+    );
+    // protected bank: charge bounded at the declared limit, time computed
+    let bank = lines
+        .iter()
+        .find(|l| l.contains("behind 'fe'"))
+        .unwrap_or_else(|| panic!("no behind-front-end line:\n{joined}"));
+    assert!(
+        bank.contains("1.5A current limit") && bank.contains("charge time"),
+        "i_lim arm did not compute the charge: {bank}"
+    );
+    // C·V/I = 101µF·12V/1.5A = 808µs (the efuse block's own 1µF
+    // c_out is part of the protected bank — counted, correctly)
+    assert!(bank.contains("808.0µs"), "charge time wrong: {bank}");
+    // the soft-start hand-off statement is always present
+    assert!(joined.contains("soft-start-limited"), "{joined}");
+}
