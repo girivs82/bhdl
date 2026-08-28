@@ -263,7 +263,19 @@ pub enum PartData {
     /// Behavioral model with declared failure states.
     Behavioral { failure_states: usize, source: String, states: Vec<FailureState> },
     /// Black box with SEooC data.
-    Seooc { lambda_fit: Option<f64>, source: String },
+    /// Black-box vendor safety data. The ATTESTATION composes into the
+    /// board metrics only when all three of lambda/spfm/lfm are
+    /// declared (the vendor's own FMEDA split, cited); a partial
+    /// attestation is a named gap — the campaign cannot simulate a
+    /// black box, and coverage is never assumed.
+    Seooc {
+        lambda_fit: Option<f64>,
+        #[serde(default)]
+        spfm: Option<f64>,
+        #[serde(default)]
+        lfm: Option<f64>,
+        source: String,
+    },
     /// Handbook class data (passives). `per` names the prediction
     /// standard whose equations compute the FIT (e.g. "IEC62380");
     /// `fit`/`fit_basis` are filled by the reliability engine when the
@@ -583,6 +595,10 @@ pub struct Metrics {
     /// Universe faults that could NOT enter the measurement (no λ share
     /// or not run) — metrics are incomplete unless this is 0.
     pub unmeasured_faults: usize,
+    /// λ composed from SEooC vendor ATTESTATIONS (lambda+spfm+lfm all
+    /// declared, cited) — included in lambda_total_fit; 0 when none.
+    #[serde(default)]
+    pub lambda_attested_fit: f64,
     /// SPFM = 1 − λ_residual/λ_total (ISO 26262-5 §8.4.5).
     pub spfm: f64,
     /// LFM = 1 − λ_latent/(λ_total − λ_residual) (ISO 26262-5 §8.4.6).

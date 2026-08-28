@@ -171,7 +171,13 @@ pub fn render(
     for p in &model.parts {
         let (data, fit) = match &p.data {
             PartData::Behavioral { failure_states, source, .. } => (format!("behavioral, {failure_states} state(s) ({})", esc(source)), "per-state λ".to_string()),
-            PartData::Seooc { lambda_fit, source } => ("SEooC".into(), format!("{} ({})", lambda_fit.map(|l| format!("{l:.1}")).unwrap_or_else(|| "—".into()), esc(source))),
+            PartData::Seooc { lambda_fit, spfm, lfm, source } => (
+                match (spfm, lfm) {
+                    (Some(sp), Some(lf)) => format!("SEooC, ATTESTED (SPFM {:.0}%, LFM {:.0}%)", sp * 100.0, lf * 100.0),
+                    _ => "SEooC (attestation incomplete — gap)".into(),
+                },
+                format!("{} ({})", lambda_fit.map(|l| format!("{l:.1}")).unwrap_or_else(|| "—".into()), esc(source)),
+            ),
             PartData::Handbook { class, source, fit, fit_basis, .. } => (
                 format!("handbook: {} ({})", esc(class), esc(source)),
                 match (fit, fit_basis) {
@@ -238,6 +244,13 @@ pub fn render(
                 m.unmeasured_faults,
                 if m.unmeasured_faults > 0 { " (metrics cannot PASS until the whole universe is measured)" } else { "" },
             );
+            if m.lambda_attested_fit > 0.0 {
+                let _ = writeln!(
+                    w,
+                    "  - includes {:.1} FIT composed from SEooC vendor ATTESTATIONS (residual = λ·(1−SPFM), latent = λ·SPFM·(1−LFM); sources cited per part in §4; attested parts\u{2019} board-side universe rows are classification-only, stated)",
+                    m.lambda_attested_fit
+                );
+            }
         }
     }
     if !any {

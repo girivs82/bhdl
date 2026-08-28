@@ -1346,8 +1346,8 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
                         internal_detection: f.5.clone(),
                     }).collect(),
                 }
-            } else if let Some((lambda, _, _, src)) = &ed.seooc {
-                PartData::Seooc { lambda_fit: *lambda, source: src.clone() }
+            } else if let Some((lambda, spfm_a, lfm_a, src)) = &ed.seooc {
+                PartData::Seooc { lambda_fit: *lambda, spfm: *spfm_a, lfm: *lfm_a, source: src.clone() }
             } else if let Some((class, src, per)) = &ed.handbook {
                 PartData::Handbook { class: class.clone(), source: src.clone(), per: per.clone(), fit: None, fit_basis: None }
             } else {

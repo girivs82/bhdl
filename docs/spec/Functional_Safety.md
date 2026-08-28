@@ -411,6 +411,22 @@ Semantics (Phase 2a, shipped):
 Safety data is read from the entity's own source file, so the CLI parses
 imports transitively (relative to the board file, `BHDL_LIB_PATH`, cwd).
 
+**SEooC λ attestation** *(implemented)*: a black box the campaign
+cannot simulate composes into the board metrics ONLY through the
+vendor's own attested FMEDA split —
+`seooc lambda=<FIT> spfm=<0..1> lfm=<0..1> source="<vendor FMEDA>";`
+with ALL THREE axes. The composition is the vendor's arithmetic, not
+ours: residual = λ·(1−SPFM), latent = λ·SPFM·(1−LFM), both added to
+the scope's measured sums and reported as the attested share
+(`lambda_attested_fit`). A partial attestation is a NAMED gap and
+composes nothing — coverage is never assumed. The attested part's
+board-side universe rows (pin opens, solder bridges) remain in the
+campaign as CLASSIFICATION-ONLY: they still fire effects, their λ is
+neither in the die FMEDA nor modeled here (solder-joint λ, stated),
+and they do not count against the metrics-completeness gate. The
+SEooC assumptions of use remain the attestation's condition — an
+open AoU is its own gap beside the composed numbers.
+
 ### 2.8 Mission profile and computed handbook FITs *(Phase 2c — implemented)*
 
 Passives don't get vendor FMEDAs; their FIT comes from a prediction

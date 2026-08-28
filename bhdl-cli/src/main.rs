@@ -4191,7 +4191,15 @@ async fn run_safety(
                 let with_beh = states.iter().filter(|st| st.behavior.is_some()).count();
                 format!("behavioral, {failure_states} failure states ({with_beh} with behavior)  {source}")
             }
-            PartData::Seooc { lambda_fit, source } => format!("seooc{}  {source}", lambda_fit.map(|l| format!(" λ={l} FIT")).unwrap_or_default()),
+            PartData::Seooc { lambda_fit, spfm, lfm, source } => format!(
+                "seooc{}{}  {source}",
+                lambda_fit.map(|l| format!(" λ={l} FIT")).unwrap_or_default(),
+                match (spfm, lfm) {
+                    (Some(sp), Some(lf)) => format!(" ATTESTED SPFM={:.0}% LFM={:.0}% (composes into the metrics)", sp * 100.0, lf * 100.0),
+                    (None, None) => String::new(),
+                    _ => " (attestation INCOMPLETE — gap)".to_string(),
+                }
+            ),
             PartData::Handbook { class, source, per, fit, fit_basis } => {
                 let engine = per.as_deref().map(|p| format!(" per {p}")).unwrap_or_default();
                 match (fit, fit_basis) {
@@ -4264,6 +4272,9 @@ async fn run_safety(
             n_spfm, m.spfm * 100.0, m.lfm * 100.0, n_pmhf, m.pmhf_fit, tgt, verdict);
         if m.unmeasured_faults > 0 {
             println!("    ⚠ {} universe fault(s) NOT in the measurement (no λ share or not run) — metrics incomplete", m.unmeasured_faults);
+        }
+        if m.lambda_attested_fit > 0.0 {
+            println!("    λ includes {:.1} FIT composed from SEooC vendor ATTESTATIONS (λ·(1−SPFM) residual, λ·SPFM·(1−LFM) latent — cited on each part; attested parts\u{2019} board-side rows are classification-only, stated)", m.lambda_attested_fit);
         }
         match m.pmhf_dual_fit {
             Some(d) => println!("    {} includes the dual-point term {:.2e} FIT (Σ λ_L·λ_exposed·T_window, second-order; window = declared proof-test interval else lifetime/2)", n_pmhf, d),

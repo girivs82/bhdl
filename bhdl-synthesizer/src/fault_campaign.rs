@@ -1352,6 +1352,16 @@ pub fn run_universe(
             PartData::Handbook { fit, .. } => *fit,
             _ => None,
         };
+        // a FULLY-attested SEooC part: its die-level λ enters the
+        // metrics via the vendor attestation, so its board-side rows
+        // are CLASSIFICATION-ONLY (they still fire effects; their λ —
+        // solder joints, pin bridges — is not in the die FMEDA and not
+        // modeled here, stated)
+        let seooc_attested_note = matches!(
+            &part.data,
+            PartData::Seooc { lambda_fit: Some(_), spfm: Some(_), lfm: Some(_), .. }
+        )
+        .then(|| "SEooC board-side fault: die λ enters the metrics via the vendor ATTESTATION — this row is classification-only (solder-joint λ not modeled, stated)".to_string());
         let pins = view.pins_of.get(&part.instance).cloned().unwrap_or_default();
         let ordered = view.pins_ordered.get(&part.instance).cloned().unwrap_or_else(|| pins.clone());
         // modes. A BEHAVIORAL part's failure modes are the VENDOR'S
@@ -1478,7 +1488,7 @@ pub fn run_universe(
                 latent: false,
                 latent_exposed_fit: 0.0,
                 weight_fit: weight,
-                note: mode_note,
+                note: mode_note.or_else(|| seooc_attested_note.clone()),
             };
             // DRIFT rows: one λ mode probed at several magnitudes —
             // classify each probe, keep the WORST (residual > detected-
@@ -1998,6 +2008,36 @@ pub fn compute_metrics(model: &mut SafetyModel) {
         return;
     }
     let mut gaps: Vec<Gap> = Vec::new();
+    // SEooC vendor ATTESTATIONS per scope: λ_res = λ(1−SPFM), λ_lat =
+    // λ·SPFM·(1−LFM). Composes only with ALL THREE axes declared —
+    // the campaign cannot simulate a black box and never assumes
+    // coverage; a partial attestation is a named gap.
+    let mut att_by_scope: std::collections::HashMap<String, (f64, f64, f64)> = Default::default();
+    let mut attested_parts: std::collections::HashSet<String> = Default::default();
+    for p in &model.parts {
+        if let bhdl_common::safety::PartData::Seooc { lambda_fit, spfm, lfm, source } = &p.data {
+            let key = p.parent.clone().unwrap_or_default();
+            let key = if model.scopes.iter().any(|s| s.path == key) { key } else { String::new() };
+            match (lambda_fit, spfm, lfm) {
+                (Some(l), Some(sp), Some(lf)) => {
+                    let e = att_by_scope.entry(key).or_default();
+                    e.0 += l;
+                    e.1 += l * (1.0 - sp);
+                    e.2 += l * sp * (1.0 - lf);
+                    attested_parts.insert(p.instance.clone());
+                }
+                (None, None, None) => {}
+                _ => gaps.push(Gap {
+                    class: bhdl_common::safety::GapClass::FitUncomputed,
+                    goal: key,
+                    subject: p.instance.clone(),
+                    fix: format!(
+                        "SEooC attestation incomplete ({source}) — declare lambda, spfm AND lfm from the vendor FMEDA; a partial attestation cannot compose and the part's λ stays unmeasured"
+                    ),
+                }),
+            }
+        }
+    }
     for scope in model.scopes.iter_mut() {
         let faults: Vec<&bhdl_common::safety::UniverseFault> =
             model.universe.iter().filter(|u| u.scope == scope.path).collect();
@@ -2005,14 +2045,22 @@ pub fn compute_metrics(model: &mut SafetyModel) {
             continue;
         }
         let measured: Vec<_> = faults.iter().filter(|u| u.ran && u.weight_fit.is_some()).collect();
-        let unmeasured = faults.len() - measured.len();
-        let lambda_total: f64 = measured.iter().map(|u| u.weight_fit.unwrap()).sum();
+        // fully-attested SEooC parts' rows are classification-only —
+        // their die λ enters below via the attestation, so they do not
+        // count as unmeasured (their note states the accounting)
+        let unmeasured = faults
+            .iter()
+            .filter(|u| !(u.ran && u.weight_fit.is_some()) && !attested_parts.contains(&u.part))
+            .count();
+        let att = att_by_scope.get(&scope.path).copied().unwrap_or((0.0, 0.0, 0.0));
+        let lambda_total: f64 = measured.iter().map(|u| u.weight_fit.unwrap()).sum::<f64>() + att.0;
         let lambda_residual: f64 = measured
             .iter()
             .filter(|u| !u.fired.is_empty() && u.detected.is_empty())
             .map(|u| u.weight_fit.unwrap())
-            .sum();
-        let lambda_latent: f64 = measured.iter().filter(|u| u.latent).map(|u| u.weight_fit.unwrap()).sum();
+            .sum::<f64>()
+            + att.1;
+        let lambda_latent: f64 = measured.iter().filter(|u| u.latent).map(|u| u.weight_fit.unwrap()).sum::<f64>() + att.2;
         let spfm = if lambda_total > 0.0 { 1.0 - lambda_residual / lambda_total } else { 1.0 };
         let non_spf = lambda_total - lambda_residual;
         let lfm = if non_spf > 0.0 { 1.0 - lambda_latent / non_spf } else { 1.0 };
@@ -2095,6 +2143,7 @@ pub fn compute_metrics(model: &mut SafetyModel) {
             }
         }
         scope.metrics = Some(Metrics {
+            lambda_attested_fit: att.0,
             lambda_total_fit: lambda_total,
             lambda_residual_fit: lambda_residual,
             lambda_latent_fit: lambda_latent,
@@ -2284,7 +2333,7 @@ pub fn export_fmeda(model: &bhdl_common::safety::SafetyModel) -> FmedaCsvs {
                         format!("vendor failure states ({}) — {source}", states.len()),
                     )
                 }
-                PartData::Seooc { lambda_fit, source } => (*lambda_fit, format!("SEooC — {source}")),
+                PartData::Seooc { lambda_fit, source, .. } => (*lambda_fit, format!("SEooC — {source}")),
                 PartData::Waived { reason } => (None, format!("WAIVED: {reason}")),
                 PartData::None => (None, "no safety data (PART_NO_SAFETY_DATA gap)".to_string()),
             };
