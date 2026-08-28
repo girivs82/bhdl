@@ -1969,6 +1969,283 @@ pub fn dc_accuracy_report(netlist: &Netlist, sf: &SourceFile) -> Vec<(bool, Opti
     out
 }
 
+/// Project knob `requirements { emi_filter: "40dB" }` — the declared
+/// conducted-emissions attenuation target at the SLOWEST bound
+/// switching frequency. The target is designer data (which CISPR
+/// class, what margin, what the lab measured last time — none of it
+/// derivable here); COMPLIANCE IS A MEASUREMENT, and the synthesis
+/// says so. Returns the attenuation in dB.
+pub fn project_emi_filter(source: &str) -> Option<(f64, Option<f64>)> {
+    let masked = crate::stage_resolution::mask_comments(source);
+    let raw = crate::stage_resolution::scan_project_requirements(&masked)
+        .into_iter()
+        .find(|(k, _)| k == "emi_filter")
+        .map(|(_, v)| v.trim_matches('"').trim().to_string())?;
+    let mut atten: Option<f64> = None;
+    let mut l: Option<f64> = None;
+    for tok in raw.split(',').map(str::trim).filter(|t| !t.is_empty()) {
+        if let Some((k, v)) = tok.split_once('=') {
+            if k.trim() == "l" {
+                l = crate::stage_acceptance::parse_si(v.trim());
+            }
+        } else {
+            atten = tok
+                .trim_end_matches("dB")
+                .trim_end_matches("db")
+                .trim()
+                .parse::<f64>()
+                .ok();
+        }
+    }
+    atten.filter(|a| *a > 0.0).map(|a| (a, l.filter(|x| *x > 0.0)))
+}
+
+/// A synthesized EMI input filter: series L into a new filter rail,
+/// shortlist filter cap, and the standard parallel R-C damping
+/// branch, with the Middlebrook interaction machine-checked.
+pub struct EmiFilterPlan {
+    /// slowest bound switching frequency (the sizing point)
+    pub f_min_hz: f64,
+    /// second-order cutoff meeting the target: f_min·10^(−A/40)
+    pub f_c_hz: f64,
+    pub l_h: f64,
+    pub l_rated_a: f64,
+    /// shortlist filter cap (entity, farads, esr)
+    pub c_entity: String,
+    /// parallel count of the shortlist part (1 unless the declared L
+    /// demands a stack)
+    pub c_count: usize,
+    pub c_f: f64,
+    /// damping branch: R_d = √(L/C_f) (the n = C_d/C_f = 4 rule of the
+    /// standard damped-input-filter design), C_d = 4·C_f
+    pub r_d_ohm: f64,
+    pub c_d_f: f64,
+    /// damped filter output-impedance peak over the swept band
+    pub z_out_peak_ohm: f64,
+    /// converter negative input impedance magnitude V²/P at the feed
+    pub z_in_conv_ohm: f64,
+    pub notes: Vec<String>,
+    /// Middlebrook violated (|Z_out|peak ≥ |Z_in|): a finding
+    pub violation: Option<String>,
+}
+
+/// Size the EMI input filter (spec addendum 12) from the BOUND tree:
+/// needs at least one stage fed from `input` (or the filter rail of a
+/// previous iteration) with a declared `f_sw`. Returns Ok(None) when
+/// the knob is absent, no stage is bound yet (the fixpoint calls
+/// again next iteration), or the project declares no decap_lib (the
+/// filter cap must be a CHARACTERIZED part — its ESR is part of the
+/// damping physics; a stated gap, not a bare-Cap guess).
+pub fn emi_filter_synthesis(
+    netlist: &Netlist,
+    source: &str,
+    input: &str,
+) -> Result<Option<EmiFilterPlan>, String> {
+    use bhdl_netlist::types::{InstanceId, NetId};
+    let Some((atten_db, l_declared)) = project_emi_filter(source) else { return Ok(None) };
+    let mut notes: Vec<String> = Vec::new();
+    let Some(lib) = project_decap_lib(source) else {
+        notes.push("emi filter: requirement declared but NO project decap_lib — the filter cap must be a characterized shortlist part (its ESR is part of the damping physics); declare one — filter NOT emitted, stated".into());
+        return Ok(Some(EmiFilterPlan {
+            f_min_hz: 0.0, f_c_hz: 0.0, l_h: 0.0, l_rated_a: 0.0,
+            c_entity: String::new(), c_count: 0, c_f: 0.0, r_d_ohm: 0.0, c_d_f: 0.0,
+            z_out_peak_ohm: 0.0, z_in_conv_ohm: 0.0, notes,
+            violation: None,
+        }));
+    };
+    let mut pin_net: std::collections::HashMap<(InstanceId, String), NetId> = Default::default();
+    for pi in netlist.pin_instances.values() {
+        let (Some(net), Some(pd)) = (pi.net, netlist.pins.get(pi.pin_def)) else { continue };
+        pin_net.insert((pi.instance, pd.name.clone()), net);
+    }
+    let attr_si = |i: InstanceId, k: &str| -> Option<f64> {
+        netlist
+            .instances
+            .get(i)
+            .and_then(|x| x.attributes.get(k))
+            .and_then(|v| crate::stage_acceptance::parse_si(v))
+    };
+    let net_named = |name: &str| -> Option<NetId> {
+        netlist.nets.iter().find(|(_, n)| n.name.as_deref() == Some(name)).map(|(id, _)| id)
+    };
+    let feed_nets: Vec<NetId> = [input, "V_FILT"].iter().filter_map(|n| net_named(n)).collect();
+    let vin = netlist
+        .nets
+        .iter()
+        .find(|(_, n)| n.name.as_deref() == Some(input))
+        .and_then(|(_, n)| match n.net_class {
+            bhdl_netlist::types::NetClass::Power { voltage, .. } => Some(voltage),
+            _ => None,
+        })
+        .unwrap_or(0.0);
+    if vin <= 0.0 {
+        return Ok(None);
+    }
+    // bound stages fed from the input (directly, or via the filter
+    // rail of a previous iteration): f_sw declared = bound
+    let mut f_min: Option<f64> = None;
+    let mut p_in_w = 0.0;
+    let mut i_in_a = 0.0;
+    for (i, _inst) in netlist.instances.iter() {
+        let Some(fin) = pin_net.get(&(i, "VIN".to_string())) else { continue };
+        if !feed_nets.contains(fin) {
+            continue;
+        }
+        let Some(vout) = attr_si(i, "output_voltage") else { continue };
+        let Some(fsw) = attr_si(i, "f_sw") else { continue };
+        let eff = attr_si(i, "powertree_eff_assumed_pct").unwrap_or(85.0) / 100.0;
+        let i_out = attr_si(i, "powertree_rating_required_a").unwrap_or(0.0) * CURRENT_DERATE;
+        let p = vout * i_out / eff.max(0.01);
+        p_in_w += p;
+        i_in_a += p / vin;
+        f_min = Some(f_min.map_or(fsw, |m: f64| m.min(fsw)));
+    }
+    let Some(f_min) = f_min else { return Ok(None) };
+    if p_in_w <= 0.0 {
+        return Ok(None);
+    }
+    // second-order LC: 40 dB/decade above f_c ⇒ f_c = f_min·10^(−A/40)
+    let f_c = f_min * 10f64.powf(-atten_db / 40.0);
+    // filter cap: with a DECLARED inductor (the recommended form —
+    // the L is a real BOM choice), C = 1/(w_c²·L) stacked from the
+    // smallest voltage-adequate candidate; with no declared L, the
+    // SMALLEST adequate candidate alone (the largest practical L a
+    // single shortlist part yields — a huge filter cap would compute
+    // a nanohenry fiction that layout parasitics dwarf, stated)
+    let derate = project_cap_v_derating(source);
+    let v_req = vin / derate.unwrap_or(1.0);
+    let mut cands = crate::decap_synthesis::bulk_parts_from_library(&lib);
+    cands.reverse(); // smallest-first
+    let Some((ent, c_each, _vr, _curve)) = cands.into_iter().find(|(_, _, vr, _)| *vr >= v_req - 1e-9) else {
+        notes.push(format!(
+            "emi filter: no shortlist candidate rated ≥ {v_req:.2}V for the {vin:.2}V input — filter NOT emitted (add a rated part), stated"
+        ));
+        return Ok(Some(EmiFilterPlan {
+            f_min_hz: f_min, f_c_hz: f_c, l_h: 0.0, l_rated_a: 0.0,
+            c_entity: String::new(), c_count: 0, c_f: 0.0, r_d_ohm: 0.0, c_d_f: 0.0,
+            z_out_peak_ohm: 0.0, z_in_conv_ohm: 0.0, notes,
+            violation: None,
+        }));
+    };
+    // the shortlist part's ESR (part of the damping physics)
+    let esr_each = crate::decap_synthesis::bulk_candidate_esr(&lib, &ent).unwrap_or(0.0);
+    let w_c = 2.0 * std::f64::consts::PI * f_c;
+    let z_in_conv = vin * vin / p_in_w;
+    let (l_h, c_count, c_each, esr_each, ent) = match l_declared {
+        Some(ld) => {
+            let c_need = 1.0 / (w_c * w_c * ld);
+            // the SMALLEST candidate covering the need alone (a bigger
+            // C only lowers f_c — over-attenuation is the safe
+            // direction); only when even the largest falls short does
+            // the stack of the largest make up the count
+            let cands2 = crate::decap_synthesis::bulk_parts_from_library(&lib);
+            let adequate = cands2
+                .iter()
+                .rev() // smallest-first
+                .find(|(_, cf, vr, _)| *vr >= v_req - 1e-9 && *cf >= c_need)
+                .or_else(|| cands2.iter().find(|(_, _, vr, _)| *vr >= v_req - 1e-9))
+                .cloned();
+            match adequate {
+                Some((e2, c2, _, _)) => {
+                    let esr2 = crate::decap_synthesis::bulk_candidate_esr(&lib, &e2).unwrap_or(0.0);
+                    let n = (c_need / c2).ceil().max(1.0) as usize;
+                    (ld, n, c2, esr2, e2)
+                }
+                None => (ld, 1usize, c_each, esr_each, ent),
+            }
+        }
+        None => {
+            // no declared L: pick the smallest candidate whose filter
+            // characteristic impedance 1/(w_c·C) clears the customary
+            // 6 dB Middlebrook margin BY CONSTRUCTION (Z_char ≤
+            // |Z_in|/2 — the margin the report states either way);
+            // fall back to the largest adequate part when none does
+            let cands2 = crate::decap_synthesis::bulk_parts_from_library(&lib);
+            let pick = cands2
+                .iter()
+                .rev() // smallest-first
+                .find(|(_, cf, vr, _)| {
+                    *vr >= v_req - 1e-9 && 1.0 / (w_c * cf) <= z_in_conv / 2.0
+                })
+                .or_else(|| cands2.iter().find(|(_, _, vr, _)| *vr >= v_req - 1e-9))
+                .cloned();
+            match pick {
+                Some((e2, c2, _, _)) => {
+                    let esr2 = crate::decap_synthesis::bulk_candidate_esr(&lib, &e2).unwrap_or(0.0);
+                    (1.0 / (w_c * w_c * c2), 1usize, c2, esr2, e2)
+                }
+                None => (1.0 / (w_c * w_c * c_each), 1usize, c_each, esr_each, ent),
+            }
+        }
+    };
+    let c_f = c_each * c_count as f64;
+    // parallel identical parts: ESR divides by the count
+    let esr = esr_each / c_count as f64;
+    let r_d = (l_h / c_f).sqrt(); // n = 4 standard damped-filter rule
+    let c_d = 4.0 * c_f;
+    // Middlebrook: damped-filter output impedance vs the converter's
+    // negative input impedance |Z_in| = V²/P at the operating point.
+    // |Z_out(ω)| = | jωL ∥ (1/jωC_f + esr) ∥ (R_d + 1/jωC_d) |,
+    // swept numerically over 3 decades around resonance.
+    let par = |a: (f64, f64), b: (f64, f64)| -> (f64, f64) {
+        // a∥b = ab/(a+b), complex as (re, im)
+        let num = (a.0 * b.0 - a.1 * b.1, a.0 * b.1 + a.1 * b.0);
+        let den = (a.0 + b.0, a.1 + b.1);
+        let d2 = den.0 * den.0 + den.1 * den.1;
+        if d2 < 1e-30 {
+            return (0.0, 0.0);
+        }
+        ((num.0 * den.0 + num.1 * den.1) / d2, (num.1 * den.0 - num.0 * den.1) / d2)
+    };
+    let mut z_peak = 0.0f64;
+    let f0 = 1.0 / (2.0 * std::f64::consts::PI * (l_h * c_f).sqrt());
+    for k in 0..=300 {
+        let f = f0 * 10f64.powf(-1.5 + 3.0 * k as f64 / 300.0);
+        let w = 2.0 * std::f64::consts::PI * f;
+        let zl = (0.0, w * l_h);
+        let zc = (esr, -1.0 / (w * c_f));
+        let zd = (r_d, -1.0 / (w * c_d));
+        let z = par(par(zl, zc), zd);
+        let m = (z.0 * z.0 + z.1 * z.1).sqrt();
+        z_peak = z_peak.max(m);
+    }
+    let margin_db = 20.0 * (z_in_conv / z_peak.max(1e-12)).log10();
+    notes.push(format!(
+        "emi filter: target {atten_db:.0}dB at f_min {:.0}kHz → f_c {:.1}kHz; L = {:.2}µH ({}, rated {:.2}A input), C_f = {c_count}× {ent} ({:.0}µF total, esr {:.1}mΩ), damping R_d = {:.2}Ω + C_d = {:.0}µF (n=4 rule)",
+        f_min / 1e3, f_c / 1e3, l_h * 1e6,
+        if l_declared.is_some() { "declared" } else { "derived — smallest shortlist part clearing the customary 6dB Middlebrook margin by construction; declare l=<H> to pick your inductor" },
+        i_in_a * 1.5, c_f * 1e6, esr * 1e3, r_d, c_d * 1e6
+    ));
+    notes.push(format!(
+        "emi filter: Middlebrook — damped |Z_out| peak {:.1}mΩ vs converter |Z_in| = {vin:.1}V²/{p_in_w:.2}W = {z_in_conv:.2}Ω → margin {margin_db:.1}dB (criterion |Z_out| ≪ |Z_in|; ≥6dB is customary — stated, not enforced)",
+        z_peak * 1e3
+    ));
+    notes.push("emi filter: CISPR compliance is a MEASUREMENT — this filter meets the DECLARED attenuation target at the fundamental; harmonics, layout and common-mode paths are the lab's verdict, stated".into());
+    let violation = if z_peak >= z_in_conv {
+        Some(format!(
+            "EMI: Middlebrook VIOLATED — damped filter |Z_out| peak {:.1}mΩ ≥ converter |Z_in| {:.2}Ω: the filter can oscillate with the converters' negative input impedance (bigger C_f, smaller L via a lower attenuation target, or heavier damping)",
+            z_peak * 1e3, z_in_conv
+        ))
+    } else {
+        None
+    };
+    Ok(Some(EmiFilterPlan {
+        f_min_hz: f_min,
+        f_c_hz: f_c,
+        l_h,
+        l_rated_a: i_in_a * 1.5,
+        c_entity: ent,
+        c_count,
+        c_f,
+        r_d_ohm: r_d,
+        c_d_f: c_d,
+        z_out_peak_ohm: z_peak,
+        z_in_conv_ohm: z_in_conv,
+        notes,
+        violation,
+    }))
+}
+
 pub const EMIT_IMPORT: &str ="import { BuckStage, LdoStage, BuckExtStage, PreregStage, BoostStage } from \"bhdl-stdlib/power/stages.bhdl\";";
 
 fn fmt_v(v: f64) -> String {

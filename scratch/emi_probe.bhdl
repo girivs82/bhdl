@@ -1,0 +1,66 @@
+import { BuckStage, LdoStage, BuckExtStage, PreregStage, BoostStage } from "bhdl-stdlib/power/stages.bhdl";
+import { DecapBulk100u } from "./tests/circuits/realistic/decap_lib_fixture.bhdl";
+import { Ind } from "bhdl-stdlib/passives/inductor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { DecapHf100n } from "./tests/circuits/realistic/decap_lib_fixture.bhdl";
+import { DecapMid10u } from "./tests/circuits/realistic/decap_lib_fixture.bhdl";
+entity BiSoc() {
+    pin 1: power in;
+    pin GND: ground;
+    domain VDD_MAIN pins="1" v=5V i_nom=200mA i_max=1A step=4.5A rise=10us dur=200us droop_max=3% source="FIXTURE — bisect probe";
+}
+board BiBoard {
+    requirements { emi_filter: "40dB";  decap_lib: "./tests/circuits/realistic/decap_lib_fixture.bhdl"; }
+    power VBAT = 3.6V @ 10A;
+    port V50: power out = 5V @ 5A;
+    ground GND;
+    soc: BiSoc();
+    @V50 -> soc.1; soc.GND -> @GND;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    // ── BEGIN GENERATED POWER TREE (bhdl powertree --emit — regenerate, never hand-edit) ──
+    // option "max-efficiency" — bucks everywhere; noise rails get minimal-headroom intermediates + post-LDOs
+    // assumptions are CONSERVATIVE ESTIMATES (stated per stage); the real part swapped in must MEET OR BEAT them
+
+    u_v50: BoostStage(vout=5V, i_max=1A, vin=3.6V);
+    @V_FILT -> u_v50.VIN;
+    u_v50.VOUT -> @V50;
+    u_v50.GND -> @GND;
+    attribute u_v50.powertree_eff_assumed_pct = "85.0";
+    attribute u_v50.powertree_noise_assumed_uvrms = "500";
+    attribute u_v50.powertree_rating_required_a = "1.736";
+    attribute u_v50.powertree_basis = "estimate: conservative boost band at 0.20A; step-up 1.4:1 penalty 0pt; switch carries the INPUT current 1.39A = I_out·V_out/V_in";
+    attribute u_v50.powertree_serves = "soc.VDD_MAIN";
+    
+    // decap networks (auto: domains declaring Z(f) masks)
+    decouple soc.VDD_MAIN from "./tests/circuits/realistic/decap_lib_fixture.bhdl";
+    
+    // bulk (sized by the power-up/interaction fixpoint — the sim is the sizing oracle)
+    @V50 -> seqbulk_v50_1: DecapBulk100u().1; seqbulk_v50_1.2 -> @GND;
+    @V50 -> seqbulk_v50_2: DecapBulk100u().1; seqbulk_v50_2.2 -> @GND;
+    @V50 -> seqbulk_v50_3: DecapBulk100u().1; seqbulk_v50_3.2 -> @GND;
+    @V50 -> seqbulk_v50_4: DecapBulk100u().1; seqbulk_v50_4.2 -> @GND;
+    @V50 -> seqbulk_v50_5: DecapBulk100u().1; seqbulk_v50_5.2 -> @GND;
+    @V50 -> seqbulk_v50_6: DecapBulk100u().1; seqbulk_v50_6.2 -> @GND;
+    @V50 -> seqbulk_v50_7: DecapBulk100u().1; seqbulk_v50_7.2 -> @GND;
+
+    // EMI input filter (auto: emi_filter requirement — sized at the slowest bound f_sw, Middlebrook-checked; sits at the CONNECTOR side, before any front end — reverse by hand if protection must clamp first, stated)
+    power V_FILT = 3.6000V;
+    @VBAT -> l_emi: Ind(0.25µH, rated_current = 3.40A).1; l_emi.2 -> @V_FILT;
+    @V_FILT -> c_emi_1: DecapMid10u().1; c_emi_1.2 -> @GND;
+    @V_FILT -> r_demi: Res(0.16Ω).1; r_demi.2 -> c_demi: Cap(40µF).1; c_demi.2 -> @GND;
+    // ── END GENERATED POWER TREE ──
+}

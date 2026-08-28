@@ -2263,6 +2263,12 @@ async fn run_powertree(
                 // is only assigned on the BREAK paths, so the voltage
                 // gate cannot lean on it mid-fixpoint.
                 let mut rail_volt_map: std::collections::HashMap<String, f64> = Default::default();
+                // EMI input filter (spec addendum 12): sized from the
+                // BOUND tree of the previous iteration (f_sw known),
+                // re-emitted and re-simulated every iteration like
+                // bulk; the last plan carries the report + verdict.
+                let mut emi_final: Option<bhdl_synthesizer::powertree::EmiFilterPlan> = None;
+                let mut emi_emitted = false;
                 for iter in 0..16 {
                     let mut region = base_region.clone();
                     let mut extra = String::new();
@@ -2331,6 +2337,38 @@ async fn run_powertree(
                             }
                         }
                     }
+                    if let Some(plan) = emi_final.take() {
+                        {
+                            {
+                                if plan.l_h > 0.0 {
+                                    emi_emitted = true;
+                                    extra.push_str(&format!(
+                                        "\n    // EMI input filter (auto: emi_filter requirement — sized at the slowest bound f_sw, Middlebrook-checked; sits at the CONNECTOR side, before any front end — reverse by hand if protection must clamp first, stated)\n"
+                                    ));
+                                    extra.push_str(&format!("    power V_FILT = {:.4}V;\n", rail_volt_map.get(input.as_str()).copied().unwrap_or(0.0)));
+                                    extra.push_str(&format!(
+                                        "    @{input} -> l_emi: Ind({:.2}µH, rated_current = {:.2}A).1; l_emi.2 -> @V_FILT;\n",
+                                        plan.l_h * 1e6, plan.l_rated_a
+                                    ));
+                                    for k in 1..=plan.c_count.max(1) {
+                                        extra.push_str(&format!(
+                                            "    @V_FILT -> c_emi_{k}: {}().1; c_emi_{k}.2 -> @{gnd};\n",
+                                            plan.c_entity
+                                        ));
+                                    }
+                                    extra.push_str(&format!(
+                                        "    @V_FILT -> r_demi: Res({:.2}Ω).1; r_demi.2 -> c_demi: Cap({:.0}µF).1; c_demi.2 -> @{gnd};\n",
+                                        plan.r_d_ohm, plan.c_d_f * 1e6
+                                    ));
+                                    used_bulk_ents.insert(plan.c_entity.clone());
+                                    // interpose: every stage fed from the
+                                    // input now feeds from the filter rail
+                                    region = region.replace(&format!("@{input} -> u_"), "@V_FILT -> u_");
+                                }
+                                emi_final = Some(plan);
+                            }
+                        }
+                    }
                     if !extra.is_empty() {
                         region = region.replace(
                             bhdl_synthesizer::powertree::EMIT_END,
@@ -2339,6 +2377,30 @@ async fn run_powertree(
                     }
                     let mut new_text = bhdl_synthesizer::powertree::splice_power_region(&disk, &region)
                         .map_err(|e| anyhow::anyhow!("{e}"))?;
+                    if emi_final.as_ref().map(|p| p.l_h > 0.0).unwrap_or(false) {
+                        for (name, path) in [
+                            ("Ind", "bhdl-stdlib/passives/inductor.bhdl"),
+                            ("Res", "bhdl-stdlib/passives/resistor.bhdl"),
+                            ("Cap", "bhdl-stdlib/passives/capacitor.bhdl"),
+                        ] {
+                            let already = new_text.lines().any(|l| {
+                                l.trim_start().starts_with("import")
+                                    && (l.contains(&format!(" {name} ")) || l.contains(&format!(" {name},")))
+                            });
+                            if already {
+                                continue;
+                            }
+                            let mut insert_at = 0usize;
+                            let mut o4 = 0usize;
+                            for line in new_text.split_inclusive('\n') {
+                                if line.trim_start().starts_with("import ") {
+                                    insert_at = o4 + line.len();
+                                }
+                                o4 += line.len();
+                            }
+                            new_text.insert_str(insert_at, &format!("import {{ {name} }} from \"{path}\";\n"));
+                        }
+                    }
                     if let Some(lib) = &bulk_lib {
                         for ent in &used_bulk_ents {
                             if new_text.lines().any(|l| l.trim_start().starts_with("import") && l.contains(ent.as_str())) {
@@ -2399,6 +2461,14 @@ async fn run_powertree(
                             rail_volt_map.entry(rn).or_insert(voltage);
                         }
                     }
+                    // EMI plan for the NEXT iteration, from THIS
+                    // bound netlist (last_built only lands on the
+                    // break paths — the recorded trap)
+                    match bhdl_synthesizer::powertree::emi_filter_synthesis(&netlist2, input_content, &input) {
+                        Err(e) => anyhow::bail!("emi filter synthesis: {e}"),
+                        Ok(Some(plan)) => emi_final = Some(plan),
+                        Ok(None) => {}
+                    }
                     // sequencing chains: discovered once from the first
                     // RESOLVED build (PG exposure / en_vih come from the
                     // bound blocks, not the requirements)
@@ -2442,6 +2512,10 @@ async fn run_powertree(
                                 bulk.iter().map(|(r, c)| format!("{r}={:.0}µF", c * 1e6)).collect::<Vec<_>>().join(", ")
                             );
                             last_pass_text = Some(new_text);
+                            continue;
+                        }
+                        if emi_final.as_ref().map(|p| p.l_h > 0.0).unwrap_or(false) && !emi_emitted {
+                            println!("  fixpoint iteration {iter}: EMI filter planned — re-emitting with it in place");
                             continue;
                         }
                         converged = Some(new_text);
@@ -2511,6 +2585,10 @@ async fn run_powertree(
                     }
                     // not closable by bulk: keep the (valid) emission and
                     // surface the findings — design work, not an emission bug
+                    if emi_final.as_ref().map(|p| p.l_h > 0.0).unwrap_or(false) && !emi_emitted {
+                        println!("  fixpoint iteration {iter}: EMI filter planned — re-emitting with it in place");
+                        continue;
+                    }
                     open_findings = errs.iter().map(|f| f.text.clone()).collect();
                     converged = Some(new_text);
                     last_built = Some((netlist2, re_sf));
@@ -2527,6 +2605,15 @@ async fn run_powertree(
                             open_findings.push(l);
                         } else {
                             println!("  sanity: {l}");
+                        }
+                    }
+                    // EMI filter report (spec addendum 12)
+                    if let Some(plan) = &emi_final {
+                        for n in &plan.notes {
+                            println!("  {n}");
+                        }
+                        if let Some(v) = &plan.violation {
+                            open_findings.push(v.clone());
                         }
                     }
                     // plug-in inrush (spec addendum 10): statements

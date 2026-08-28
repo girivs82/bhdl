@@ -1307,3 +1307,33 @@ should declare `output_tol` instead. First stamped blocks (all
 EC-table-cited): TPS54331 ±3.5%/0.8V, TPS54302 ±2.5%/0.596V,
 TPS61022 ±2.5%/0.6V, LP2985 output_tol 1%; the rest of the library
 reports UNCHECKED until its campaign pass.
+
+**EMI input filter (§7.5 addendum 12).** `requirements { emi_filter:
+"<A>dB[, l=<H>]" }` — the attenuation target at the SLOWEST bound
+switching frequency is designer data (which CISPR class, what the lab
+measured — none of it derivable here), and COMPLIANCE IS A
+MEASUREMENT: the synthesis states that hand-off explicitly. The
+second-order LC is sized `f_c = f_min·10^(−A/40)`; the filter cap
+comes from the characterized shortlist (voltage-gated — its ESR is
+part of the damping physics, so no shortlist means a stated gap and
+NO filter, never a bare-Cap guess). With `l=` declared (the
+recommended form — the inductor is a real BOM choice) the smallest
+single candidate covering the needed C is used (over-attenuation is
+the safe direction), stacking only when even the largest falls short;
+undeclared, the smallest candidate whose characteristic impedance
+`1/(ω_c·C)` clears the customary 6 dB Middlebrook margin BY
+CONSTRUCTION is picked, with the note telling the designer to declare
+their inductor. Damping is the standard n = C_d/C_f = 4 rule:
+`R_d = √(L/C_f)`, `C_d = 4·C_f`. The filter interposes a V_FILT rail
+at the connector side (before any front end — reverse by hand if the
+protection must clamp first, stated); the power-up engine treats the
+undriven declared rail as ideal (its L dynamics are the SPICE side's,
+same stated scope as the feed inductance). The MIDDLEBROOK
+interaction is machine-checked: the damped filter's output impedance
+`|jωL ∥ (1/jωC_f + esr) ∥ (R_d + 1/jωC_d)|` swept numerically over
+three decades around resonance against the converter's negative input
+impedance `|Z_in| = V²/P` at the operating point — margin reported in
+dB, and a peak at or above `|Z_in|` is an EMI finding surfaced as
+designer action (capacitance on the output rails cannot fix it). A
+pending plan forces one extra fixpoint iteration so the emitted board
+always carries the filter it was judged with.

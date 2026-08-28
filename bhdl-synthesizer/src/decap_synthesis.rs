@@ -249,6 +249,13 @@ pub fn bulk_parts_from_library(lib_path: &str) -> Vec<(String, f64, f64, Vec<(f6
     cands.into_iter().map(|c| (c.entity, c.c_f, c.v_rating, c.dc_bias)).collect()
 }
 
+/// One candidate's declared ESR by entity name — the EMI filter's
+/// damping math needs the filter cap's real parasitic.
+pub fn bulk_candidate_esr(lib_path: &str, entity: &str) -> Option<f64> {
+    let (cands, _) = load_library(lib_path).ok()?;
+    cands.into_iter().find(|c| c.entity == entity).map(|c| c.esr_ohm)
+}
+
 fn load_library(lib_path: &str) -> Result<(Vec<Candidate>, Vec<String>), String> {
     let resolved = bhdl_common::import_search::resolve_relative(lib_path, std::path::Path::new("."));
     let text = std::fs::read_to_string(&resolved)
