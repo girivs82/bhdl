@@ -114,6 +114,10 @@ entity Ldo_LP2985(
     // is exported so the elaboration emitter can reconstruct the ctor.
     attribute component_class = "ldo";
     attribute output_voltage  = v_out;
+    // DC ACCURACY (SBVS072: fixed output, ±1% across load and
+    // temperature — current chip / A grade; the legacy chip is ±2.5%,
+    // pick the grade at BOM time). A COMBINED figure: no divider term.
+    attribute output_tol      = 1%;
     attribute v_in            = v_in;
     attribute i_out_max       = i_out_max;
     attribute output_current  = 0.15A;  // SLVS522S

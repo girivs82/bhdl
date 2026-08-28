@@ -199,6 +199,11 @@ entity Buck_TPS54302(
     VIN -> C_in.1; C_in.2 -> GND;
     u.SW -> L_out: Ind(l_value, rated_current = l_rated_current).1; L_out.2 -> VOUT;
     VOUT -> C_out: Cap(c_out_value).1; C_out.2 -> GND;
+    // DC ACCURACY (SLVSCV5: EC-table feedback voltage 0.581/0.596/0.611 V
+    // at VIN = 12 V = ±2.5%; conditions per that row — line effects
+    // beyond it are not in this figure, stated).
+    attribute v_ref     = 0.596V;
+    attribute v_ref_tol = 2.5%;
     VOUT -> R_top: Res(r_top_value, tolerance = 1%, supply_profile = "grade").1; R_top.2 -> u.FB;
     u.FB -> R_bot: Res(r_fb_bot, tolerance = 1%, supply_profile = "grade").1; R_bot.2 -> GND;
     u.BOOT -> C_boot: Cap(100nF).1; C_boot.2 -> u.SW;

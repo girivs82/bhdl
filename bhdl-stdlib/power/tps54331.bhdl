@@ -263,6 +263,12 @@ entity Buck_TPS54331(
     u.SW -> L_out: Ind(l_value, rated_current = l_rated_current).1; L_out.2 -> VOUT;
     GND -> D_catch: Diode(diode_vf).A; D_catch.K -> u.SW;
     VOUT -> C_out: Cap(c_out_value).1; C_out.2 -> GND;
+    // DC ACCURACY (SLVSB09: EC-table voltage reference 0.772/0.8/0.828 V
+    // = ±3.5%; the text states ±2% initial, ±3.5% over temperature —
+    // the over-temperature band is the sign-off number). Consumed by
+    // the DC accuracy budget with the FB divider tolerances.
+    attribute v_ref     = 0.8V;
+    attribute v_ref_tol = 3.5%;
     // FB divider sets V_OUT = V_REF·(1 + R_top/R_bot); its ratio
     // accuracy and temperature stability set the output-voltage
     // accuracy, so these are PRECISION parts — stated as part attributes

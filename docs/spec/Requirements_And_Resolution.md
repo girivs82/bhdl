@@ -1283,3 +1283,27 @@ behind regulator stages are soft-start-limited — the power-up
 timeline is the verification (the knee physics), and the report only
 states the hand-off. N+1 bulk makes every one of these numbers
 bigger; that is exactly why they are printed next to the sizing.
+
+**DC accuracy budget (§7.5 addendum 11).** The solved nominal passing
+the static window says nothing about the vendor stack-up — the
+classic worst-case analysis was absent. Per driving stage against
+each domain window on its rail: a fixed-output block declares
+`output_tol` (a COMBINED vendor figure — load/temp per the datasheet
+note, cited on the block) and that is the budget; an adjustable block
+declares `v_ref` + `v_ref_tol` (the EC-table reference band, cited)
+and the engine composes
+`budget = v_ref_tol + (1 − v_ref/vout)·(tol_top + tol_bot)` — the
+first-order WCA of V_OUT = V_REF·(1 + R_top/R_bot) with both divider
+resistors at opposite extremes, tolerances read from the block's own
+R_top/R_bot children. Budget > window is an ACCURACY finding —
+surfaced in the emit flow as a DESIGNER-ACTION finding (capacitance
+cannot fix a setpoint, so it never feeds the bulk fixpoint) and in
+the safety flow as an AouViolated gap that holds the pdn assumption
+open. Missing data is a NAMED gap at every level: no accuracy attrs,
+no v_ref, or an FB divider without tolerances each say exactly what
+to declare. Line/load regulation beyond the reference spec's own
+conditions is not modeled — a datasheet stating a combined figure
+should declare `output_tol` instead. First stamped blocks (all
+EC-table-cited): TPS54331 ±3.5%/0.8V, TPS54302 ±2.5%/0.596V,
+TPS61022 ±2.5%/0.6V, LP2985 output_tol 1%; the rest of the library
+reports UNCHECKED until its campaign pass.

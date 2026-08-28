@@ -2536,6 +2536,17 @@ async fn run_powertree(
                     for l in bhdl_synthesizer::powertree::inrush_report(nl, input_content, &input) {
                         println!("  {l}");
                     }
+                    // DC ACCURACY BUDGET (spec addendum 11): the
+                    // vendor stack-up vs each declared tol window —
+                    // violations surface as findings (not fixpoint
+                    // inputs: capacitance cannot fix a setpoint)
+                    for (bad, _, l) in bhdl_synthesizer::powertree::dc_accuracy_report(nl, sf2) {
+                        if bad {
+                            open_findings.push(l);
+                        } else {
+                            println!("  {l}");
+                        }
+                    }
                 }
                 let Some(final_text) = converged else {
                     anyhow::bail!(
@@ -3859,6 +3870,23 @@ async fn run_safety(
                             pdn_out!("      basis: transient from healthy operating point, step {:.2}µs; regulators respond per their converter models (control-loop dynamics only as modeled)", total / 400.0 * 1e6);
                         }
                     }
+                }
+            }
+        }
+        // DC ACCURACY BUDGET (spec addendum 11): the vendor stack-up
+        // (reference tol + FB divider WCA, or the combined output_tol)
+        // vs each declared tol window — a violated budget on a
+        // consumed contract is an AoU violation like droop/overshoot.
+        for (bad, owner, l) in bhdl_synthesizer::powertree::dc_accuracy_report(&netlist, source_file) {
+            pdn_out!("      {l}");
+            if bad {
+                if let Some(o) = owner {
+                    model.gaps.push(bhdl_common::safety::Gap {
+                        class: bhdl_common::safety::GapClass::AouViolated,
+                        goal: String::new(),
+                        subject: format!("{o} accuracy"),
+                        fix: l.clone(),
+                    });
                 }
             }
         }

@@ -1842,6 +1842,133 @@ pub fn inrush_report(netlist: &Netlist, source: &str, input: &str) -> Vec<String
     out
 }
 
+/// DC ACCURACY BUDGET (spec addendum 11) — the classic worst-case
+/// analysis: the SOLVED nominal voltage passing the static window
+/// says nothing about the vendor stack-up. Per driving stage vs each
+/// domain window on its rail:
+///   fixed-output (`output_tol`, a combined vendor figure) —
+///     budget = output_tol;
+///   adjustable (`v_ref_tol` + `v_ref` + the FB divider) —
+///     budget = v_ref_tol + (1 - v_ref/vout) * (tol_top + tol_bot),
+///     the first-order WCA of V_OUT = V_REF*(1 + R_top/R_bot) with
+///     both resistors at opposite extremes. Divider children found by
+///     the composed-name convention ({stage}_R_top / {stage}_R_bot);
+///     a missing tolerance or v_ref is a NAMED gap, never a guess.
+/// Line/load regulation beyond the reference spec\'s own conditions is
+/// NOT modeled — a datasheet stating a combined figure should declare
+/// it as `output_tol` instead, stated in the doc comment of each
+/// block. Returns (violation?, domain owner instance, text).
+pub fn dc_accuracy_report(netlist: &Netlist, sf: &SourceFile) -> Vec<(bool, Option<String>, String)> {
+    use bhdl_netlist::types::{InstanceId, NetId};
+    let mut out = Vec::new();
+    let mut pin_net: std::collections::HashMap<(InstanceId, String), NetId> = Default::default();
+    for pi in netlist.pin_instances.values() {
+        let (Some(net), Some(pd)) = (pi.net, netlist.pins.get(pi.pin_def)) else { continue };
+        pin_net.insert((pi.instance, pd.name.clone()), net);
+    }
+    let attr = |i: InstanceId, k: &str| -> Option<String> {
+        netlist.instances.get(i).and_then(|x| x.attributes.get(k).cloned())
+    };
+    let pct = |i: InstanceId, k: &str| -> Option<f64> {
+        attr(i, k).and_then(|v| v.trim().trim_end_matches('%').trim().parse::<f64>().ok())
+    };
+    let si = |i: InstanceId, k: &str| -> Option<f64> {
+        attr(i, k).and_then(|v| crate::stage_acceptance::parse_si(&v))
+    };
+    // domains with a tol window, resolved to (owner, domain name, net, tol)
+    let domains = entity_domain_map(&sf.syntax().clone());
+    let mut windows: Vec<(String, String, NetId, f64)> = Vec::new();
+    for (i, inst) in netlist.instances.iter() {
+        let ety = netlist
+            .modules
+            .get(inst.definition)
+            .map(|m| m.name.clone())
+            .unwrap_or_default();
+        let Some((doms, _)) = domains.get(&ety) else { continue };
+        for d in doms {
+            let (Some(tol), Some(p0)) = (d.tol_pct, d.pins.first()) else { continue };
+            if let Some(net) = pin_net.get(&(i, p0.clone())) {
+                windows.push((inst.name.clone(), d.name.clone(), *net, tol));
+            }
+        }
+    }
+    if windows.is_empty() {
+        return out;
+    }
+    // driving stages: output_voltage + VOUT pin
+    for (i, inst) in netlist.instances.iter() {
+        let Some(vout) = si(i, "output_voltage") else { continue };
+        let Some(rail) = pin_net.get(&(i, "VOUT".to_string())) else { continue };
+        for (owner, dname, net, tol) in windows.iter().filter(|(_, _, n, _)| n == rail) {
+            let owner_s = Some(owner.clone());
+            // combined vendor figure wins
+            if let Some(ot) = pct(i, "output_tol") {
+                let bad = ot > *tol + 1e-9;
+                out.push((bad, owner_s.clone(), format!(
+                    "{}: '{}' setpoint budget ±{ot:.2}% (output_tol, combined vendor figure) vs {owner}.{dname} window ±{tol}% → {}",
+                    if bad { "ACCURACY" } else { "accuracy" },
+                    inst.name,
+                    if bad { "EXCEEDS the window at zero margin for everything else" } else { "within" }
+                )));
+                continue;
+            }
+            let Some(vr_tol) = pct(i, "v_ref_tol") else {
+                out.push((false, owner_s.clone(), format!(
+                    "ACCURACY UNCHECKED: '{}' declares no output_tol/v_ref_tol — the {owner}.{dname} ±{tol}% window cannot be budgeted (declare the datasheet accuracy)",
+                    inst.name
+                )));
+                continue;
+            };
+            // adjustable: divider term needs v_ref and both tolerances
+            let vref = si(i, "v_ref");
+            let rtol = |suffix: &str| -> Option<f64> {
+                netlist
+                    .instances
+                    .iter()
+                    .find(|(_, c)| c.name == format!("{}_{suffix}", inst.name))
+                    .and_then(|(ci, _)| pct(ci, "tolerance"))
+            };
+            let (t_top, t_bot) = (rtol("R_top"), rtol("R_bot"));
+            match (vref, t_top, t_bot) {
+                (Some(vr), Some(tt), Some(tb)) if vout > 0.0 => {
+                    let div_term = (1.0 - vr / vout).max(0.0) * (tt + tb);
+                    let total = vr_tol + div_term;
+                    let bad = total > *tol + 1e-9;
+                    out.push((bad, owner_s.clone(), format!(
+                        "{}: '{}' setpoint budget ±{total:.2}% = ref ±{vr_tol}% + divider {div_term:.2}% ((1−{vr}V/{vout}V)·({tt}%+{tb}%)) vs {owner}.{dname} window ±{tol}% → {}",
+                        if bad { "ACCURACY" } else { "accuracy" },
+                        inst.name,
+                        if bad { "EXCEEDS the window at zero margin for everything else (tighter divider tolerance, or a tighter-reference part)" } else { "within" }
+                    )));
+                }
+                (None, _, _) => out.push((false, owner_s.clone(), format!(
+                    "ACCURACY UNCHECKED: '{}' declares v_ref_tol but no v_ref — the divider term of the {owner}.{dname} budget cannot be placed (declare the datasheet reference voltage)",
+                    inst.name
+                ))),
+                _ => {
+                    // fixed-output block (no divider children): the
+                    // reference tol IS the budget
+                    if netlist.instances.iter().any(|(_, c)| c.name == format!("{}_R_top", inst.name)) {
+                        out.push((false, owner_s.clone(), format!(
+                            "ACCURACY UNCHECKED: '{}' has an FB divider but its resistors declare no tolerance — the {owner}.{dname} budget cannot be composed (declare it)",
+                            inst.name
+                        )));
+                    } else {
+                        let bad = vr_tol > *tol + 1e-9;
+                        out.push((bad, owner_s.clone(), format!(
+                            "{}: '{}' setpoint budget ±{vr_tol:.2}% (reference only, no divider) vs {owner}.{dname} window ±{tol}% → {}",
+                            if bad { "ACCURACY" } else { "accuracy" },
+                            inst.name,
+                            if bad { "EXCEEDS" } else { "within" }
+                        )));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 pub const EMIT_IMPORT: &str ="import { BuckStage, LdoStage, BuckExtStage, PreregStage, BoostStage } from \"bhdl-stdlib/power/stages.bhdl\";";
 
 fn fmt_v(v: f64) -> String {

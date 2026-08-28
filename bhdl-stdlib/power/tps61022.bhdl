@@ -177,6 +177,10 @@ entity Boost_TPS61022(
     VIN -> L_in: Ind(l_value, rated_current = l_rated_current).1; L_in.2 -> u.SW;
     u.VOUT -> VOUT;
     VOUT -> C_out: Cap(c_out_value).1; C_out.2 -> GND;
+    // DC ACCURACY (SLVSDX7: FB voltage PWM 585/600/615 mV = ±2.5%,
+    // matching the stated ±2.5% reference accuracy over -40..125°C).
+    attribute v_ref     = 0.6V;
+    attribute v_ref_tol = 2.5%;
     VOUT -> R_top: Res(r_top_value, tolerance = 1%, supply_profile = "grade").1; R_top.2 -> u.FB;
     u.FB -> R_bot: Res(r_fb_bot, tolerance = 1%, supply_profile = "grade").1; R_bot.2 -> GND;
 
