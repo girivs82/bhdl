@@ -90,6 +90,11 @@ pub struct StepResponse {
     pub self_droop_v: f64,
     /// Verdict against the declared droop_max (None = undeclared, stated).
     pub droop_ok: Option<bool>,
+    /// Load-RELEASE overshoot on the domain rail (V above settled).
+    pub self_overshoot_v: f64,
+    /// Verdict against overshoot_max, else the tol window (None =
+    /// neither declared, stated).
+    pub overshoot_ok: Option<bool>,
     /// Worst coupling onto each OTHER rail (net label → ΔV below settled).
     pub coupling_v: Vec<(String, f64)>,
     /// Extra peak demand imposed on each stage (stage name → A above baseline).
@@ -218,6 +223,8 @@ struct DomLoad {
     step_rise_s: Option<f64>,
     step_dur_s: Option<f64>,
     droop_max_pct: Option<f64>,
+    overshoot_max_pct: Option<f64>,
+    tol_pct: Option<f64>,
     step_period: Option<f64>,
     i_sleep: Option<f64>,
     sleep_off: bool,
@@ -302,6 +309,9 @@ struct RunTrace {
     events: Vec<TimelineEvent>,
     /// min V per rail over the run.
     min_v: HashMap<NetId, f64>,
+    /// max V per rail over the run (the load-RELEASE overshoot lives
+    /// here — the step trace holds the release edge too).
+    max_v: HashMap<NetId, f64>,
     /// peak output supply per stage over the run.
     peak_supply: Vec<f64>,
     /// stages that entered CurrentLimited during the run.
@@ -336,6 +346,7 @@ impl Model {
         let mut tr = RunTrace {
             events: Vec::new(),
             min_v: self.all_rails.iter().map(|(n, _)| (*n, volt(&state.v, *n))).collect(),
+            max_v: self.all_rails.iter().map(|(n, _)| (*n, volt(&state.v, *n))).collect(),
             peak_supply: vec![0.0; self.stages.len()],
             cc_entered: Vec::new(),
             t_good: HashMap::new(),
@@ -622,6 +633,8 @@ impl Model {
                 let cur = volt(&state.v, *n);
                 let e = tr.min_v.entry(*n).or_insert(cur);
                 *e = e.min(cur);
+                let e = tr.max_v.entry(*n).or_insert(cur);
+                *e = e.max(cur);
                 if track_down && cur <= 0.1 * vn + 1e-9 && !tr.t_down.contains_key(n) {
                     tr.t_down.insert(*n, state.t);
                     tr.events.push(TimelineEvent { t: state.t, text: format!("{} DOWN ({:.2}V ≤ 10% of {:.2}V)", self.net_label.get(n).cloned().unwrap_or_default(), cur, vn) });
@@ -860,6 +873,8 @@ fn build_model(netlist: &Netlist, sf: &SourceFile, rep: &mut PowerupReport) -> (
                 step_rise_s: d.step_rise_s,
                 step_dur_s: d.step_dur_s,
                 droop_max_pct: d.droop_max_pct,
+                overshoot_max_pct: d.overshoot_max_pct,
+                tol_pct: d.tol_pct,
                 step_period: d.step_period_s,
                 i_sleep: d.i_sleep_a,
                 sleep_off: d.sleep_off,
@@ -1057,6 +1072,15 @@ pub fn simulate_powerup_opt(netlist: &Netlist, sf: &SourceFile, capture: bool) -
             let settled_v = |n: NetId| volt(&settled.v, n);
             let self_droop = settled_v(d.net.unwrap()) - tr.min_v.get(&d.net.unwrap()).copied().unwrap_or(0.0);
             let droop_ok = d.droop_max_pct.map(|p| self_droop <= p / 100.0 * d.v_nom + 1e-9);
+            // the same trace holds the load-RELEASE edge: energy the
+            // step pulled through the feed dumps into the bank when
+            // the load lets go — bound by overshoot_max, else the
+            // declared tol window, else stated-unchecked
+            let self_over = (tr.max_v.get(&d.net.unwrap()).copied().unwrap_or(0.0)
+                - settled_v(d.net.unwrap()))
+                .max(0.0);
+            let over_bound = d.overshoot_max_pct.or(d.tol_pct);
+            let overshoot_ok = over_bound.map(|p| self_over <= p / 100.0 * d.v_nom + 1e-9);
             if let (Some(per), Some(durs)) = (d.step_period, d.step_dur_s) {
                 if per > 0.0 {
                     rep.interactions.push(format!(
@@ -1087,9 +1111,16 @@ pub fn simulate_powerup_opt(netlist: &Netlist, sf: &SourceFile, capture: bool) -
                 rail,
                 self_droop_v: self_droop,
                 droop_ok,
+                self_overshoot_v: self_over,
+                overshoot_ok,
                 coupling_v: coupling,
                 extra_demand_a: extra,
             });
+            if overshoot_ok == Some(false) {
+                let rail_lbl = model.net_label.get(&d.net.unwrap()).cloned();
+                let bsrc = if d.overshoot_max_pct.is_some() { "overshoot_max" } else { "tol window" };
+                rep.findings.push(Finding { rail: rail_lbl, sev: Sev::Error, text: format!("{}.{}: load-RELEASE overshoot {:.0}mV exceeds the {}% {bsrc} of {:.2}V ({:.0}mV) — more bulk absorbs the release energy, or damp the feed", d.owner, d.name, self_over * 1e3, over_bound.unwrap_or(0.0), d.v_nom, over_bound.unwrap_or(0.0) / 100.0 * d.v_nom * 1e3) });
+            }
             if droop_ok == Some(false) {
                 let rail_lbl = model.net_label.get(&d.net.unwrap()).cloned();
                 rep.findings.push(Finding { rail: rail_lbl, sev: Sev::Error, text: format!("{}.{}: SELF step droop {:.0}mV exceeds declared droop_max {:.0}% of {:.2}V ({:.0}mV) — with its OWN step alone", d.owner, d.name, self_droop * 1e3, d.droop_max_pct.unwrap_or(0.0), d.v_nom, d.droop_max_pct.unwrap_or(0.0) / 100.0 * d.v_nom * 1e3) });
@@ -1566,13 +1597,18 @@ pub fn render(rep: &PowerupReport) -> String {
         s.push_str("\n  load steps (each domain fired ALONE from the settled point):\n");
         for st in &rep.steps {
             s.push_str(&format!(
-                "    {}.{} on {}: self-droop {:.0}mV{}{}{}\n",
+                "    {}.{} on {}: self-droop {:.0}mV{}{}{}{}\n",
                 st.owner, st.domain, st.rail,
                 st.self_droop_v * 1e3,
                 match st.droop_ok {
                     Some(true) => " (within droop_max)".to_string(),
                     Some(false) => " EXCEEDS droop_max".to_string(),
                     None => " (no droop_max declared — stated)".to_string(),
+                },
+                match st.overshoot_ok {
+                    Some(true) => format!("; release +{:.0}mV (within bound)", st.self_overshoot_v * 1e3),
+                    Some(false) => format!("; release +{:.0}mV EXCEEDS bound", st.self_overshoot_v * 1e3),
+                    None => format!("; release +{:.0}mV (no overshoot_max/tol — stated)", st.self_overshoot_v * 1e3),
                 },
                 if st.coupling_v.is_empty() { String::new() } else { format!("; couples: {}", st.coupling_v.iter().map(|(r, v)| format!("{r} −{:.0}mV", v * 1e3)).collect::<Vec<_>>().join(", ")) },
                 if st.extra_demand_a.is_empty() { String::new() } else { format!("; extra demand: {}", st.extra_demand_a.iter().map(|(n, a)| format!("{n} +{:.2}A", a)).collect::<Vec<_>>().join(", ")) },

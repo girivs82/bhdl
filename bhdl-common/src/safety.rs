@@ -308,6 +308,14 @@ pub struct PowerDomain {
     pub step_dur_s: Option<f64>,
     /// Allowed droop under the step (± percent of v_nom).
     pub droop_max_pct: Option<f64>,
+    /// Allowed overshoot on load RELEASE (percent of v_nom): the
+    /// energy the step pulled through the feed inductance dumps into
+    /// the bank when the load lets go. Falls back to `tol` when
+    /// undeclared (the static window is a DECLARED bound the rail
+    /// must hold under transients too); with neither, the release
+    /// edge is info-only, stated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overshoot_max_pct: Option<f64>,
     /// Burst repetition period (s) when the step is PERIODIC (frame
     /// cadences): concentrates the step's spectral content at the
     /// fundamental 1/period and its harmonics, and gives the duty

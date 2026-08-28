@@ -1232,3 +1232,22 @@ composition stamps `composed_parent`, so the recipe's lookups failed
 and the whole block fell back to the generic model, silently. Both
 spellings now resolve, which turns on the blocks' ΔV/I_pk/P_pass
 stress rows for composed instances as well.
+
+**Load-release overshoot (§7.5 addendum 9).** The droop transient
+always held the release edge (the drive ends at `dur`, the solve runs
+to 4·dur) — only the bottom of the trace was ever read. The top is
+now read too: the energy the step pulled through the feed inductance
+dumps into the bank when the load lets go, and the resulting
+overshoot is checked wherever droop is — the PDN section (with the
+declared budget terms applied to the fall edge symmetrically —
+conservative, stated), the fault-campaign PDN recheck (a lost bulk
+cap worsens the release kick exactly as it worsens droop), and the
+power-up engine's per-domain step screen (an EXCEEDS finding drives
+the fixpoint, and more bulk absorbs release energy, so the sizing
+loop's bump direction is already correct). The bound is the new
+optional `overshoot_max` domain key; undeclared falls back to the
+declared `tol` window — the static window is a bound the rail must
+hold under transients too — and with neither the release edge is
+info-only, stated. The PWL power-up engine models no feed inductance,
+so its release numbers are the stages' own dynamics only; the SPICE
+PDN checks carry the L physics.

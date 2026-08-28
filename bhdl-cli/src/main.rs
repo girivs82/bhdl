@@ -3597,6 +3597,15 @@ async fn run_safety(
                             let droop_pct = ((v0 - vmin) + extra) / dom.v_nom * 100.0;
                             if droop_pct > dm {
                                 out.push((aref.clone(), format!("droop {droop_pct:.2}% > {dm}% under the {step}A step")));
+                            } else if let Some(om) = dom.overshoot_max_pct.or(dom.tol_pct) {
+                                // release overshoot, same trace (see the
+                                // PDN section for the basis) — a lost
+                                // bulk cap worsens the release kick too
+                                let vmax = tr.iter().cloned().fold(f64::MIN, f64::max);
+                                let over_pct = ((vmax - v0).max(0.0) + extra) / dom.v_nom * 100.0;
+                                if over_pct > om {
+                                    out.push((aref.clone(), format!("load-release overshoot {over_pct:.2}% > {om}% after the {step}A step")));
+                                }
                             }
                         }
                     }
@@ -3801,6 +3810,36 @@ async fn run_safety(
                             };
                             pdn_out!("      droop: {step}A step ({:.1}µs rise, {:.1}µs hold) → board {:.1}mV + budget {:.1}mV = {:.2}% of {}V {}",
                                 rise * 1e6, dur * 1e6, board * 1e3, extra * 1e3, droop_pct, dom.v_nom, verdict);
+                            // load-RELEASE overshoot: the same trace holds the
+                            // release edge (drive ends at `dur`, solved to
+                            // 4·dur) — the energy the step pulled through the
+                            // feed inductance dumps into the bank when the
+                            // load lets go. The budget terms apply on the
+                            // fall edge symmetrically (L·ΔI/Δt kick + R
+                            // relief — conservative, stated). Bound:
+                            // overshoot_max, else the declared tol window,
+                            // else info-only.
+                            let vmax = tr.iter().cloned().fold(f64::MIN, f64::max);
+                            let over_board = (vmax - v0).max(0.0);
+                            let over_pct = (over_board + extra) / dom.v_nom * 100.0;
+                            let bound = dom.overshoot_max_pct.or(dom.tol_pct);
+                            let bsrc = if dom.overshoot_max_pct.is_some() { "overshoot_max" } else { "tol window" };
+                            let overdict = match bound {
+                                Some(om) => {
+                                    if over_pct > om {
+                                        model.gaps.push(bhdl_common::safety::Gap {
+                                            class: bhdl_common::safety::GapClass::AouViolated,
+                                            goal: dom.name.clone(),
+                                            subject: format!("{} overshoot", part.instance),
+                                            fix: format!("load-release overshoot {over_pct:.2}% exceeds the {om}% bound ({bsrc}) — more bulk absorbs the release energy, or damp the feed"),
+                                        });
+                                    }
+                                    if over_pct <= om { format!("≤ {om}% ({bsrc}) → {}", "OK".green()) } else { format!("> {om}% ({bsrc}) → {}", "VIOLATED".red()) }
+                                }
+                                None => "(no overshoot_max and no tol declared — info only, stated)".to_string(),
+                            };
+                            pdn_out!("      release: overshoot board {:.1}mV + budget {:.1}mV = {:.2}% of {}V {}",
+                                over_board * 1e3, extra * 1e3, over_pct, dom.v_nom, overdict);
                             pdn_out!("      basis: transient from healthy operating point, step {:.2}µs; regulators respond per their converter models (control-loop dynamics only as modeled)", total / 400.0 * 1e6);
                         }
                     }

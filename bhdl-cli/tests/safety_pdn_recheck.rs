@@ -57,3 +57,47 @@ fn safety_pdn_recheck_fires_and_dc_map_is_complete() {
         text.lines().filter(|l| l.contains("no solved voltage")).collect::<Vec<_>>().join("\n")
     );
 }
+
+/// Load-release overshoot (spec addendum 9): the droop trace holds the
+/// release edge — the energy the step pulled through the feed
+/// inductance dumps into the bank when the load lets go. Healthy
+/// fixture: bounded by the declared tol window and PASSES (the line
+/// must exist — reading the top of the trace is the whole point); a
+/// variant declaring overshoot_max=0.5% must VIOLATE, leave the pdn
+/// assumption OPEN, and carry the AouViolated gap naming the remedy.
+#[test]
+fn load_release_overshoot_bound_and_violation() {
+    let root = workspace_root();
+    let src = std::fs::read_to_string(root.join("tests/circuits/realistic/test_safety_pdn_recheck.bhdl")).unwrap();
+    // healthy: tol-window fallback, passes
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_bhdl-cli"));
+    cmd.current_dir(&root)
+        .arg(root.join("tests/circuits/realistic/test_safety_pdn_recheck.bhdl"))
+        .arg("safety");
+    let out = cmd.output().expect("spawn");
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let rel = text.lines().find(|l| l.contains("release: overshoot")).unwrap_or_else(|| panic!("no release line:\n{text}"));
+    assert!(rel.contains("(tol window)") && rel.contains("OK"), "healthy release must pass on the tol window: {rel}");
+
+    // tight bound: violates, assumption stays OPEN
+    let dir = std::env::temp_dir().join("bhdl_overshoot_test");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let tight = src.replace("droop_max=4%", "droop_max=4% overshoot_max=0.5%");
+    assert_ne!(tight, src, "fixture shape changed — update the replace");
+    let f = dir.join("over.bhdl");
+    std::fs::write(&f, tight).unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_bhdl-cli"));
+    cmd.current_dir(&root).arg("-I").arg(&root).arg(&f).arg("safety");
+    let out = cmd.output().expect("spawn");
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(
+        text.contains("load-release overshoot") && text.contains("VIOLATED"),
+        "tight overshoot bound did not violate:\n{}",
+        text.lines().filter(|l| l.contains("release")).collect::<Vec<_>>().join("\n")
+    );
+    assert!(
+        !text.contains("satisfied_by machine-verified: PDN checks pass"),
+        "assumption must NOT discharge under an overshoot violation"
+    );
+}
