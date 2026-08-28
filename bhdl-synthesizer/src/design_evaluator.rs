@@ -423,9 +423,22 @@ fn dispatch_primitive(name: &str, args: &[f64]) -> Result<f64, DesignEvalError> 
             let p = TriodeParams::new(args[0], args[1], args[2], args[3], args[4]);
             Ok(koren_inverse_vgk(&p, args[5], args[6]))
         }
+        // sqrt(x) — the RMS forms in vendor stress blocks (capacitor
+        // ripple-current shares are √-shaped in every topology)
+        "sqrt" => {
+            if args.len() != 1 {
+                return Err(DesignEvalError::EvalError(
+                    format!("sqrt expects 1 arg, got {}", args.len())));
+            }
+            if args[0] < 0.0 {
+                return Err(DesignEvalError::EvalError(
+                    format!("sqrt of negative value {}", args[0])));
+            }
+            Ok(args[0].sqrt())
+        }
         other => Err(DesignEvalError::EvalError(
             format!("unknown primitive function '{other}' — the design \
-                     evaluator currently knows plate_current, koren_inverse_vgk"))),
+                     evaluator currently knows plate_current, koren_inverse_vgk, sqrt"))),
     }
 }
 

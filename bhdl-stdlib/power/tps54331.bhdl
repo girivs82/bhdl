@@ -286,6 +286,11 @@ entity Buck_TPS54331(
             L_out.i_peak   = i_out + d_il / 2;
             C_out.v_ripple = d_il / (8 * self.f_sw * C_out.value);
             C_in.v_ripple  = i_out * duty * (1 - duty) / (self.f_sw * C_in.value);
+            // capacitor RMS ripple current, standard buck forms:
+            // output cap carries the inductor ripple (triangular ->
+            // /sqrt(12)); input cap chops the full load current
+            C_out.i_ripple_applied = d_il / sqrt(12);
+            C_in.i_ripple_applied  = i_out * sqrt(duty * (1 - duty));
         }
     }
 }

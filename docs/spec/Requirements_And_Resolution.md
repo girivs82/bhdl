@@ -1204,3 +1204,31 @@ designer data: `requirements { cap_v_derating: "80%"; }` tightens
 every gate to `rating × derate ≥ rail`; undeclared = checked at
 100 % of rating, stated — the tool never invents the 80 % rule on
 the designer's behalf.
+
+**Capacitor ripple current (§7.5 addendum 8).** A buck's input cap
+chops nearly the full load current; MLCC self-heating is exactly the
+stress the RMS ripple rating bounds — and it went unchecked. The
+TOPOLOGY physics lives where the topology is known: every switching
+block's `stress { }` section now assigns the standard per-cap forms
+(`C_out.i_ripple_applied = d_il / sqrt(12)` and
+`C_in.i_ripple_applied = i_out * sqrt(duty * (1 - duty))` for bucks;
+`I_out·√(D/(1−D))` on a boost's output, the inductor-ripple form on
+its continuous input; boost-form worst case at v_in_min for the
+buck-boost — `sqrt` added to the expression primitives). The sign-off
+engine gives each assigned cap an `Irms` row against its declared
+`ripple_current` rating — an OPTIONAL library axis (vendors often
+publish a thermal model instead), carried by shortlist candidates and
+stamped onto minted/characterized instances; a cap carrying computed
+ripple with no rating reports UNCHECKED, never a pass. External
+rail caps carry no assigned share in this increment (the block's own
+application caps take the full computed ripple — conservative for
+them, and the admittance-split attribution is a stated follow-up).
+
+Landing this exposed a silent-drop: vendor `stress { }` recipes that
+reference expansion children (`L_out.value`, `C_out.v_ripple`) were
+SKIPPED on every composed design block — the child map matched only
+the S4 expansion path's `expansion_parent` attribute while
+composition stamps `composed_parent`, so the recipe's lookups failed
+and the whole block fell back to the generic model, silently. Both
+spellings now resolve, which turns on the blocks' ΔV/I_pk/P_pass
+stress rows for composed instances as well.

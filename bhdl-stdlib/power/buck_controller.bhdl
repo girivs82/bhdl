@@ -168,6 +168,9 @@ entity BuckController(
             const d_il = (vin - vout) * duty / (self.f_sw * L_out.value);
             L_out.i_peak   = i_out + d_il / 2;
             C_out.v_ripple = d_il / (8 * self.f_sw * C_out.value);
+            // capacitor RMS ripple current, standard buck forms
+            C_out.i_ripple_applied = d_il / sqrt(12);
+            C_in.i_ripple_applied  = i_out * sqrt(duty * (1 - duty));
             // the power stage's heat is in the FETs: HS conduction at D
             // + switching transitions; LS conduction at 1−D — measured
             // rows gated against each FET's own power_rating

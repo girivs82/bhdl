@@ -69,6 +69,11 @@ struct Candidate {
     /// undeclared rating is not infinite, so a candidate without one
     /// is skipped with a stated reason, exactly like missing ESR/ESL.
     v_rating: f64,
+    /// RMS ripple-current rating (A) — OPTIONAL library data (many
+    /// MLCC datasheets publish a thermal model instead of a rating);
+    /// absent = the sign-off row for a cap carrying computed ripple
+    /// reports NoData/UNCHECKED, never a pass.
+    ripple_a: Option<f64>,
     /// DC-bias derating curve (V, F) breakpoints — the vendor tool's
     /// export, declared per part; empty = no curve (nominal used,
     /// stated). Effective C at the rail voltage = linear interpolation.
@@ -304,7 +309,12 @@ fn load_library(lib_path: &str) -> Result<(Vec<Candidate>, Vec<String>), String>
         // optional per-part DC-bias curve (the vendor tool's export);
         // absence = nominal, stated in the synthesis notes
         let dc_bias = attrs.get("dc_bias").map(|t| parse_dc_bias(t)).unwrap_or_default();
-        out.push(Candidate { entity: name, c_f, esr_ohm, esl_h, c_text, v_rating, dc_bias });
+        // OPTIONAL RMS ripple-current rating (vendors often publish a
+        // thermal model instead — absent is a stated gap at sign-off)
+        let ripple_a = attrs
+            .get("ripple_current")
+            .and_then(|t| parse_unit(t, &[("mA", 1e-3), ("A", 1.0)]));
+        out.push(Candidate { entity: name, c_f, esr_ohm, esl_h, c_text, v_rating, ripple_a, dc_bias });
     }
     if out.is_empty() {
         return Err(format!("decouple: library '{lib_path}' has no usable candidates (capacitance+esr+esl declared)"));
@@ -423,6 +433,9 @@ pub fn characterize_block_caps(
         inst.attributes.insert("esr".into(), format!("{}", c.esr_ohm));
         inst.attributes.insert("esl".into(), format!("{}", c.esl_h));
         inst.attributes.insert("voltage_rating".into(), format!("{}V", c.v_rating));
+        if let Some(r) = c.ripple_a {
+            inst.attributes.insert("ripple_current".into(), format!("{r}A"));
+        }
         if !c.dc_bias.is_empty() {
             inst.attributes.insert(
                 "dc_bias".into(),
@@ -553,6 +566,9 @@ fn mint_decap(
         inst.attributes.insert("esr".into(), format!("{}", cand.esr_ohm));
         inst.attributes.insert("esl".into(), format!("{}", cand.esl_h));
         inst.attributes.insert("voltage_rating".into(), format!("{}V", cand.v_rating));
+        if let Some(r) = cand.ripple_a {
+            inst.attributes.insert("ripple_current".into(), format!("{r}A"));
+        }
         inst.attributes.insert("kicad_symbol".into(), "Device:C".into());
         inst.attributes
             .insert("decap_origin".into(), format!("decouple {}.{}", stmt.instance, stmt.domain));

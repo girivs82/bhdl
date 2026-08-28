@@ -226,6 +226,12 @@ entity BuckBoost_TPS63020(
             const d_il = self.v_in_min * duty / (self.f_sw * L_bb.value);
             L_bb.i_peak    = i_l + d_il / 2;
             C_out.v_ripple = i_out * duty / (self.f_sw * C_out.value);
+            // capacitor RMS ripple current, boost-form worst case at
+            // v_in_min (the same operating point this stress block
+            // already evaluates at): output cap chops the load; input
+            // cap conservatively carries the full chopped i_l form
+            C_out.i_ripple_applied = i_out * sqrt(duty / (1 - duty));
+            C_in.i_ripple_applied  = i_l * sqrt(duty * (1 - duty));
             // conduction (two switches in the path) + quiescent only:
             // SLVS916I states no switching transition time, so the
             // transition loss is NOT modelled (stated) — the η = 0.9 in

@@ -148,6 +148,19 @@ fn sorted_instances(netlist: &Netlist) -> Vec<(bhdl_netlist::InstanceId, &bhdl_n
 /// dropped (its parts keep generic DC stress) — except a board's SOLE
 /// switcher, which keeps the historical global-rail fallback (highest rail =
 /// input, next = output).
+
+/// The instance's expansion/composition parent, whichever spelling the
+/// producing path stamped: S4 hardcoded expansion writes
+/// `expansion_parent`, composed design blocks write `composed_parent`
+/// (values may carry quotes). Reading only one spelling silently
+/// orphans the other path's children.
+fn parent_attr(inst: &bhdl_netlist::Instance) -> Option<&str> {
+    inst.attributes
+        .get("expansion_parent")
+        .or_else(|| inst.attributes.get("composed_parent"))
+        .map(|v| v.trim_matches('"'))
+}
+
 fn recover_switcher_ops(
     netlist: &Netlist,
     entity_attrs: &HashMap<String, HashMap<String, String>>,
@@ -518,7 +531,7 @@ fn inductor_ripple_current(
             continue;
         };
         let d_il = (op.v_in - op.v_out) * op.duty / (op.f_sw * l);
-        if inst.attributes.get("expansion_parent").map(String::as_str) == Some(stage) {
+        if parent_attr(inst) == Some(stage) {
             return Some(d_il);
         }
         if sole_stage && fallback.is_none() {
@@ -985,9 +998,7 @@ pub fn apply_inductor_stepping(
             }
             let vstr = inst.attributes.get("value")?.clone();
             let l = parse_si(&vstr).filter(|l| *l > 0.0)?;
-            let op_idx = inst
-                .attributes
-                .get("expansion_parent")
+            let op_idx = parent_attr(inst)
                 .and_then(|p| ops.iter().position(|(n, _)| n == p))
                 .or(if sole { Some(0) } else { None })?;
             Some((id, vstr, l, op_idx))
@@ -1071,11 +1082,7 @@ fn stress_overrides(
         let stage_op = ops
             .iter()
             .find(|(n, _)| *n == inst.name)
-            .or_else(|| {
-                inst.attributes
-                    .get("expansion_parent")
-                    .and_then(|p| ops.iter().find(|(n, _)| n == p))
-            })
+            .or_else(|| parent_attr(inst).and_then(|p| ops.iter().find(|(n, _)| n == p)))
             .or_else(|| if sole { ops.first() } else { None });
         let Some((_, op)) = stage_op else {
             log::debug!(
@@ -1114,12 +1121,20 @@ fn stress_overrides(
 
         // This instance's expansion children: local name → full refdes.
         let prefix = format!("{}_", inst.name);
+        // TWO parent-attribute spellings exist: the S4 hardcoded
+        // expansion path stamps `expansion_parent`, the composed
+        // design-block path stamps `composed_parent`. Matching only
+        // the first silently skipped EVERY vendor stress recipe that
+        // references a child on a composed block (the local-children
+        // map came back empty, so `L_out.value` failed to resolve) —
+        // the sibling-attribute-name drift, caught here.
         let local_children: HashMap<String, String> = netlist
             .instances
             .values()
             .filter(|c| {
-                c.attributes.get("expansion_parent").map(String::as_str)
-                    == Some(inst.name.as_str())
+                ["expansion_parent", "composed_parent"].iter().any(|k| {
+                    c.attributes.get(*k).map(|v| v.trim_matches('"')) == Some(inst.name.as_str())
+                })
             })
             .filter_map(|c| {
                 c.name
@@ -1632,6 +1647,53 @@ pub fn compute_signoff(
                 source: None,
             });
         }
+    }
+
+    // §4 capacitor ripple-CURRENT rows: a vendor stress block computed
+    // this cap's RMS switching-ripple share (`C_x.i_ripple_applied = …`,
+    // the standard per-topology forms — buck output = ΔI_L/√12, buck
+    // input = I_out·√(D(1−D)), boost output = I_out·√(D/(1−D))).
+    // Checked against the part's declared `ripple_current` rating; a
+    // cap carrying computed ripple with NO declared rating reports
+    // NoData (UNCHECKED) — an undeclared rating is not infinite, and
+    // MLCC self-heating is exactly the stress this rating bounds.
+    for inst in netlist.instances.values() {
+        let key = (inst.name.clone(), "i_ripple_applied".to_string());
+        let Some(&i_rms) = overrides.get(&key) else { continue };
+        let get = |k: &str| inst.attributes.get(k);
+        if get("component_class").map(String::as_str) != Some("capacitor") {
+            continue;
+        }
+        let dnp = get("dnp").map(|v| v == "true").unwrap_or(false);
+        let rating = get("ripple_current").and_then(|s| parse_si(s));
+        // no derating factor invented here: raw applied vs rating, the
+        // uniform SIGNOFF_MARGIN carries the tool's margin discipline
+        let margin = rating.filter(|_| i_rms > 0.0).map(|r| r / i_rms);
+        let verdict = match margin {
+            Some(m) if m >= SIGNOFF_MARGIN => Verdict::SignedOff,
+            Some(m) if m >= 1.0 => Verdict::UnderMargin,
+            Some(_) => Verdict::OverStress,
+            None => Verdict::NoData,
+        };
+        rows.push(SignoffRow {
+            refdes: inst.name.clone(),
+            display: display_label(inst),
+            class: "capacitor".to_string(),
+            axis: "Irms",
+            value: get("capacitance")
+                .and_then(|s| parse_si(s))
+                .map(|c| fmt_si(c, "F"))
+                .unwrap_or_default(),
+            stress: Some(i_rms),
+            derated: Some(i_rms),
+            rating,
+            margin,
+            verdict,
+            dnp,
+            ripple: Some(format!("I_rms={:.3}A switching ripple (stress block)", i_rms)),
+            step: None,
+            source: None,
+        });
     }
 
     // Requirement rows (Power_Supply_Synthesis.md §5): a `supply` statement's

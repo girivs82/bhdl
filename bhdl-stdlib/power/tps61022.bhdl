@@ -190,6 +190,11 @@ entity Boost_TPS61022(
             const d_il = vin * duty / (self.f_sw * L_in.value);
             L_in.i_peak    = i_in + d_il / 2;
             C_out.v_ripple = i_out * duty / (self.f_sw * C_out.value);
+            // capacitor RMS ripple current, standard boost forms:
+            // output cap chops the full load current; input cap sees
+            // only the inductor ripple (continuous input current)
+            C_out.i_ripple_applied = i_out * sqrt(duty / (1 - duty));
+            C_in.i_ripple_applied  = d_il / sqrt(12);
             // conduction + quiescent only: SLVSDX7D states no switching
             // transition time, so the transition loss is NOT modelled
             // (stated) — the conservative η = 0.80 in i_in absorbs margin

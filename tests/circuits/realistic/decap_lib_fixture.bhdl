@@ -14,6 +14,7 @@ entity DecapBulk100u() {
     attribute esr = 20mΩ;
     attribute esl = 5nH;
     attribute voltage_rating = 25V; // FIXTURE
+    attribute ripple_current = 2A;  // FIXTURE
     attribute kicad_symbol = "Device:C";
 }
 
@@ -25,6 +26,7 @@ entity DecapMid10u() {
     attribute esr = 5mΩ;
     attribute esl = 1nH;
     attribute voltage_rating = 16V; // FIXTURE
+    attribute ripple_current = 3A;  // FIXTURE
     attribute kicad_symbol = "Device:C";
 }
 
@@ -36,6 +38,7 @@ entity DecapHf100n() {
     attribute esr = 10mΩ;
     attribute esl = 0.5nH;
     attribute voltage_rating = 16V; // FIXTURE
+    attribute ripple_current = 1A;  // FIXTURE
     attribute kicad_symbol = "Device:C";
 }
 
