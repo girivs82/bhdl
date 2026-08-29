@@ -129,7 +129,12 @@ pub(crate) fn connect_pin_instance_by_name(
             return netlist.connect(net_id, ConnectionPoint::PinInstance(pi_id));
         }
     }
-    Err(format!("pin '{}' not found on instance {:?}", pin_name, inst_id))
+    {
+        let iname = netlist.instances.get(inst_id).map(|x| x.name.clone()).unwrap_or_default();
+        let mname = netlist.instances.get(inst_id).and_then(|x| netlist.modules.get(x.definition)).map(|m| m.name.clone()).unwrap_or_default();
+        let have: Vec<String> = pin_instances.iter().filter_map(|pi| netlist.pin_instances.get(*pi)).filter_map(|pi| netlist.pins.get(pi.pin_def)).map(|p| p.name.clone()).collect();
+        Err(format!("pin '{}' not found on instance '{}' (module '{}', pins: {:?})", pin_name, iname, mname, have))
+    }
 }
 
 /// Format a capacitance value (in farads) as a human-readable string for attributes.

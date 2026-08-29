@@ -134,6 +134,9 @@ pub struct PowerupReport {
     pub interactions: Vec<String>,
     /// Captured V(t) per rail: (label, waves) per captured scenario.
     pub waves: Vec<(String, Vec<RailWave>)>,
+    /// the power-up run hit the event guard: absence claims (a rail
+    /// never good, an unmet window) are UNVERIFIABLE, not findings.
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -163,6 +166,14 @@ struct StageDef {
     topology: String,
     eta: f64,
     en_vih: Option<f64>,
+    /// rated output current (i_rating / powertree_rating_required_a) —
+    /// the charging ceiling when no datasheet current limit exists: a
+    /// stage cannot source more than its own acceptance contract.
+    i_rating: Option<f64>,
+    /// nominal input voltage (vin_nom / input_voltage) — the UVLO
+    /// proxy: real regulators hold off below their input floor; a
+    /// declared vin_nom gates the stage at 70% of it (stated).
+    vin_nom: Option<f64>,
     ss_i_initial: Option<f64>,
     ss_v_full: Option<f64>,
     i_limit: Option<f64>,
@@ -173,7 +184,7 @@ impl StageDef {
     fn i_out_cap(&self, v_out: f64, v_in: f64) -> Option<f64> {
         let lim = self.i_limit?;
         let ratio_cap = match self.topology.as_str() {
-            "boost" | "buck_boost" => {
+            t if t.starts_with("boost") || t == "buck_boost" => {
                 if v_out > 1e-3 {
                     lim * self.eta * v_in.max(0.0) / v_out
                 } else {
@@ -188,9 +199,21 @@ impl StageDef {
         };
         Some(ratio_cap.min(ss_cap))
     }
-    fn reflect_in(&self, i_out: f64, v_out: f64, v_in: f64) -> f64 {
+    /// A buck or linear stage cannot regulate ABOVE its input; only
+    /// boost-class topologies may. The effective target is clamped.
+    fn eff_target(&self, v_in: f64) -> f64 {
         match self.topology.as_str() {
-            "boost" | "buck_boost" | "buck" => {
+            "boost" | "buck_boost" => self.v_target,
+            _ => self.v_target.min(v_in.max(0.0)),
+        }
+    }
+
+    fn reflect_in(&self, i_out: f64, v_out: f64, v_in: f64) -> f64 {
+        // power balance holds for EVERY switching topology — match by
+        // class, not exact string ("buck_external_stages" is a buck);
+        // series stages (prereg, ldo) pass current through unchanged
+        match self.topology.as_str() {
+            t if t.starts_with("buck") || t.starts_with("boost") => {
                 i_out * v_out.max(0.05 * self.v_target) / (v_in.max(1e-3) * self.eta)
             }
             _ => i_out,
@@ -292,6 +315,12 @@ struct Model {
     /// loads): I = V·G, recomputed each interval.
     res_load_g: HashMap<NetId, f64>,
     en_rc: HashMap<NetId, EnRc>,
+    /// direct PG->EN wiring (no RC): stage indices whose PG pins sit
+    /// on the net. Open-drain wired-AND — the enable is high only when
+    /// EVERY driving stage regulates (PG-on-regulation is the
+    /// conservative placeholder contract; a resolved block's RC path
+    /// goes through en_rc instead).
+    pg_direct: HashMap<NetId, Vec<usize>>,
     all_rails: Vec<(NetId, f64)>,
     dom_loads: Vec<DomLoad>,
     net_label: HashMap<NetId, String>,
@@ -324,6 +353,15 @@ struct RunTrace {
     /// sampled waveforms (t, V per rail in all_rails order) — captured
     /// when the caller asks (the PD report's curves).
     samples: Vec<(f64, Vec<f64>)>,
+    /// the event guard fired — the run DID NOT reach t_end; absence
+    /// claims (never-good, windows) are unverifiable, not findings.
+    truncated: bool,
+    /// per-stage count of UVLO release edges (input recrossing 70% of
+    /// vin_nom from below). More than a couple = a LIMIT CYCLE: the
+    /// feed collapses under the woken load, the stage drops out, the
+    /// feed recovers, repeat — bulk on the FEED rail (plus soft-start
+    /// on the real parts) is the physical fix.
+    uvlo_trips: Vec<u32>,
 }
 
 fn volt(v: &HashMap<NetId, f64>, n: NetId) -> f64 {
@@ -353,7 +391,10 @@ impl Model {
             sags: HashMap::new(),
             t_down: HashMap::new(),
             samples: Vec::new(),
+            truncated: false,
+            uvlo_trips: vec![0; self.stages.len()],
         };
+        let mut uvlo_prev: Vec<bool> = vec![false; self.stages.len()];
         let mut sag_open: HashMap<NetId, (f64, f64)> = HashMap::new();
         // rails already good at entry
         if track_good {
@@ -383,6 +424,7 @@ impl Model {
             guard += 1;
             if guard > 200_000 {
                 tr.events.push(TimelineEvent { t: state.t, text: "event guard hit (200k intervals) — truncated".into() });
+                tr.truncated = true;
                 break;
             }
             // EN node algebraic values
@@ -405,10 +447,30 @@ impl Model {
             // stage enable + coarse mode
             let mut modes_changed = false;
             for (k, s) in self.stages.iter().enumerate() {
-                let enabled = !forced_off.contains(&k) && match s.en {
+                // UVLO proxy: below 70% of the declared nominal input
+                // a real regulator holds off — without this, stages
+                // "charge" from a collapsed feed and the timeline
+                // wedges in an unphysical equilibrium
+                let uvlo_ok = s
+                    .vin_nom
+                    .map(|vn| volt(&state.v, s.vin) >= 0.7 * vn)
+                    .unwrap_or(true);
+                if uvlo_ok && !uvlo_prev[k] && state.t > 0.0 {
+                    tr.uvlo_trips[k] += 1;
+                }
+                uvlo_prev[k] = uvlo_ok;
+                let enabled = uvlo_ok && !forced_off.contains(&k) && match s.en {
                     None => {
                         let vin_v = volt(&state.v, s.vin);
                         s.en_vih.map(|vih| vin_v >= vih).unwrap_or(vin_v > 0.0)
+                    }
+                    // direct PG->EN wiring (no RC): open-drain
+                    // wired-AND — high only when EVERY driving stage
+                    // regulates (the conservative PG contract)
+                    Some(en) if !self.en_rc.contains_key(&en) && self.pg_direct.contains_key(&en) => {
+                        self.pg_direct[&en].iter().all(|&k2| {
+                            volt(&state.v, self.stages[k2].vout) >= GOOD_FRAC * self.stages[k2].v_target
+                        })
                     }
                     // an EN net with NO discoverable pull source (no
                     // rail-R, no PG) is a FIRMWARE signal: treated as
@@ -427,12 +489,13 @@ impl Model {
                         s.en.and_then(|e| en_v.get(&e).copied()));
                 }
                 let vo = volt(&state.v, s.vout);
+                let vt_eff = s.eff_target(volt(&state.v, s.vin));
                 let mode_before = state.modes[k];
                 state.modes[k] = if !enabled {
                     Mode::Off
-                } else if vo < s.v_target * 0.999 && state.modes[k] != Mode::Regulating && state.modes[k] != Mode::CurrentLimited {
+                } else if vo < vt_eff * 0.999 && state.modes[k] != Mode::Regulating && state.modes[k] != Mode::CurrentLimited {
                     Mode::Charging
-                } else if vo < s.v_target * 0.90 && (state.modes[k] == Mode::Regulating || state.modes[k] == Mode::CurrentLimited) {
+                } else if vo < vt_eff * 0.90 && (state.modes[k] == Mode::Regulating || state.modes[k] == Mode::CurrentLimited) {
                     // deep collapse re-enters charging (hiccup-ish)
                     Mode::Charging
                 } else {
@@ -456,9 +519,35 @@ impl Model {
                 let vo = volt(&state.v, s.vout);
                 let vi = volt(&state.v, s.vin);
                 let cap = s.i_out_cap(vo, vi);
-                let i_chg = match cap {
-                    Some(c) => c,
-                    None => {
+                let i_chg = match (cap, s.i_rating) {
+                    (Some(c), _) => c,
+                    // no current-limit figure: the stage cannot source
+                    // more than its RATED current, and a placeholder
+                    // with no soft-start data is assumed to ramp its
+                    // output over T_SS_ASSUMED (stated in the notes) —
+                    // charging at full rating from t=0 IS the inrush
+                    // the real part's soft-start exists to prevent
+                    (None, Some(rated)) => {
+                        let bank = self.cap_on_net.get(&s.vout).copied().unwrap_or(MIN_C).max(MIN_C);
+                        // soft-start limits the output RAMP, not the
+                        // throughput: the stage must still carry its
+                        // net's live demand (static load + regulated
+                        // children's reflected draw) ON TOP of the
+                        // bank-ramp current — capping at ramp+static
+                        // alone deadlocks the feed at the UVLO point
+                        let mut demand = load_at(s.vout, state.t, &state.v);
+                        for (k2, s2) in self.stages.iter().enumerate() {
+                            if s2.vin == s.vout
+                                && (state.modes[k2] == Mode::Regulating || state.modes[k2] == Mode::CurrentLimited)
+                            {
+                                let d2 = load_at(s2.vout, state.t, &state.v);
+                                demand += s2.reflect_in(d2, volt(&state.v, s2.vout), volt(&state.v, s2.vin));
+                            }
+                        }
+                        let i_ss = bank * s.v_target / T_SS_ASSUMED + demand;
+                        rated.min(i_ss)
+                    }
+                    (None, None) => {
                         let c = self.cap_on_net.get(&s.vout).copied().unwrap_or(MIN_C).max(MIN_C);
                         c * s.v_target / 1e-5
                     }
@@ -523,12 +612,17 @@ impl Model {
                 let s = self.stages.iter().enumerate().find(|(_, s)| s.vout == *n);
                 let mut rate = i / c;
                 if let Some((k, sd)) = s {
-                    if state.modes[k] == Mode::Regulating && rate > 0.0 && volt(&state.v, *n) >= sd.v_target * 0.999 {
+                    let vt_eff = sd.eff_target(volt(&state.v, sd.vin));
+                    if state.modes[k] == Mode::Regulating && rate > 0.0 && volt(&state.v, *n) >= vt_eff * 0.999 {
                         rate = 0.0;
                     }
-                    if state.modes[k] == Mode::Off {
-                        let load = load_at(*n, state.t, &state.v);
-                        rate = if volt(&state.v, *n) > 0.0 { -load / c } else { 0.0 };
+                    // an Off stage supplies nothing — i_net already
+                    // carries the rail loads AND downstream stages'
+                    // draws; overriding with -static_load/c here erased
+                    // the draw physics (a dead front-end then "held"
+                    // its bank at nominal forever on input loss)
+                    if state.modes[k] == Mode::Off && volt(&state.v, *n) <= 0.0 {
+                        rate = rate.max(0.0);
                     }
                 }
                 dvdt.insert(*n, rate);
@@ -610,6 +704,10 @@ impl Model {
                 }
             }
             dt = dt.max(1e-9);
+            if std::env::var("BHDL_POWERUP_DTDEBUG").is_ok() && guard % 10_000 == 0 {
+                let worst = self.all_rails.iter().filter_map(|(n, vn)| dvdt.get(n).map(|r| (self.net_label.get(n).cloned().unwrap_or_default(), *r, *vn, volt(&state.v, *n)))).max_by(|a, b| a.1.abs().partial_cmp(&b.1.abs()).unwrap());
+                eprintln!("dt-debug t={:.6}ms dt={:.3e} worst-rate {:?}", state.t * 1e3, dt, worst);
+            }
             // advance
             for (n, r) in &dvdt {
                 let nv = (volt(&state.v, *n) + r * dt).max(0.0);
@@ -704,6 +802,12 @@ impl Model {
     }
 }
 
+/// Placeholder soft-start assumption: an unresolved stage with no
+/// datasheet soft-start ramps its output over this time (a typical
+/// regulator ships 0.5–4ms). CONSERVATIVE ESTIMATE, stated in the
+/// notes — the resolved part's real t_ss replaces it.
+const T_SS_ASSUMED: f64 = 1e-3;
+
 fn build_model(netlist: &Netlist, sf: &SourceFile, rep: &mut PowerupReport) -> (Model, State) {
     rep.notes.push("input `power` rails ideal at declared V from t=0".into());
     rep.notes.push("static domain loads draw i_nom whenever their rail > 0 (conservative)".into());
@@ -765,14 +869,19 @@ fn build_model(netlist: &Netlist, sf: &SourceFile, rep: &mut PowerupReport) -> (
 
     let mut stages: Vec<StageDef> = Vec::new();
     for (i, inst) in netlist.instances.iter() {
-        let Some(vt) = attr_si(i, "output_voltage") else { continue };
+        // resolved blocks declare output_voltage; UNRESOLVED Generic
+        // placeholders declare vout_nom — they still gate, chain and
+        // reflect input current (their missing soft-start/limit data is
+        // stated below), so the timeline sees the tree, not fiction
+        let Some(vt) = attr_si(i, "output_voltage").or_else(|| attr_si(i, "vout_nom")) else { continue };
         let Some(vout) = pin_net.get(&(i, "VOUT".to_string())).copied() else { continue };
         let Some(vin) = pin_net.get(&(i, "VIN".to_string())).copied() else { continue };
         let i_limit = attr_si(i, "i_sw_avg_limit").or_else(|| attr_si(i, "i_valley_limit"));
         if i_limit.is_none() {
             rep.notes.push(format!(
-                "'{}': no current-limit figure — modeled IDEAL, knee/limit physics unmodeled for this stage (stated)",
-                inst.name
+                "'{}': no current-limit figure — charging capped at its rating with an ASSUMED {:.0}ms soft-start ramp (conservative estimate, stated; the resolved part's datasheet replaces both)",
+                inst.name,
+                T_SS_ASSUMED * 1e3
             ));
         }
         stages.push(StageDef {
@@ -782,8 +891,13 @@ fn build_model(netlist: &Netlist, sf: &SourceFile, rep: &mut PowerupReport) -> (
             en: pin_net.get(&(i, "EN".to_string())).copied(),
             v_target: vt,
             topology: attr(i, "topology").map(|t| t.trim_matches('"').to_string()).unwrap_or_default(),
-            eta: attr_si(i, "efficiency").map(|e| if e > 1.0 { e / 100.0 } else { e }).unwrap_or(DEFAULT_ETA),
+            eta: attr_si(i, "efficiency")
+                .or_else(|| attr_si(i, "powertree_eff_assumed_pct"))
+                .map(|e| if e > 1.0 { e / 100.0 } else { e })
+                .unwrap_or(DEFAULT_ETA),
             en_vih: attr_si(i, "en_vih"),
+            i_rating: attr_si(i, "i_rating").or_else(|| attr_si(i, "powertree_rating_required_a")),
+            vin_nom: attr_si(i, "vin_nom").or_else(|| attr_si(i, "input_voltage")),
             ss_i_initial: attr_si(i, "ss_i_initial"),
             ss_v_full: attr_si(i, "ss_v_full"),
             i_limit,
@@ -947,6 +1061,12 @@ fn build_model(netlist: &Netlist, sf: &SourceFile, rep: &mut PowerupReport) -> (
             Some((pg, k))
         })
         .collect();
+    let mut pg_direct: HashMap<NetId, Vec<usize>> = HashMap::new();
+    for (i, inst) in netlist.instances.iter() {
+        let Some(pg) = pin_net.get(&(i, "PG".to_string())).copied() else { continue };
+        let Some(k) = stages.iter().position(|s| s.name == inst.name) else { continue };
+        pg_direct.entry(pg).or_default().push(k);
+    }
     for s in &stages {
         let Some(en) = s.en else { continue };
         if en_rc.contains_key(&en) {
@@ -1011,7 +1131,7 @@ fn build_model(netlist: &Netlist, sf: &SourceFile, rep: &mut PowerupReport) -> (
     }
     let modes = vec![Mode::Off; stages.len()];
     (
-        Model { stages, ideal_v, timed_ideal, cap_on_net, static_load, res_load_g, en_rc, all_rails, dom_loads, net_label },
+        Model { stages, ideal_v, timed_ideal, cap_on_net, static_load, res_load_g, en_rc, pg_direct, all_rails, dom_loads, net_label },
         State { t: 0.0, v, modes },
     )
 }
@@ -1033,6 +1153,22 @@ pub fn simulate_powerup_opt(netlist: &Netlist, sf: &SourceFile, capture: bool) -
 
     // ── phase 1: the power-up timeline ──
     let tr = model.run(&mut state, T_END, &[], true, &[], None, false, capture);
+    rep.truncated = tr.truncated;
+    for (k, n) in tr.uvlo_trips.iter().enumerate() {
+        if *n >= 3 {
+            let s = &model.stages[k];
+            let feed = model.net_label.get(&s.vin).cloned().unwrap_or_default();
+            rep.findings.push(Finding {
+                rail: Some(feed.clone()),
+                sev: Sev::Error,
+                text: format!(
+                    "'{}' UVLO LIMIT CYCLE on feed '{feed}' ({n} release edges): the woken load collapses the feed below 70% of vin_nom {:.2}V, the stage drops out, the feed recovers, repeat — the feed's bank cannot carry the wake-up inrush (bulk on '{feed}' and soft-start on the real part are the physical fix)",
+                    s.name,
+                    s.vin_nom.unwrap_or(0.0)
+                ),
+            });
+        }
+    }
     if capture {
         rep.waves.push(("power-up".into(), waves_of(&model, &tr)));
     }
@@ -1524,6 +1660,15 @@ pub fn render_down(rep: &PowerdownReport) -> String {
 
 /// Window verification (order / t_min / t_max / slots) on the timeline.
 fn verify_windows(model: &Model, timelines: &HashMap<NetId, RailTimeline>, rep: &mut PowerupReport) {
+    // a truncated run proves nothing about absences: name the state
+    // and skip the window arithmetic (the guard event says why)
+    if rep.truncated {
+        rep.findings.push(Finding { rail: None, sev: Sev::Error, text: format!(
+            "power-up simulation TRUNCATED by the event guard before {:.0}ms — sequencing windows and never-good claims are UNVERIFIED (fix the oscillation the guard caught first)",
+            T_END * 1e3
+        ) });
+        return;
+    }
     let tl_of = |net: Option<NetId>| net.and_then(|n| timelines.get(&n));
     let by_name: HashMap<(String, String), &DomLoad> = model
         .dom_loads

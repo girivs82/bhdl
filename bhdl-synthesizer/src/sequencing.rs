@@ -536,8 +536,10 @@ pub fn check_power_sequencing(
                 continue;
             }
 
-            // the edge is IMPLEMENTED; now the hard timing, if declared
-            let Some(t_min) = e.t_min else { continue };
+            // the edge is IMPLEMENTED; now the hard timing, if declared.
+            // t_min=0 is pure ordering — the bare chain already is the
+            // mechanism; no timing element required
+            let Some(t_min) = e.t_min.filter(|t| *t > 0.0) else { continue };
             let (Some(r), Some(c)) = (series_r, shunt_c) else {
                 out.push(viol(
                     ViolationSeverity::Error,

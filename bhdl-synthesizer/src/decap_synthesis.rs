@@ -505,8 +505,17 @@ fn worst_ratio(
         .map(|(f, _)| *f)
         .fold(100e3_f64, f64::min)
         .max(100.0);
-    let (freqs, z) = bhdl_spice::ac::run_ac_impedance(&circ, rail_net, f_start, 50e6, 20)
-        .map_err(|e| format!("decouple: impedance sweep failed: {e}"))?;
+    let (freqs, z) = match bhdl_spice::ac::run_ac_impedance(&circ, rail_net, f_start, 50e6, 20) {
+        Ok(fz) => fz,
+        // a bare function-first rail (black-box pins only, no caps
+        // placed yet) IS an open: infinite baseline, worst at the
+        // mask's first breakpoint — the greedy loop takes it from there
+        Err(e) if e.to_string().contains("no stamped elements") => {
+            let f0 = dom.zmask.first().map(|(f, _)| *f).unwrap_or(f_start);
+            return Ok((f64::INFINITY, f0, f64::INFINITY));
+        }
+        Err(e) => return Err(format!("decouple: impedance sweep failed: {e}")),
+    };
     let budget = |f: f64| -> f64 {
         let r = dom.pdn_r_ohm.unwrap_or(0.0);
         let l = dom.pdn_l_h.unwrap_or(0.0);
@@ -540,12 +549,16 @@ fn mint_decap(
         .iter()
         .find(|(_, m)| m.name == cand.entity)
         .map(|(id, _)| id)
-        .unwrap_or_else(|| {
-            let id = netlist.add_module(cand.entity.clone(), ModuleKind::PhysicalComponent);
-            netlist.add_pin(id, "1".into(), PinDirection::Passive, PinType::Passive);
-            netlist.add_pin(id, "2".into(), PinDirection::Passive, PinType::Passive);
-            id
-        });
+        .unwrap_or_else(|| netlist.add_module(cand.entity.clone(), ModuleKind::PhysicalComponent));
+    // a found-by-name module can be an IMPORT STUB with no pin defs
+    // (the entity was imported but nothing instantiated it) — a trial
+    // cap minted onto it would have zero pin instances
+    for pn in ["1", "2"] {
+        let has = netlist.pins.values().any(|p| p.module == mod_id && p.name == pn);
+        if !has {
+            netlist.add_pin(mod_id, pn.into(), PinDirection::Passive, PinType::Passive);
+        }
+    }
     let inst_id = netlist
         .add_instance(name.to_string(), mod_id)
         .ok_or("decouple: instance creation failed")?;
@@ -825,8 +838,8 @@ pub fn run_decap_synthesis(
                 let zb = (r * r + (2.0 * std::f64::consts::PI * f * l).powi(2)).sqrt();
                 if zb > m {
                     return Err(format!(
-                        "decouple {}.{}: INFEASIBLE — the declared PDN budget alone (R={r}Ω, L={l}H → |Z|={:.1}mΩ at {:.2}MHz) exceeds the mask ({:.1}mΩ incl. {}% z_margin derating) before any capacitor is placed; reduce the budget inductance, renegotiate the mask, or lower z_margin",
-                        stmt.instance, stmt.domain, zb * 1e3, f / 1e6, m * 1e3, stmt.z_margin_pct
+                        "decouple {}.{}: INFEASIBLE — the declared PDN budget alone (R={:.2}mΩ, L={:.2}nH → |Z|={:.1}mΩ at {:.2}MHz) exceeds the mask ({:.1}mΩ incl. {}% z_margin derating) before any capacitor is placed; reduce the budget inductance, renegotiate the mask, or lower z_margin",
+                        stmt.instance, stmt.domain, dom.pdn_r_ohm.unwrap_or(0.0) * 1e3, dom.pdn_l_h.unwrap_or(0.0) * 1e9, zb * 1e3, f / 1e6, m * 1e3, stmt.z_margin_pct
                     ));
                 }
             }

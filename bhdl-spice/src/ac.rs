@@ -1110,6 +1110,24 @@ pub fn run_ac_impedance(
         stamp_branches(circuit, &node_index, omega, &HashMap::new(), &mut y);
         let mut rhs = DVector::<Complex64>::zeros(n);
         rhs[probe_idx] = Complex64::new(1.0, 0.0); // 1 A injection
+        // dangling nodes (nets whose only endpoints are unmodeled
+        // black-box pins — routine on boards with SEooC parts) stamp
+        // nothing and would leave zero rows → singular. Pin them to 0;
+        // they are disconnected from the probed rail by construction.
+        // The PROBE being unstamped is a real error, named as such.
+        for i in 0..n {
+            if i == probe_idx || dirichlet.contains(&i) {
+                continue;
+            }
+            if (0..n).all(|j| y[(i, j)].norm() == 0.0) {
+                y[(i, i)] = Complex64::new(1.0, 0.0);
+            }
+        }
+        if (0..n).all(|j| y[(probe_idx, j)].norm() == 0.0) {
+            return Err(SpiceError::NodeNotFound(format!(
+                "probe net '{probe_node}' has no stamped elements — nothing is connected to the rail"
+            )));
+        }
         for &idx in &dirichlet {
             for j in 0..n {
                 y[(idx, j)] = Complex64::new(0.0, 0.0);

@@ -2271,7 +2271,14 @@ pub fn emit_power_region(option: &TreeOption, gnd: &str) -> String {
     let known_outputs: Vec<&str> = option.stages.iter().map(|s| s.to.as_str()).collect();
     for st in &option.stages {
         if st.to.starts_with("V_PROT") || st.to.starts_with("V_BULK") || st.to.starts_with("V_INT") {
-            out.push_str(&format!("    power {} = {};\n", st.to, fmt_v(st.vout)));
+            // generated ON-board (the stage drives it) — the `power X =`
+            // form declares an EXTERNAL supply and trips ERC028
+            out.push_str(&format!(
+                "    port {}: power out = {} @ {};\n",
+                st.to,
+                fmt_v(st.vout),
+                fmt_a_ceil(st.i_max_a)
+            ));
         }
     }
     // stages: sources before consumers (a stage whose `from` is another

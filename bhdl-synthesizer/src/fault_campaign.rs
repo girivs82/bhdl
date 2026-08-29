@@ -1178,9 +1178,19 @@ pub fn run_universe(
                 continue;
             }
             uf.fired.push(format!("boot:{key}"));
-            let n = format!(
-                "BOOT: power-up under this fault violates a declared contract: {t} — dangerous at start-up; the settled DC solve cannot see an enable/ordering failure (stated)"
-            );
+            // a TRUNCATED run is the sim refusing to settle — under a
+            // fault that is the physics of instability (a regulator
+            // hiccuping without its output cap), not an unverified
+            // window claim: counted dangerous, said honestly
+            let n = if t.contains("TRUNCATED") {
+                format!(
+                    "BOOT: power-up under this fault never settles (event-guard oscillation — hiccup/limit-cycle physics) — counted dangerous at start-up (conservative, stated)"
+                )
+            } else {
+                format!(
+                    "BOOT: power-up under this fault violates a declared contract: {t} — dangerous at start-up; the settled DC solve cannot see an enable/ordering failure (stated)"
+                )
+            };
             uf.note = Some(match uf.note.take() { Some(p) => format!("{p}; {n}"), None => n });
         }
     };

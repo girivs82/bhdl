@@ -55,7 +55,7 @@ entity FeSoc() {
     );
     let emitted = std::fs::read_to_string(&f).unwrap();
     // the protected rail exists and the downstream stage feeds from it
-    assert!(emitted.contains("power V_PROT"), "no protected rail:\n{emitted}");
+    assert!(emitted.contains("port V_PROT: power out"), "no protected rail:\n{emitted}");
     assert!(emitted.contains("@V_PROT -> u_v50.VIN;"), "stage not re-fed from the protected rail:\n{emitted}");
     // the axis tokens became REQUIREMENT arguments (acceptance-gated)
     let req = emitted

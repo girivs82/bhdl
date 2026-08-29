@@ -39,7 +39,7 @@ entity TPS63020() as part {
     pin FB:      feedback in; // 500 mV reference divider
     pin EN:      signal in;   // must not be left open
     pin PS_SYNC: signal in;   // power-save (0 enabled / 1 disabled / sync clock), must not be left open
-    pin PG:      signal out;  // power good, open-drain, can be left open
+    pin PG:      signal inout;  // power good, open-drain, can be left open
     pin GND:     ground;      // control/logic ground
     pin PGND:    ground;      // power ground (join to GND at one point)
 
@@ -111,7 +111,7 @@ entity BuckBoost_TPS63020(
     pin VIN:  power in;
     pin VOUT: power out virtual;
     pin EN:   signal in;
-    pin PG:   signal out;     // power good (open-drain, Fig. 7 pull-up inside) — the sequencing chain output
+    pin PG:   signal inout;     // power good (open-drain, Fig. 7 pull-up inside) — the sequencing chain output
     pin GND:  ground;
 
     // Promises (SLVS916I) + exported operating point.

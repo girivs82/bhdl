@@ -1,0 +1,285 @@
+// MEGABOARD — the everything-at-once dogfood: an FPGA + DDR4 memory
+// subsystem exercising every bhdl feature end to end. All contract
+// numbers are FIXTURE values with realistic SHAPES (JESD79-4-style
+// DDR4 rails and ordering, Xilinx-style FPGA rail ladder) — replace
+// with vendor data on a real program.
+//
+// Features exercised: requirements{} (front_end, emi_filter, source_r,
+// decap_lib, cap_v_derating, pdn_redundancy, qual/temp), multi-rail
+// SEooC entities (domains w/ zmask/step/periodic bursts/droop/
+// overshoot/slots/after/t_min/sw_enabled/down_before/i_sleep/
+// sleep_off/pdn_r/pdn_l), clock_in contracts, seooc attestation,
+// config validity, AoUs + terminals, decouple statements, safety
+// goals (ASIL + SIL w/ hft/element), psm/lsm mechanisms w/
+// detected_when, assume pdn/clock_in, mission profile phases,
+// declared faults, and the powertree/powerup/powerdown/safety/
+// pdreport/report command gamut.
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { BuckStage, LdoStage, BuckExtStage, PreregStage, BoostStage } from "bhdl-stdlib/power/stages.bhdl";
+import { DecapBulk100u } from "./tests/circuits/realistic/decap_lib_fixture.bhdl";
+import { DecapJumbo220uLow3v3 } from "./tests/circuits/realistic/decap_lib_fixture.bhdl";
+
+// ── The FPGA (SEooC black box, Xilinx-style rail ladder) ────────────
+entity Fpga_Seooc() {
+    pin VCCINT: power in;
+    pin VCCAUX: power in;
+    pin VCCO:   power in;   // 1.2V bank shared with the DDR4 VDDQ net
+    pin REFCLK: signal in;
+    pin PGOOD_IN: signal in;
+    pin GND:    ground;
+
+    attribute component_class = "asic";
+    attribute part_number     = "FIXTURE-FPGA-7X";
+    attribute io_voltage      = 1.2V;   // clock-capable pins on the 1.2V bank
+
+    // core: big periodic compute bursts, tight window, aggressive mask
+    domain CORE pins="VCCINT" v=0.85V tol=3% i_nom=4A i_max=12A
+        zmask="100kHz:6m 1MHz:5m 10MHz:8m 50MHz:30m"
+        step=8A rise=2us dur=50us period=200us droop_max=3% overshoot_max=3%
+        pdn_r=0.15m pdn_l=0.02n
+        slot=1
+        source="FIXTURE — Xilinx-style VCCINT shape";
+    // aux: after core, defined delay window
+    domain AUX pins="VCCAUX" v=1.8V tol=5% i_nom=300mA i_max=800mA
+        slot=2 after="CORE" t_min=200us t_max=50ms
+        source="FIXTURE — VCCAUX ladder position";
+    // IO bank on the shared 1.2V net; sleepable
+    domain IO pins="VCCO" v=1.2V tol=5% i_nom=500mA i_max=1.5A
+        slot=3 after="AUX" i_sleep=5mA
+        source="FIXTURE — VCCO bank";
+
+    safety {
+        clock_in REFCLK_100 pins="REFCLK" freq=100MHz rise_max=1.2ns ppm=100 c_in=3pF
+                 source="FIXTURE — FPGA refclk spec";
+        seooc lambda=180 spfm=0.93 lfm=0.75
+              source="FIXTURE — FPGA vendor FMEDA edition A";
+        config core_v=0.85V source="FIXTURE — FMEDA valid for the 0.85V speed grade";
+        assumption AOU_SEQ "the board enforces the VCCINT→VCCAUX→VCCO ladder";
+        assumption AOU_PG  "PGOOD_IN gates configuration until all rails are good";
+        terminal PGOOD_IN "active-high; hold low until the ladder completes";
+    }
+}
+
+// ── The DDR4 device (SEooC; JESD79-4-style rails) ───────────────────
+entity Ddr4_Seooc() {
+    pin VDD:  power in;    // 1.2V core+IO (VDDQ tied on this fixture)
+    pin VPP:  power in;    // 2.5V activation supply
+    pin VTT:  power in;    // 0.6V termination (sinks AND sources)
+    pin CK:   signal in;
+    pin GND:  ground;
+
+    attribute component_class = "asic";
+    attribute part_number     = "FIXTURE-DDR4-8G";
+    attribute io_voltage      = 1.2V;   // CK/DQ are VDDQ-referenced
+
+    // VDD/VDDQ: refresh+activate bursts are PERIODIC; tight window.
+    // JESD79-4 shape: VPP must never be below VDD → VDD comes AFTER
+    // VPP on the timeline.
+    domain VDD12 pins="VDD" v=1.2V tol=5% i_nom=800mA i_max=2.5A
+        zmask="100kHz:15m 1MHz:10m 10MHz:12m 50MHz:45m"
+        step=1.8A rise=50us dur=400us period=7.8ms droop_max=4% overshoot_max=4%
+        pdn_r=0.3m pdn_l=0.05n
+        slot=2 after="VPP25" t_min=0us
+        source="FIXTURE — JESD79-4-style VDD/VDDQ shape";
+    domain VPP25 pins="VPP" v=2.5V tol=6% i_nom=40mA i_max=150mA
+        slot=1
+        source="FIXTURE — JESD79-4 VPP-first ordering";
+    // termination: VDDQ/2, must both SINK and SOURCE; sleepable in
+    // self-refresh, dropped by firmware
+    domain VTT06 pins="VTT" v=0.6V tol=3% i_nom=0mA i_max=1.2A
+        after="VDD12" t_min=100us sw_enabled i_sleep=0mA sleep_off
+        down_before="VDD12"
+        source="FIXTURE — VTT tracks VDDQ/2; termination sinks and sources";
+
+    safety {
+        clock_in CK_1G pins="CK" freq=1GHz rise_max=120ps ppm=100 c_in=1.5pF
+                 source="FIXTURE — DDR4 clock input spec";
+        seooc lambda=90 spfm=0.9 lfm=0.7
+              source="FIXTURE — DRAM vendor FMEDA";
+        assumption AOU_VTT "VTT is regulated to VDDQ/2 and can sink termination current";
+        terminal VTT "termination center-tap; bidirectional current";
+    }
+}
+
+// ── The board ───────────────────────────────────────────────────────
+board MegaBoard {
+    requirements {
+        front_end: "reverse_polarity, ov_trip=16V, uv_trip=9V";
+        emi_filter: "40dB, l=4.7µH";
+        source_r: "80m";
+        decap_lib: "./tests/circuits/realistic/decap_lib_fixture.bhdl";
+        cap_v_derating: "80%";
+        pdn_redundancy: "n+1";
+        temp_min: "-20degC";
+        temp_max: "70degC";
+    }
+
+    power V12 = 12V @ 6A;
+    port VCCINT: power out = 0.85V @ 12A;
+    port V18:    power out = 1.8V @ 1A;
+    port V12Q:   power out = 1.2V @ 4A;
+    port VPP:    power out = 2.5V @ 200mA;
+    port VTT:    power out = 0.6V @ 1.2A;
+    ground GND;
+
+    fpga: Fpga_Seooc();
+    @VCCINT -> fpga.VCCINT;
+    @V18    -> fpga.VCCAUX;
+    @V12Q   -> fpga.VCCO;
+    fpga.GND -> @GND;
+
+    dram: Ddr4_Seooc();
+    @V12Q -> dram.VDD;      // shared 1.2V net: FPGA VCCO + DRAM VDDQ
+    @VPP  -> dram.VPP;
+    @VTT  -> dram.VTT;
+    dram.GND -> @GND;
+
+    // 100MHz refclk for the FPGA
+    osc: MbOsc();
+    osc.GND -> @GND;
+    osc.OUT -> fpga.REFCLK;
+    osc.OUT -> C_ck: Cap(8pF).1; C_ck.2 -> @GND;
+    // DELIBERATE PROBE: the DRAM clock_in contract says 1GHz; this
+    // oscillator is 100MHz — the safety clock check must flag it
+    osc.OUT -> dram.CK;
+
+    // configuration gate: the LAST rail in the ladder reports good
+    u_vtt.PG -> fpga.PGOOD_IN;
+    // front end always enabled (root of the tree — nothing precedes it)
+    @V12 -> u_v_prot.EN;
+
+    // VTT discharge path: termination i_nom is 0, so without a bleed
+    // the bank cannot honor down_before=VDD12 (powerdown timeline
+    // finding) — 100R bleeds 6mA and discharges in microseconds
+    @VTT -> bleed_vtt: Res(100Ω).1; bleed_vtt.2 -> @GND;
+
+    // an INDEPENDENTLY-supplied rail supervisor (DFA-clean by design):
+    // divider fed from V18 monitors VCCINT
+    @V18 -> mon_top: Res(10kΩ, tolerance = 1%).1; mon_top.2 -> mon_bot: Res(10kΩ, tolerance = 1%).1; mon_bot.2 -> @GND;
+
+    // decap networks from the shortlist per declared masks
+    decouple fpga.CORE from "./tests/circuits/realistic/decap_lib_fixture.bhdl" max_parts=24;
+    decouple dram.VDD12 from "./tests/circuits/realistic/decap_lib_fixture.bhdl" max_parts=18;
+
+
+
+
+
+
+
+
+
+
+    // ── BEGIN GENERATED POWER TREE (bhdl powertree --emit — regenerate, never hand-edit) ──
+    // option "max-efficiency" — bucks everywhere; noise rails get minimal-headroom intermediates + post-LDOs
+    // assumptions are CONSERVATIVE ESTIMATES (stated per stage); the real part swapped in must MEET OR BEAT them
+    port V_PROT: power out = 11.9V @ 1.74A;
+
+    u_v_prot: PreregStage(vout=11.9V, i_max=1.74A, vin=12V, reverse_polarity=true, ov_trip=16V, uv_trip=9V);
+    @V12 -> u_v_prot.VIN;
+    u_v_prot.VOUT -> @V_PROT;
+    u_v_prot.GND -> @GND;
+    attribute u_v_prot.powertree_eff_assumed_pct = "99.2";
+    attribute u_v_prot.powertree_noise_assumed_uvrms = "0";
+    attribute u_v_prot.powertree_rating_required_a = "2.169";
+    attribute u_v_prot.powertree_basis = "physics: series-FET drop 0.1V; protection: reverse_polarity, ov_trip=16V, uv_trip=9V";
+    attribute u_v_prot.powertree_serves = "all non-always-on rails (reverse_polarity, ov_trip=16V, uv_trip=9V)";
+
+    u_v12q: BuckStage(vout=1.2V, i_max=4A, vin=11.9V);
+    @V_PROT -> u_v12q.VIN;
+    u_v12q.VOUT -> @V12Q;
+    u_v12q.GND -> @GND;
+    attribute u_v12q.powertree_eff_assumed_pct = "86.0";
+    attribute u_v12q.powertree_noise_assumed_uvrms = "500";
+    attribute u_v12q.powertree_rating_required_a = "5.000";
+    attribute u_v12q.powertree_basis = "estimate: conservative buck band at 1.30A; ratio 9.9:1 penalty 2pt";
+    attribute u_v12q.powertree_serves = "dram.VDD12, fpga.IO";
+
+    u_v18: BuckStage(vout=1.8V, i_max=0.8A, vin=11.9V);
+    @V_PROT -> u_v18.VIN;
+    u_v18.VOUT -> @V18;
+    u_v18.GND -> @GND;
+    attribute u_v18.powertree_eff_assumed_pct = "83.0";
+    attribute u_v18.powertree_noise_assumed_uvrms = "500";
+    attribute u_v18.powertree_rating_required_a = "1.000";
+    attribute u_v18.powertree_basis = "estimate: conservative buck band at 0.30A; ratio 6.6:1 penalty 2pt";
+    attribute u_v18.powertree_serves = "fpga.AUX";
+
+    u_vccint: BuckExtStage(vout=0.85V, i_max=12A, vin=11.9V);
+    @V_PROT -> u_vccint.VIN;
+    u_vccint.VOUT -> @VCCINT;
+    u_vccint.GND -> @GND;
+    attribute u_vccint.powertree_eff_assumed_pct = "86.0";
+    attribute u_vccint.powertree_noise_assumed_uvrms = "500";
+    attribute u_vccint.powertree_rating_required_a = "15.000";
+    attribute u_vccint.powertree_basis = "estimate: controller + 1 phase(s) at 4.00A, 20A/phase design point derated from stage rating for reliability/FIT; ratio 14.0:1 penalty 4pt";
+    attribute u_vccint.powertree_serves = "fpga.CORE";
+
+    u_vpp: BuckStage(vout=2.5V, i_max=0.15A, vin=11.9V);
+    @V_PROT -> u_vpp.VIN;
+    u_vpp.VOUT -> @VPP;
+    u_vpp.GND -> @GND;
+    attribute u_vpp.powertree_eff_assumed_pct = "80.0";
+    attribute u_vpp.powertree_noise_assumed_uvrms = "500";
+    attribute u_vpp.powertree_rating_required_a = "0.187";
+    attribute u_vpp.powertree_basis = "estimate: conservative buck band at 0.04A; ratio 4.8:1 penalty 0pt";
+    attribute u_vpp.powertree_serves = "dram.VPP25";
+
+    u_vtt: BuckStage(vout=0.6V, i_max=1.2A, vin=11.9V);
+    @V_PROT -> u_vtt.VIN;
+    u_vtt.VOUT -> @VTT;
+    u_vtt.GND -> @GND;
+    attribute u_vtt.powertree_eff_assumed_pct = "72.0";
+    attribute u_vtt.powertree_noise_assumed_uvrms = "500";
+    attribute u_vtt.powertree_rating_required_a = "1.500";
+    attribute u_vtt.powertree_basis = "estimate: conservative buck band at 0.00A; ratio 19.8:1 penalty 8pt";
+    attribute u_vtt.powertree_serves = "dram.VTT06";
+    
+    // sequencing chains (auto: declared domain ordering — verified by ERC033 + `bhdl powerup`)
+    u_v12q.PG -> u_vtt.EN;
+    u_v18.PG -> u_v12q.EN;
+    u_vccint.PG -> u_v18.EN;
+    u_vpp.PG -> u_v12q.EN;
+
+    // bulk (sized by the power-up/interaction fixpoint — the sim is the sizing oracle)
+    @V_PROT -> seqbulk_v_prot_1: DecapBulk100u().1; seqbulk_v_prot_1.2 -> @GND;
+    @V_PROT -> seqbulk_v_prot_2: DecapBulk100u().1; seqbulk_v_prot_2.2 -> @GND;
+    // ── END GENERATED POWER TREE ──
+}
+
+entity MbOsc() {
+    pin OUT: signal out;
+    pin GND: ground;
+    attribute component_class = "oscillator";
+    attribute f_out     = 100MHz;
+    attribute rise_time = 0.5ns;
+    attribute r_out     = 30Ω;
+    attribute ppm       = 50;
+    attribute source    = "FIXTURE oscillator";
+}
+
+safety MegaBoard as brd {
+    mission { profile = passenger_compartment; lifetime = 20000h; }
+
+    assume pdn(brd.fpga.CORE);
+    assume pdn(brd.dram.VDD12);
+    assume clock_in(brd.fpga.REFCLK_100);
+
+    goal SG_CORE: ASIL_B "the FPGA core supply stays in its window" (id="SG-MB-1", ftti=10ms) {
+        effect core_uv = brd.fpga.VCCINT < 0.8V severity S3;
+    }
+    goal SG_MEM: SIL2 "memory contents survive operation" (id="SG-MB-2", hft=0, element=B) {
+        effect mem_uv = brd.dram.VDD < 1.1V severity S2;
+    }
+
+    mechanism brd.mon_top: psm(SG_CORE, detects=[core_uv],
+                               detected_when = brd.mon_top.2 < 0.42V,
+                               dc=0.9, source="FIXTURE supervisor claim");
+
+    // vendor AoUs dispositioned as this board's argument
+    fpga.AOU_SEQ satisfied_by brd.fpga;
+    fpga.AOU_PG satisfied_by brd.u_vtt;
+    dram.AOU_VTT waived "FIXTURE demo — VTT sink capability is the known stage-vocabulary gap";
+}

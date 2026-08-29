@@ -111,8 +111,12 @@ fn is_signal_net(netlist: &Netlist, id: NetId) -> bool {
 /// The instance's supply voltage: follow its power-input pin(s) to a
 /// `NetClass::Power { voltage }` rail. None when the instance has no
 /// resolvable supply (passives, connectors) — those carry no domain.
-fn instance_supply_voltage(netlist: &Netlist) -> HashMap<String, f64> {
-    let mut out = HashMap::new();
+/// (supply voltage, distinct-rail count) per instance. A declared
+/// `io_voltage` attribute pins the IO domain exactly (multi-rail parts
+/// — FPGAs, DRAMs — reference IO to ONE of their rails; the highest-
+/// rail fallback is a heuristic and callers must say so).
+fn instance_supply_voltage(netlist: &Netlist) -> HashMap<String, (f64, usize)> {
+    let mut rails: HashMap<String, Vec<f64>> = HashMap::new();
     for pi in netlist.pin_instances.values() {
         let Some(pin) = netlist.pins.get(pi.pin_def) else { continue };
         let is_supply_in = matches!(pin.direction, PinDirection::Power)
@@ -127,12 +131,27 @@ fn instance_supply_voltage(netlist: &Netlist) -> HashMap<String, f64> {
             continue;
         };
         let Some(inst) = netlist.instances.get(pi.instance) else { continue };
-        // Highest supply wins when a part touches several rails (VIN vs EN
-        // reference etc. — the IO domain is usually the core supply; this is
-        // a heuristic, and ERC004 reports the voltages it used).
-        let e = out.entry(inst.name.clone()).or_insert(voltage);
-        if voltage > *e {
-            *e = voltage;
+        let v = rails.entry(inst.name.clone()).or_default();
+        if !v.iter().any(|x| (x - voltage).abs() < 1e-9) {
+            v.push(voltage);
+        }
+    }
+    let mut out = HashMap::new();
+    for (name, vs) in rails {
+        let declared = netlist
+            .instances
+            .iter()
+            .find(|(_, i)| i.name == name)
+            .and_then(|(_, i)| i.attributes.get("io_voltage"))
+            .and_then(|t| crate::stage_acceptance::parse_si(t));
+        match declared {
+            Some(vio) => {
+                out.insert(name, (vio, 1)); // declared = exact, not a heuristic
+            }
+            None => {
+                let hi = vs.iter().cloned().fold(f64::MIN, f64::max);
+                out.insert(name, (hi, vs.len()));
+            }
         }
     }
     out
@@ -159,14 +178,18 @@ pub fn check_driver_conflicts(
         if !is_signal_net(netlist, *net_id) {
             continue;
         }
-        // Virtual pins have no copper — they cannot contend.
-        let drivers: Vec<&NetPin> = pins
+        // Virtual pins have no copper — they cannot contend. One pin
+        // fanned out through several connection statements is still ONE
+        // driver — count by identity, not by statement.
+        let mut drivers: Vec<&NetPin> = pins
             .iter()
             .filter(|p| {
                 !p.is_virtual && matches!(p.dir, PinDirection::Out)
                     && !matches!(p.ptype, PinType::Power | PinType::Ground)
             })
             .collect();
+        drivers.sort_by(|a, b| (&a.inst, &a.pin).cmp(&(&b.inst, &b.pin)));
+        drivers.dedup_by(|a, b| a.inst == b.inst && a.pin == b.pin);
         let sinks: Vec<&NetPin> = pins
             .iter()
             .filter(|p| matches!(p.dir, PinDirection::In))
@@ -383,11 +406,17 @@ pub fn check_voltage_domains(
         // Domains of the ACTIVE members (instances with a resolvable supply);
         // passives bridge domains legitimately (dividers, series R).
         let mut domains: Vec<(f64, String)> = Vec::new();
+        let mut heuristic = false;
         for p in pins {
-            if matches!(p.dir, PinDirection::Passive) {
+            // passives bridge; open-drain (InOut) imposes the PULL-UP's
+            // level, not its own supply's — neither is an aggressor
+            if matches!(p.dir, PinDirection::Passive | PinDirection::InOut) {
                 continue;
             }
-            if let Some(v) = supply.get(&p.inst) {
+            if let Some((v, n_rails)) = supply.get(&p.inst) {
+                if *n_rails > 1 {
+                    heuristic = true;
+                }
                 domains.push((*v, format!("{}.{} @{v:.2}V", p.inst, p.pin)));
             }
         }
@@ -408,11 +437,18 @@ pub fn check_voltage_domains(
                     net_name(netlist, *net_id),
                     domains.iter().map(|(_, d)| d.as_str()).collect::<Vec<_>>().join(", "),
                 ),
-                severity: ViolationSeverity::Error,
+                // a multi-rail member's domain came from the highest-
+                // rail HEURISTIC — a claim that strong only warns, and
+                // says how to pin it down
+                severity: if heuristic { ViolationSeverity::Warning } else { ViolationSeverity::Error },
                 location: ViolationLocation::Net(*net_id),
-                fix_suggestion: "insert a level shifter (component_class = \"level_shifter\") \
+                fix_suggestion: if heuristic {
+                    "a multi-rail part's pin domain is the highest-rail heuristic — declare `attribute io_voltage = <V>` on it to pin the IO domain, then insert a level shifter if the mismatch is real".into()
+                } else {
+                    "insert a level shifter (component_class = \"level_shifter\") \
                      or supply both from one rail"
-                        .into(),
+                        .into()
+                },
                 standard_reference: None,
             });
         }
@@ -505,7 +541,7 @@ pub fn check_i2c_pullups(
             // Wrong-rail pull-up: compare against the I2C devices' domain.
             let dev_v: Vec<f64> = i2c_pins
                 .iter()
-                .filter_map(|p| supply.get(&p.inst).copied())
+                .filter_map(|p| supply.get(&p.inst).map(|(v, _)| *v))
                 .collect();
             if let Some(min_dev) = dev_v.iter().cloned().reduce(f64::min) {
                 if rail_v > min_dev * 1.05 {

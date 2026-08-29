@@ -63,13 +63,16 @@ fn full_attestation_composes_with_hand_math() {
         "attestation not shown:\n{}",
         text.lines().filter(|l| l.contains("seooc")).collect::<Vec<_>>().join("\n")
     );
-    // hand math: residual = 120·(1−0.92) = 9.6; latent = 120·0.92·(1−0.7) = 33.1
+    // hand math: attested residual = 120·(1−0.92) = 9.6; latent =
+    // 120·0.92·(1−0.7) = 33.1. The base fixture adds 1.7 FIT of its
+    // own boot-dangerous residual (uA_C_out open makes the regulator
+    // hiccup — the boot campaign counts it) ⇒ 9.6 + 1.7 = 11.3.
     let metrics = text
         .lines()
         .find(|l| l.contains("metrics [board]"))
         .unwrap_or_else(|| panic!("no metrics line:\n{text}"));
     assert!(
-        metrics.contains("λ_residual=9.6") && metrics.contains("λ_latent=33.1"),
+        metrics.contains("λ_residual=11.3") && metrics.contains("λ_latent=33.1"),
         "attested split wrong: {metrics}"
     );
     assert!(

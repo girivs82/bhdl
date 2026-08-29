@@ -510,6 +510,13 @@ fn kv_from_tokens(toks: &[String]) -> BTreeMap<String, String> {
             out.insert(k.to_string(), v.trim_matches('"').to_string());
             i += 1;
         } else {
+            // a bare identifier is a FLAG (sw_enabled, sleep_off,
+            // always_on ...): record it as true — dropping it silently
+            // made `sleep_off` a no-op that only the sleep timeline's
+            // empty drop-list betrayed
+            if !toks[i].is_empty() && toks[i].chars().all(|c| c.is_alphanumeric() || c == '_') {
+                out.entry(toks[i].clone()).or_insert_with(|| "true".to_string());
+            }
             i += 1;
         }
     }

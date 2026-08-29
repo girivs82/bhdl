@@ -2539,8 +2539,15 @@ async fn run_powertree(
                     let envelope = bhdl_synthesizer::powertree::rail_cap_envelope(&netlist2);
                     let mut bumped = false;
                     let mut empty_interval: Vec<String> = Vec::new();
+                    // several findings can implicate the SAME rail (one
+                    // UVLO cycle per downstream stage) — bump each rail
+                    // ONCE per iteration or the doubling compounds
+                    let mut bumped_rails: std::collections::BTreeSet<String> = Default::default();
                     for f in &errs {
                         if let Some(r) = &f.rail {
+                            if !bumped_rails.insert(r.clone()) {
+                                continue;
+                            }
                             // a mid-bisection failure tightens the bracket
                             // back toward the known-passing value
                             if let Some(pass) = bulk_pass.get(r).copied() {
@@ -4117,6 +4124,9 @@ async fn run_safety(
                 // Z(f) mask sweep
                 if let Some(circ) = &circuit {
                     match bhdl_spice::ac::run_ac_impedance(circ, &net, 100e3, 50e6, 20) {
+                        Err(e) if e.to_string().contains("no stamped elements") => {
+                            pdn_out!("      zmask: rail is BARE (no capacitor or model element on it) — |Z| unbounded, the mask cannot be met; place the decap network first (stated)")
+                        }
                         Err(e) => pdn_out!("      zmask: sweep failed ({e})"),
                         Ok((freqs, z)) => {
                             let budget = |f: f64| -> f64 {
@@ -4144,7 +4154,7 @@ async fn run_safety(
                                 }
                             }
                             let btxt = if dom.pdn_r_ohm.is_some() || dom.pdn_l_h.is_some() {
-                                format!(" (incl. declared PDN budget R={:?}Ω L={:?}H as series terms)", dom.pdn_r_ohm.unwrap_or(0.0), dom.pdn_l_h.unwrap_or(0.0))
+                                format!(" (incl. declared PDN budget R={:.2}mΩ L={:.2}nH as series terms)", dom.pdn_r_ohm.unwrap_or(0.0) * 1e3, dom.pdn_l_h.unwrap_or(0.0) * 1e9)
                             } else {
                                 " (no PDN budget declared — layout parasitics EXCLUDED, stated)".to_string()
                             };

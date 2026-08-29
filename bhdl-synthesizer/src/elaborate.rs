@@ -97,7 +97,23 @@ pub fn emit_elaborated_with_preamble(
         match n.net_class {
             bhdl_netlist::types::NetClass::Power { voltage, current } => {
                 let amp = current.map(|c| format!(" @ {c}A")).unwrap_or_default();
-                rails.push(format!("    power {nm} = {voltage}V{amp};"));
+                // a rail declared `port X: power out` is GENERATED
+                // on-board — re-emitting it via the `power X =` sugar
+                // (an EXTERNAL supply claim) flips the ports-doctrine
+                // direction and trips ERC028 on the elaborated form
+                let port_dir = netlist.ports.iter().find_map(|(_, p)| {
+                    (Some(p.module) == netlist.top_level_module && p.net == Some(net_id))
+                        .then_some(p.direction)
+                });
+                match port_dir {
+                    Some(bhdl_netlist::types::PortDirection::Output) => {
+                        rails.push(format!("    port {nm}: power out = {voltage}V{amp};"));
+                    }
+                    Some(bhdl_netlist::types::PortDirection::InOut) => {
+                        rails.push(format!("    port {nm}: power inout = {voltage}V{amp};"));
+                    }
+                    _ => rails.push(format!("    power {nm} = {voltage}V{amp};")),
+                }
             }
             bhdl_netlist::types::NetClass::Ground => grounds.push(format!("    ground {nm};")),
             _ => {}
