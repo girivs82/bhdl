@@ -814,6 +814,18 @@ with a statement when its datum is absent:
   same window under the stamped `i_max` draws — the worst-case feed
   IR. A board declaring no `i_nom` falls back to the healthy
   operating point, stated.
+- **Supply capability, multi-supply traced** — each domain's `i_max`
+  walks up its driving-stage chain to its ROOT source: series
+  passives pass current through (named in the chain), linear stages
+  (ldo/prereg — including via the composed parent's class when the
+  inner silicon drives the rail) pass current, switching stages
+  input-refer through the voltage ratio and the DECLARED efficiency
+  (`powertree_eff_assumed_pct`, else the block's own `efficiency`),
+  else the ideal ratio as an OPTIMISTIC LOWER BOUND, stated. The
+  per-source sums are judged against each `power X = V @ I` rating:
+  a bound already over the rating is a definite violation; a bound
+  within it is BOUND ONLY, never a pass; an unrated or untraceable
+  root is unchecked by name.
 - **Target-impedance mask** — a small-signal AC impedance sweep of the
   WHOLE tree (1 A injection at the domain net, DC sources as AC
   grounds), 100 kHz–50 MHz — the board's band of responsibility

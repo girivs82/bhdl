@@ -3868,6 +3868,157 @@ async fn run_safety(
         };
         let nom_draw = declared_solve(&|d| d.i_nom_a);
         let max_draw = declared_solve(&|d| d.i_max_a);
+        // MULTI-SUPPLY tracing (the last recorded increment): walk
+        // each domain's rail up its driving-stage chain to the ROOT
+        // source, input-referring i_max per stage — linear stages
+        // (ldo/prereg) pass current through; switching stages use
+        // power conservation with the DECLARED efficiency
+        // (powertree_eff_assumed_pct or `efficiency`), else the ideal
+        // ratio as an OPTIMISTIC LOWER BOUND, stated (a bound already
+        // over the rating is a definite violation; a bound within it
+        // is bound-only, never a pass).
+        let rail_driver: HashMap<String, (String, Option<String>, f64)> = {
+            // rail net name → (stage instance, its VIN net, v_out)
+            let mut m = HashMap::new();
+            for (_, inst) in netlist.instances.iter() {
+                let Some(vo) = inst.attributes.get("output_voltage").and_then(|v| bhdl_synthesizer::stage_acceptance::parse_si(v)) else { continue };
+                let Some(vout_net) = pin_net(&inst.name, "VOUT") else { continue };
+                let vin_net = pin_net(&inst.name, "VIN");
+                m.insert(vout_net, (inst.name.clone(), vin_net, vo));
+            }
+            m
+        };
+        let rated_sources: HashMap<String, f64> = netlist
+            .nets
+            .values()
+            .filter_map(|n| match n.net_class {
+                bhdl_netlist::types::NetClass::Power { current: Some(c), .. } => n.name.clone().map(|nm| (nm, c)),
+                _ => None,
+            })
+            .collect();
+        let stage_is_linear = |name: &str| -> bool {
+            let check = |i: &bhdl_netlist::Instance| -> bool {
+                let cls = i.attributes.get("component_class").map(|c| c.trim_matches('"').to_string()).unwrap_or_default();
+                let topo = i.attributes.get("topology").map(|c| c.trim_matches('"').to_string()).unwrap_or_default();
+                cls == "ldo" || cls == "protection" || topo == "ldo" || topo == "prereg"
+            };
+            let Some(inst) = netlist.instances.values().find(|i| i.name == name) else { return false };
+            if check(inst) {
+                return true;
+            }
+            // the rail is often driven by the INNER silicon part
+            // (class regulator_ic) — the topology lives on its design
+            // block: fall back to the composed/expansion parent
+            inst.attributes
+                .get("composed_parent")
+                .or_else(|| inst.attributes.get("expansion_parent"))
+                .map(|pn| pn.trim_matches('"').to_string())
+                .and_then(|pn| netlist.instances.values().find(|i| i.name == pn))
+                .map(check)
+                .unwrap_or(false)
+        };
+        let stage_eff = |name: &str| -> Option<f64> {
+            netlist.instances.values().find(|i| i.name == name).and_then(|i| {
+                i.attributes
+                    .get("powertree_eff_assumed_pct")
+                    .and_then(|v| v.trim_matches('"').parse::<f64>().ok())
+                    .map(|p| p / 100.0)
+                    .or_else(|| {
+                        i.attributes
+                            .get("efficiency")
+                            .and_then(|v| v.trim_matches('"').trim_end_matches('%').parse::<f64>().ok())
+                            .map(|p| if p > 1.0 { p / 100.0 } else { p })
+                    })
+            })
+        };
+        let net_voltage = |name: &str| -> Option<f64> {
+            if let Some((_, _, vo)) = rail_driver.get(name) {
+                return Some(*vo);
+            }
+            netlist.nets.values().find(|n| n.name.as_deref() == Some(name)).and_then(|n| match n.net_class {
+                bhdl_netlist::types::NetClass::Power { voltage, .. } if voltage > 0.0 => Some(voltage),
+                _ => None,
+            })
+        };
+        // series passives (feed resistors, inductors, fuses) carry the
+        // current through unchanged — hop across them toward the
+        // source. Preference: a far net that is rated or stage-driven;
+        // several equally-plausible bridges = ambiguous, stated.
+        let passive_hop = |net: &str| -> Option<(String, String)> {
+            let is_gnd = |nm: &str| {
+                netlist
+                    .nets
+                    .values()
+                    .find(|n| n.name.as_deref() == Some(nm))
+                    .map(|n| matches!(n.net_class, bhdl_netlist::types::NetClass::Ground))
+                    .unwrap_or(false)
+            };
+            let mut cands: Vec<(String, String)> = Vec::new();
+            for inst in netlist.instances.values() {
+                let m = netlist.modules.get(inst.definition).map(|m| m.name.clone()).unwrap_or_default();
+                if !matches!(m.as_str(), "Res" | "Resistor" | "Ind" | "Inductor" | "Fuse") {
+                    continue;
+                }
+                let (Some(n1), Some(n2)) = (pin_net(&inst.name, "1"), pin_net(&inst.name, "2")) else { continue };
+                let far = if n1 == net { n2 } else if n2 == net { n1 } else { continue };
+                if far == net || is_gnd(&far) {
+                    continue;
+                }
+                cands.push((inst.name.clone(), far));
+            }
+            let preferred: Vec<&(String, String)> = cands
+                .iter()
+                .filter(|(_, f)| rated_sources.contains_key(f) || rail_driver.contains_key(f))
+                .collect();
+            match (preferred.as_slice(), cands.as_slice()) {
+                ([one], _) => Some((*one).clone()),
+                ([], [one]) => Some(one.clone()),
+                _ => None,
+            }
+        };
+        // trace: (root net, input-referred i, chain text, bound_only?)
+        let trace_to_root = |start_net: &str, i_out: f64| -> Option<(String, f64, String, bool)> {
+            let mut net = start_net.to_string();
+            let mut i = i_out;
+            let mut chain: Vec<String> = Vec::new();
+            let mut bound_only = false;
+            for _ in 0..16 {
+                let Some((stage, vin_net, v_out)) = rail_driver.get(&net) else {
+                    // no stage drives this net: hop a series passive
+                    // toward the source, else this IS the root
+                    if !rated_sources.contains_key(&net) {
+                        if let Some((via, far)) = passive_hop(&net) {
+                            chain.push(format!("{via} (series passive, I passes)"));
+                            net = far;
+                            continue;
+                        }
+                    }
+                    return Some((net, i, chain.join(" ← "), bound_only));
+                };
+                let vin_net = vin_net.clone()?;
+                if stage_is_linear(stage) {
+                    chain.push(format!("{stage} (linear, I passes)"));
+                } else {
+                    let v_in = net_voltage(&vin_net)?;
+                    match stage_eff(stage) {
+                        Some(eff) if eff > 0.0 => {
+                            i = i * v_out / v_in / eff;
+                            chain.push(format!("{stage} (×{v_out}V/{v_in}V/η{:.0}%)", eff * 100.0));
+                        }
+                        _ => {
+                            i = i * v_out / v_in;
+                            bound_only = true;
+                            chain.push(format!("{stage} (×{v_out}V/{v_in}V, η UNDECLARED — ideal, lower bound)"));
+                        }
+                    }
+                }
+                net = vin_net;
+            }
+            None
+        };
+        // per-root accumulation for the post-loop summary:
+        // root → (Σ i, any bound_only, contributors)
+        let mut source_loads: std::collections::BTreeMap<String, (f64, bool, Vec<String>)> = Default::default();
         let mut assumed_refs: Vec<(String, String)> = Vec::new(); // (ref, instance)
         for part in model.parts.iter().filter(|p| !p.domains.is_empty()) {
             for dom in &part.domains {
@@ -3937,38 +4088,24 @@ async fn run_safety(
                         }
                     }
                 }
-                // supply capability: i_max vs the board's declared
-                // supply rating — checkable only when the board has
-                // exactly ONE rated power source (multi-supply
-                // attribution needs tree tracing, a later increment —
-                // stated).
+                // supply capability: i_max traced up the stage chain
+                // to its ROOT source and input-referred per stage.
                 if let Some(imax) = dom.i_max_a {
-                    let supplies: Vec<(String, f64)> = netlist
-                        .nets
-                        .values()
-                        .filter_map(|n| match n.net_class {
-                            bhdl_netlist::types::NetClass::Power { current: Some(c), .. } => {
-                                n.name.clone().map(|nm| (nm, c))
+                    match trace_to_root(&net, imax) {
+                        Some((root, i_in, chain, bound_only)) => {
+                            let via = if chain.is_empty() { String::new() } else { format!(" via {chain}") };
+                            let b = if bound_only { " (LOWER BOUND — η undeclared on the chain; declare stage efficiencies for a verdict)" } else { "" };
+                            pdn_out!("      supply: fed from {root}{via} — input-referred i_max {i_in:.2}A{b}");
+                            if rated_sources.contains_key(&root) {
+                                let e = source_loads.entry(root).or_default();
+                                e.0 += i_in;
+                                e.1 |= bound_only;
+                                e.2.push(format!("{aref} {i_in:.2}A"));
+                            } else {
+                                pdn_out!("      supply: root '{root}' declares no rating (`power {root} = <V> @ <I>`) — capability unchecked, stated");
                             }
-                            _ => None,
-                        })
-                        .collect();
-                    match supplies.as_slice() {
-                        [(snm, c)] => {
-                            let ok = imax <= *c;
-                            if !ok {
-                                model.gaps.push(bhdl_common::safety::Gap {
-                                    class: bhdl_common::safety::GapClass::AouViolated,
-                                    goal: dom.name.clone(),
-                                    subject: format!("{} supply capability", part.instance),
-                                    fix: format!("domain i_max {imax}A exceeds the {snm} supply rating {c}A — upsize the supply or renegotiate i_max"),
-                                });
-                            }
-                            pdn_out!("      supply: i_max {imax}A vs {snm} rated {c}A → {}",
-                                if ok { "OK".green().to_string() } else { "VIOLATED".red().to_string() });
                         }
-                        [] => pdn_out!("      supply: no rated power source declared — i_max unchecked, stated"),
-                        _ => pdn_out!("      supply: {} rated sources — attribution needs tree tracing (later increment); i_max unchecked, stated", supplies.len()),
+                        None => pdn_out!("      supply: chain to a root source could not be traced (undriven feed or missing rail voltage) — i_max unchecked, stated"),
                     }
                 }
                 // Z(f) mask sweep
@@ -4257,6 +4394,32 @@ async fn run_safety(
                 !(matches!(g.class, bhdl_common::safety::GapClass::AssumptionOpen)
                     && g.subject.ends_with(&format!("clock:{aref}")))
             });
+        }
+        // per-source capability summary: Σ input-referred i_max of
+        // every domain fed from each root vs the root's rating
+        for (root, (sum, bound_only, who)) in &source_loads {
+            let rating = rated_sources.get(root).copied().unwrap_or(0.0);
+            let over = *sum > rating + 1e-9;
+            let verdict = if over {
+                "VIOLATED".red().to_string()
+            } else if *bound_only {
+                "within (BOUND ONLY — not a pass until every chain declares its efficiency, stated)".to_string()
+            } else {
+                "OK".green().to_string()
+            };
+            pdn_out!("\n  SOURCE {} rated {rating}A: Σ input-referred i_max {}{:.2}A ({}) → {verdict}",
+                root.bold(), if *bound_only { "≥ " } else { "" }, sum, who.join(", "));
+            if over {
+                model.gaps.push(bhdl_common::safety::Gap {
+                    class: bhdl_common::safety::GapClass::AouViolated,
+                    goal: String::new(),
+                    subject: format!("{root} capability"),
+                    fix: format!(
+                        "Σ input-referred i_max {}{:.2}A exceeds the {root} rating {rating}A ({}) — upsize the supply or renegotiate the domains",
+                        if *bound_only { "≥ " } else { "" }, sum, who.join(", ")
+                    ),
+                });
+            }
         }
         // DC ACCURACY BUDGET (spec addendum 11): the vendor stack-up
         // (reference tol + FB divider WCA, or the combined output_tol)

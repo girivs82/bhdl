@@ -1,0 +1,45 @@
+// bhdl-sweep: skip — multi-supply tracing fixture (spec 2.10), not a
+// layout target. TWO rated sources: VBAT feeds a boost (switching —
+// input-referred through the voltage ratio; efficiency declared via a
+// scoped attribute on one arm), V12 feeds an LDO (linear — current
+// passes through). Each domain's i_max must land on ITS root.
+// FIXTURE numbers.
+
+import { Boost_TPS61022 } from "bhdl-stdlib/power/tps61022.bhdl";
+import { Ldo_LP2985 } from "bhdl-stdlib/power/lp2985.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+entity MsSoc() {
+    pin 1: power in;
+    pin 2: power in;
+    pin GND: ground;
+    domain VDD_5V pins="1" v=5V tol=5% i_nom=200mA i_max=1A source="FIXTURE — boost-fed domain";
+    domain VDD_3V3 pins="2" v=3.3V tol=5% i_nom=50mA i_max=100mA source="FIXTURE — LDO-fed domain";
+}
+
+board MultiSupply {
+    power VBAT = 3.6V @ 2A;
+    power V12 = 12V @ 1A;
+    port V50: power out = 5V @ 1A;
+    port V33: power out = 3.3V @ 200mA;
+    ground GND;
+
+    @VBAT -> u1: Boost_TPS61022(v_out=5V, i_out_max=1A, v_in=3.6V).VIN;
+    u1.GND -> @GND; u1.VOUT -> @V50;
+    attribute u1.powertree_eff_assumed_pct = "85";
+
+    @V12 -> u2: Ldo_LP2985(v_out=3.3V, i_out_max=100mA, v_in=12V).VIN;
+    u2.GND -> @GND; u2.VOUT -> @V33;
+
+    soc: MsSoc();
+    @V50 -> soc.1; @V33 -> soc.2; soc.GND -> @GND;
+    @V50 -> R_l1: Res(25Ω).1; R_l1.2 -> @GND;
+}
+
+safety MultiSupply as brd {
+    mission { ambient = 40degC; lifetime = 15000h; }
+    assume pdn(brd.soc.VDD_5V);
+    goal SG: ASIL_B "both rails hold" (id="SG-MS-1") {
+        effect uv = brd.R_l1.1 < 4.5V severity S2;
+    }
+}
