@@ -378,7 +378,10 @@ impl GenericGlacierSolver {
             .enumerate()
             .map(|(i, r)| (i, r.abs()))
             .collect();
-        worst.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        // total_cmp: a diverged solve can carry NaN residuals — the
+        // diagnostic printer must not panic on the very failure it
+        // exists to describe
+        worst.sort_by(|a, b| b.1.total_cmp(&a.1));
         for (i, r) in worst.iter().take(3) {
             let name = variables
                 .get(*i)

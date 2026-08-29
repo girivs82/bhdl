@@ -138,8 +138,10 @@ entity BuckController(
             else "BuckController: low-side FET dissipation (I²·R_ds·(1−D)) exceeds fet_p_rating — pick a bigger FET";
 
         // FB divider: R_top = R_bot·(V_OUT − V_REF)/V_REF.
-        const vov     = vout - self.feedback_voltage;
-        const r_scale = self.r_fb_bot / self.feedback_voltage;
+        // read the CTOR PARAM (v_ref), not the derived attribute —
+        // attribute-from-param is not in scope on the resolve path
+        const vov     = vout - self.v_ref;
+        const r_scale = self.r_fb_bot / self.v_ref;
         r_top_value   = vov * r_scale;
     }
 

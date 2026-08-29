@@ -1,0 +1,168 @@
+// TPS26630 — TI 60 V, 6 A power-limiting industrial eFuse (SLVSE94G).
+// Adjustable current limit (0.6–6 A ±7%), adjustable OVP cutoff and
+// UVLO via one three-resistor string, input reverse-polarity
+// protection, integrated 31 mΩ FET (26 mΩ RON typ, IN→OUT total).
+//
+// Two-layer library model (docs/spec/Requirements_And_Resolution.md §1):
+//   TPS26630        as part   — vendor truth.
+//   Efuse_TPS26630  as design — the designer's subcircuit, `impl
+//                               PreregStage`: derives the OV/UV string
+//                               from the trip points (SLVSE94G Eq. 9/10)
+//                               and R_ILIM from the current limit
+//                               (SLVSE94G Eq. 5: I_OL(A) = 18 / R_ILIM(kΩ),
+//                               R_ILIM ≥ 3 kΩ).
+//
+// REAL-DATA PROVENANCE, stated (all SLVSE94G):
+//   - operating input 4.5 V to 60 V; 6 A; abs-max 67 V: front page/§6.
+//   - UVLO threshold rising 1.176 / 1.2 / 1.224 V; V(OVPR) = 1.2 V
+//     (EC table; §9.2.2 design example uses both at 1.2 V).
+//   - divider law (§9.2.2, Eq. 9/10, single R1-R2-R3 string from
+//     IN_SYS; OVP taps R3, UVLO taps R2+R3):
+//       V_th = V(OV)·R3/(R1+R2+R3)   and   V_th = V(UV)·(R2+R3)/(R1+R2+R3)
+//   - current limit: Eq. 5, I_OL = 18/R_ILIM(kΩ), ±7%, R_ILIM ≥ 3 kΩ.
+//   - RON 26 mΩ typ (TJ 25 °C; 33 mΩ at 85 °C), IN→OUT total: EC table.
+//   - IQ(ON) 1.38 mA typ / 1.7 mA max: EC table.
+//   - reverse INPUT polarity protection (to −60 V): front page. (The
+//     external blocking FET Q1 of the full application is for reverse
+//     CURRENT blocking — a different axis, not modeled here, stated.)
+//   - θJA 31.4 °C/W; TJ −40 °C to 125 °C: §6.4 / quality tables.
+//   - output slew (CdVdT) inrush control is DESIGNER data (load-bank
+//     dependent) — why this block stays a TEMPLATE
+//     (supply_choosable = false): commit with `resolve`.
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+
+// ── Vendor truth ────────────────────────────────────────────────────
+entity TPS26630() as part {
+    pin IN:   power in;
+    pin OUT:  power out;
+    pin GND:  ground;
+    pin UVLO: signal in;      // undervoltage lockout (string tap, R2+R3)
+    pin OVP:  signal in;      // overvoltage cutoff (string tap, R3)
+    pin ILIM: signal inout;   // current-limit programming resistor to GND
+    pin FLT:  signal out;     // fault flag
+
+    attribute component_class = "protection_ic";
+    attribute manufacturer    = "Texas Instruments";
+    attribute part_number     = "TPS26630";
+    attribute vin_min         = 4.5V;    // SLVSE94G: operating 4.5 V to 60 V
+    attribute vin_max         = 60V;
+    attribute output_current  = 6A;      // SLVSE94G: 6 A (max adjustable limit)
+    attribute reverse_polarity = true;   // SLVSE94G: input reverse polarity protection
+    attribute rds_on          = 26mΩ;    // SLVSE94G: IN→OUT total RON, typ TJ 25 °C (33 mΩ at 85 °C)
+    attribute i_quiescent     = 1.38mA;  // SLVSE94G: IQ(ON) typ (1.7 mA max)
+    attribute threshold_v     = 1.2V;    // SLVSE94G: UVLO rising 1.176/1.2/1.224 V; V(OVPR) 1.2 V
+    attribute tj_min          = -40degC; // SLVSE94G: −40 °C to 125 °C
+    attribute tj_max          = 125degC;
+    attribute theta_ja        = 31.4degC/W; // SLVSE94G §6.4
+    attribute functional_safety = "capable — documentation available (SLVSE94G)";
+
+    simulation {
+        stress {
+            self.p_diss = i_out * i_out * self.rds_on + vin * self.i_quiescent;
+        }
+    }
+}
+
+symbol TPS26630 {
+    left   { IN, UVLO, OVP }
+    right  { OUT, FLT, ILIM }
+    bottom { GND }
+}
+
+layout TPS26630 {
+    package VQFN-24;   // SLVSE94G: RGE
+}
+
+// ── The designer's subcircuit ───────────────────────────────────────
+entity Efuse_TPS26630(
+    v_in:      voltage    = 24V,
+    i_out_max: current    = 4A,
+    ov_trip:   voltage    = 33V,     // cut off above this
+    uv_trip:   voltage    = 18V,     // hold off below this
+    i_lim:     current    = 5A,      // programmed limit — R_ILIM derived (SLVSE94G Eq. 5)
+    r_str_bot: resistance = 34kΩ,    // string R3 (the §9.2.2 example's choice class)
+    c_out:     capacitance = 1µF
+) as design
+  // ENVELOPE: 6 A × 0.8 derating; SLVSE94G input range; trips bracket
+  // the input; the limit stays in the adjustable window (R_ILIM ≥ 3 kΩ
+  // caps it at 6 A, 0.6 A floor).
+  where i_out_max <= 4.8A, v_in >= 4.5V, v_in <= 60V, ov_trip > v_in, uv_trip < v_in, i_lim <= 6A, i_lim >= 0.6A
+{
+    pin VIN:  power in;
+    pin VOUT: power out virtual;
+    pin FLT:  signal out;
+    pin GND:  ground;
+
+    attribute component_class  = "protection";
+    attribute topology         = "prereg";
+    attribute supply_choosable = false;   // TEMPLATE: inrush slew (CdVdT) is designer data (see header)
+    attribute output_voltage   = v_in;    // pass-through
+    attribute v_in             = v_in;
+    attribute i_out_max        = i_out_max;
+    attribute output_current   = 6A;      // SLVSE94G
+    attribute vin_min          = 4.5V;
+    attribute vin_max          = 60V;
+    attribute ov_trip          = ov_trip; // promise = the string below is sized to it
+    attribute uv_trip          = uv_trip;
+    attribute reverse_polarity = true;    // SLVSE94G (input reverse polarity)
+    attribute i_lim            = i_lim;   // programmed limit; R_ILIM below derives from it
+    attribute i_sw_avg_limit   = i_lim;   // the eFuse actively limits at I_OL — the power-up sim's capability
+    attribute rds_on           = 26mΩ;    // SLVSE94G (internal pass FET)
+    attribute i_quiescent      = 1.38mA;  // SLVSE94G
+    attribute tj_min           = -40degC;
+    attribute tj_max           = 125degC;
+    attribute theta_ja         = 31.4degC/W;
+    attribute functional_safety = "capable — documentation available (SLVSE94G)";
+
+    // String sizing (SLVSE94G §9.2.2, Eq. 9/10, V_th = 1.2 V):
+    //   R3            = r_str_bot (chosen)
+    //   R1+R2+R3      = V(OV)·R3 / V_th
+    //   R2+R3         = V_th·(R1+R2+R3) / V(UV) ... rearranged:
+    //   R23           = (R1+R2+R3)·V_th / V(UV)
+    //   R2 = R23 − R3;  R1 = Rtot − R23.
+    // Current limit (Eq. 5): R_ILIM(kΩ) = 18 / I_OL(A).
+    // One binary op per const.
+    design {
+        const v_th   = 1.2;
+        const r3     = self.r_str_bot;
+        const ovr    = self.ov_trip / v_th;
+        const rtot_c = r3 * ovr;
+        const uvr    = v_th / self.uv_trip;
+        const r23    = rtot_c * uvr;
+        r_str_mid    = r23 - r3;
+        r_str_top    = rtot_c - r23;
+        const ilim_a = self.i_lim / 1A;
+        const rk     = 18.0 / ilim_a;
+        const rilim  = rk * 1000.0;
+        require rilim >= 3000
+            else "Efuse_TPS26630: R_ILIM below the 3 kΩ datasheet minimum (SLVSE94G) — the requested limit exceeds 6 A";
+        r_ilim_value = rilim * 1.0;
+    }
+
+    u: TPS26630();
+    VIN -> u.IN;
+    u.GND -> GND;
+    u.OUT -> VOUT;
+    VOUT -> C_out: Cap(c_out).1; C_out.2 -> GND;
+    // OV/UV string: VIN → R1 → (UVLO tap) → R2 → (OVP tap) → R3 → GND
+    VIN -> R_str_top: Res(r_str_top, tolerance = 1%).1; R_str_top.2 -> u.UVLO;
+    u.UVLO -> R_str_mid: Res(r_str_mid, tolerance = 1%).1; R_str_mid.2 -> u.OVP;
+    u.OVP -> R_str_bot: Res(r_str_bot, tolerance = 1%).1; R_str_bot.2 -> GND;
+    // current limit — derived from i_lim by the datasheet's own law
+    u.ILIM -> R_ilim: Res(r_ilim_value, tolerance = 1%).1; R_ilim.2 -> GND;
+    generate if (wired(FLT)) {
+        u.FLT -> FLT;
+    }
+}
+
+// The block SATISFIES PreregStage: trip points convey into the string
+// sizing; the current limit derives from the stage's i_max.
+impl PreregStage for Efuse_TPS26630 {
+    const vout    = v_in;
+    const i_max   = i_out_max;
+    const vin     = v_in;
+    const ov_trip = ov_trip;
+    const uv_trip = uv_trip;
+}

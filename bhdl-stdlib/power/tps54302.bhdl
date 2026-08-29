@@ -58,6 +58,8 @@ entity TPS54302() as part {
     attribute switching_frequency = 500kHz;
     attribute f_sw            = 500kHz;
     attribute efficiency      = 92%;      // SLVSDG6C typical-application curves, mid-load
+    attribute en_vih          = 1.23V;    // SLVSDG6C EC: EN rising threshold, typ (the sequencing-chain RC sizes against it)
+    attribute t_ss            = 5ms;      // SLVSDG6C section 8.3.4: internal 5 ms soft-start (512 cycles)
     attribute dropout_voltage = 0.5V;
     attribute feedback_voltage = 0.6V;
     attribute fb_divider_bottom = 10kΩ;
@@ -148,6 +150,8 @@ entity Buck_TPS54302(
     attribute rds_on          = 98mΩ;
     attribute t_sw            = 20ns;
     attribute i_quiescent     = 85uA;
+    attribute en_vih          = 1.23V;    // SLVSDG6C EC: EN rising threshold, typ
+    attribute t_ss            = 5ms;      // SLVSDG6C section 8.3.4: internal 5 ms soft-start
     attribute feedback_voltage = 0.6V;
     attribute fb_equation     = "VOUT = {VREF}*(1 + {R1}/{R2})";
 

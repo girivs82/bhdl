@@ -436,9 +436,18 @@ fn dispatch_primitive(name: &str, args: &[f64]) -> Result<f64, DesignEvalError> 
             }
             Ok(args[0].sqrt())
         }
+        // pow(x, y) — vendor sizing laws with non-integer exponents
+        // (TPS54560 SLVSBN0C Eq. 7: RT(kΩ) = 101756 / fsw(kHz)^1.008)
+        "pow" => {
+            if args.len() != 2 {
+                return Err(DesignEvalError::EvalError(
+                    format!("pow expects 2 args (base, exponent), got {}", args.len())));
+            }
+            Ok(args[0].powf(args[1]))
+        }
         other => Err(DesignEvalError::EvalError(
             format!("unknown primitive function '{other}' — the design \
-                     evaluator currently knows plate_current, koren_inverse_vgk, sqrt"))),
+                     evaluator currently knows plate_current, koren_inverse_vgk, sqrt, pow"))),
     }
 }
 

@@ -542,10 +542,17 @@ impl NetlistGenerator {
                     .iter_mut()
                     .find(|(_, i)| i.name == *inst_name)
                 else {
-                    anyhow::bail!(
-                        "scoped attribute `{}.{}`: no instance '{}' on the board — a provenance statement resting on nothing",
+                    // powertree --emit strips its generated region for
+                    // replanning: standing scoped attributes on those
+                    // instances (u_*.vin_min ...) dangle for exactly one
+                    // pass and re-attach when the region is re-emitted.
+                    // A typo'd name still shows: the attribute never
+                    // lands and its consumer reports the missing axis.
+                    log::warn!(
+                        "scoped attribute `{}.{}`: no instance '{}' in this build — kept standing (emit replanning re-creates generated instances; a typo shows as the axis staying undeclared)",
                         inst_name, key, inst_name
                     );
+                    continue;
                 };
                 debug!("scoped attribute: {inst_name}.{key} = {value}");
                 inst.attributes.insert(key, value);

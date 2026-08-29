@@ -18,6 +18,10 @@
 import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
 import { BuckStage, LdoStage, BuckExtStage, PreregStage, BoostStage } from "bhdl-stdlib/power/stages.bhdl";
+import { Buck_TPS54302 } from "bhdl-stdlib/power/tps54302.bhdl";
+import { Buck_TPS54560 } from "bhdl-stdlib/power/tps54560.bhdl";
+import { BuckController } from "bhdl-stdlib/power/buck_controller.bhdl";
+import { Efuse_TPS26630 } from "bhdl-stdlib/protection/tps2663.bhdl";
 import { DecapBulk100u } from "./tests/circuits/realistic/decap_lib_fixture.bhdl";
 import { DecapJumbo220uLow3v3 } from "./tests/circuits/realistic/decap_lib_fixture.bhdl";
 
@@ -86,11 +90,14 @@ entity Ddr4_Seooc() {
     domain VPP25 pins="VPP" v=2.5V tol=6% i_nom=40mA i_max=150mA
         slot=1
         source="FIXTURE — JESD79-4 VPP-first ordering";
-    // termination: VDDQ/2, must both SINK and SOURCE; sleepable in
-    // self-refresh, dropped by firmware
+    // termination: VDDQ/2, must both SINK and SOURCE. With the
+    // committed buck (no tracking, EN threshold 1.23V > every low
+    // rail) the firmware-drop (sw_enabled/sleep_off) and the
+    // down_before=VDD12 discharge ordering are NOT implementable —
+    // the powerdown timeline measured both; a tracking VTT part
+    // (TPS51200 class) is the real answer, recorded in AOU_VTT.
     domain VTT06 pins="VTT" v=0.6V tol=3% i_nom=0mA i_max=1.2A
-        after="VDD12" t_min=100us sw_enabled i_sleep=0mA sleep_off
-        down_before="VDD12"
+        after="VDD12" t_min=100us
         source="FIXTURE — VTT tracks VDDQ/2; termination sinks and sources";
 
     safety {
@@ -145,15 +152,55 @@ board MegaBoard {
     // oscillator is 100MHz — the safety clock check must flag it
     osc.OUT -> dram.CK;
 
-    // configuration gate: the LAST rail in the ladder reports good
-    u_vtt.PG -> fpga.PGOOD_IN;
-    // front end always enabled (root of the tree — nothing precedes it)
-    @V12 -> u_v_prot.EN;
+    // VTT enable: hand-wired RC from V_PROT (the only rail above the
+    // TPS54302's 1.23V EN threshold that exists before VTT) — a FIXED
+    // delay sized so VTT enables AFTER V12Q's measured good (~7.4ms):
+    // t = RC·ln(11.9/(11.9−1.23)) ⇒ 100k·750nF ≈ 8.2ms. The power-up
+    // timeline VERIFIES the after=VDD12 ordering (a hand-wired enable
+    // wins over chain synthesis).
+    @V_PROT -> seq_vtt_r: Res(100kΩ).1; seq_vtt_r.2 -> u_vtt.EN;
+    u_vtt.EN -> seq_vtt_c: Cap(750nF).1; seq_vtt_c.2 -> @GND;
+
+    // NOTE: the COMMITTED regulators (TPS54302/54560) have no PG pin —
+    // the placeholder-era PG chain and PGOOD gate are impossible with
+    // these parts; sequencing falls to the rail-RC mechanism and the
+    // configuration gate returns to an explicit AoU waiver.
+
 
     // VTT discharge path: termination i_nom is 0, so without a bleed
     // the bank cannot honor down_before=VDD12 (powerdown timeline
     // finding) — 100R bleeds 6mA and discharges in microseconds
     @VTT -> bleed_vtt: Res(100Ω).1; bleed_vtt.2 -> @GND;
+
+    // ── COMMITTED PARTS (resolve: placeholder → reviewed block) ─────
+    // Front end: TPS26630 eFuse (SLVSE94G) — 6A class covers the
+    // 2.17A required rating TPS2660 (2A) missed; limit programmed to
+    // 2.6A (R_ILIM = 18/2.6 ≈ 6.92kΩ derived by the block's own law)
+    resolve u_v_prot = Efuse_TPS26630(v_in=12V, i_out_max=1.74A, ov_trip=16V, uv_trip=9V, i_lim=2.6A);
+    // V12Q: 5A-class buck (SLVSBN0C) for the 5A required rating
+    resolve u_v12q = Buck_TPS54560(v_out=1.2V, v_in=11.9V, i_out_max=4A);
+    // V18 / VPP / VTT: TPS54302 3A sync buck (SLVSDG6C)
+    resolve u_v18 = Buck_TPS54302(v_out=1.8V, v_in=11.9V, i_out_max=0.8A);
+    resolve u_vpp = Buck_TPS54302(v_out=2.5V, v_in=11.9V, i_out_max=0.15A);
+    // VTT: 0.6V = the part's own VREF (R_top -> 0). NOTE the sink
+    // limitation stays recorded in the safety block's AOU_VTT waiver.
+    resolve u_vtt = Buck_TPS54302(v_out=0.6V, v_in=11.9V, i_out_max=1.2A);
+    // VCCINT: controller + CSD87350Q5D NexFET power block (SLPS288E):
+    // BVDSS 30V, 40A operating, HS RDS(on) 6.8 mOhm DC max at VGS 4.5V,
+    // VGS(th) 2.1V upper figure, p_rating derived (125-70degC)/50degC/W
+    // theta_JA(max Cu) = 1.1W
+    // f_sw 300kHz: at 500kHz the HS switching loss (hard-switching
+    // estimate, t_sw = tr+tf = 19ns per SLPS288E at RG=2R) exceeds the
+    // theta_JA-derated rating — the resolver said so; lowering f_sw is
+    // the designer remedy it named
+    resolve u_vccint = BuckController(v_out=0.85V, v_in=11.9V, i_out_max=12A, f_sw=300kHz, t_sw=19ns,
+        hs_fet="CSD87350Q5D-Q1", ls_fet="CSD87350Q5D-Q2",
+        fet_vds_max=30V, fet_id_max=40A, fet_rds_on=6.8mΩ,
+        fet_vgs_th=2.1V, fet_p_rating=1.1W);
+    // the power block's own input range (SLPS288E: VIN 4.5-27V) — the
+    // generic controller declares none; the sim's UVLO floor needs it
+    attribute u_vccint.vin_min = 4.5V;
+    attribute u_vccint.vin_max = 27V;
 
     // an INDEPENDENTLY-supplied rail supervisor (DFA-clean by design):
     // divider fed from V18 monitors VCCINT
@@ -162,6 +209,14 @@ board MegaBoard {
     // decap networks from the shortlist per declared masks
     decouple fpga.CORE from "./tests/circuits/realistic/decap_lib_fixture.bhdl" max_parts=24;
     decouple dram.VDD12 from "./tests/circuits/realistic/decap_lib_fixture.bhdl" max_parts=18;
+
+
+
+
+
+
+
+
 
 
 
@@ -238,14 +293,35 @@ board MegaBoard {
     attribute u_vtt.powertree_serves = "dram.VTT06";
     
     // sequencing chains (auto: declared domain ordering — verified by ERC033 + `bhdl powerup`)
-    u_v12q.PG -> u_vtt.EN;
-    u_v18.PG -> u_v12q.EN;
-    u_vccint.PG -> u_v18.EN;
-    u_vpp.PG -> u_v12q.EN;
+    @V18 -> seqr_u_v12q: Res(100kΩ).1; seqr_u_v12q.2 -> u_v12q.EN;
+    @V_PROT -> seqr_u_v18: Res(100kΩ).1; seqr_u_v18.2 -> u_v18.EN;
+    u_v12q.EN -> seqc_u_v12q: Cap(0.000e0).1; seqc_u_v12q.2 -> @GND;
+    u_v18.EN -> seqc_u_v18: Cap(1.849e-8).1; seqc_u_v18.2 -> @GND;
 
     // bulk (sized by the power-up/interaction fixpoint — the sim is the sizing oracle)
+    @V12Q -> seqbulk_v12q_1: DecapJumbo220uLow3v3().1; seqbulk_v12q_1.2 -> @GND;
+    @V12Q -> seqbulk_v12q_2: DecapJumbo220uLow3v3().1; seqbulk_v12q_2.2 -> @GND;
+    @V18 -> seqbulk_v18_1: DecapJumbo220uLow3v3().1; seqbulk_v18_1.2 -> @GND;
+    @V18 -> seqbulk_v18_2: DecapJumbo220uLow3v3().1; seqbulk_v18_2.2 -> @GND;
+    @VCCINT -> seqbulk_vccint_1: DecapJumbo220uLow3v3().1; seqbulk_vccint_1.2 -> @GND;
+    @VCCINT -> seqbulk_vccint_2: DecapJumbo220uLow3v3().1; seqbulk_vccint_2.2 -> @GND;
     @V_PROT -> seqbulk_v_prot_1: DecapBulk100u().1; seqbulk_v_prot_1.2 -> @GND;
     @V_PROT -> seqbulk_v_prot_2: DecapBulk100u().1; seqbulk_v_prot_2.2 -> @GND;
+    @V_PROT -> seqbulk_v_prot_3: DecapBulk100u().1; seqbulk_v_prot_3.2 -> @GND;
+    @V_PROT -> seqbulk_v_prot_4: DecapBulk100u().1; seqbulk_v_prot_4.2 -> @GND;
+    @V_PROT -> seqbulk_v_prot_5: DecapBulk100u().1; seqbulk_v_prot_5.2 -> @GND;
+    @V_PROT -> seqbulk_v_prot_6: DecapBulk100u().1; seqbulk_v_prot_6.2 -> @GND;
+    @V_PROT -> seqbulk_v_prot_7: DecapBulk100u().1; seqbulk_v_prot_7.2 -> @GND;
+    @V_PROT -> seqbulk_v_prot_8: DecapBulk100u().1; seqbulk_v_prot_8.2 -> @GND;
+    @V_PROT -> seqbulk_v_prot_9: DecapBulk100u().1; seqbulk_v_prot_9.2 -> @GND;
+    @V_PROT -> seqbulk_v_prot_10: DecapBulk100u().1; seqbulk_v_prot_10.2 -> @GND;
+    @V_PROT -> seqbulk_v_prot_11: DecapBulk100u().1; seqbulk_v_prot_11.2 -> @GND;
+    @V_PROT -> seqbulk_v_prot_12: DecapBulk100u().1; seqbulk_v_prot_12.2 -> @GND;
+    @V_PROT -> seqbulk_v_prot_13: DecapBulk100u().1; seqbulk_v_prot_13.2 -> @GND;
+    @V_PROT -> seqbulk_v_prot_14: DecapBulk100u().1; seqbulk_v_prot_14.2 -> @GND;
+    @V_PROT -> seqbulk_v_prot_15: DecapBulk100u().1; seqbulk_v_prot_15.2 -> @GND;
+    @V_PROT -> seqbulk_v_prot_16: DecapBulk100u().1; seqbulk_v_prot_16.2 -> @GND;
+    @V_PROT -> seqbulk_v_prot_17: DecapBulk100u().1; seqbulk_v_prot_17.2 -> @GND;
     // ── END GENERATED POWER TREE ──
 }
 
@@ -280,6 +356,6 @@ safety MegaBoard as brd {
 
     // vendor AoUs dispositioned as this board's argument
     fpga.AOU_SEQ satisfied_by brd.fpga;
-    fpga.AOU_PG satisfied_by brd.u_vtt;
-    dram.AOU_VTT waived "FIXTURE demo — VTT sink capability is the known stage-vocabulary gap";
+    fpga.AOU_PG waived "committed regulators expose no PG pin — configuration gating unimplemented, tracked";
+    dram.AOU_VTT waived "FIXTURE demo — VTT sink capability, VDDQ/2 tracking and power-fail discharge ordering all need a tracking VTT part (TPS51200 class): the committed buck implements none of them (powerdown timeline measured it)";
 }

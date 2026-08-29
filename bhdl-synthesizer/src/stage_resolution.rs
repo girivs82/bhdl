@@ -244,7 +244,14 @@ pub fn resolve_stages(
     }
     for (inst, _, _) in &overrides {
         if !reqs.iter().any(|r| &r.instance == inst) {
-            bail!("`resolve {inst} = …;` names no requirement instantiation '{inst}' in this file");
+            // NOT an error: `powertree --emit` strips the generated
+            // region for replanning, and the designer's standing
+            // resolve statements then reference instances the emit is
+            // about to re-create -- killing the run would make emit
+            // impossible on any board with committed stages. A typo'd
+            // resolve still surfaces: it binds nothing, the stage
+            // stays Generic, and ERC032 reports it every build.
+            println!("  note: `resolve {inst} = …;` names no requirement instantiation '{inst}' in this build -- kept standing (the emit replanning pass re-creates stages; a typo shows as the stage staying Generic under ERC032)");
         }
     }
 

@@ -21,18 +21,22 @@ fn run(cmd: &str) -> String {
         .arg("tests/circuits/realistic/test_megaboard_fpga_ddr4.bhdl")
         .arg(cmd);
     let out = c.output().expect("spawn");
-    format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))
+    // STDOUT only: the findings-section parsing below anchors on the
+    // last "findings:" — appending stderr (build logs, survey rows)
+    // after it would pollute the section
+    String::from_utf8_lossy(&out.stdout).to_string()
 }
 
 #[test]
 fn megaboard_powerup_ladder_is_real_and_windows_hold() {
     let text = run("powerup");
-    // the ladder exists on the timeline (placeholder stages simulate)
-    for rail in ["V_PROT GOOD", "VCCINT GOOD", "V18 GOOD", "V12Q GOOD"] {
+    // every rail reaches good on the timeline (REAL blocks: committed
+    // TPS26630/TPS54560/TPS54302/BuckController+CSD87350 stages
+    // simulate with datasheet soft-starts and EN thresholds)
+    for rail in ["V_PROT GOOD", "VCCINT GOOD", "V18 GOOD", "V12Q GOOD", "VTT GOOD", "VPP GOOD"] {
         assert!(text.contains(rail), "missing {rail}:\n{}",
             text.lines().filter(|l| l.contains("GOOD") || l.contains("NEVER")).collect::<Vec<_>>().join("\n"));
     }
-    // sequencing order realized: V_PROT before VCCINT before V18 before V12Q
     let t_of = |rail: &str| -> f64 {
         text.lines()
             .find(|l| l.contains(&format!("{rail} GOOD")))
@@ -40,11 +44,28 @@ fn megaboard_powerup_ladder_is_real_and_windows_hold() {
             .and_then(|t| t.trim().parse::<f64>().ok())
             .unwrap_or(f64::NAN)
     };
-    let (tp, tc, t18, t12q) = (t_of("V_PROT"), t_of("VCCINT"), t_of("V18"), t_of("V12Q"));
-    assert!(tp < tc && tc < t18 && t18 < t12q, "ladder out of order: {tp} {tc} {t18} {t12q}");
+    // the DECLARED orderings realized on the timeline: CORE before AUX
+    // (t_min 0.2ms), AUX before IO, VPP before VDD12, VDD12 before VTT
+    // (t_min 0.1ms) — V_PROT itself goes good late (its 1.5mF bank
+    // keeps charging while it already feeds the ladder; physical)
+    let (tc, t18, t12q, tpp, tvtt) =
+        (t_of("VCCINT"), t_of("V18"), t_of("V12Q"), t_of("VPP"), t_of("VTT"));
+    assert!(tc + 0.2 <= t18, "AUX t_min after CORE: {tc} {t18}");
+    assert!(t18 < t12q, "IO before AUX: {t18} {t12q}");
+    assert!(tpp < t12q, "VDD12 before VPP: {tpp} {t12q}");
+    assert!(t12q + 0.1 <= tvtt, "VTT t_min after VDD12: {t12q} {tvtt}");
     // no Error finding on the timeline (the findings block carries the
     // cross rows; the stage-survey near-miss crosses live before it)
-    let findings: Vec<&str> = text.split("findings:").last().unwrap_or("").lines().collect();
+    // the section header is a lone "  findings:" line; absent header
+    // (a clean run omits it) = no findings. Ends at the first blank.
+    let findings: Vec<&str> = match text.lines().collect::<Vec<_>>().iter().rposition(|l| l.trim() == "findings:") {
+        Some(i) => text
+            .lines()
+            .skip(i + 1)
+            .take_while(|l| !l.trim().is_empty())
+            .collect(),
+        None => Vec::new(),
+    };
     assert!(
         !findings.iter().any(|l| l.contains('\u{2717}')),
         "error findings:\n{}",
@@ -67,6 +88,27 @@ fn megaboard_powerdown_discharges_through_draw_and_bleed() {
         "discharge finding should be closed by the bleed:\n{}",
         text.lines().filter(|l| l.contains("✗")).collect::<Vec<_>>().join("\n")
     );
+}
+
+#[test]
+fn megaboard_stages_resolved_to_real_parts() {
+    let text = run("synthesize");
+    for (inst, block) in [
+        ("u_v_prot", "Efuse_TPS26630"),
+        ("u_v12q", "Buck_TPS54560"),
+        ("u_v18", "Buck_TPS54302"),
+        ("u_vpp", "Buck_TPS54302"),
+        ("u_vtt", "Buck_TPS54302"),
+        ("u_vccint", "BuckController"),
+    ] {
+        assert!(
+            text.contains(&format!("{inst}: ")) || text.contains(block),
+            "{inst} -> {block} not bound"
+        );
+    }
+    // no stage left Generic
+    assert!(!text.contains("is still the Generic"), "unresolved stage:\n{}",
+        text.lines().filter(|l| l.contains("ERC032")).collect::<Vec<_>>().join("\n"));
 }
 
 #[test]

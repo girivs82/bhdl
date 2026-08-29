@@ -2,10 +2,159 @@
 # hashes for reproducible builds. Do not edit by hand; commit it.
 
 version = 1
-part = []
 
 [[library]]
 name = "corpus-support"
 version = "0.1.0"
 hash = "sha256:cce393ddd179e36cb49df3835bc9f564754cd8223d848c986192e538031e0aee"
 source = "path:corpus-support"
+
+[[part]]
+refdes = "buck_C_boot"
+mpn = "CC0603KRX7R9BB104"
+manufacturer = "YAGEO"
+vendor_sku = "C14663"
+provider = "bhdl-jlcparts-provider"
+dielectric = "X7R"
+voltage_rating_v = 50.0
+
+[[part]]
+refdes = "buck_C_in"
+mpn = "1206B475K500NT"
+manufacturer = "FH(Guangdong Fenghua Advanced Tech)"
+vendor_sku = "C29823"
+provider = "bhdl-jlcparts-provider"
+dielectric = "X7R"
+voltage_rating_v = 50.0
+
+[[part]]
+refdes = "buck_C_out"
+mpn = "CL31B106KBHNNNE"
+manufacturer = "Samsung Electro-Mechanics"
+vendor_sku = "C89632"
+provider = "bhdl-jlcparts-provider"
+dielectric = "X7R"
+voltage_rating_v = 50.0
+
+[[part]]
+refdes = "buck_L_out"
+mpn = "YNR6045-3R3N"
+manufacturer = "YJYCOIN"
+vendor_sku = "C341064"
+provider = "bhdl-jlcparts-provider"
+current_rating_a = 3.7
+
+[[part]]
+refdes = "buck_R_bot"
+mpn = "TP0603T10K0P0510Z"
+manufacturer = "Ever Ohms Tech"
+vendor_sku = "C5184132"
+provider = "bhdl-jlcparts-provider"
+power_rating_w = 0.1
+
+[[part]]
+refdes = "buck_R_rt"
+mpn = "0603WAF2433T5E"
+manufacturer = "UNI-ROYAL(Uniroyal Elec)"
+vendor_sku = "C23351"
+provider = "bhdl-jlcparts-provider"
+power_rating_w = 0.1
+
+[[part]]
+refdes = "buck_R_top"
+mpn = "TNPU06034K99AWEN00"
+manufacturer = "Vishay Intertech"
+vendor_sku = "C1858463"
+provider = "bhdl-jlcparts-provider"
+power_rating_w = 0.1
+
+[[part]]
+refdes = "fe_C_out"
+mpn = "CL10B105KB8NQNC"
+manufacturer = "Samsung Electro-Mechanics"
+vendor_sku = "C5199872"
+provider = "bhdl-jlcparts-provider"
+dielectric = "X7R"
+voltage_rating_v = 50.0
+
+[[part]]
+refdes = "fe_R_ilim"
+mpn = "TR0603D6K98P0550Z"
+manufacturer = "Ever Ohms Tech"
+vendor_sku = "C149962"
+provider = "bhdl-jlcparts-provider"
+power_rating_w = 0.1
+
+[[part]]
+refdes = "fe_R_str_bot"
+mpn = "FRC0603F3402TS"
+manufacturer = "FOJAN"
+vendor_sku = "C2933202"
+provider = "bhdl-jlcparts-provider"
+power_rating_w = 0.1
+
+[[part]]
+refdes = "fe_R_str_mid"
+mpn = "FRC0603F2672TS"
+manufacturer = "FOJAN"
+vendor_sku = "C2930082"
+provider = "bhdl-jlcparts-provider"
+power_rating_w = 0.1
+
+[[part]]
+refdes = "fe_R_str_top"
+mpn = "0603WAF3903T5E"
+manufacturer = "UNI-ROYAL(Uniroyal Elec)"
+vendor_sku = "C23150"
+provider = "bhdl-jlcparts-provider"
+power_rating_w = 0.1
+
+[[part]]
+refdes = "load"
+mpn = "MFR03SF100KA10"
+manufacturer = "UNI-ROYAL(Uniroyal Elec)"
+vendor_sku = "C113667"
+provider = "bhdl-jlcparts-provider"
+power_rating_w = 3.0
+
+[[stage]]
+board = "MegaBoard"
+instance = "u_v12q"
+trait_name = "BuckStage"
+requirement = "vout=1.2V, i_max=4A, vin=11.9V, temp_min=-20degC, temp_max=70degC"
+block = "Buck_TPS54560"
+
+[[stage]]
+board = "MegaBoard"
+instance = "u_v18"
+trait_name = "BuckStage"
+requirement = "vout=1.8V, i_max=0.8A, vin=11.9V, temp_min=-20degC, temp_max=70degC"
+block = "Buck_TPS54302"
+
+[[stage]]
+board = "MegaBoard"
+instance = "u_v_prot"
+trait_name = "PreregStage"
+requirement = "vout=11.9V, i_max=1.74A, vin=12V, reverse_polarity=true, ov_trip=16V, uv_trip=9V, temp_min=-20degC, temp_max=70degC"
+block = "Efuse_TPS26630"
+
+[[stage]]
+board = "MegaBoard"
+instance = "u_vccint"
+trait_name = "BuckExtStage"
+requirement = "vout=0.85V, i_max=12A, vin=11.9V, temp_min=-20degC, temp_max=70degC"
+block = "BuckController"
+
+[[stage]]
+board = "MegaBoard"
+instance = "u_vpp"
+trait_name = "BuckStage"
+requirement = "vout=2.5V, i_max=0.15A, vin=11.9V, temp_min=-20degC, temp_max=70degC"
+block = "Buck_TPS54302"
+
+[[stage]]
+board = "MegaBoard"
+instance = "u_vtt"
+trait_name = "BuckStage"
+requirement = "vout=0.6V, i_max=1.2A, vin=11.9V, temp_min=-20degC, temp_max=70degC"
+block = "Buck_TPS54302"

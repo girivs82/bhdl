@@ -1368,14 +1368,49 @@ pub fn synthesize_seq_chains(netlist: &Netlist, sf: &SourceFile, gnd: &str) -> C
             }
         } else {
             let (n0, _, _) = &stages_a[0];
-            let Some(rail) = net_label(*n0) else { continue };
+            let Some(mut rail) = net_label(*n0) else { continue };
             let r = 1e5;
-            plan.wiring.push(format!("@{rail} -> seqr_{lb}: Res(100kΩ).1; seqr_{lb}.2 -> {bname}.EN;", lb = bname.to_lowercase()));
-            let vs = netlist
+            let mut vs = netlist
                 .instances
                 .iter()
                 .find_map(|(i, _)| (supply_stage(*n0) == Some(i)).then(|| attr_si(i, "output_voltage")).flatten())
                 .unwrap_or(0.0);
+            // a prerequisite rail BELOW the stage's EN threshold can
+            // never swing the enable (a 0.85V core rail against a
+            // 1.23V threshold holds the stage off FOREVER — measured
+            // on the timeline before this check existed). Fall back to
+            // the stage's own VIN rail: the RC becomes a fixed delay
+            // from the FEED coming up, and the declared ordering is
+            // verified by the power-up timeline, not by construction.
+            if let Some(vih) = vih {
+                if vs <= vih {
+                    let vin_net = netlist.instances.iter().find_map(|(i, x)| {
+                        (x.name == bname).then(|| {
+                            netlist.pin_instances.values().find_map(|pi| {
+                                let p = netlist.pins.get(pi.pin_def)?;
+                                (pi.instance == i && p.name == "VIN").then_some(pi.net).flatten()
+                            })
+                        }).flatten()
+                    });
+                    if let Some((vn, vrail, vvs)) = vin_net.and_then(|vn| {
+                        let l = net_label(vn)?;
+                        let v = netlist
+                            .instances
+                            .iter()
+                            .find_map(|(i, _)| (supply_stage(vn) == Some(i)).then(|| attr_si(i, "output_voltage")).flatten())
+                            .unwrap_or(0.0);
+                        Some((vn, l, v))
+                    }) {
+                        let _ = vn;
+                        plan.notes.push(format!(
+                            "rail-RC into {bname}: prerequisite '{rail}' ({vs:.2}V) cannot cross en_vih {vih:.2}V — RC re-sourced from the stage's own VIN rail '{vrail}' ({vvs:.2}V): a FIXED delay from the feed, the declared ordering is verified by the power-up timeline (stated)"
+                        ));
+                        rail = vrail;
+                        vs = vvs;
+                    }
+                }
+            }
+            plan.wiring.push(format!("@{rail} -> seqr_{lb}: Res(100kΩ).1; seqr_{lb}.2 -> {bname}.EN;", lb = bname.to_lowercase()));
             let c = mk_c(r, vs, &format!("rail-RC into {bname}"), &mut plan).unwrap_or(1e-8);
             plan.wiring.push(format!("{bname}.EN -> seqc_{lb}: Cap({c:.3e}).1; seqc_{lb}.2 -> @{gnd};", lb = bname.to_lowercase()));
             if stages_a.len() > 1 {

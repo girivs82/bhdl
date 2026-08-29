@@ -170,10 +170,16 @@ struct StageDef {
     /// the charging ceiling when no datasheet current limit exists: a
     /// stage cannot source more than its own acceptance contract.
     i_rating: Option<f64>,
-    /// nominal input voltage (vin_nom / input_voltage) — the UVLO
-    /// proxy: real regulators hold off below their input floor; a
-    /// declared vin_nom gates the stage at 70% of it (stated).
-    vin_nom: Option<f64>,
+    /// declared soft-start time (t_ss) — the output ramps to target
+    /// over it; the charging current is capped at bank·V/t_ss plus the
+    /// net's live demand (soft-start limits the RAMP, not throughput).
+    t_ss: Option<f64>,
+    /// UVLO floor: the block's declared vin_min (the DATASHEET
+    /// operating floor) when present, else 70% of vin_nom /
+    /// input_voltage (the placeholder proxy, stated). Below it a real
+    /// regulator holds off — without this gate a stage wakes at
+    /// millivolt inputs and its 1/vin reflected draw pins the feed.
+    vin_floor: Option<f64>,
     ss_i_initial: Option<f64>,
     ss_v_full: Option<f64>,
     i_limit: Option<f64>,
@@ -452,8 +458,8 @@ impl Model {
                 // "charge" from a collapsed feed and the timeline
                 // wedges in an unphysical equilibrium
                 let uvlo_ok = s
-                    .vin_nom
-                    .map(|vn| volt(&state.v, s.vin) >= 0.7 * vn)
+                    .vin_floor
+                    .map(|vf| volt(&state.v, s.vin) >= vf)
                     .unwrap_or(true);
                 if uvlo_ok && !uvlo_prev[k] && state.t > 0.0 {
                     tr.uvlo_trips[k] += 1;
@@ -519,7 +525,22 @@ impl Model {
                 let vo = volt(&state.v, s.vout);
                 let vi = volt(&state.v, s.vin);
                 let cap = s.i_out_cap(vo, vi);
-                let i_chg = match (cap, s.i_rating) {
+                // the net's LIVE demand: static load + regulated
+                // children's reflected draw — the soft-start ramp caps
+                // are on TOP of it (soft-start limits the RAMP, not
+                // the throughput; capping at ramp+static alone
+                // deadlocks the feed at the UVLO point)
+                let mut demand = load_at(s.vout, state.t, &state.v);
+                for (k2, s2) in self.stages.iter().enumerate() {
+                    if s2.vin == s.vout
+                        && (state.modes[k2] == Mode::Regulating || state.modes[k2] == Mode::CurrentLimited)
+                    {
+                        let d2 = load_at(s2.vout, state.t, &state.v);
+                        demand += s2.reflect_in(d2, volt(&state.v, s2.vout), volt(&state.v, s2.vin));
+                    }
+                }
+                let bank = self.cap_on_net.get(&s.vout).copied().unwrap_or(MIN_C).max(MIN_C);
+                let mut i_chg = match (cap, s.i_rating) {
                     (Some(c), _) => c,
                     // no current-limit figure: the stage cannot source
                     // more than its RATED current, and a placeholder
@@ -528,30 +549,20 @@ impl Model {
                     // charging at full rating from t=0 IS the inrush
                     // the real part's soft-start exists to prevent
                     (None, Some(rated)) => {
-                        let bank = self.cap_on_net.get(&s.vout).copied().unwrap_or(MIN_C).max(MIN_C);
-                        // soft-start limits the output RAMP, not the
-                        // throughput: the stage must still carry its
-                        // net's live demand (static load + regulated
-                        // children's reflected draw) ON TOP of the
-                        // bank-ramp current — capping at ramp+static
-                        // alone deadlocks the feed at the UVLO point
-                        let mut demand = load_at(s.vout, state.t, &state.v);
-                        for (k2, s2) in self.stages.iter().enumerate() {
-                            if s2.vin == s.vout
-                                && (state.modes[k2] == Mode::Regulating || state.modes[k2] == Mode::CurrentLimited)
-                            {
-                                let d2 = load_at(s2.vout, state.t, &state.v);
-                                demand += s2.reflect_in(d2, volt(&state.v, s2.vout), volt(&state.v, s2.vin));
-                            }
-                        }
                         let i_ss = bank * s.v_target / T_SS_ASSUMED + demand;
                         rated.min(i_ss)
                     }
-                    (None, None) => {
-                        let c = self.cap_on_net.get(&s.vout).copied().unwrap_or(MIN_C).max(MIN_C);
-                        c * s.v_target / 1e-5
-                    }
+                    (None, None) => bank * s.v_target / 1e-5,
                 };
+                // a DECLARED soft-start (datasheet t_ss) caps the ramp
+                // regardless of the current limit: the reference walks
+                // to target over t_ss, so the bank cannot charge faster
+                // than bank·V/t_ss on top of the live demand
+                if let Some(t_ss) = s.t_ss {
+                    if t_ss > 0.0 {
+                        i_chg = i_chg.min(bank * s.v_target / t_ss + demand);
+                    }
+                }
                 *i_net.entry(s.vout).or_default() += i_chg;
                 tr.peak_supply[k] = tr.peak_supply[k].max(i_chg.min(1e6));
                 let i_in = s.reflect_in(i_chg.min(1e6), vo, vi);
@@ -756,7 +767,15 @@ impl Model {
                 if !track_good || self.ideal_v.contains_key(n) {
                     continue;
                 }
-                let good = cur >= GOOD_FRAC * vn - 1e-9;
+                // HYSTERESIS: a rail crossing exactly at the good
+                // threshold chatters zero-width sag/recover pairs each
+                // interval — a sag OPENS 0.5% below the threshold and
+                // CLOSES back at it (real supervisors hysterese too)
+                let good = if sag_open.contains_key(n) || !tr.t_good.contains_key(n) {
+                    cur >= GOOD_FRAC * vn - 1e-9
+                } else {
+                    cur >= (GOOD_FRAC - 0.005) * vn - 1e-9
+                };
                 let lbl = self.net_label.get(n).cloned().unwrap_or_default();
                 match (tr.t_good.contains_key(n), good, sag_open.contains_key(n)) {
                     (false, true, _) => {
@@ -897,7 +916,12 @@ fn build_model(netlist: &Netlist, sf: &SourceFile, rep: &mut PowerupReport) -> (
                 .unwrap_or(DEFAULT_ETA),
             en_vih: attr_si(i, "en_vih"),
             i_rating: attr_si(i, "i_rating").or_else(|| attr_si(i, "powertree_rating_required_a")),
-            vin_nom: attr_si(i, "vin_nom").or_else(|| attr_si(i, "input_voltage")),
+            t_ss: attr_si(i, "t_ss"),
+            vin_floor: attr_si(i, "vin_min").or_else(|| {
+                attr_si(i, "vin_nom")
+                    .or_else(|| attr_si(i, "input_voltage"))
+                    .map(|v| 0.7 * v)
+            }),
             ss_i_initial: attr_si(i, "ss_i_initial"),
             ss_v_full: attr_si(i, "ss_v_full"),
             i_limit,
@@ -1162,9 +1186,9 @@ pub fn simulate_powerup_opt(netlist: &Netlist, sf: &SourceFile, capture: bool) -
                 rail: Some(feed.clone()),
                 sev: Sev::Error,
                 text: format!(
-                    "'{}' UVLO LIMIT CYCLE on feed '{feed}' ({n} release edges): the woken load collapses the feed below 70% of vin_nom {:.2}V, the stage drops out, the feed recovers, repeat — the feed's bank cannot carry the wake-up inrush (bulk on '{feed}' and soft-start on the real part are the physical fix)",
+                    "'{}' UVLO LIMIT CYCLE on feed '{feed}' ({n} release edges): the woken load collapses the feed below its {:.2}V input floor, the stage drops out, the feed recovers, repeat — the feed's bank cannot carry the wake-up inrush (bulk on '{feed}' and soft-start on the real part are the physical fix)",
                     s.name,
-                    s.vin_nom.unwrap_or(0.0)
+                    s.vin_floor.unwrap_or(0.0)
                 ),
             });
         }

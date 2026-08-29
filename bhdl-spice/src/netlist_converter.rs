@@ -1893,7 +1893,9 @@ impl NetlistToSpiceConverter {
         
         let value = match model.component_type {
             ComponentType::Resistor => {
-                model.parameters.get("resistance").copied().unwrap_or(1e3)
+                // a computed 0R (FB tie when VOUT = VREF) is an ideal
+                // short — stamp 1 uOhm, never 1/0 = NaN into the MNA
+                model.parameters.get("resistance").copied().unwrap_or(1e3).max(1e-6)
             }
             ComponentType::Capacitor => {
                 model.parameters.get("capacitance").copied().unwrap_or(1e-6)

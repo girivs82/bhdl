@@ -1240,10 +1240,11 @@ async fn powertree_emit_closes_the_loop() {
     // the requirement stays live on the instance
     assert_eq!(u.attributes.get("stage_bound").map(String::as_str), Some("Ldo_LP2985"), "{:#?}", u.attributes);
     assert!(n2.instances.iter().any(|(_, i)| i.name == "u_v1v8_u"), "LP2985 silicon inside the block");
-    // the 4A buck has no covering block yet → placeholder, contract attrs present
-    let (_, b) = n2.instances.iter().find(|(_, i)| i.name == "u_v1v0").expect("buck placeholder");
-    assert_eq!(b.attributes.get("stage_binding").map(String::as_str), Some("unresolved"), "{:#?}", b.attributes);
-    assert!(b.attributes.contains_key("i_rating"), "{:#?}", b.attributes);
+    // the 4A buck RESOLVES since the library gained Buck_TPS54560
+    // (SLVSBN0C, 5A ≥ the 5A required rating): bound, silicon inside
+    let (_, b) = n2.instances.iter().find(|(_, i)| i.name == "u_v1v0").expect("buck stage");
+    assert_eq!(b.attributes.get("stage_bound").map(String::as_str), Some("Buck_TPS54560"), "{:#?}", b.attributes);
+    assert!(n2.instances.iter().any(|(_, i)| i.name == "u_v1v0_u"), "TPS54560 silicon inside the block");
 
     // strip → byte-identical replanning source
     let stripped = strip_power_region(&emitted).expect("region present");
@@ -1391,12 +1392,13 @@ async fn powertree_swap_by_rename_to_real_part() {
             && x.description.contains("u_v1v8")),
         "{v:#?}"
     );
-    // the still-generic bucks report as placeholders (Info) — a
-    // planned tree is visible, never silent
+    // the library now covers every stage of this fixture (TPS54560
+    // took the 4A buck) — nothing stays a placeholder; the planned
+    // tree is visible through the BOUND stages instead
     assert!(
-        v.iter().any(|x| x.severity == bhdl_synthesizer::design_rule_checker::ViolationSeverity::Info
+        !v.iter().any(|x| x.severity == bhdl_synthesizer::design_rule_checker::ViolationSeverity::Info
             && x.description.contains("placeholder")),
-        "{v:#?}"
+        "unexpected placeholder remains: {v:#?}"
     );
 
     // under-rated rename = Error: fake the same swap onto a 0.2A LDO
@@ -2040,10 +2042,12 @@ board ExtDemo {{
     assert!(tg.2 && tg.1.contains("thermal: T_J = 60°C + 0.119W × 116.3°C/W = 73.8°C"), "{tg:?}");
     let c205 = r.resolutions[0].candidates.iter().find(|c| c.block == "Buck_AP63205").unwrap();
     assert!(c205.gates.iter().any(|g| g.0 == "temp_max" && g.2 && g.1.contains("temp_max 85°C ≥ required 60°C")), "{c205:#?}");
-    // 2 A at 85 °C PASSES with the IC's own physics loss (~0.46 W → 139 °C);
-    // at 125 °C ambient the same loss exceeds T_J,max — refused
+    // 2 A at 125 °C: the SOIC-8 TPS54331 (θJA 116.3 °C/W) exceeds
+    // T_J,max and is refused on its own thermal gate — but the library
+    // now carries Buck_TPS54560 (HSOIC PowerPAD, θJA 42 °C/W) which
+    // SURVIVES the same point: the resolver binds the better package.
     let r = resolve_stages(&board("vout=5V, i_max=2A, vin=12V, temp_max=125degC", ""), &stdlib, &[]).unwrap().unwrap();
-    assert!(r.resolutions[0].bound.is_none(), "2 A at 125 °C exceeds T_J,max on the JEDEC board: {}", bhdl_synthesizer::stage_resolution::render_report(&r.resolutions[0]));
+    assert_eq!(r.resolutions[0].bound.as_deref(), Some("Buck_TPS54560"), "{}", bhdl_synthesizer::stage_resolution::render_report(&r.resolutions[0]));
     let c331 = r.resolutions[0].candidates.iter().find(|c| c.block == "Buck_TPS54331").unwrap();
     assert!(c331.gates.iter().any(|g| g.0 == "temp_max" && !g.2 && g.1.contains("≤ T_J,max 150°C")), "{c331:#?}");
     let r = resolve_stages(&board("vout=5V, i_max=2A, vin=12V, qual=\"AEC-Q100\"", ""), &stdlib, &[]).unwrap().unwrap();
@@ -2061,7 +2065,9 @@ board ExtDemo {{
     let r = resolve_stages(&board("vout=5V, i_max=2A, vin=12V", ""), &stdlib, &lock).unwrap().unwrap();
     assert_eq!(r.resolutions[0].basis, "lock");
     assert!(r.resolutions[0].notes.iter().any(|n| n.contains("requirement changed since lock")), "{:?}", r.resolutions[0].notes);
-    let r = resolve_stages(&board("vout=5V, i_max=2.6A, vin=12V", ""), &stdlib, &lock).unwrap().unwrap();
+    // 6A: beyond every stdlib buck (TPS54560 tops out at 5A) — the
+    // stale lock cannot re-resolve to anything
+    let r = resolve_stages(&board("vout=5V, i_max=6A, vin=12V", ""), &stdlib, &lock).unwrap().unwrap();
     assert_eq!(r.resolutions[0].basis, "unresolved");
     assert!(r.resolutions[0].notes.iter().any(|n| n.contains("no longer meets")), "{:?}", r.resolutions[0].notes);
     // a different board's lock entry is not this board's
@@ -2070,7 +2076,8 @@ board ExtDemo {{
     assert_eq!(r.resolutions[0].basis, "survey");
 
     // 6. an unresolved requirement can never synthesize silently
-    let raw = board("vout=5V, i_max=2A, vin=12V", "");
+    // (6A: above every stdlib buck rating, stays unresolved)
+    let raw = board("vout=5V, i_max=6A, vin=12V", "");
     let pr = parse(&raw);
     let sf = SourceFile::cast(pr.syntax()).unwrap();
     let analysis = analyze(&sf);
@@ -2124,8 +2131,10 @@ async fn trace_matrix_derives_rows_with_evidence_and_links() {
     let m = build_trace_matrix(&n, &analysis, &sf, &drc.violations, Some(&safety), false);
     let row = |id: &str| m.rows.iter().find(|r| r.id == id).unwrap_or_else(|| panic!("row {id}: {:#?}", m.rows.iter().map(|r| &r.id).collect::<Vec<_>>()));
 
-    // stage requirements: unresolved / resolved-with-implementers
-    assert_eq!(row("PowertreeDemo.u_v1v0").status, TraceStatus::Unresolved);
+    // stage requirements: the 4A buck now RESOLVES (Buck_TPS54560) —
+    // its row is no longer Unresolved; the LDO stays the
+    // resolved-with-implementers example
+    assert!(row("PowertreeDemo.u_v1v0").status != TraceStatus::Unresolved);
     let ldo = row("PowertreeDemo.u_v1v8");
     assert!(ldo.implemented_by.iter().any(|i| i == "u_v1v8 : Ldo_LP2985"), "{ldo:#?}");
     assert!(ldo.implemented_by.iter().any(|i| i == "u_v1v8_u"), "{ldo:#?}");

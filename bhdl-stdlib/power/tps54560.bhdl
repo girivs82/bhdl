@@ -1,0 +1,218 @@
+// TPS54560: TI 60 V input, 5 A step-down (buck) converter with
+// Eco-mode (SLVSBN0C — MARCH 2013, REVISED MARCH 2017). Non-synchronous:
+// external catch diode, external L/C, adjustable frequency via RT/CLK.
+//
+// Two-layer library model (docs/spec/Requirements_And_Resolution.md §1):
+//   TPS54560      as part    — vendor truth (pins, package, datasheet figures)
+//   Buck_TPS54560 as design  — the reviewed application subcircuit,
+//                              `impl BuckStage` (TI SLVSBN0C §9 procedure)
+//
+// REAL-DATA PROVENANCE, stated (all SLVSBN0C):
+//   - 4.5 V to 60 V operating input, 5 A continuous: front page / §6.
+//   - 0.8 V ±1% internal voltage reference: front page + EC table.
+//   - fsw 100 kHz – 2.5 MHz set by RT/CLK resistor; Eq. 7:
+//       RT(kΩ) = 101756 / fsw(kHz)^1.008   (transcribed exactly; the
+//     `pow` primitive exists for this law).
+//   - HS switch RDS(on) 92 mΩ (§9 short-circuit example states "switch
+//     resistance of 92 mΩ" — the EC-table figure).
+//   - current limit threshold 6.3 A MINIMUM (all VIN and temperatures,
+//     open loop; 7.5 typ / 8.8 max). This is a PEAK switch limit —
+//     the average capability the power-up simulator may assume is
+//     peak_min − ΔI_L/2 (0.3 ripple at 5 A ⇒ −0.75 A): 5.5 A stated.
+//   - internal soft-start: reference ramps in 1024 switching cycles,
+//     tSS(ms) = 1024 / fsw(kHz) (§7.3.8 Eq. 6) — at the 400 kHz default
+//     that is 2.56 ms; the attribute states the 400 kHz condition.
+//   - EN stop threshold 1.2 V (§7.3.8: below 1.2 V switching stops).
+//   - IQ 146 µA operating, 2 µA shutdown: front page.
+//   - θJA 42.0 °C/W (standard board), TJ −40 °C to 150 °C: §6.4 / §6.3.
+//   - minimum controllable on-time 135 ns typ (§7.3.9) — bounds the
+//     max fsw at high step-down ratios; the envelope enforces it.
+//   - efficiency: front-page "Efficiency vs Load Current" figure,
+//     12 V → 3.3 V mid-load curve ≈ 90% (condition stated; low-VOUT
+//     non-synchronous designs run LOWER — diode conduction dominates).
+
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Ind } from "bhdl-stdlib/passives/inductor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+import { Diode } from "bhdl-stdlib/passives/diode.bhdl";
+
+// ── Vendor truth ────────────────────────────────────────────────────
+entity TPS54560 as part {
+    pin VIN:  power in;
+    pin SW:   switch out;
+    pin FB:   feedback in;
+    pin BOOT: signal inout;
+    pin EN:   signal in;
+    pin RT:   signal inout;  // RT/CLK — frequency-set resistor to GND
+    pin GND:  ground;
+
+    attribute component_class   = "regulator_ic";
+    attribute manufacturer      = "Texas Instruments";
+    attribute part_number       = "TPS54560";
+    attribute output_current    = 5A;       // SLVSBN0C: 5 A continuous
+    attribute vin_min           = 4.5V;     // SLVSBN0C: 4.5 V to 60 V operating
+    attribute vin_max           = 60V;
+    attribute tj_min            = -40degC;  // SLVSBN0C §6.3 (junction; ambient via θ_JA)
+    attribute tj_max            = 150degC;
+    attribute theta_ja          = 42.0degC/W; // SLVSBN0C §6.4, DDA (HSOIC-8), standard board
+    attribute rds_on            = 92mΩ;     // SLVSBN0C HS MOSFET
+    attribute t_sw              = 20ns;     // switching transition class
+    attribute i_quiescent       = 146uA;    // SLVSBN0C: operating quiescent current
+    attribute i_sw_avg_limit    = 5.5A;     // peak limit 6.3 A MIN − ΔI_L/2 at 0.3 ripple (derivation stated above)
+    attribute en_vih            = 1.2V;     // SLVSBN0C §7.3.8: EN below 1.2 V stops switching
+    attribute t_ss              = 2.56ms;   // SLVSBN0C Eq. 6 at the 400 kHz default (1024/fsw)
+    attribute efficiency        = 90%;      // SLVSBN0C front-page figure, 12V→3.3V mid-load (condition stated)
+    attribute feedback_voltage  = 0.8V;     // SLVSBN0C: 0.8 V ±1% reference
+    attribute fb_equation       = "VOUT = {VREF}*(1 + {R1}/{R2})";
+
+    simulation {
+        stress {
+            self.p_diss = i_out * i_out * self.rds_on * (vout / vin) + vin * i_out * 400kHz * self.t_sw + vin * self.i_quiescent;
+        }
+    }
+}
+
+symbol TPS54560 {
+    left   { VIN, EN, BOOT, RT }
+    right  { SW, FB }
+    bottom { GND }
+}
+
+layout TPS54560 {
+    package HSOIC-8;   // SLVSBN0C: DDA (HSOIC PowerPAD)
+}
+
+// ── The designer's subcircuit ───────────────────────────────────────
+entity Buck_TPS54560(
+    v_out:        voltage     = 5V,
+    v_in:         voltage     = 12V,
+    i_out_max:    current     = 4A,
+    f_sw:         frequency   = 400kHz,  // RT-set (SLVSBN0C §9 example value)
+    ripple_ratio: float       = 0.3,
+    ripple_v:     voltage     = 30mV,
+    ripple_v_in:  voltage     = 150mV,
+    r_fb_bot:     resistance  = 10kΩ,
+    diode_vf:     voltage     = 0.5V,    // SLVSBN0C §9 example uses 0.7 V worst / low-VF Schottky class
+    rds_on:       resistance  = 92mΩ,
+    t_sw:         time        = 20ns,
+    i_quiescent:  current     = 146uA
+) as design
+  // VALIDITY ENVELOPE: 5 A rating × 0.8 derating; SLVSBN0C input range;
+  // 135 ns minimum controllable on-time bounds duty·period.
+  where i_out_max <= 4A, v_in >= 4.5V, v_in <= 60V
+{
+    pin VIN:  power in;
+    pin VOUT: power out virtual;
+    pin EN:   signal in;
+    pin GND:  ground;
+
+    attribute component_class = "switching_regulator";
+    attribute output_voltage  = v_out;
+    attribute v_in            = v_in;
+    attribute i_out_max       = i_out_max;
+    attribute output_current  = 5A;       // promise = the part's rating (SLVSBN0C)
+    attribute vin_min         = 4.5V;
+    attribute vin_max         = 60V;
+    attribute tj_min          = -40degC;
+    attribute tj_max          = 150degC;
+    attribute theta_ja        = 42.0degC/W;
+    attribute f_sw            = f_sw;
+    attribute rds_on          = rds_on;
+    attribute t_sw            = t_sw;
+    attribute i_quiescent     = i_quiescent;
+    attribute i_sw_avg_limit  = 5.5A;     // SLVSBN0C peak-limit MIN − ΔI_L/2 (stated on the part)
+    attribute en_vih          = 1.2V;     // SLVSBN0C §7.3.8
+    attribute t_ss            = 2.56ms;   // SLVSBN0C Eq. 6 at 400 kHz (1024/fsw; condition stated)
+    attribute efficiency      = 90%;      // SLVSBN0C front-page figure (12V→3.3V mid-load, stated)
+    attribute feedback_voltage = 0.8V;
+    attribute fb_equation     = "VOUT = {VREF}*(1 + {R1}/{R2})";
+    // DC ACCURACY: 0.8 V ±1% reference (SLVSBN0C front page / EC table).
+    attribute v_ref           = 0.8V;
+    attribute v_ref_tol       = 1%;
+
+    design {
+        const v_ref = 0.8;
+        const vout  = self.v_out;
+        require vout < self.v_in
+            else "buck V_OUT must be below V_IN";
+        // 135 ns minimum controllable on-time (SLVSBN0C §7.3.9):
+        // t_on = D / fsw must stay above it.
+        const duty  = vout / self.v_in;
+        const t_on  = duty / self.f_sw;
+        require t_on >= 135ns
+            else "Buck_TPS54560 envelope: on-time below the 135 ns minimum controllable on-time (SLVSBN0C) — lower f_sw or reduce the step-down ratio";
+
+        const vdiff = self.v_in - vout;
+        // L_out = (V_IN−V_OUT)·D / (f_sw·ΔI_L)
+        const d_il  = self.ripple_ratio * self.i_out_max;
+        const l_num = vdiff * duty;
+        const l_den = self.f_sw * d_il;
+        l_value     = l_num / l_den;
+        const il_half   = d_il / 2.0;
+        const i_peak    = self.i_out_max + il_half;
+        l_rated_current = i_peak * 1.6;
+
+        // C_out = ΔI_L / (8·f_sw·ΔV_out)
+        const co_d0 = self.f_sw * self.ripple_v;
+        const co_d  = co_d0 * 8.0;
+        c_out_value = d_il / co_d;
+
+        // C_in = I_out·D·(1−D) / (f_sw·ΔV_in)
+        const inv_d  = 1.0 - duty;
+        const ci_n0  = self.i_out_max * duty;
+        const ci_num = ci_n0 * inv_d;
+        const ci_den = self.f_sw * self.ripple_v_in;
+        c_in_value   = ci_num / ci_den;
+
+        // FB divider: R_top = R_bot·(V_OUT − V_REF)/V_REF
+        const vov     = vout - v_ref;
+        const r_scale = self.r_fb_bot / v_ref;
+        r_top_value   = vov * r_scale;
+
+        // RT/CLK: SLVSBN0C Eq. 7, RT(kΩ) = 101756 / fsw(kHz)^1.008 —
+        // transcribed EXACTLY (the pow primitive exists for this).
+        const f_khz   = self.f_sw / 1000.0;
+        const f_pow   = pow(f_khz, 1.008);
+        const rt_kohm = 101756.0 / f_pow;
+        r_rt_value    = rt_kohm * 1000.0;
+    }
+
+    u: TPS54560();
+    VIN -> u.VIN;
+    u.GND -> GND;
+    generate if (wired(EN)) {
+        EN -> u.EN;
+    } else {
+        VIN -> u.EN;
+    }
+
+    C_in: Cap(c_in_value) for switching_input_filter(rail: VIN, return: GND, loop_area_max: 2.0mm2, switch_node_keepaway: 1.0mm);
+    VIN -> C_in.1; C_in.2 -> GND;
+
+    u.SW -> L_out: Ind(l_value, rated_current = l_rated_current).1; L_out.2 -> VOUT;
+    GND -> D_catch: Diode(diode_vf).A; D_catch.K -> u.SW;
+    VOUT -> C_out: Cap(c_out_value).1; C_out.2 -> GND;
+    VOUT -> R_top: Res(r_top_value, tolerance = 1%, supply_profile = "grade").1; R_top.2 -> u.FB;
+    u.FB -> R_bot: Res(r_fb_bot, tolerance = 1%, supply_profile = "grade").1; R_bot.2 -> GND;
+    u.BOOT -> C_boot: Cap(100nF).1; C_boot.2 -> u.SW;
+    // frequency-set resistor (Eq. 7 above)
+    u.RT -> R_rt: Res(r_rt_value, tolerance = 1%).1; R_rt.2 -> GND;
+
+    simulation {
+        stress {
+            const duty = vout / vin;
+            const d_il = (vin - vout) * duty / (self.f_sw * L_out.value);
+            L_out.i_peak   = i_out + d_il / 2;
+            C_out.v_ripple = d_il / (8 * self.f_sw * C_out.value);
+            C_in.v_ripple  = i_out * duty * (1 - duty) / (self.f_sw * C_in.value);
+            C_out.i_ripple_applied = d_il / sqrt(12);
+            C_in.i_ripple_applied  = i_out * sqrt(duty * (1 - duty));
+        }
+    }
+}
+
+impl BuckStage for Buck_TPS54560 {
+    const vout  = v_out;
+    const i_max = i_out_max;
+    const vin   = v_in;
+}
