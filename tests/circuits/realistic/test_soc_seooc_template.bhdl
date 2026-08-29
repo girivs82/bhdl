@@ -1,0 +1,50 @@
+// bhdl-sweep: skip — SEooC-template consumption fixture, not a layout
+// target. Instantiates the stdlib SoC SEooC template so the template
+// stays PARSE- and PIPELINE-CHECKED by the corpus: its domains reach
+// the PDN section, its clock contract the CLOCK section, its attested
+// split the metrics, its AoUs the gap register. FIXTURE numbers
+// throughout (the template's own placeholders).
+
+import { Soc_Seooc_Template } from "bhdl-stdlib/safety/soc_seooc_template.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+entity TplOsc() {
+    pin OUT: signal out;
+    pin GND: ground;
+    attribute component_class = "oscillator";
+    attribute f_out     = 25MHz;
+    attribute rise_time = 1ns;
+    attribute r_out     = 50Ω;
+    attribute ppm       = 30;
+    attribute source    = "FIXTURE oscillator";
+}
+
+board SeoocTemplateDemo {
+    power V09 = 0.9V @ 8A;
+    power V33 = 3.3V @ 1A;
+    ground GND;
+
+    soc: Soc_Seooc_Template();
+    @V09 -> soc.VDD_CORE;
+    @V33 -> soc.VDD_IO;
+    soc.GND -> @GND;
+    osc: TplOsc();
+    osc.GND -> @GND;
+    osc.OUT -> soc.CLK;
+    osc.OUT -> C_clk: Cap(10pF).1; C_clk.2 -> @GND;
+    @V09 -> C_core: Cap(100µF).1; C_core.2 -> @GND;
+    @V33 -> R_pg: Res(100kΩ).1; R_pg.2 -> soc.PG_OUT;
+}
+
+safety SeoocTemplateDemo as brd {
+    mission { ambient = 40degC; lifetime = 15000h; }
+    assume pdn(brd.soc.CORE);
+    assume clock_in(brd.soc.CLK_MAIN);
+    goal SG: ASIL_B "core supply holds" (id="SG-TPL-1") {
+        effect uv = brd.soc.VDD_CORE < 0.8V severity S2;
+    }
+    // the template's AoUs, dispositioned as the board's argument
+    soc.AOU_WDT waived "FIXTURE demo board — no watchdog fitted";
+    soc.AOU_PG waived "FIXTURE demo board — PG unused";
+}

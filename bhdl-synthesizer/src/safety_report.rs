@@ -244,6 +244,9 @@ pub fn render(
                 m.unmeasured_faults,
                 if m.unmeasured_faults > 0 { " (metrics cannot PASS until the whole universe is measured)" } else { "" },
             );
+            for r in &m.sff_rows {
+                let _ = writeln!(w, "  - route 1H: {}", esc(r));
+            }
             if m.lambda_attested_fit > 0.0 {
                 let _ = writeln!(
                     w,

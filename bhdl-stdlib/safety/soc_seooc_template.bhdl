@@ -1,0 +1,61 @@
+// SoC SEooC TEMPLATE — the full black-box contract vocabulary in one
+// place. An SoC's real numbers are almost always NDA'd: this file is
+// the SHAPE, every value a FIXTURE placeholder to replace with the
+// customer's own data files. Copy the entity, rename it, fill every
+// axis from the vendor's documents (and delete what the vendor does
+// not supply — an absent axis is a NAMED gap downstream, never a
+// silent pass).
+//
+// What each section feeds:
+//   domain    → the PDN machine (static window under declared draws,
+//               Z(f) mask, droop, release overshoot, sequencing,
+//               decap/bulk synthesis) — consumed by the safety case
+//               via `assume pdn(<inst>.<DOMAIN>)`.
+//   clock_in  → the CLOCK section (drift arithmetic, measured edge)
+//               — consumed via `assume clock_in(<inst>.<NAME>)`.
+//   seooc     → the vendor's ATTESTED FMEDA split — composes into
+//               SPFM/LFM/PMHF only with lambda+spfm+lfm all three.
+//   config    → the configuration the vendor data is valid for —
+//               checked against the placed instance's attributes.
+//   assumption→ the vendor's assumptions of use — each must be
+//               satisfied_by or waived in the board's safety block.
+//   terminal  → per-pin behavioral notes carried into the report.
+
+entity Soc_Seooc_Template() {
+    pin VDD_CORE: power in;
+    pin VDD_IO:   power in;
+    pin CLK:      signal in;
+    pin PG_OUT:   signal out;
+    pin GND:      ground;
+
+    attribute component_class = "asic";
+    attribute part_number     = "FIXTURE-SOC-0000";   // replace
+
+    // ── PDN contracts (vendor Z(f)/droop data — FIXTURE numbers) ──
+    domain CORE pins="VDD_CORE" v=0.9V tol=3% i_nom=2A i_max=6A
+        zmask="100kHz:10m 1MHz:5m 10MHz:5m 50MHz:20m"
+        step=4A rise=5us dur=100us droop_max=3% overshoot_max=3%
+        pdn_r=0.2m pdn_l=0.05n slot=1
+        source="FIXTURE — replace with the vendor PDN spec";
+    domain IO pins="VDD_IO" v=3.3V tol=5% i_nom=200mA i_max=500mA
+        slot=2 after="CORE" t_min=1ms
+        source="FIXTURE — replace with the vendor sequencing spec";
+
+    safety {
+        // ── clock-input contract (vendor datasheet) ──
+        clock_in CLK_MAIN pins="CLK" freq=25MHz rise_max=3ns ppm=50 c_in=5pF
+                 source="FIXTURE — replace with the vendor clock spec";
+        // ── the attested FMEDA split (vendor safety manual) ──
+        // composes into the board metrics ONLY with all three axes;
+        // partial = a named gap, never assumed coverage.
+        seooc lambda=250 spfm=0.95 lfm=0.8
+              source="FIXTURE — replace with the vendor FMEDA edition";
+        // ── the configuration that data is valid for ──
+        config core_v=0.9V source="FIXTURE — the FMEDA tool run + configuration";
+        // ── assumptions of use (each needs satisfied_by/waived) ──
+        assumption AOU_WDT "an external window watchdog supervises the lockstep cores";
+        assumption AOU_PG  "PG_OUT gates every downstream sequencing consumer";
+        // ── per-pin notes ──
+        terminal PG_OUT "open-drain, asserts when CORE and IO are in regulation";
+    }
+}

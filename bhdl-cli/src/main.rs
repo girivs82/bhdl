@@ -3416,6 +3416,12 @@ async fn run_safety(
                     let fill = |name: &str| bhdl_synthesizer::reliability::InstanceStress {
                         applied: 0.0,
                         rated: 0.0,
+                        n_resistors: netlist
+                            .instances
+                            .values()
+                            .find(|i| i.name == name)
+                            .and_then(|i| i.attributes.get("n_resistors"))
+                            .and_then(|v| v.trim_matches('"').parse::<f64>().ok()),
                         resistance_ohm: res_of.get(name).copied(),
                         capacitance_f: cap_of.get(name).copied(),
                         power_w: ann.instance_power.get(name).copied(),
@@ -4670,6 +4676,9 @@ async fn run_safety(
         }
         if m.lambda_attested_fit > 0.0 {
             println!("    λ includes {:.1} FIT composed from SEooC vendor ATTESTATIONS (λ·(1−SPFM) residual, λ·SPFM·(1−LFM) latent — cited on each part; attested parts\u{2019} board-side rows are classification-only, stated)", m.lambda_attested_fit);
+        }
+        for r in &m.sff_rows {
+            println!("    route 1H: {r}");
         }
         match m.pmhf_dual_fit {
             Some(d) => println!("    {} includes the dual-point term {:.2e} FIT (Σ λ_L·λ_exposed·T_window, second-order; window = declared proof-test interval else lifetime/2)", n_pmhf, d),

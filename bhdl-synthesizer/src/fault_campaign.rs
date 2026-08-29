@@ -2142,7 +2142,74 @@ pub fn compute_metrics(model: &mut SafetyModel) {
                 });
             }
         }
+        // IEC 61508 route 1H (Type B / HFT>0 rows): for SIL goals,
+        // SFF = 1 − λ_DU/λ_total over the measured universe (safe and
+        // dangerous-detected both count as "safe fraction"), and the
+        // architectural-constraint table caps the claimable SIL from
+        // (element type, SFF, HFT). Element type defaults to B — the
+        // honest default for complex silicon — and HFT to 0, both
+        // stated on the row.
+        let sff = if lambda_total > 0.0 { 1.0 - lambda_residual / lambda_total } else { 0.0 };
+        let mut sff_rows: Vec<String> = Vec::new();
+        for g in scope.goals.iter().filter(|g| matches!(g.level, bhdl_common::safety::Level::Sil1 | bhdl_common::safety::Level::Sil2 | bhdl_common::safety::Level::Sil3 | bhdl_common::safety::Level::Sil4)) {
+            let type_b = !g.element_type.as_deref().map(|t| t.eq_ignore_ascii_case("A")).unwrap_or(false);
+            let hft = g.hft.unwrap_or(0);
+            let max_sil = bhdl_common::safety::route_1h_max_sil(type_b, sff, hft);
+            let defaults = format!(
+                "{}{}",
+                if g.element_type.is_none() { " (type B assumed — declare element=A only for a simple, fully-characterized element)" } else { "" },
+                if g.hft.is_none() { " (HFT 0 assumed — declare hft=N for redundant architectures)" } else { "" },
+            );
+            match max_sil {
+                Some(m) if m >= g.level => sff_rows.push(format!(
+                    "SFF {:.1}% · type {} · HFT {hft} → route 1H allows {} ≥ goal {} ({}){defaults}",
+                    sff * 100.0,
+                    if type_b { "B" } else { "A" },
+                    m.as_str(),
+                    g.level.as_str(),
+                    g.path,
+                )),
+                Some(m) => {
+                    sff_rows.push(format!(
+                        "SFF {:.1}% · type {} · HFT {hft} → route 1H caps at {} < goal {} ({}) — VIOLATED{defaults}",
+                        sff * 100.0,
+                        if type_b { "B" } else { "A" },
+                        m.as_str(),
+                        g.level.as_str(),
+                        g.path,
+                    ));
+                    gaps.push(Gap {
+                        class: bhdl_common::safety::GapClass::MetricMissed,
+                        goal: g.path.clone(),
+                        subject: format!("{} route 1H", g.path),
+                        fix: format!(
+                            "SFF {:.1}% with type {} / HFT {hft} caps the claimable SIL at {} (IEC 61508-2 route 1H) — raise coverage, add fault tolerance (hft=), or argue element=A",
+                            sff * 100.0,
+                            if type_b { "B" } else { "A" },
+                            m.as_str()
+                        ),
+                    });
+                }
+                None => {
+                    sff_rows.push(format!(
+                        "SFF {:.1}% · type B · HFT {hft} → route 1H: NOT ALLOWED (SFF < 60 % at HFT 0) — VIOLATED ({}){defaults}",
+                        sff * 100.0,
+                        g.path,
+                    ));
+                    gaps.push(Gap {
+                        class: bhdl_common::safety::GapClass::MetricMissed,
+                        goal: g.path.clone(),
+                        subject: format!("{} route 1H", g.path),
+                        fix: format!(
+                            "SFF {:.1}% below 60 % with type B / HFT 0 is NOT ALLOWED at any SIL (IEC 61508-2 route 1H) — coverage or fault tolerance is mandatory",
+                            sff * 100.0
+                        ),
+                    });
+                }
+            }
+        }
         scope.metrics = Some(Metrics {
+            sff_rows,
             lambda_attested_fit: att.0,
             lambda_total_fit: lambda_total,
             lambda_residual_fit: lambda_residual,
@@ -2189,6 +2256,8 @@ mod tests {
     #[test]
     fn metrics_arithmetic_and_targets() {
         let goal = Goal {
+            hft: None,
+            element_type: None,
             name: "G".into(), path: "G".into(), library_type: None, level: Level::AsilB,
             title: String::new(), id: None, ftti: None, safe_state: None, effects: vec![], refines: None,
         };

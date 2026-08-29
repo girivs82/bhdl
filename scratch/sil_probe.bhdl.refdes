@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "mappings": {
+    "C": {
+      "c_bulk": "C1",
+      "c_mid": "C2"
+    },
+    "L": {
+      "l_feed": "L1"
+    },
+    "R": {
+      "r_load": "R1",
+      "soc": "R2"
+    }
+  }
+}

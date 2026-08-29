@@ -136,6 +136,15 @@ pub struct Goal {
     pub id: Option<String>,
     pub ftti: Option<String>,
     pub safe_state: Option<String>,
+    /// IEC 61508 hardware fault tolerance of the element implementing
+    /// this goal (route 1H architectural constraints). Default 0,
+    /// stated in the SFF row.
+    #[serde(default)]
+    pub hft: Option<u32>,
+    /// IEC 61508 element type: "A" (simple, fully-characterized) or
+    /// "B" (complex — the honest default for silicon, stated).
+    #[serde(default)]
+    pub element_type: Option<String>,
     pub effects: Vec<Effect>,
     /// `refines <parent goal path>`.
     pub refines: Option<String>,
@@ -623,6 +632,10 @@ pub struct Metrics {
     /// Universe faults that could NOT enter the measurement (no λ share
     /// or not run) — metrics are incomplete unless this is 0.
     pub unmeasured_faults: usize,
+    /// IEC 61508 route-1H rows (SIL goals only): SFF · element type ·
+    /// HFT → the claimable-SIL verdict, defaults stated.
+    #[serde(default)]
+    pub sff_rows: Vec<String>,
     /// λ composed from SEooC vendor ATTESTATIONS (lambda+spfm+lfm all
     /// declared, cited) — included in lambda_total_fit; 0 when none.
     #[serde(default)]
@@ -664,6 +677,26 @@ pub struct Metrics {
 /// 61508-1:2010 Table 3 (high demand / continuous mode), expressed in
 /// FIT (1 FIT = 1e-9/h). IEC has no LFM equivalent — the LFM floor is
 /// 0 for SIL rows.
+/// IEC 61508-2 route 1H architectural constraints: the maximum SIL a
+/// single element can claim from its Safe Failure Fraction and
+/// Hardware Fault Tolerance (Tables 2/3). Returns None for
+/// "not allowed" (Type B, SFF < 60 %, HFT 0).
+pub fn route_1h_max_sil(type_b: bool, sff: f64, hft: u32) -> Option<Level> {
+    let hft = hft.min(2);
+    let band = if sff < 0.60 { 0 } else if sff < 0.90 { 1 } else if sff < 0.99 { 2 } else { 3 };
+    // rows: band → [HFT0, HFT1, HFT2] as SIL numbers, 0 = not allowed
+    let table_a: [[u8; 3]; 4] = [[1, 2, 3], [2, 3, 4], [3, 4, 4], [3, 4, 4]];
+    let table_b: [[u8; 3]; 4] = [[0, 1, 2], [1, 2, 3], [2, 3, 4], [3, 4, 4]];
+    let n = if type_b { table_b } else { table_a }[band][hft as usize];
+    match n {
+        1 => Some(Level::Sil1),
+        2 => Some(Level::Sil2),
+        3 => Some(Level::Sil3),
+        4 => Some(Level::Sil4),
+        _ => None,
+    }
+}
+
 pub fn metric_targets(level: Level) -> Option<(f64, f64, f64)> {
     match level {
         Level::AsilB => Some((0.90, 0.60, 100.0)), // ISO 26262-5:2018 T4/T5/T6

@@ -859,6 +859,7 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
     };
 
     let mut scopes: Vec<Scope> = Vec::new();
+    let mut pending_dispositions: Vec<(String, String, String, String, AssumptionStatus)> = Vec::new();
     for (blk, prefix) in &applications {
         let mut scope = scopes
             .iter()
@@ -935,6 +936,8 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
                         id: kw.get("id").cloned(),
                         ftti: kw.get("ftti").cloned(),
                         safe_state: kw.get("safe_state").cloned(),
+                        hft: kw.get("hft").and_then(|v| v.parse().ok()),
+                        element_type: kw.get("element").cloned(),
                         effects,
                         refines: None,
                     });
@@ -1001,6 +1004,8 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
                         id: ik.get("id").cloned(),
                         ftti: ik.get("ftti").cloned(),
                         safe_state: ik.get("safe_state").cloned(),
+                        hft: ik.get("hft").and_then(|v| v.parse().ok()),
+                        element_type: ik.get("element").cloned(),
                         effects,
                         refines: None,
                     });
@@ -1378,7 +1383,9 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
                         }
                     }
                     if !found {
-                        model.errors.push(format!("safety {}: satisfied_by/waived: unknown assumption '{}'", blk.name, subj));
+                        // PART assumptions of use are seeded AFTER the
+                        // block statements run — defer, retry post-seed
+                        pending_dispositions.push((blk.name.clone(), subj.to_string(), scope.path.clone(), aid, status));
                     }
                 }
                 _ => {}
@@ -1389,6 +1396,25 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
     scopes.sort_by(|a, b| a.path.cmp(&b.path));
 
     for sc in scopes.iter_mut() { seed_part_assumptions(sc); }
+    // deferred dispositions: part AoUs exist only now — resolve by id
+    // in the declaring scope (the id is the seeded `<inst>.<AOU>`
+    // form), else the miss is the real error
+    for (blk_name, subj, scope_path, aid, status) in pending_dispositions {
+        let full = if subj.contains('.') { subj.clone() } else { aid.clone() };
+        let mut found = false;
+        for s in scopes.iter_mut() {
+            if s.path != scope_path {
+                continue;
+            }
+            if let Some(a) = s.assumptions.iter_mut().find(|a| a.id == full || a.id == aid || a.id == subj) {
+                a.status = status.clone();
+                found = true;
+            }
+        }
+        if !found {
+            model.errors.push(format!("safety {blk_name}: satisfied_by/waived: unknown assumption '{subj}'"));
+        }
+    }
 
     // Parts table: every physical instance, grouped by expansion parent.
     let waived: HashMap<String, String> = scopes
