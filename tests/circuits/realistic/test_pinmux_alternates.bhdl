@@ -88,7 +88,7 @@ entity MuxMcu() {
 entity MuxPeer() {
     pin RX:  signal in;
     pin TX:  signal out;
-    pin INT: signal inout;
+    pin INT: signal inout;   // open-drain IRQ (declared below)
     pin SDA: signal inout;
     pin SCL: signal inout;
     pin SCK: signal in;
@@ -97,6 +97,7 @@ entity MuxPeer() {
     pin GND: ground;
     attribute component_class = "ic";
     attribute part_number = "FIXTURE-MUX-PEER";
+    attribute open_drain_pins = "INT";
 }
 
 import { Res } from "bhdl-stdlib/passives/resistor.bhdl";

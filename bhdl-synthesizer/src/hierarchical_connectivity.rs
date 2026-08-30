@@ -2615,6 +2615,31 @@ pub(crate) const PULL_CAP_ATTR_PREFIX: &str = "pull__";
 /// (instance attr; designer override via the same scoped attribute).
 pub(crate) const PULL_CFG_ATTR_PREFIX: &str = "pull_cfg__";
 
+/// Open-drain declaration (vendor data): `attribute open_drain_pins =
+/// "PG,INT";` — which pads are open-collector/drain. Stamped as
+/// `od__<pin>` module attrs. InOut direction alone CANNOT identify
+/// open-drain (a DDR DQ pad is push-pull bidirectional and also
+/// `inout`), so the datasheet declares it.
+pub(crate) const OPEN_DRAIN_ATTR_PREFIX: &str = "od__";
+
+fn add_open_drain_attrs(entity: &bhdl_ast::Entity, module_id: ModuleId, netlist: &mut Netlist) {
+    use rowan::ast::AstNode;
+    let text = entity.syntax().text().to_string();
+    for line in text.lines() {
+        let t = line.trim();
+        let Some(rest) = t.strip_prefix("attribute open_drain_pins") else { continue };
+        let Some(v) = rest.split_once('=').map(|(_, v)| v) else { continue };
+        let v = v.trim().trim_end_matches(';').trim().trim_matches('"');
+        if let Some(module) = netlist.modules.get_mut(module_id) {
+            for pin in v.split(|c: char| c == ',' || c.is_whitespace()).filter(|p| !p.is_empty()) {
+                module
+                    .attributes
+                    .insert(format!("{OPEN_DRAIN_ATTR_PREFIX}{pin}"), "true".into());
+            }
+        }
+    }
+}
+
 fn add_internal_pull_attrs(entity: &bhdl_ast::Entity, module_id: ModuleId, netlist: &mut Netlist) {
     use rowan::ast::AstNode;
     let text = entity.syntax().text().to_string();
@@ -2713,6 +2738,7 @@ fn add_interface_field_pins(
 ) {
     add_io_bank_attrs(entity, module_id, netlist);
     add_internal_pull_attrs(entity, module_id, netlist);
+    add_open_drain_attrs(entity, module_id, netlist);
     use bhdl_netlist::{PinDirection, PinType, PortDirection};
     use bhdl_parser::SyntaxKind;
     use rowan::ast::AstNode;

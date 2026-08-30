@@ -254,6 +254,14 @@ by itself:
   silent. First corpus scan caught a real one: buck_converter_tps54331's
   hand-authored catch diode had silently paralleled the entity's own
   after the TPS54331 expansion grew one.
+- **ERC037** open-drain pull-up tiers — BUILT (Warning): every net
+  with a DECLARED open-drain pin (`attribute open_drain_pins = "…"` —
+  datasheet truth; inout direction alone cannot identify open-drain)
+  needs a pull-up, ONE per net however many OD pins share it. A
+  single OD pin accepts an external resistor OR a configured internal
+  pull-up; a wired-AND (two or more OD pins) accepts only an EXTERNAL
+  pull-up — one device's weak internal pull does not serve a shared
+  line, and the warning says so even when an internal PU is enabled.
 - **ERC036** ambiguous input level — BUILT (Error, signoff-side): the
   DC solve (which includes materialised internal-pull resistors) is
   the oracle; a digital input pin on an undriven net whose SOLVED

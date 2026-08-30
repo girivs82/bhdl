@@ -257,6 +257,12 @@ impl DesignRuleChecker {
                 crate::erc::check_rail_anchoring,
             ),
             (
+                "ERC037",
+                "Wired-AND without bus pull-up",
+                "Nets joining two or more DECLARED open-drain pins (attribute open_drain_pins) with no external pull-up resistor — an internal pull-up does not serve a shared line and the warning says so",
+                crate::erc::check_wired_and_pullup,
+            ),
+            (
                 "ERC035",
                 "IO bank discipline",
                 "Banked signal pins (domain io_pins=) refused when their bank rail is unpowered; used pins outside an entity's declared bank map stated as Info",

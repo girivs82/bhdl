@@ -206,6 +206,60 @@ fn pull_header_and_midpoint_contradiction() {
 }
 
 #[test]
+fn open_drain_pullup_tiers() {
+    let root = workspace_root();
+    let src = std::fs::read_to_string(
+        root.join("tests/circuits/realistic/test_pinmux_alternates.bhdl"),
+    )
+    .unwrap();
+
+    // baseline: peer.INT (declared open-drain) point-to-point with the
+    // MCU's configured internal pull-up — SILENT (a single-OD net
+    // accepts an internal PU)
+    let text = run_file("tests/circuits/realistic/test_pinmux_alternates.bhdl");
+    assert!(!text.contains("ERC037"), "clean fixture flagged:\n{}",
+        text.lines().filter(|l| l.contains("ERC037")).collect::<Vec<_>>().join("\n"));
+
+    // 1. remove the MCU's pull capability on PA4 → single OD pin with
+    //    NO pull-up anywhere → Warning "can never go high"
+    let bare = src.replace("pins=PA4,PA9,PA10,PB6,PB7", "pins=PA9,PA10,PB6,PB7");
+    assert_ne!(bare, src);
+    let text = run_src(&bare, "od_bare.bhdl");
+    assert!(
+        text.contains("ERC037") && text.contains("NO pull-up anywhere"),
+        "single-OD bare not warned:\n{}",
+        text.lines().filter(|l| l.contains("ERC037")).collect::<Vec<_>>().join("\n")
+    );
+
+    // 2. wire a SECOND open-drain device onto the line (wired-AND):
+    //    the internal PU stays configured but is NOT sufficient
+    let wired_and = src.replace(
+        "    peer.INT -> mcu.PA4;",
+        "    peer.INT -> mcu.PA4;\n    peer2: MuxPeer();\n    peer2.GND -> @GND;\n    peer2.INT -> mcu.PA4;",
+    );
+    assert_ne!(wired_and, src);
+    let text = run_src(&wired_and, "od_wired_and.bhdl");
+    assert!(
+        text.contains("wire-ANDs") && text.contains("NOT sufficient"),
+        "wired-AND with internal PU not warned:\n{}",
+        text.lines().filter(|l| l.contains("ERC037")).collect::<Vec<_>>().join("\n")
+    );
+
+    // 3. ONE external pull-up serves the whole wired-AND (dedupe) —
+    //    silent again
+    let pulled = wired_and.replace(
+        "    peer.INT -> mcu.PA4;",
+        "    peer.INT -> mcu.PA4;\n    @VDD -> rp_irq: Res(10kΩ, tolerance = 1%).1; rp_irq.2 -> mcu.PA4;",
+    );
+    let text = run_src(&pulled, "od_pulled.bhdl");
+    assert!(
+        !text.contains("ERC037"),
+        "external pull-up not honored:\n{}",
+        text.lines().filter(|l| l.contains("ERC037")).collect::<Vec<_>>().join("\n")
+    );
+}
+
+#[test]
 fn override_forces_the_alternate_and_conflicts_survey_loudly() {
     let root = workspace_root();
     let src = std::fs::read_to_string(

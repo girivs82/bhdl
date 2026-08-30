@@ -40,6 +40,7 @@ entity TPS63020() as part {
     pin EN:      signal in;   // must not be left open
     pin PS_SYNC: signal in;   // power-save (0 enabled / 1 disabled / sync clock), must not be left open
     pin PG:      signal inout;  // power good, open-drain, can be left open
+    attribute open_drain_pins = "PG";  // SLVS916I: PG is open-drain
     pin GND:     ground;      // control/logic ground
     pin PGND:    ground;      // power ground (join to GND at one point)
 
@@ -112,6 +113,7 @@ entity BuckBoost_TPS63020(
     pin VOUT: power out virtual;
     pin EN:   signal in;
     pin PG:   signal inout;     // power good (open-drain, Fig. 7 pull-up inside) — the sequencing chain output
+    attribute open_drain_pins = "PG";  // SLVS916I: PG is open-drain (the block's own R_pg is the pull-up)
     pin GND:  ground;
 
     // Promises (SLVS916I) + exported operating point.

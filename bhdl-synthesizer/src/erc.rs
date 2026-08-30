@@ -352,6 +352,144 @@ pub fn check_io_banks(netlist: &Netlist, _analysis: &AnalysisResult) -> Vec<DRCV
     out
 }
 
+// ─────────────── ERC037: wired-AND without a bus pull-up ───────────────
+
+/// EVERY net with a declared open-drain pin (`attribute
+/// open_drain_pins = "…"` — datasheet truth; `inout` direction alone
+/// cannot identify open-drain) needs a pull-up; one pull-up serves
+/// the whole net however many open-drain pins share it (dedupe).
+/// Two tiers:
+///   - a SINGLE open-drain pin: an external resistor OR a configured
+///     internal pull-up satisfies it; neither = Warning (the line can
+///     never go high);
+///   - TWO OR MORE (a wired-AND bus): only an EXTERNAL pull-up
+///     counts — an internal pull-up is ONE device's weak pull, rise
+///     time scales with the whole line's capacitance and every member
+///     must see valid VIH, so the warning fires even when an internal
+///     PU is enabled (and says so).
+pub fn check_wired_and_pullup(
+    netlist: &Netlist,
+    _analysis: &AnalysisResult,
+) -> Vec<DRCViolation> {
+    use bhdl_netlist::types::NetClass;
+    let mut out = Vec::new();
+    let is_od = |inst_name: &str, pin_name: &str| -> bool {
+        netlist
+            .instances
+            .iter()
+            .find(|(_, i)| i.name == inst_name)
+            .and_then(|(_, i)| netlist.modules.get(i.definition))
+            .map(|m| m.attributes.contains_key(&format!("od__{pin_name}")))
+            .unwrap_or(false)
+    };
+    let internal_pu = |inst_name: &str, pin_name: &str| -> bool {
+        netlist
+            .instances
+            .iter()
+            .find(|(_, i)| i.name == inst_name)
+            .map(|(_, i)| {
+                i.attributes
+                    .get(&format!("pull_cfg__{pin_name}"))
+                    .map(|v| v == "up")
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false)
+    };
+    let members = net_members(netlist);
+    for (net_id, pins) in &members {
+        if !is_signal_net(netlist, *net_id) {
+            continue;
+        }
+        let od: Vec<&NetPin> = pins
+            .iter()
+            .filter(|p| is_od(&p.inst, &p.pin))
+            .collect();
+        if od.is_empty() {
+            continue;
+        }
+        // external pull-up: a resistor-class member whose other pin
+        // sits on a Power net (a configured internal pull is a
+        // `virtual_component` and deliberately does NOT count)
+        let has_ext_pu = pins.iter().any(|p| {
+            let Some((iid, inst)) = netlist.instances.iter().find(|(_, i)| i.name == p.inst)
+            else {
+                return false;
+            };
+            let is_res = inst
+                .attributes
+                .get("component_class")
+                .map(|c| c.contains("resistor"))
+                .unwrap_or(false)
+                && inst
+                    .attributes
+                    .get("virtual_component")
+                    .map(|v| v != "true")
+                    .unwrap_or(true);
+            if !is_res {
+                return false;
+            }
+            netlist.pin_instances.values().any(|pj| {
+                pj.instance == iid
+                    && pj.net != Some(*net_id)
+                    && pj
+                        .net
+                        .and_then(|n| netlist.nets.get(n))
+                        .map(|n| matches!(n.net_class, NetClass::Power { .. }))
+                        .unwrap_or(false)
+            })
+        });
+        if has_ext_pu {
+            continue;
+        }
+        let who: Vec<String> = od.iter().map(|p| format!("{}.{}", p.inst, p.pin)).collect();
+        let int_pu = od.iter().any(|p| internal_pu(&p.inst, &p.pin))
+            || pins.iter().any(|p| internal_pu(&p.inst, &p.pin));
+        if od.len() == 1 {
+            // point-to-point: any pull-up serves — a configured
+            // internal PU (on any member pin) is enough
+            if int_pu {
+                continue;
+            }
+            out.push(DRCViolation {
+                rule_id: "ERC037".into(),
+                rule_name: "Open-drain without pull-up".into(),
+                category: RuleCategory::Electrical,
+                description: format!(
+                    "net '{}': open-drain pin {} has NO pull-up anywhere (external or configured internal) — the line can never go high",
+                    net_name(netlist, *net_id),
+                    who[0]
+                ),
+                severity: ViolationSeverity::Warning,
+                location: ViolationLocation::Net(*net_id),
+                fix_suggestion: "add a pull-up resistor to the rail, or configure the receiver's internal pull-up".into(),
+                standard_reference: None,
+            });
+            continue;
+        }
+        out.push(DRCViolation {
+            rule_id: "ERC037".into(),
+            rule_name: "Wired-AND without bus pull-up".into(),
+            category: RuleCategory::Electrical,
+            description: format!(
+                "net '{}' wire-ANDs {} open-drain pins ({}) with NO external pull-up{} — ONE bus pull-up serves the whole net (dedupe), but it must be a real resistor: one device's weak internal pull does not serve the line (rise time scales with total capacitance; every member must see valid VIH)",
+                net_name(netlist, *net_id),
+                od.len(),
+                who.join(", "),
+                if int_pu {
+                    "; a configured INTERNAL pull-up exists and is NOT sufficient"
+                } else {
+                    ""
+                }
+            ),
+            severity: ViolationSeverity::Warning,
+            location: ViolationLocation::Net(*net_id),
+            fix_suggestion: "add ONE pull-up resistor from the net to the bus rail (size for the line capacitance and the slowest member's VIH/timing)".into(),
+            standard_reference: None,
+        });
+    }
+    out
+}
+
 // ──────────────────── ERC034: swizzle discipline ────────────────────
 //
 // Interface constraints DECLARE the legal permutation freedoms
