@@ -31,6 +31,20 @@ pub struct ProjectManifest {
     pub project: ProjectInfo,
     #[serde(default)]
     pub libraries: HashMap<String, Dependency>,
+    /// Declared providers — DECLARED, NOT AMBIENT: the same principle
+    /// as `[libraries]`. Role → command string (whitespace-split into
+    /// program + args). Recognized roles: `supply` (supply-chain part
+    /// provider, else `$BHDL_SUPPLY_PROVIDER`), `fit` (reliability
+    /// FIT provider, else `$BHDL_FIT_PROVIDER`). A declared provider
+    /// OVERRIDES the ambient env var — the manifest is authoritative.
+    ///
+    /// ```toml
+    /// [providers]
+    /// supply = "python3 /opt/acme/acme_supply.py --db /opt/acme/parts.sqlite"
+    /// fit    = "/opt/acme/acme-fit-provider"
+    /// ```
+    #[serde(default)]
+    pub providers: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -192,6 +206,19 @@ pub struct Lockfile {
     /// requirement, and re-resolved (loudly) when it no longer does.
     #[serde(default, rename = "stage")]
     pub stages: Vec<LockedStage>,
+    /// Declared-provider pins (role → command). Guards "same build,
+    /// different provider": a changed provider command is DRIFT, loud
+    /// unless --update-lock. The command string is the identity v0
+    /// pins (providers report no version in protocol 1).
+    #[serde(default, rename = "provider")]
+    pub providers: Vec<LockedProvider>,
+}
+
+/// One pinned provider declaration.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LockedProvider {
+    pub role: String,
+    pub command: String,
 }
 
 /// One requirement-interface binding (`u1: BuckStage(...)` → block).
@@ -327,6 +354,32 @@ impl Lockfile {
                 }
             }
         }
+        for cur in &current.providers {
+            match self.providers.iter().find(|p| p.role == cur.role) {
+                None => drifts.push(LockDrift::ProviderChanged {
+                    role: cur.role.clone(),
+                    locked: "<none>".into(),
+                    current: cur.command.clone(),
+                }),
+                Some(l) if l.command != cur.command => {
+                    drifts.push(LockDrift::ProviderChanged {
+                        role: cur.role.clone(),
+                        locked: l.command.clone(),
+                        current: cur.command.clone(),
+                    });
+                }
+                _ => {}
+            }
+        }
+        for locked in &self.providers {
+            if !current.providers.iter().any(|p| p.role == locked.role) {
+                drifts.push(LockDrift::ProviderChanged {
+                    role: locked.role.clone(),
+                    locked: locked.command.clone(),
+                    current: "<none>".into(),
+                });
+            }
+        }
         for locked in &self.libraries {
             if current.get(&locked.name).is_none() {
                 drifts.push(LockDrift::Removed { name: locked.name.clone() });
@@ -339,6 +392,8 @@ impl Lockfile {
 /// A way a freshly-resolved build differs from the stored lockfile.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LockDrift {
+    /// A declared provider's command changed (or appeared/vanished).
+    ProviderChanged { role: String, locked: String, current: String },
     /// Same version, different content — the dangerous silent case
     /// (e.g. 10 kΩ → 15 kΩ shipped without a version bump).
     Content { name: String, version: String },
@@ -350,6 +405,10 @@ pub enum LockDrift {
 impl std::fmt::Display for LockDrift {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            LockDrift::ProviderChanged { role, locked, current } => write!(
+                f,
+                "provider `{role}` changed: locked `{locked}` → current `{current}`"
+            ),
             LockDrift::Content { name, version } => write!(
                 f,
                 "library `{name}` ({version}) CONTENT changed since the lock — same \
@@ -691,7 +750,27 @@ impl LibraryResolver {
     /// board imports), so it's a pure function of (manifest + search
     /// path) and reproducible. `bhdl-stdlib` is implicit and not locked
     /// (it's the bundled lib, versioned with the toolchain itself).
+    /// The manifest's declared providers (empty when no manifest or
+    /// none declared).
+    pub fn declared_providers(&self) -> HashMap<String, String> {
+        self.manifest
+            .as_ref()
+            .map(|m| m.providers.clone())
+            .unwrap_or_default()
+    }
+
     pub fn compute_lockfile(&self) -> anyhow::Result<Lockfile> {
+        let mut providers = Vec::new();
+        if let Some(manifest) = &self.manifest {
+            let mut roles: Vec<&String> = manifest.providers.keys().collect();
+            roles.sort();
+            for role in roles {
+                providers.push(LockedProvider {
+                    role: role.clone(),
+                    command: manifest.providers[role].clone(),
+                });
+            }
+        }
         let mut libraries = Vec::new();
         if let Some(manifest) = &self.manifest {
             let mut names: Vec<&String> = manifest.libraries.keys().collect();
@@ -719,7 +798,7 @@ impl LibraryResolver {
                 });
             }
         }
-        Ok(Lockfile { version: Lockfile::CURRENT_VERSION, libraries, parts: Vec::new(), stages: Vec::new() })
+        Ok(Lockfile { version: Lockfile::CURRENT_VERSION, libraries, parts: Vec::new(), stages: Vec::new(), providers })
     }
 }
 
@@ -982,6 +1061,7 @@ mod tests {
                 rev: None,
             }],
             stages: Vec::new(),
+            providers: Vec::new(),
             parts: vec![LockedPart {
                 refdes: "buck_R_top".into(),
                 mpn: "RT0603BRC0731K6L".into(),

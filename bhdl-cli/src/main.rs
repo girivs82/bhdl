@@ -1153,6 +1153,35 @@ fn build_library_resolver(
         anyhow::bail!("--locked requires a bhdl.toml + bhdl.lock, but no manifest was found");
     }
 
+    // Declared providers — the manifest is authoritative over ambient
+    // env ("declared, not ambient", same principle as [libraries]).
+    // The provider machinery reads the env vars, so declaration is
+    // delivered by setting them for this process; an overridden
+    // ambient value is reported.
+    for (role, cmd) in resolver.declared_providers() {
+        let var = match role.as_str() {
+            "supply" => "BHDL_SUPPLY_PROVIDER",
+            "fit" => "BHDL_FIT_PROVIDER",
+            other => {
+                eprintln!(
+                    "warning: bhdl.toml [providers] role `{other}` is not recognized (known: supply, fit) — ignored"
+                );
+                continue;
+            }
+        };
+        if let Ok(ambient) = std::env::var(var) {
+            if ambient != cmd {
+                eprintln!(
+                    "note: bhdl.toml [providers] {role} overrides ambient ${var} (declared is authoritative)"
+                );
+            }
+        }
+        std::env::set_var(var, &cmd);
+        if cli.verbose {
+            eprintln!("provider ({role}): {cmd}");
+        }
+    }
+
     Ok(Some(resolver))
 }
 
@@ -1333,6 +1362,7 @@ fn resolve_stage_requirements(
                             libraries: Vec::new(),
                             parts: Vec::new(),
                             stages: Vec::new(),
+                            providers: Vec::new(),
                         }
                     };
                     lock.stages = new_lock;
@@ -7189,6 +7219,7 @@ async fn cmd_bom(
                         libraries: Vec::new(),
                         parts: Vec::new(),
                         stages: Vec::new(),
+                        providers: Vec::new(),
                     });
                     lock.set_parts(
                         resolved

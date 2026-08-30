@@ -127,3 +127,63 @@ fn version_mismatch_is_refused() {
         text.lines().rev().take(6).collect::<Vec<_>>().join("\n")
     );
 }
+
+#[test]
+fn declared_providers_export_pin_and_drift() {
+    // `[providers]` in bhdl.toml — DECLARED, NOT AMBIENT: the
+    // declared supply-chain provider is exported to the machinery,
+    // pinned in bhdl.lock, authoritative over ambient env, and a
+    // changed command is DRIFT (loud, --update-lock to accept).
+    let dir = std::env::temp_dir().join("bhdl_oot_providers");
+    let _ = std::fs::remove_dir_all(&dir);
+    scaffold(&dir, "1.0", "./acme_sub.bhdl");
+    let manifest = dir.join("proj/bhdl.toml");
+    let base = std::fs::read_to_string(&manifest).unwrap();
+    std::fs::write(
+        &manifest,
+        format!("{base}\n[providers]\nsupply = \"python3 /opt/acme/supply.py --db /opt/acme/parts.sqlite\"\n"),
+    )
+    .unwrap();
+
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf();
+    let run_flags = |flags: &[&str], env: Option<(&str, &str)>| -> (String, bool) {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_bhdl-cli"));
+        c.current_dir(&root).env_remove("BHDL_LIB_PATH").env_remove("BHDL_SUPPLY_PROVIDER");
+        if let Some((k, v)) = env {
+            c.env(k, v);
+        }
+        for f in flags {
+            c.arg(f);
+        }
+        c.arg(dir.join("proj/board.bhdl")).arg("synthesize");
+        let out = c.output().expect("spawn");
+        (
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+            out.status.success(),
+        )
+    };
+
+    // declared → exported (verbose print) + locked
+    let (text, ok) = run_flags(&["--verbose", "--update-lock"], None);
+    assert!(ok, "provider board failed:\n{}", text.lines().rev().take(6).collect::<Vec<_>>().join("\n"));
+    assert!(text.contains("provider (supply): python3 /opt/acme/supply.py"), "declared provider not exported:\n{}",
+        text.lines().filter(|l| l.contains("provider")).collect::<Vec<_>>().join("\n"));
+    let lock = std::fs::read_to_string(dir.join("proj/bhdl.lock")).unwrap();
+    assert!(lock.contains("[[provider]]") && lock.contains("role = \"supply\""), "provider not pinned:\n{lock}");
+
+    // declared beats ambient, with a note
+    let (text, _) = run_flags(&[], Some(("BHDL_SUPPLY_PROVIDER", "something-else")));
+    assert!(text.contains("overrides ambient $BHDL_SUPPLY_PROVIDER"), "ambient override not reported");
+
+    // changed command = DRIFT, refused loudly
+    let drifted = std::fs::read_to_string(&manifest).unwrap().replace("parts.sqlite", "OTHER.sqlite");
+    std::fs::write(&manifest, drifted).unwrap();
+    let (text, ok) = run_flags(&[], None);
+    assert!(!ok, "provider drift not refused");
+    assert!(text.contains("provider `supply` changed"), "drift does not name the provider:\n{}",
+        text.lines().rev().take(6).collect::<Vec<_>>().join("\n"));
+}

@@ -103,6 +103,35 @@ Its presence marks a directory as a library root. `name` is the
 namespace imports use (`import … from "acme-stdlib/…"`); `version` is
 what the project manifest's dependency check compares against.
 
+### 3.3 Providers — `[providers]` (shipped)
+
+The same "declared, not ambient" principle extends to the executable
+providers a build depends on. A customer's supply-chain DB or
+proprietary FIT standard plugs in as an executable (JSON
+stdin/stdout protocol); declaring it in the manifest makes the build
+carry its own provider identity instead of riding shell state:
+
+```toml
+[providers]
+supply = "python3 /opt/acme/acme_supply.py --db /opt/acme/parts.sqlite"
+fit    = "/opt/acme/acme-fit-provider"
+```
+
+Roles: `supply` (supply-chain part provider; ambient fallback
+`$BHDL_SUPPLY_PROVIDER`), `fit` (reliability FIT provider; ambient
+fallback `$BHDL_FIT_PROVIDER`). A declared provider is AUTHORITATIVE
+over the ambient env var (a note reports the override); unknown
+roles warn and are ignored. Declared providers are PINNED in
+`bhdl.lock` (`[[provider]]` role + command) — a changed command is
+lock DRIFT, refused loudly unless `--update-lock`.
+
+Notes for library authors: a library file's own relative imports
+(`./sibling.bhdl`) resolve against THAT file's directory, so
+multi-file libraries work from wherever they are checked out; a
+failed import is a hard synthesis error naming the full chain; and
+absolute-path imports are literal files that bypass namespace
+resolution (generated boards carry them).
+
 ## 4. Resolution algorithm
 
 For an import `from "<ns>/<rel>.bhdl"`:
