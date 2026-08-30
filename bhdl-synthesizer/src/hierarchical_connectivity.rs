@@ -47,6 +47,9 @@ pub struct HierarchicalContext {
     pub pinmux_used: HashMap<String, HashSet<String>>,
     /// Pinmux overrides: (instance, field) → forced alternate.
     pub pinmux_overrides: HashMap<(String, String), String>,
+    /// Board-scope pull requirements (Phase 1.7 harvest):
+    /// (instance, pin, "up"|"down", ohms, explicit rail name).
+    pub board_pull_reqs: Vec<(String, String, String, Option<f64>, Option<String>)>,
     /// Stack of module contexts (for nested modules)
     module_stack: Vec<ModuleContext>,
     /// Map from module name to ModuleId
@@ -85,6 +88,7 @@ impl HierarchicalContext {
             pull_decided: HashSet::new(),
             pinmux_used: HashMap::new(),
             pinmux_overrides: HashMap::new(),
+            board_pull_reqs: Vec::new(),
             module_stack: Vec::new(),
             module_name_to_id: HashMap::new(),
             instance_path_to_id: HashMap::new(),
@@ -296,6 +300,16 @@ pub fn extract_hierarchical_connectivity(
     // the actual resistor network, and the ambiguous-level signoff
     // check catches a board-pull-vs-internal-pull divider parking a
     // digital input at midpoint (the worst place for a digital pin).
+    // Phase 2.75: PULL-REQUIREMENT SATISFACTION. `require pullup(…)`
+    // declared in an interface body, an entity body, or the board is
+    // resolved to its NET here; an existing external resistor of the
+    // right polarity satisfies it (value mismatch = stated note),
+    // otherwise exactly ONE real BOM resistor per (net, polarity) is
+    // materialised — never a parallel network. Runs BEFORE internal-
+    // pull configuration so the materialised part reads as an
+    // external pull there (internal → off) and counts for ERC037.
+    satisfy_pull_requirements(netlist, &context)?;
+
     configure_internal_pulls(netlist, &context)?;
 
     // Third pass: detect interface-field pin conflicts (v0.6).
@@ -324,6 +338,26 @@ fn harvest_pinmux_inputs(ast: &bhdl_ast::SourceFile, context: &mut HierarchicalC
             match node.kind() {
                 SyntaxKind::CONNECTION_STMT => {
                     harvest_field_references(&node.text().to_string(), &mut context.pinmux_used);
+                }
+                SyntaxKind::INTERFACE_REQUIREMENT => {
+                    // board scope: `require pullup(mcu.PA4, 10k [, RAIL]);`
+                    if let Some((kind, target, ohms, rail)) =
+                        parse_pull_requirement_text(&node.text().to_string())
+                    {
+                        if let Some((inst, pin)) = target.split_once('.') {
+                            context.board_pull_reqs.push((
+                                inst.to_string(),
+                                pin.to_string(),
+                                kind,
+                                ohms,
+                                rail,
+                            ));
+                        } else {
+                            println!(
+                                "  pull-req: board-scope requirement '{target}' is not <instance>.<pin> — IGNORED (stated)"
+                            );
+                        }
+                    }
                 }
                 SyntaxKind::SCOPED_ATTRIBUTE => {
                     let text = node.text().to_string();
@@ -545,6 +579,439 @@ fn solve_pinmux_for_instance(
         );
     }
     Ok(chosen)
+}
+
+/// Parse one `require pullup(TARGET, 4.7k [, RAIL]);` /
+/// `require pulldown(…)` statement's text. Returns
+/// (kind "up"|"down", target, ohms, explicit rail). Requirement
+/// names other than pullup/pulldown (termination, …) return None —
+/// existing vocabulary, other consumers.
+fn parse_pull_requirement_text(text: &str) -> Option<(String, String, Option<f64>, Option<String>)> {
+    let t = text.trim().strip_prefix("require")?.trim();
+    let (name, rest) = t.split_once('(')?;
+    let kind = match name.trim() {
+        "pullup" => "up",
+        "pulldown" => "down",
+        _ => return None,
+    };
+    let args_str = rest.rsplit_once(')')?.0;
+    let mut args = args_str.split(',').map(|a| a.trim());
+    let target = args.next()?.to_string();
+    if target.is_empty() {
+        return None;
+    }
+    let mut ohms: Option<f64> = None;
+    let mut rail: Option<String> = None;
+    for a in args {
+        if a.is_empty() {
+            continue;
+        }
+        let cleaned = a.trim_end_matches('Ω').trim_end_matches("ohm").trim_end_matches("Ohm");
+        match crate::stage_acceptance::parse_si(cleaned) {
+            Some(v) if v > 0.0 => ohms = Some(v),
+            _ => rail = Some(a.to_string()),
+        }
+    }
+    Some((kind.to_string(), target, ohms, rail))
+}
+
+/// Entity-scope pull requirements: `require pullup(INT, 10k);` in the
+/// entity body (datasheet truth — "this open-drain output needs an
+/// external pull-up"). Stamped as `pull_req__<pin>` module attrs.
+fn add_pull_req_attrs(entity: &bhdl_ast::Entity, module_id: ModuleId, netlist: &mut Netlist) {
+    use rowan::ast::AstNode;
+    for node in entity
+        .syntax()
+        .descendants()
+        .filter(|n| n.kind() == SyntaxKind::INTERFACE_REQUIREMENT)
+    {
+        let Some((kind, target, ohms, _rail)) =
+            parse_pull_requirement_text(&node.text().to_string())
+        else {
+            continue;
+        };
+        if let Some(module) = netlist.modules.get_mut(module_id) {
+            module.attributes.insert(
+                format!("{PULL_REQ_ATTR_PREFIX}{target}"),
+                format!("{kind}|{}", ohms.map(|v| v.to_string()).unwrap_or_default()),
+            );
+        }
+    }
+}
+
+/// Resolve a requirement's pin key to the PHYSICAL pin carrying it:
+/// direct pin name, fixed interface binding, or the chosen mux
+/// alternate — then to that pin's net.
+fn resolve_req_net(
+    netlist: &Netlist,
+    inst_id: bhdl_netlist::types::InstanceId,
+    key: &str,
+) -> Option<(String, bhdl_netlist::types::NetId)> {
+    let inst = netlist.instances.get(inst_id)?;
+    let module = netlist.modules.get(inst.definition)?;
+    let mut candidates: Vec<String> = vec![key.to_string()];
+    if let Some(p) = module
+        .attributes
+        .get(&format!("{INTERFACE_FIELD_BINDING_ATTR_PREFIX}{key}"))
+    {
+        candidates.push(p.clone());
+    }
+    if let Some((field, sig)) = key.split_once('.') {
+        if let Some(alt) = inst
+            .attributes
+            .get(&format!("{PINMUX_CHOICE_ATTR_PREFIX}{field}"))
+        {
+            if let Some(p) = module.attributes.get(&format!(
+                "{INTERFACE_FIELD_ALT_ATTR_PREFIX}{field}__{alt}__{sig}"
+            )) {
+                candidates.push(p.clone());
+            }
+        }
+    }
+    for cand in candidates {
+        let net = netlist.pin_instances.values().find_map(|pi| {
+            (pi.instance == inst_id
+                && netlist
+                    .pins
+                    .get(pi.pin_def)
+                    .map(|p| p.name == cand)
+                    .unwrap_or(false))
+            .then_some(pi.net)
+            .flatten()
+        });
+        if let Some(n) = net {
+            return Some((cand, n));
+        }
+    }
+    None
+}
+
+/// Pull-requirement satisfaction (see the Phase 2.75 comment).
+fn satisfy_pull_requirements(netlist: &mut Netlist, context: &HierarchicalContext) -> Result<()> {
+    use bhdl_netlist::types::{InstanceId, NetClass, NetId, PinDirection, PinType};
+    // Collect: (inst_id, inst name, pin key, kind, ohms, explicit rail)
+    let mut reqs: Vec<(InstanceId, String, String, String, Option<f64>, Option<String>)> =
+        Vec::new();
+    for (inst_id, inst) in &netlist.instances {
+        let Some(module) = netlist.modules.get(inst.definition) else { continue };
+        for (k, v) in &module.attributes {
+            let Some(pin) = k.strip_prefix(PULL_REQ_ATTR_PREFIX) else { continue };
+            let (kind, ohm_s) = v.split_once('|').unwrap_or((v.as_str(), ""));
+            reqs.push((
+                inst_id,
+                inst.name.clone(),
+                pin.to_string(),
+                kind.to_string(),
+                ohm_s.parse().ok(),
+                None,
+            ));
+        }
+    }
+    for (inst_name, pin, kind, ohms, rail) in &context.board_pull_reqs {
+        let Some((inst_id, _)) = netlist.instances.iter().find(|(_, i)| &i.name == inst_name)
+        else {
+            anyhow::bail!(
+                "require pull{}: no instance named '{inst_name}' on the board",
+                if kind == "up" { "up" } else { "down" }
+            );
+        };
+        reqs.push((inst_id, inst_name.clone(), pin.clone(), kind.clone(), *ohms, rail.clone()));
+    }
+    if reqs.is_empty() {
+        return Ok(());
+    }
+    // Resolve each requirement to a NET; group by (net, polarity).
+    type Member = (InstanceId, String, String, Option<f64>, Option<String>);
+    let mut groups: HashMap<(NetId, String), Vec<Member>> = HashMap::new();
+    for (inst_id, inst_name, pin, kind, ohms, rail) in reqs {
+        let Some((phys, net)) = resolve_req_net(netlist, inst_id, &pin) else {
+            println!(
+                "  pull-req: {inst_name}.{pin} requires a pull-{kind} but the pin is UNWIRED — requirement moot (stated)"
+            );
+            continue;
+        };
+        groups
+            .entry((net, kind))
+            .or_default()
+            .push((inst_id, inst_name, phys, ohms, rail));
+    }
+    // Deterministic order: by net name then polarity.
+    let mut keys: Vec<(NetId, String)> = groups.keys().cloned().collect();
+    keys.sort_by_key(|(n, k)| {
+        (
+            netlist.nets.get(*n).and_then(|x| x.name.clone()).unwrap_or_default(),
+            k.clone(),
+        )
+    });
+    for key in keys {
+        let (net_id, kind) = key.clone();
+        let members = groups.get(&key).cloned().unwrap_or_default();
+        let net_name = netlist
+            .nets
+            .get(net_id)
+            .and_then(|n| n.name.clone())
+            .unwrap_or_else(|| "?".into());
+        let who = members
+            .iter()
+            .map(|(_, i, p, o, _)| match o {
+                Some(v) => format!("{i}.{p} ({v:.0}Ω)"),
+                None => format!("{i}.{p}"),
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let req_insts: std::collections::HashSet<InstanceId> =
+            members.iter().map(|(id, ..)| *id).collect();
+        // The STRONGEST requirement (min R) is the one part's value —
+        // per the user's correction, multiple pull-ups are a PARALLEL
+        // NETWORK, never a merge: so we never emit more than one.
+        let want: Option<f64> = members
+            .iter()
+            .filter_map(|(.., o, _)| *o)
+            .fold(None, |acc, v| Some(acc.map_or(v, |x: f64| x.min(v))));
+        // An existing REAL external resistor of the right polarity
+        // satisfies the requirement (internal-pull models are
+        // virtual_component and deliberately do not).
+        let mut existing: Option<(String, Option<f64>)> = None;
+        for pi in netlist.pin_instances.values() {
+            if pi.net != Some(net_id) || req_insts.contains(&pi.instance) {
+                continue;
+            }
+            let Some(other) = netlist.instances.get(pi.instance) else { continue };
+            if other
+                .attributes
+                .get("virtual_component")
+                .map(|v| v == "true")
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let is_res = other
+                .attributes
+                .get("component_class")
+                .map(|c| c.contains("resistor"))
+                .unwrap_or(false)
+                || netlist
+                    .modules
+                    .get(other.definition)
+                    .map(|m| m.name == "Res" || m.name == "Resistor")
+                    .unwrap_or(false);
+            if !is_res {
+                continue;
+            }
+            let polarity_ok = netlist.pin_instances.values().any(|pj| {
+                pj.instance == pi.instance
+                    && pj.net != Some(net_id)
+                    && pj
+                        .net
+                        .and_then(|n| netlist.nets.get(n))
+                        .map(|n| {
+                            if kind == "up" {
+                                matches!(n.net_class, NetClass::Power { .. })
+                            } else {
+                                matches!(n.net_class, NetClass::Ground)
+                            }
+                        })
+                        .unwrap_or(false)
+            });
+            if polarity_ok {
+                let rv = other
+                    .attributes
+                    .get("resistance")
+                    .or_else(|| other.attributes.get("value"))
+                    .and_then(|v| crate::stage_acceptance::parse_si(v));
+                existing = Some((other.name.clone(), rv));
+                break;
+            }
+        }
+        if let Some((rname, rv)) = existing {
+            let mism = match (want, rv) {
+                (Some(w), Some(h)) if (w - h).abs() > 0.5 => {
+                    format!(" — NOTE value differs: required {w:.0}Ω, present {h:.0}Ω")
+                }
+                _ => String::new(),
+            };
+            println!(
+                "  pull-req: net {net_name} pull-{kind} SATISFIED by existing {rname}{mism} (required by {who})"
+            );
+            continue;
+        }
+        // Materialise. Resistance is mandatory — no guessing.
+        let Some(r) = want else {
+            anyhow::bail!(
+                "require pull{kind_w}: net {net_name} (required by {who}) — no resistance stated anywhere; state it: `require pull{kind_w}(<pin>, 4.7k);`",
+                kind_w = if kind == "up" { "up" } else { "down" }
+            );
+        };
+        let distinct_vals: std::collections::HashSet<String> = members
+            .iter()
+            .filter_map(|(.., o, _)| o.map(|v| format!("{v:.0}")))
+            .collect();
+        let strongest_note = if distinct_vals.len() > 1 {
+            " — multiple requirements: STRONGEST (min R) wins as ONE part; a parallel network is never emitted"
+        } else {
+            ""
+        };
+        // Target rail: explicit rail name (must agree), else the
+        // requiring pin's IO-bank rail, else a hard error — no
+        // guessing which supply a pull-up belongs to. Pull-downs go
+        // to a Ground net.
+        let target: NetId = if kind == "up" {
+            let explicit: std::collections::HashSet<String> =
+                members.iter().filter_map(|(.., r)| r.clone()).collect();
+            if explicit.len() > 1 {
+                anyhow::bail!(
+                    "require pullup: net {net_name} — CONTRADICTORY rails named: {:?} (required by {who})",
+                    explicit
+                );
+            }
+            if let Some(rn) = explicit.iter().next() {
+                netlist
+                    .nets
+                    .iter()
+                    .find(|(_, n)| {
+                        n.name.as_deref() == Some(rn.as_str())
+                            && matches!(n.net_class, NetClass::Power { .. })
+                    })
+                    .map(|(id, _)| id)
+                    .ok_or_else(|| {
+                        let rails: Vec<String> = netlist
+                            .nets
+                            .values()
+                            .filter(|n| matches!(n.net_class, NetClass::Power { .. }))
+                            .filter_map(|n| n.name.clone())
+                            .collect();
+                        anyhow::anyhow!(
+                            "require pullup: rail '{rn}' is not a power net on this board (power nets: {rails:?})"
+                        )
+                    })?
+            } else {
+                // The requiring pin's own IO bank first; else ANY
+                // banked pin on the net (a peer's open-drain output
+                // pulled to the RECEIVER's bank rail — the receiver
+                // is the one whose VIH matters).
+                let bank = members
+                    .iter()
+                    .find_map(|(id, _, pin, ..)| {
+                        netlist
+                            .instances
+                            .get(*id)
+                            .and_then(|i| netlist.modules.get(i.definition))
+                            .and_then(|m| {
+                                m.attributes.get(&format!("{IO_BANK_ATTR_PREFIX}{pin}"))
+                            })
+                            .and_then(|e| e.split_once('|').map(|(_, rp)| (*id, rp.to_string())))
+                    })
+                    .or_else(|| {
+                        netlist.pin_instances.values().find_map(|pi| {
+                            if pi.net != Some(net_id) {
+                                return None;
+                            }
+                            let pin_name =
+                                netlist.pins.get(pi.pin_def).map(|p| p.name.clone())?;
+                            netlist
+                                .instances
+                                .get(pi.instance)
+                                .and_then(|i| netlist.modules.get(i.definition))
+                                .and_then(|m| {
+                                    m.attributes
+                                        .get(&format!("{IO_BANK_ATTR_PREFIX}{pin_name}"))
+                                })
+                                .and_then(|e| {
+                                    e.split_once('|').map(|(_, rp)| (pi.instance, rp.to_string()))
+                                })
+                        })
+                    });
+                let Some((iid, rail_pin)) = bank else {
+                    anyhow::bail!(
+                        "require pullup: net {net_name} — no rail known: no pin on the net sits in an IO bank and no rail was named; add `domain … io_pins=` or name it: `require pullup(<pin>, {r}, RAIL);`"
+                    );
+                };
+                netlist
+                    .pin_instances
+                    .values()
+                    .find_map(|pi| {
+                        (pi.instance == iid
+                            && netlist
+                                .pins
+                                .get(pi.pin_def)
+                                .map(|p| p.name == rail_pin)
+                                .unwrap_or(false))
+                        .then_some(pi.net)
+                        .flatten()
+                    })
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "require pullup: net {net_name} — the IO-bank rail pin '{rail_pin}' is unwired"
+                        )
+                    })?
+            }
+        } else {
+            netlist
+                .nets
+                .iter()
+                .find(|(_, n)| matches!(n.net_class, NetClass::Ground))
+                .map(|(id, _)| id)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "require pulldown: net {net_name} — no ground net on this board"
+                    )
+                })?
+        };
+        let target_name = netlist
+            .nets
+            .get(target)
+            .and_then(|n| n.name.clone())
+            .unwrap_or_default();
+        // ONE real BOM resistor per (net, polarity).
+        let mod_id = netlist
+            .modules
+            .iter()
+            .find(|(_, m)| m.name == "Res")
+            .map(|(id, _)| id)
+            .unwrap_or_else(|| {
+                let id = netlist
+                    .add_module("Res".into(), bhdl_netlist::ModuleKind::PhysicalComponent);
+                netlist.add_pin(id, "1".into(), PinDirection::Passive, PinType::Passive);
+                netlist.add_pin(id, "2".into(), PinDirection::Passive, PinType::Passive);
+                id
+            });
+        for pn in ["1", "2"] {
+            let has = netlist.pins.values().any(|p| p.module == mod_id && p.name == pn);
+            if !has {
+                netlist.add_pin(mod_id, pn.into(), PinDirection::Passive, PinType::Passive);
+            }
+        }
+        let sanitized: String = net_name
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
+            .collect();
+        let rname = format!("pullreq_{kind}_{sanitized}");
+        let Some(r_id) = netlist.add_instance(rname.clone(), mod_id) else { continue };
+        if let Some(ri) = netlist.instances.get_mut(r_id) {
+            ri.attributes.insert("component_class".into(), "resistor".into());
+            ri.attributes.insert("spice_model".into(), "resistor".into());
+            ri.attributes.insert("value".into(), format!("{r}"));
+            ri.attributes.insert("resistance".into(), format!("{r}"));
+            // A REAL BOM part (unlike internal-pull models): it lands
+            // on the board, counts for ERC037, and reads as an
+            // external pull for internal-pull configuration.
+            ri.attributes.insert(
+                "pull_requirement".into(),
+                format!("net {net_name} pull-{kind} — required by {who}"),
+            );
+        }
+        let pis = netlist
+            .create_pin_instances(r_id)
+            .map_err(|e| anyhow::anyhow!("pull-req pins: {e}"))?;
+        crate::virtual_pin_expander::connect_pin_instance_by_name(netlist, r_id, &pis, "1", net_id)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        crate::virtual_pin_expander::connect_pin_instance_by_name(netlist, r_id, &pis, "2", target)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        println!(
+            "  pull-req: net {net_name} → {r:.0}Ω pull-{kind} '{rname}' to {target_name} (required by {who}){strongest_note}"
+        );
+    }
+    Ok(())
 }
 
 /// Internal pull auto-configuration (see the Phase 2.8 comment).
@@ -2611,6 +3078,13 @@ pub(crate) const IO_BANK_ATTR_PREFIX: &str = "io_bank__";
 /// `pull__<pin>` = "<pu_ohms>|<pd_ohms>" module attrs; the
 /// auto-configuration pass and the firmware artifact read them.
 pub(crate) const PULL_CAP_ATTR_PREFIX: &str = "pull__";
+/// Pull REQUIREMENT declared where the knowledge lives (interface
+/// body / entity body / board): `require pullup(PIN, 4.7k);` →
+/// `pull_req__<pin>` = "up|<ohms>" module attrs. The satisfier
+/// resolves each requirement to a NET and emits exactly ONE real BOM
+/// resistor per (net, polarity) — NEVER a parallel network: multiple
+/// requirements dedupe to the strongest (min R) with a stated note.
+pub(crate) const PULL_REQ_ATTR_PREFIX: &str = "pull_req__";
 /// The CONFIGURED state per pin — `pull_cfg__<pin>` = up|down|off
 /// (instance attr; designer override via the same scoped attribute).
 pub(crate) const PULL_CFG_ATTR_PREFIX: &str = "pull_cfg__";
@@ -2739,6 +3213,7 @@ fn add_interface_field_pins(
     add_io_bank_attrs(entity, module_id, netlist);
     add_internal_pull_attrs(entity, module_id, netlist);
     add_open_drain_attrs(entity, module_id, netlist);
+    add_pull_req_attrs(entity, module_id, netlist);
     use bhdl_netlist::{PinDirection, PinType, PortDirection};
     use bhdl_parser::SyntaxKind;
     use rowan::ast::AstNode;
@@ -2906,6 +3381,27 @@ fn add_interface_field_pins(
         };
         let xwires_for_field: HashMap<String, String> =
             synth_harvest_xwires(&iface_node, our_perspective.as_deref());
+
+        // Pull requirements declared IN THE INTERFACE BODY apply to
+        // every field of the type: `require pullup(SDA, 4.7k);` →
+        // `pull_req__<field>.SDA` on this module. The satisfier
+        // resolves the field pin through its binding / chosen mux
+        // alternate to a net and emits ONE part per net.
+        for req_node in iface_node
+            .descendants()
+            .filter(|n| n.kind() == SyntaxKind::INTERFACE_REQUIREMENT)
+        {
+            if let Some((kind, sig, ohms, _rail)) =
+                parse_pull_requirement_text(&req_node.text().to_string())
+            {
+                if let Some(module) = netlist.modules.get_mut(module_id) {
+                    module.attributes.insert(
+                        format!("{PULL_REQ_ATTR_PREFIX}{field_name}.{sig}"),
+                        format!("{kind}|{}", ohms.map(|v| v.to_string()).unwrap_or_default()),
+                    );
+                }
+            }
+        }
 
         for sig_node in signal_nodes {
             // Pull signal name + direction.

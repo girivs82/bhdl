@@ -407,6 +407,33 @@ longer participates in interface field declarations.
   already-decided pins), and firmware receives the pull program in
   the `--mux-header` defines (`…_PULL UP|DOWN|OFF`).
 
+- **Pull requirements (SoC arc, shipped).** "I need a pull-up here",
+  declared WHERE THE KNOWLEDGE LIVES — a full resistor entity with
+  port mapping is overkill for one pin:
+  - interface body — the protocol knows:
+    `require pullup(SDA, 4.7k);` (every board using the interface
+    inherits it; resolved through the field's binding or chosen mux
+    alternate);
+  - entity body — the datasheet knows:
+    `require pullup(INT, 10k);` (an open-drain IRQ output);
+  - board body — the designer knows:
+    `require pullup(peer.INT, 4.7k [, RAIL]);` (also
+    `require pulldown(…)`).
+  The satisfier resolves each requirement to its NET and emits
+  exactly **one real BOM resistor per (net, polarity)** — NEVER a
+  parallel network: two pull-ups on one net are parallel resistance,
+  not redundancy, so multiple requirements dedupe to the STRONGEST
+  (min R) with a stated note, and an existing designer resistor of
+  the right polarity satisfies the requirement outright (value
+  mismatch = stated note). The rail is the named one, else the bank
+  rail of any banked pin on the net (`domain … io_pins=`); no rail
+  known, no stated resistance, or contradictory named rails = hard
+  errors — the tool never guesses which supply a pull-up belongs to.
+  The materialised part (`pullreq_<polarity>_<net>`, provenance in a
+  `pull_requirement` attribute) is EXTERNAL: it satisfies ERC037,
+  turns the internal pull off, and an explicit requirement is never
+  satisfied by a weak internal pull alone.
+
 ---
 
 ## 10. v0.8 worked example: DDR4

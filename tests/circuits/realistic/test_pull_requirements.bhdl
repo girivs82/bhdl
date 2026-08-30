@@ -1,0 +1,99 @@
+// Pull requirements (SoC arc) — `require pullup(...)` declared where
+// the KNOWLEDGE lives, at all three scopes:
+//   interface body:  require pullup(SDA, 4.7k);      — the protocol knows
+//   entity body:     require pullup(INT, 10k);       — the datasheet knows
+//   board body:      require pullup(peer.INT, 4.7k, VDD);  — the designer knows
+// The satisfier resolves each requirement to its NET; an existing
+// external resistor of the right polarity satisfies it (value
+// mismatch = stated note); otherwise exactly ONE real BOM resistor
+// per (net, polarity) is materialised — NEVER a parallel network:
+// multiple requirements dedupe to the STRONGEST (min R) with a
+// stated note. Rail = named explicitly, else any banked pin on the
+// net; no rail known = hard error (no guessing).
+
+interface RqUART {
+    perspective dev  { signal TX: out; signal RX: in; }
+    perspective host { signal TX: out; signal RX: in; }
+    wires { dev.TX <-> host.RX; dev.RX <-> host.TX; }
+}
+
+interface RqI2C {
+    // The protocol itself demands the pull-ups — every board using
+    // this interface inherits the requirement.
+    require pullup(SDA, 4.7k);
+    require pullup(SCL, 4.7k);
+    signal SDA: inout;
+    signal SCL: inout;
+}
+
+entity RqMcu() {
+    pin VDDIO_A: power in;
+    pin VDDIO_B: power in;
+    pin PA4:  signal inout;
+    pin PA9:  signal inout;
+    pin PA10: signal inout;
+    pin PB6:  signal inout;
+    pin PB7:  signal inout;
+    pin GND:  ground;
+    attribute component_class = "mcu";
+    attribute part_number = "FIXTURE-RQ-MCU";
+    attribute internal_pull = "pins=PA4,PA9,PA10,PB6,PB7 pu=40kΩ pd=40kΩ source=FIXTURE";
+
+    domain BANK_A pins="VDDIO_A" v=3.3V i_nom=10mA i_max=50mA
+        io_pins="PA4 PA9 PA10"
+        source="FIXTURE — port A bank";
+    domain BANK_B pins="VDDIO_B" v=3.3V i_nom=10mA i_max=50mA
+        io_pins="PB6 PB7"
+        source="FIXTURE — port B bank";
+
+    interface RqUART:dev uart1 {
+        TX = PA9;
+        RX = PA10;
+    }
+    interface RqI2C i2c1 {
+        SDA = PB7;
+        SCL = PB6;
+    }
+}
+
+entity RqPeer() {
+    pin RX:  signal in;
+    pin TX:  signal out;
+    pin INT: signal inout;   // open-drain IRQ
+    pin SDA: signal inout;
+    pin SCL: signal inout;
+    pin GND: ground;
+    attribute component_class = "ic";
+    attribute part_number = "FIXTURE-RQ-PEER";
+    attribute open_drain_pins = "INT";
+    // Datasheet truth: the OD IRQ output needs an external pull-up.
+    require pullup(INT, 10k);
+}
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+board PullReqBoard {
+    power VDD = 3.3V @ 1A;
+    ground GND;
+
+    mcu:  RqMcu();
+    peer: RqPeer();
+    mcu.GND -> @GND;
+    peer.GND -> @GND;
+    @VDD -> mcu.VDDIO_A;
+    @VDD -> mcu.VDDIO_B;
+
+    mcu.uart1.TX -> peer.RX;
+    peer.TX -> mcu.uart1.RX;
+    mcu.i2c1.SDA -> peer.SDA;
+    mcu.i2c1.SCL -> peer.SCL;
+    // SDA already has a designer pull-up: the interface requirement
+    // is SATISFIED by it (one part, no duplicate). SCL has none: the
+    // requirement MATERIALISES one 4.7k to the bank rail.
+    @VDD -> rp_sda: Res(4.7kΩ, tolerance = 1%).1; rp_sda.2 -> peer.SDA;
+    // The IRQ line: entity requires 10k, the designer tightens to
+    // 4.7k at board scope — STRONGEST wins, ONE part (a parallel
+    // network is never emitted).
+    peer.INT -> mcu.PA4;
+    require pullup(peer.INT, 4.7k, VDD);
+}

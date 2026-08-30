@@ -298,3 +298,67 @@ fn override_forces_the_alternate_and_conflicts_survey_loudly() {
         text.lines().filter(|l| l.contains("alt") || l.contains("BLOCKED")).collect::<Vec<_>>().join("\n")
     );
 }
+
+#[test]
+fn pull_requirements_three_scopes() {
+    // `require pullup(...)` at interface / entity / board scope. The
+    // satisfier emits exactly ONE real BOM resistor per (net,
+    // polarity) — never a parallel network (user doctrine): multiple
+    // requirements dedupe to the STRONGEST (min R) with a stated
+    // note; an existing designer resistor satisfies.
+    let root = workspace_root();
+    let src = std::fs::read_to_string(
+        root.join("tests/circuits/realistic/test_pull_requirements.bhdl"),
+    )
+    .unwrap();
+
+    let text = run_file("tests/circuits/realistic/test_pull_requirements.bhdl");
+    // interface scope, no designer part on SCL → materialised to the
+    // bank rail
+    assert!(
+        text.contains("4700Ω pull-up 'pullreq_up_auto_mcu_i2c1_scl' to VDD"),
+        "SCL requirement not materialised:\n{}",
+        text.lines().filter(|l| l.contains("pull-req")).collect::<Vec<_>>().join("\n")
+    );
+    // interface scope, designer part present on SDA → satisfied, no
+    // duplicate
+    assert!(
+        text.contains("pull-up SATISFIED by existing rp_sda"),
+        "rp_sda did not satisfy the SDA requirement"
+    );
+    // entity 10k + board 4.7k on the IRQ net → ONE part, strongest
+    assert!(
+        text.contains("STRONGEST (min R) wins as ONE part; a parallel network is never emitted"),
+        "strongest-wins note missing"
+    );
+    assert!(
+        text.contains("pullreq_up_auto_peer_int' to VDD (required by peer.INT (10000Ω), peer.INT (4700Ω))"),
+        "IRQ pull not deduped to one part"
+    );
+    // the materialised pull is EXTERNAL: internal pull stays off and
+    // ERC037 (open-drain needs a pull-up) is silent
+    assert!(!text.contains("pull: mcu.PA4 → up"), "internal pull configured despite the requirement pull");
+    assert!(!text.contains("ERC037"), "ERC037 fired despite the requirement pull:\n{}",
+        text.lines().filter(|l| l.contains("ERC037")).collect::<Vec<_>>().join("\n"));
+
+    // resistance is mandatory — no guessing
+    let noval = src
+        .replace("    require pullup(peer.INT, 4.7k, VDD);\n", "    require pullup(peer.INT);\n")
+        .replace("    require pullup(INT, 10k);\n", "");
+    assert_ne!(noval, src);
+    let text = run_src(&noval, "pullreq_noval.bhdl");
+    assert!(
+        text.contains("no resistance stated anywhere"),
+        "missing-value requirement not refused:\n{}",
+        text.lines().rev().take(8).collect::<Vec<_>>().join("\n")
+    );
+
+    // a named rail must BE a power net
+    let badrail = src.replace("require pullup(peer.INT, 4.7k, VDD);", "require pullup(peer.INT, 4.7k, VNOPE);");
+    assert_ne!(badrail, src);
+    let text = run_src(&badrail, "pullreq_badrail.bhdl");
+    assert!(
+        text.contains("rail 'VNOPE' is not a power net"),
+        "unknown rail not refused"
+    );
+}

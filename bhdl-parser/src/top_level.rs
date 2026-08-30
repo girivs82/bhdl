@@ -158,6 +158,11 @@ impl<'t> Parser<'t> {
             self.skip_trivia();
             match self.peek() {
                 Some(SyntaxKind::R_BRACE) => break,
+                // Pull requirements at BOARD scope (ad-hoc, the
+                // designer's own knowledge): `require pullup(mcu.PA4,
+                // 10k [, @RAIL]);` — same node shape as the interface
+                // form; the satisfier resolves scope by parent.
+                Some(SyntaxKind::REQUIRE_KW) => self.parse_interface_requirement(),
                 Some(SyntaxKind::CONST_KW) => self.parse_const_decl(),
                 Some(SyntaxKind::POWER_KW) => self.parse_power_decl(),
                 Some(SyntaxKind::GROUND_KW) => self.parse_ground_decl(),
@@ -308,6 +313,10 @@ impl<'t> Parser<'t> {
                     }
                 }
                 Some(SyntaxKind::ATTRIBUTE_KW) => self.parse_attribute_decl(),
+                // Pull requirements at ENTITY scope (datasheet truth:
+                // "this open-drain output needs an external 10k"):
+                // `require pullup(INT, 10k);`
+                Some(SyntaxKind::REQUIRE_KW) => self.parse_interface_requirement(),
                 Some(SyntaxKind::GENERATE_KW) => self.parse_generate_block(),
                 Some(SyntaxKind::WITH_KW) => self.parse_with_block(),
                 Some(SyntaxKind::SATISFIES_KW) => self.parse_satisfies_block(),
