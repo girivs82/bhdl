@@ -2789,7 +2789,11 @@ fn solved_signoff_text(
         log::warn!("{line}");
         println!("| {} |", line.trim_start_matches("DRC "));
     }
-    bhdl_synthesizer::signoff::format_signoff_report(&rows)
+    let mut text = bhdl_synthesizer::signoff::format_signoff_report(&rows);
+    if let Some(fw) = bhdl_synthesizer::signoff::format_firmware_contract(netlist) {
+        text = Some(format!("{}{}", text.unwrap_or_default(), fw));
+    }
+    text
 }
 
 /// Print powertree drift findings — the anti-silent-rot gate: loads
@@ -7353,6 +7357,13 @@ async fn cmd_bom(
                             bhdl_synthesizer::signoff::format_signoff_report(&rows)
                         {
                             print!("{report}");
+                        }
+                        // the FUNCTIONAL pin program signs off with the
+                        // electrical rows — firmware's contract
+                        if let Some(fw) =
+                            bhdl_synthesizer::signoff::format_firmware_contract(&netlist)
+                        {
+                            print!("{fw}");
                         }
                         // ERC036: the DC solve (incl. materialised
                         // internal pulls) is the contradiction oracle

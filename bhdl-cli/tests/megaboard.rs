@@ -149,12 +149,24 @@ fn megaboard_safety_catches_the_planted_clock_violation() {
     assert!(text.contains("270.0 FIT composed from SEooC vendor ATTESTATIONS"), "attestation");
     // route 1H rows on the SIL goal
     assert!(text.contains("route 1H"), "route-1H row missing");
-    // the solved PIN PROGRAM is a firmware obligation — every mux
-    // choice and enabled internal pull lands in the AoU register,
-    // satisfied by the exported `doc --mux-header` contract
-    assert!(text.contains("mux:fpga.dbg"), "mux choice missing from the AoU register:\n{}",
-        text.lines().filter(|l| l.contains("mux:")).collect::<Vec<_>>().join("\n"));
-    assert!(text.contains("pull:fpga.PGOOD_IN") && text.contains("internal pull-down on fpga.PGOOD_IN"),
-        "pull program missing from the AoU register");
-    assert!(text.contains("exported pin-program contract"), "AoU not tied to the mux-header artifact");
+    // the pin program is a FUNCTIONAL contract, not a safety AoU —
+    // it must NOT appear in the safety model (safety references a
+    // pin only where a goal names it)
+    assert!(!text.contains("mux:fpga.dbg"), "pin program leaked into the safety model");
+}
+
+#[test]
+fn megaboard_report_carries_the_firmware_contract() {
+    // the solved pin program signs off as a FUNCTIONAL contract in
+    // the report, alongside the electrical rows: mux choices with
+    // the resolved signal→pin map, and every enabled internal pull
+    let text = run("report");
+    assert!(text.contains("Firmware contract (functional pin program)"),
+        "firmware contract section missing");
+    assert!(text.contains("| fpga | mux dbg | alt \"IOB\" |") && text.contains("RX=DBG_D") && text.contains("TX=DBG_C"),
+        "mux program row missing/unresolved:\n{}",
+        text.lines().filter(|l| l.contains("mux dbg")).collect::<Vec<_>>().join("\n"));
+    assert!(text.contains("| fpga | pull PGOOD_IN | down |"), "pull program row missing:\n{}",
+        text.lines().filter(|l| l.contains("pull ")).collect::<Vec<_>>().join("\n"));
+    assert!(text.contains("bhdl doc --mux-header"), "machine artifact not referenced");
 }

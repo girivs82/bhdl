@@ -675,18 +675,16 @@ and the same source regenerates it byte-for-byte. Sections:
 8. The DFA table with per-finding disposition status.
 9. Assumptions of use with their status.
 
-**Synthesized firmware AoUs (pin program).** Every solved pinmux
-choice (`mux__<field>`) and every enabled internal pull
-(`pull_cfg__<pin>` ≠ off) is a SOFTWARE obligation: the board is
-only wired-as-analyzed if firmware programs the mux/pull registers
-exactly as solved. The safety model appends a `firmware` scope with
-one assumption per decision (`mux:<inst>.<field>`,
-`pull:<inst>.<pin>`), satisfied by the exported pin-program
-contract (`bhdl doc --mux-header` — the BHDL_MUX_* / …_PULL
-defines); upholding that contract is the firmware integration's
-obligation, and the assumption text says so. Emitted only for
-boards that carry safety content (a board with no safety blocks
-keeps an empty model).
+**The pin program is a FUNCTIONAL contract, not a safety AoU.** A
+wrong mux or pull program (an I²C pad left GPIO, a UART on the
+other home) breaks the board's FUNCTION — so the solved pin
+program signs off in the REPORT ("Firmware contract (functional
+pin program)" section: every mux choice with its resolved
+signal→pin map, every enabled internal pull), with
+`bhdl doc --mux-header` as the machine artifact. The safety model
+does not carry it wholesale; where a specific pin is
+safety-relevant, the designer's safety block names it (as the
+megaboard's AOU_PG names PGOOD_IN).
 10. The gap register — the assessor's to-do, one row per open gap.
 
 The FMEDA CSV package (`--fmeda`) remains the worksheet; this report

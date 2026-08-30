@@ -375,7 +375,10 @@ longer participates in interface field declarations.
   commitments for firmware — one define per solved field naming the
   chosen alternate, one per signal naming the physical pin, with
   fixed bindings riding along so the header is each chip's whole pin
-  story. "Record it in the bring-up code", made mechanical. Storage:
+  story. "Record it in the bring-up code", made mechanical.
+  The same program renders in the REPORT as the "Firmware contract
+  (functional pin program)" section — a wrong mux program is a
+  broken FUNCTION, so it signs off alongside the electrical rows. Storage:
   `io_bank__<pin>` = "<bank>|<rail pin>" module attributes, stamped
   from the DOMAIN_DECLs at module creation.
 

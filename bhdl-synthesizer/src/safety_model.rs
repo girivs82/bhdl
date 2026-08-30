@@ -1598,69 +1598,6 @@ pub fn build_safety_model(netlist: &Netlist, sources: &[&SourceFile]) -> SafetyM
             }
         }
     }
-    // ── Synthesized FIRMWARE assumptions of use ──────────────────────
-    // Every solved pinmux choice and every enabled internal pull is a
-    // SOFTWARE obligation: the board is only wired-as-analyzed if
-    // firmware programs the mux/pull registers exactly as solved.
-    // Surface them in the AoU register. Status: SatisfiedBy the
-    // exported pin-program contract (`bhdl doc --mux-header` emits
-    // the BHDL_MUX_* defines) — the discharge artifact this tool can
-    // provide; whether firmware honors the contract is the next
-    // integration level's obligation, and the text says so.
-    {
-        let mut fw = Scope {
-            path: String::new(),
-            entity: view.board_name.clone(),
-            ns: "firmware".into(),
-            goals: Vec::new(),
-            mechanisms: Vec::new(),
-            faults: Vec::new(),
-            waivers: Vec::new(),
-            assumptions: Vec::new(),
-            metrics: None,
-        };
-        let mut insts: Vec<_> = netlist.instances.values().collect();
-        insts.sort_by(|a, b| a.name.cmp(&b.name));
-        for inst in insts {
-            let mut keys: Vec<(&String, &String)> = inst.attributes.iter().collect();
-            keys.sort();
-            for (k, v) in keys {
-                if let Some(field) = k.strip_prefix("mux__") {
-                    let id = format!("mux:{}.{}", inst.name, field);
-                    fw.assumptions.push(Assumption {
-                        path: id.clone(),
-                        id,
-                        text: format!(
-                            "firmware programs {}.{} to alternate \"{}\" — the as-solved pin plan; any other mux program disconnects the nets as built and analyzed",
-                            inst.name, field, v
-                        ),
-                        status: AssumptionStatus::SatisfiedBy(
-                            "exported pin-program contract — `bhdl doc --mux-header` (BHDL_MUX_* defines); upholding it is the firmware integration's obligation".into(),
-                        ),
-                    });
-                } else if let Some(pin) = k.strip_prefix("pull_cfg__") {
-                    if v == "off" {
-                        continue; // reset state — nothing to program
-                    }
-                    let id = format!("pull:{}.{}", inst.name, pin);
-                    fw.assumptions.push(Assumption {
-                        path: id.clone(),
-                        id,
-                        text: format!(
-                            "firmware enables the internal pull-{} on {}.{} — pads reset floating; the DC solve models this pull as configured",
-                            v, inst.name, pin
-                        ),
-                        status: AssumptionStatus::SatisfiedBy(
-                            "exported pin-program contract — `bhdl doc --mux-header` (…_PULL defines); upholding it is the firmware integration's obligation".into(),
-                        ),
-                    });
-                }
-            }
-        }
-        if !fw.assumptions.is_empty() && !scopes.is_empty() {
-            scopes.push(fw);
-        }
-    }
     model.scopes = scopes;
     // Append: the parts loop may already have pushed CONFIG_MISMATCH gaps.
     model.gaps.extend(gaps);

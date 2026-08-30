@@ -2421,3 +2421,71 @@ pub fn format_signoff_report(rows: &[SignoffRow]) -> Option<String> {
     }
     Some(out)
 }
+
+/// The FUNCTIONAL firmware contract: the solved pin program. A wrong
+/// mux program (an I²C pad left GPIO, a UART on the other home) is a
+/// broken FUNCTION — the board is wired-as-analyzed only under this
+/// program, so it sign-offs alongside the electrical rows, not inside
+/// the safety model (safety references a pin only where a goal names
+/// it). Machine artifact: `bhdl doc --mux-header`.
+pub fn format_firmware_contract(netlist: &Netlist) -> Option<String> {
+    use crate::hierarchical_connectivity::{
+        INTERFACE_FIELD_ALT_ATTR_PREFIX, PINMUX_CHOICE_ATTR_PREFIX, PULL_CFG_ATTR_PREFIX,
+    };
+    let mut rows: Vec<(String, String, String, String)> = Vec::new();
+    let mut insts: Vec<_> = netlist.instances.values().collect();
+    insts.sort_by(|a, b| a.name.cmp(&b.name));
+    for inst in insts {
+        let module = netlist.modules.get(inst.definition);
+        let mut keys: Vec<(&String, &String)> = inst.attributes.iter().collect();
+        keys.sort();
+        for (k, v) in keys {
+            if let Some(field) = k.strip_prefix(PINMUX_CHOICE_ATTR_PREFIX) {
+                // resolve the chosen alternate's signal → pin map
+                let mut pins: Vec<String> = Vec::new();
+                if let Some(m) = module {
+                    let prefix = format!("{INTERFACE_FIELD_ALT_ATTR_PREFIX}{field}__{v}__");
+                    let mut alts: Vec<(&String, &String)> = m
+                        .attributes
+                        .iter()
+                        .filter(|(ak, _)| ak.starts_with(&prefix))
+                        .collect();
+                    alts.sort();
+                    for (ak, phys) in alts {
+                        let sig = &ak[prefix.len()..];
+                        pins.push(format!("{sig}={phys}"));
+                    }
+                }
+                rows.push((
+                    inst.name.clone(),
+                    format!("mux {field}"),
+                    format!("alt \"{v}\""),
+                    pins.join(" "),
+                ));
+            } else if let Some(pin) = k.strip_prefix(PULL_CFG_ATTR_PREFIX) {
+                if v == "off" {
+                    continue; // reset state — nothing to program
+                }
+                rows.push((
+                    inst.name.clone(),
+                    format!("pull {pin}"),
+                    v.clone(),
+                    "internal pull enabled by firmware (pads reset floating; modelled in the DC solve)".into(),
+                ));
+            }
+        }
+    }
+    if rows.is_empty() {
+        return None;
+    }
+    let mut out = String::new();
+    out.push_str("\n## Firmware contract (functional pin program)\n\n");
+    out.push_str("The board is wired-as-analyzed ONLY under this program — a wrong mux\n");
+    out.push_str("or pull program is a broken FUNCTION. Machine artifact: `bhdl doc --mux-header`.\n\n");
+    out.push_str("| Instance | Item | Program | Detail |\n");
+    out.push_str("|---|---|---|---|\n");
+    for (inst, item, prog, detail) in rows {
+        out.push_str(&format!("| {inst} | {item} | {prog} | {detail} |\n"));
+    }
+    Some(out)
+}
