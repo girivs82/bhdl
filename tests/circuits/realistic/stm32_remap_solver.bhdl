@@ -1,0 +1,63 @@
+// STM32F103 REAL remap tables through the mux solver — the stdlib
+// entity now carries the F1's AFIO remap register states as `alt`
+// groups (RM0008 Rev 9 Tables 43–47), and this board forces the
+// cascade a firmware engineer performs by hand from those tables:
+//   - straps occupy USART1's reset home PA9/PA10
+//       → uart1 must take USART1_REMAP=1 (PB6/PB7, Table 45)
+//   - which is I²C1's reset home
+//       → i2c1 must take I2C1_REMAP=1 (PB8/PB9, Table 46)
+// The chosen states land as mux__ attributes (= the AFIO_MAPR
+// program for firmware), the internal-pull pass resolves logical
+// directions THROUGH the chosen remap, and the I²C pull-ups ride
+// the remap home.
+
+import { STM32F103Cx } from "bhdl-stdlib/actives/stm32f103cx.bhdl";
+import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+entity RemapPeer() {
+    pin RX:  signal in;
+    pin TX:  signal out;
+    pin SDA: signal inout;
+    pin SCL: signal inout;
+    pin S0:  signal in;    // strap inputs occupying PA9/PA10
+    pin S1:  signal in;
+    pin GND: ground;
+    attribute component_class = "ic";
+    attribute part_number = "FIXTURE-REMAP-PEER";
+}
+
+board Stm32RemapBoard {
+    power VDD = 3.3V @ 100mA;
+    ground GND;
+
+    mcu:  STM32F103Cx();
+    peer: RemapPeer();
+
+    @VDD -> mcu.VDD_1;
+    @VDD -> mcu.VDD_2;
+    @VDD -> mcu.VDD_3;
+    @VDD -> mcu.VDDA;
+    mcu.VSS_1 -> @GND;
+    mcu.VSS_2 -> @GND;
+    mcu.VSS_3 -> @GND;
+    mcu.VSSA  -> @GND;
+    mcu.VBAT  -> @VDD;
+    peer.GND  -> @GND;
+
+    // straps hold the USART1 reset home (directly-wired pins CLAIM)
+    mcu.PA9  -> peer.S0;
+    mcu.PA10 -> peer.S1;
+
+    // UART wired → solver must fit it → USART1_REMAP=1 (PB6/PB7)
+    mcu.uart1.TX -> peer.RX;
+    peer.TX -> mcu.uart1.RX;
+
+    // I²C wired → its reset home just went to the UART →
+    // I2C1_REMAP=1 (PB8/PB9)
+    mcu.i2c1.SDA -> peer.SDA;
+    mcu.i2c1.SCL -> peer.SCL;
+    // bus pull-ups (they sit on the NET, so they follow the remap)
+    @VDD -> rp_sda: Res(4.7kΩ).1; rp_sda.2 -> peer.SDA;
+    @VDD -> rp_scl: Res(4.7kΩ).1; rp_scl.2 -> peer.SCL;
+}

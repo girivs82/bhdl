@@ -22,6 +22,8 @@
 import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
 
+import { SPI, I2C, UART } from "bhdl-stdlib/interfaces/serial.bhdl";
+
 entity STM32F103Vx(
     part_no: string      = "STM32F103VBT6",
     flash_kb: int        = 128,
@@ -143,38 +145,96 @@ entity STM32F103Vx(
     pin VSS_5: signal inout;          //                        (pin 10)
     pin VSSA:  signal inout;          // analog VSS             (pin 19)
 
-    // ─── Peripheral interfaces (same default muxes) ─────────
+    // ─── Peripheral interfaces — REAL AFIO remap tables ─────
+    // The F1 muxes by PER-PERIPHERAL remap register bits
+    // (AFIO_MAPR), not per-pin AFn numbers: each `alt` group below
+    // is one register state, transcribed from RM0008 Rev 9
+    // §8.3.7–8.3.11 (Tables 43–47). Declaration order = solver
+    // preference = the reset (no-remap) state; homes whose pins
+    // exist only on larger packages are omitted per the tables'
+    // package footnotes.
+    // SPI1 (RM0008 Table 47, SPI1_REMAP; NSS = the CS signal)
     interface SPI spi1 {
-        MOSI = PA7;
-        MISO = PA6;
-        SCK  = PA5;
-        CS   = PA4;
+        alt "NOREMAP" {
+            CS   = PA4;
+            SCK  = PA5;
+            MISO = PA6;
+            MOSI = PA7;
+        }
+        alt "REMAP" {
+            CS   = PA15;
+            SCK  = PB3;
+            MISO = PB4;
+            MOSI = PB5;
+        }
     }
+
+    // SPI2: no remap exists (RM0008 §8.3)
     interface SPI spi2 {
         MOSI = PB15;
         MISO = PB14;
         SCK  = PB13;
         CS   = PB12;
     }
+
+    // I²C1 (RM0008 Table 46, I2C1_REMAP; the remap is absent
+    // only on the 36-pin package — present here)
     interface I2C i2c1 {
-        SDA = PB7;
-        SCL = PB6;
+        alt "NOREMAP" {
+            SCL = PB6;
+            SDA = PB7;
+        }
+        alt "REMAP" {
+            SCL = PB8;
+            SDA = PB9;
+        }
     }
+
+    // I²C2: no remap exists
     interface I2C i2c2 {
         SDA = PB11;
         SCL = PB10;
     }
+
+    // USART1 (RM0008 Table 45, USART1_REMAP)
     interface UART uart1 {
-        TX = PA9;
-        RX = PA10;
+        alt "NOREMAP" {
+            TX = PA9;
+            RX = PA10;
+        }
+        alt "REMAP" {
+            TX = PB6;
+            RX = PB7;
+        }
     }
+    // USART2 (RM0008 Table 44, USART2_REMAP — the PD5/PD6 home
+    // exists on this 100-pin package)
     interface UART uart2 {
-        TX = PA2;
-        RX = PA3;
+        alt "NOREMAP" {
+            TX = PA2;
+            RX = PA3;
+        }
+        alt "REMAP" {
+            TX = PD5;
+            RX = PD6;
+        }
     }
+    // USART3 (RM0008 Table 43, USART3_REMAP[1:0]): "00" no remap,
+    // "01" partial (PC10/PC11), "11" full (PD8/PD9) — all three
+    // homes exist on this 100-pin package
     interface UART uart3 {
-        TX = PB10;
-        RX = PB11;
+        alt "NOREMAP" {
+            TX = PB10;
+            RX = PB11;
+        }
+        alt "PARTIAL" {
+            TX = PC10;
+            RX = PC11;
+        }
+        alt "FULL" {
+            TX = PD8;
+            RX = PD9;
+        }
     }
 
     attribute component_class = "microcontroller";
@@ -190,6 +250,13 @@ entity STM32F103Vx(
     // ── Supply (DS5319 §5.3.5, run mode from flash, 72 MHz all
     // peripherals on: 50 mA typ — same die family) ──
     attribute i_supply        = 50mA;
+
+    // Internal weak pull-up/pull-down on every GPIO (F103 I/O
+    // static characteristics, Doc ID 14611 Rev 8: RPU/RPD 30–50 kΩ,
+    // typ 40 kΩ; same I/O cell across the F103 line). NOTE the
+    // datasheet's FT-pin footnote: to sustain >VDD+0.3 V on a
+    // five-volt-tolerant pin the internal pulls must be DISABLED.
+    attribute internal_pull = "pins=PA0,PA1,PA2,PA3,PA4,PA5,PA6,PA7,PA8,PA9,PA10,PA11,PA12,PA13,PA14,PA15,PB0,PB1,PB2,PB3,PB4,PB5,PB6,PB7,PB8,PB9,PB10,PB11,PB12,PB13,PB14,PB15,PC0,PC1,PC2,PC3,PC4,PC5,PC6,PC7,PC8,PC9,PC10,PC11,PC12,PC13,PC14,PC15,PD0,PD1,PD2,PD3,PD4,PD5,PD6,PD7,PD8,PD9,PD10,PD11,PD12,PD13,PD14,PD15,PE0,PE1,PE2,PE3,PE4,PE5,PE6,PE7,PE8,PE9,PE10,PE11,PE12,PE13,PE14,PE15 pu=40kΩ pd=40kΩ source=STM32F103 DS Doc ID 14611 Rev 8, I/O static characteristics";
 
     simulation {
         model {

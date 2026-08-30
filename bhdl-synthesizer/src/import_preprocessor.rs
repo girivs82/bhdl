@@ -72,6 +72,11 @@ impl ImportPreprocessor {
         Ok(())
     }
 
+    /// Find an interface definition in any loaded import file.
+    pub fn find_interface_def(&self, name: &str) -> Option<bhdl_ast::SyntaxNode<bhdl_ast::BhdlLanguage>> {
+        self.import_loader.find_interface_def(name)
+    }
+
     /// Get an imported entity by name
     pub fn get_imported_entity(&self, name: &str) -> Option<&Entity> {
         self.imported_entities.get(name)

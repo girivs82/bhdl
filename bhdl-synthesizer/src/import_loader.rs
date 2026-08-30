@@ -117,26 +117,45 @@ impl ImportLoader {
         };
         
         println!("IMPORT_LOADER: Loading modules {:?} from: {}", module_names, full_path.display());
-        
-        // Read and parse the file
-        let content = fs::read_to_string(&full_path)
-            .with_context(|| format!("Failed to read import file: {}", full_path.display()))?;
-        
-        let parse_result = parse(&content);
-        if !parse_result.errors().is_empty() {
-            for error in parse_result.errors() {
-                log::warn!("Parse error in imported file {}: {}", full_path.display(), error.message);
-            }
-        }
-        
-        let syntax = parse_result.syntax();
-        let source_file = SourceFile::cast(syntax)
-            .ok_or_else(|| anyhow::anyhow!("Failed to cast imported file to SourceFile"))?;
-        
-        // Store the full source file AST for cross-import resolution
+
         let file_path = full_path.to_string_lossy().to_string();
-        self.loaded_source_files.insert(file_path.clone(), source_file.clone());
-        info!("Stored source file AST for: {}", file_path);
+        let source_file = if let Some(sf) = self.loaded_source_files.get(&file_path) {
+            // Already parsed (another import of the same file, or a
+            // transitive cycle) — reuse the stored AST; its own
+            // imports were processed on first load.
+            sf.clone()
+        } else {
+            // Read and parse the file
+            let content = fs::read_to_string(&full_path)
+                .with_context(|| format!("Failed to read import file: {}", full_path.display()))?;
+
+            let parse_result = parse(&content);
+            if !parse_result.errors().is_empty() {
+                for error in parse_result.errors() {
+                    log::warn!("Parse error in imported file {}: {}", full_path.display(), error.message);
+                }
+            }
+
+            let syntax = parse_result.syntax();
+            let source_file = SourceFile::cast(syntax)
+                .ok_or_else(|| anyhow::anyhow!("Failed to cast imported file to SourceFile"))?;
+
+            // Store the full source file AST for cross-import resolution
+            self.loaded_source_files.insert(file_path.clone(), source_file.clone());
+            info!("Stored source file AST for: {}", file_path);
+
+            // TRANSITIVE imports: an imported file's own `import`
+            // statements load too — an imported ENTITY's interface
+            // types live where that file says they do (the STM32
+            // stdlib entities import UART/SPI/I2C from
+            // interfaces/serial.bhdl; without this, interface-signal
+            // directions were silently unresolvable for every
+            // imported entity). Cycle-safe: the AST above is stored
+            // BEFORE recursing, so a re-visited file takes the cached
+            // branch.
+            self.process_imports(&source_file)?;
+            source_file
+        };
         
         // First, extract all entities from the file
         let mut file_modules = HashMap::new();
@@ -227,6 +246,31 @@ impl ImportLoader {
         Ok(())
     }
     
+    /// Find an INTERFACE_DEF with the given name in ANY loaded
+    /// import file (interfaces aren't entities — the entity APIs
+    /// can't carry them). Used by interface-field pin creation when
+    /// the definition is neither in the board's own file nor on the
+    /// imported entity's file.
+    pub fn find_interface_def(&self, name: &str) -> Option<bhdl_ast::SyntaxNode<bhdl_ast::BhdlLanguage>> {
+        use bhdl_parser::SyntaxKind;
+        for sf in self.loaded_source_files.values() {
+            let hit = sf.syntax().descendants().find(|n| {
+                if n.kind() != SyntaxKind::INTERFACE_DEF {
+                    return false;
+                }
+                n.children_with_tokens()
+                    .filter_map(|el| el.into_token())
+                    .find(|t| t.kind() == SyntaxKind::IDENT)
+                    .map(|t| t.text() == name)
+                    .unwrap_or(false)
+            });
+            if hit.is_some() {
+                return hit;
+            }
+        }
+        None
+    }
+
     /// Get a loaded module by name
     pub fn get_entity(&self, name: &str) -> Option<&Entity> {
         self.loaded_entities.get(name)

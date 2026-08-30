@@ -3351,6 +3351,16 @@ fn add_interface_field_pins(
                         .unwrap_or(false)
                 })
         });
+        // Last: any LOADED IMPORT FILE (transitively loaded) — an
+        // imported entity's interface types live in the file its own
+        // `import` names (e.g. the STM32 entities import UART/SPI/I2C
+        // from interfaces/serial.bhdl). Without this, imported
+        // entities silently lost interface-signal DIRECTIONS
+        // (intf_dir__ never stamped → a UART TX pad read as a plain
+        // input and got the idle-high auto pull-up).
+        let iface_node = iface_node.or_else(|| {
+            import_preprocessor.and_then(|p| p.find_interface_def(&type_name))
+        });
 
         let Some(iface_node) = iface_node else { continue; };
 

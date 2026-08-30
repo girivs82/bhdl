@@ -407,6 +407,24 @@ longer participates in interface field declarations.
   already-decided pins), and firmware receives the pull program in
   the `--mux-header` defines (`…_PULL UP|DOWN|OFF`).
 
+- **Real STM32 AF tables (stdlib, shipped).** The STM32F103
+  Cx/Rx/Vx stdlib entities carry the F1's REAL remap tables as
+  `alt` groups: the F1 muxes by per-peripheral AFIO_MAPR register
+  bits, so each group is one register state, transcribed from
+  RM0008 Rev 9 Tables 43–47 (SPI1_REMAP, I2C1_REMAP, USART1/2/3
+  remap), with homes filtered per package footnote (USART2's
+  PD5/PD6 home exists only on the 100-pin Vx, USART3's partial
+  PC10/PC11 from the 64-pin Rx up). Declaration order = the reset
+  no-remap state. All GPIOs also declare the internal weak pulls
+  (RPU/RPD 30–50 kΩ, typ 40 kΩ — F103 DS I/O static
+  characteristics). ENGINE FIX flushed by this: imports are now
+  TRANSITIVE and interface definitions resolve from loaded import
+  files — before, an imported entity's interface types (the STM32
+  files import UART/SPI/I2C from interfaces/serial.bhdl) were
+  silently unresolvable, so `intf_dir__` never stamped and a UART
+  TX pad on an imported MCU read as a plain input (idle-high
+  auto pull-up on a driven pin).
+
 - **Pull requirements (SoC arc, shipped).** "I need a pull-up here",
   declared WHERE THE KNOWLEDGE LIVES — a full resistor entity with
   port mapping is overkill for one pin:

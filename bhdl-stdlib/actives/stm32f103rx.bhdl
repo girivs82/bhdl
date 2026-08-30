@@ -26,6 +26,8 @@
 import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
 import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
 
+import { SPI, I2C, UART } from "bhdl-stdlib/interfaces/serial.bhdl";
+
 entity STM32F103Rx(
     part_no: string      = "STM32F103RBT6",
     flash_kb: int        = 128,
@@ -109,38 +111,86 @@ entity STM32F103Rx(
     pin VSS_4: signal inout;          //                        (pin 18)
     pin VSSA:  signal inout;          // analog VSS             (pin 12)
 
-    // ─── Peripheral interfaces (same default muxes as Cx) ───
+    // ─── Peripheral interfaces — REAL AFIO remap tables ─────
+    // The F1 muxes by PER-PERIPHERAL remap register bits
+    // (AFIO_MAPR), not per-pin AFn numbers: each `alt` group below
+    // is one register state, transcribed from RM0008 Rev 9
+    // §8.3.7–8.3.11 (Tables 43–47). Declaration order = solver
+    // preference = the reset (no-remap) state; homes whose pins
+    // exist only on larger packages are omitted per the tables'
+    // package footnotes.
+    // SPI1 (RM0008 Table 47, SPI1_REMAP; NSS = the CS signal)
     interface SPI spi1 {
-        MOSI = PA7;
-        MISO = PA6;
-        SCK  = PA5;
-        CS   = PA4;
+        alt "NOREMAP" {
+            CS   = PA4;
+            SCK  = PA5;
+            MISO = PA6;
+            MOSI = PA7;
+        }
+        alt "REMAP" {
+            CS   = PA15;
+            SCK  = PB3;
+            MISO = PB4;
+            MOSI = PB5;
+        }
     }
+
+    // SPI2: no remap exists (RM0008 §8.3)
     interface SPI spi2 {
         MOSI = PB15;
         MISO = PB14;
         SCK  = PB13;
         CS   = PB12;
     }
+
+    // I²C1 (RM0008 Table 46, I2C1_REMAP; the remap is absent
+    // only on the 36-pin package — present here)
     interface I2C i2c1 {
-        SDA = PB7;
-        SCL = PB6;
+        alt "NOREMAP" {
+            SCL = PB6;
+            SDA = PB7;
+        }
+        alt "REMAP" {
+            SCL = PB8;
+            SDA = PB9;
+        }
     }
+
+    // I²C2: no remap exists
     interface I2C i2c2 {
         SDA = PB11;
         SCL = PB10;
     }
+
+    // USART1 (RM0008 Table 45, USART1_REMAP)
     interface UART uart1 {
-        TX = PA9;
-        RX = PA10;
+        alt "NOREMAP" {
+            TX = PA9;
+            RX = PA10;
+        }
+        alt "REMAP" {
+            TX = PB6;
+            RX = PB7;
+        }
     }
+    // USART2 (RM0008 Table 44): the remap home is PD5/PD6,
+    // available only on 100/144-pin packages — single home here
     interface UART uart2 {
         TX = PA2;
         RX = PA3;
     }
+    // USART3 (RM0008 Table 43, USART3_REMAP[1:0]): "00" no remap,
+    // "01" partial remap (PC10/PC11 exist on this 64-pin package);
+    // the "11" full-remap home PD8/PD9 needs 100-pin+ — omitted
     interface UART uart3 {
-        TX = PB10;
-        RX = PB11;
+        alt "NOREMAP" {
+            TX = PB10;
+            RX = PB11;
+        }
+        alt "PARTIAL" {
+            TX = PC10;
+            RX = PC11;
+        }
     }
 
     attribute component_class = "microcontroller";
@@ -156,6 +206,13 @@ entity STM32F103Rx(
     // ── Supply (DS5319 §5.3.5, run mode from flash, 72 MHz all
     // peripherals on: 50 mA typ — same die as the Cx) ──
     attribute i_supply        = 50mA;
+
+    // Internal weak pull-up/pull-down on every GPIO (F103 I/O
+    // static characteristics, Doc ID 14611 Rev 8: RPU/RPD 30–50 kΩ,
+    // typ 40 kΩ; same I/O cell across the F103 line). NOTE the
+    // datasheet's FT-pin footnote: to sustain >VDD+0.3 V on a
+    // five-volt-tolerant pin the internal pulls must be DISABLED.
+    attribute internal_pull = "pins=PA0,PA1,PA2,PA3,PA4,PA5,PA6,PA7,PA8,PA9,PA10,PA11,PA12,PA13,PA14,PA15,PB0,PB1,PB2,PB3,PB4,PB5,PB6,PB7,PB8,PB9,PB10,PB11,PB12,PB13,PB14,PB15,PC0,PC1,PC2,PC3,PC4,PC5,PC6,PC7,PC8,PC9,PC10,PC11,PC12,PC13,PC14,PC15,PD2 pu=40kΩ pd=40kΩ source=STM32F103 DS Doc ID 14611 Rev 8, I/O static characteristics";
 
     simulation {
         model {
