@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::fs;
 use anyhow::{Result, Context};
 use bhdl_parser::parse;
@@ -100,7 +100,16 @@ impl ImportLoader {
         // through the Cargo-style resolver when one is installed
         // (declared-library + search-path resolution); otherwise they
         // fall back to the legacy literal-path-from-cwd behaviour.
-        let full_path = if import_path.starts_with("../") || import_path.starts_with("./") {
+        let full_path = if Path::new(import_path).is_absolute() {
+            // Absolute paths are literal files, never namespaced
+            // imports — generated boards carry them (`decap_lib:`
+            // emits one). Without this branch the resolver parsed
+            // "/Users/…" as namespace "" and refused it — a failure
+            // the old warn-and-continue path swallowed, so the
+            // emit gate passed boards whose decap library never
+            // loaded (vacuous green, exposed by the hard error).
+            PathBuf::from(import_path)
+        } else if import_path.starts_with("../") || import_path.starts_with("./") {
             Path::new(&self.base_path).join(import_path)
         } else if let Some(resolver) = &self.resolver {
             resolver
@@ -153,7 +162,24 @@ impl ImportLoader {
             // imported entity). Cycle-safe: the AST above is stored
             // BEFORE recursing, so a re-visited file takes the cached
             // branch.
-            self.process_imports(&source_file)?;
+            //
+            // The nested imports resolve against the IMPORTED FILE's
+            // directory, not the project's — a proprietary library's
+            // internal `./sibling.bhdl` imports must work from
+            // wherever the library lives (found by the out-of-tree
+            // library probe: `././sibling.bhdl` resolved against the
+            // board's dir and failed). Swap the base for the
+            // recursion, restore after.
+            let saved_base = std::mem::replace(
+                &mut self.base_path,
+                full_path
+                    .parent()
+                    .map(|d| d.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| ".".into()),
+            );
+            let recursed = self.process_imports(&source_file);
+            self.base_path = saved_base;
+            recursed?;
             source_file
         };
         

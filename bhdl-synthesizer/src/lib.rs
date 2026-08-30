@@ -578,7 +578,13 @@ impl NetlistGenerator {
         if let Some(ast) = ast {
             info!("Processing imports from source file");
             if let Err(e) = self.import_loader.process_imports(ast) {
-                warn!("Failed to process some imports: {}", e);
+                // HARD error — a failed import means entities exist
+                // pinless and nets fragment silently; a build that
+                // "passes" with a library file missing is the
+                // silent-drop pattern (found by the out-of-tree
+                // library probe: the board synthesized clean with an
+                // entity that never loaded).
+                anyhow::bail!("import loading failed: {e}");
             }
 
             // Build import preprocessor from loaded entities so that

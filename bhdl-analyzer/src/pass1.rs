@@ -1149,11 +1149,23 @@ fn process_import(import: &ImportStmt, context: &mut Pass1Context) {
             // recipes below. Cycle detection lives in the
             // `imported_modules` set (top of this function), which is
             // already keyed by path string.
+            // Nested imports resolve against the IMPORTED FILE's
+            // directory (a library's internal `./sibling.bhdl` works
+            // from wherever the library lives); restore the caller's
+            // base after.
+            let saved_base = std::mem::replace(
+                &mut context.base_path,
+                resolved_path
+                    .parent()
+                    .map(|d| d.to_path_buf())
+                    .unwrap_or_else(|| PathBuf::from(".")),
+            );
             for item in imported_source.items() {
                 if let Some(nested_import) = ImportStmt::cast(item.syntax().clone()) {
                     process_import(&nested_import, context);
                 }
             }
+            context.base_path = saved_base;
             // Stage 6: merge this file's entity attribute defaults into
             // the global cross-file index BEFORE recipe extraction, so
             // an entity in this file referenced via expansion from a
