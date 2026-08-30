@@ -120,6 +120,24 @@ fn megaboard_stages_resolved_to_real_parts() {
     assert!(text.contains("pull: fpga.DBG_A → up"), "strap auto pull-up missing");
     assert!(!text.contains("IO bank discipline | Error"), "bank error:\n{}",
         text.lines().filter(|l| l.contains("ERC035")).collect::<Vec<_>>().join("\n"));
+    // pull REQUIREMENTS: the board-scope pulldown makes the PGOOD
+    // hold a REAL 10k strap (the internal override stays as the weak
+    // backstop), and the eFuse's open-drain FLT (SLVSE94G, declared
+    // on the stdlib block) gets its 100k to the NAMED rail — neither
+    // end sits in an IO bank, so the rail must be named
+    assert!(
+        text.contains("10000Ω pull-down 'pullreq_down_auto_fpga_pgood_in' to GND"),
+        "PGOOD pulldown requirement not materialised:\n{}",
+        text.lines().filter(|l| l.contains("pull-req")).collect::<Vec<_>>().join("\n")
+    );
+    assert!(
+        text.contains("100000Ω pull-up 'pullreq_up_auto_u_v_prot_flt' to V18"),
+        "FLT pull-up requirement not materialised:\n{}",
+        text.lines().filter(|l| l.contains("pull-req")).collect::<Vec<_>>().join("\n")
+    );
+    // the requirement pull satisfies ERC037 for the OD fault flag
+    assert!(!text.contains("ERC037"), "ERC037 fired despite the FLT requirement pull:\n{}",
+        text.lines().filter(|l| l.contains("ERC037")).collect::<Vec<_>>().join("\n"));
 }
 
 #[test]

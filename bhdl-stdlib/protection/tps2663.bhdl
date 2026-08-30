@@ -42,6 +42,12 @@ entity TPS26630() as part {
     pin OVP:  signal in;      // overvoltage cutoff (string tap, R3)
     pin ILIM: signal inout;   // current-limit programming resistor to GND
     pin FLT:  signal out;     // fault flag
+    // SLVSE94G 8.3.10: FLT is an OPEN-DRAIN active-low fault output
+    // (electrical table specs it as a pull-down resistance + leakage;
+    // the pull-up is the board's). "Can be left open or connected to
+    // GND when not used" — so the pull-up VALUE and rail are board
+    // knowledge, not declared here.
+    attribute open_drain_pins = "FLT";
 
     attribute component_class = "protection_ic";
     attribute manufacturer    = "Texas Instruments";
@@ -94,6 +100,7 @@ entity Efuse_TPS26630(
     pin VOUT: power out virtual;
     pin FLT:  signal out;
     pin GND:  ground;
+    attribute open_drain_pins = "FLT";   // SLVSE94G: open-drain, active low
 
     attribute component_class  = "protection";
     attribute topology         = "prereg";

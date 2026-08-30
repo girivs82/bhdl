@@ -250,6 +250,20 @@ board MegaBoard {
     // chosen idle-high
     fpga.PGOOD_IN -> hdr.PG;
     attribute fpga.pull__PGOOD_IN = "down";
+    // …and a REAL strap for the same hold (pull REQUIREMENT, board
+    // scope): the internal 25k override above is the weak backstop,
+    // this materialises a 10k to GND so the hold survives with the
+    // FPGA unconfigured. Same direction → solid low, no divider.
+    require pulldown(fpga.PGOOD_IN, 10k);
+
+    // front-end fault flag to the debug header. FLT is OPEN-DRAIN
+    // active-low (SLVSE94G 8.3.10, declared on the stdlib block) —
+    // ERC037 would flag the bare net; the pull-up VALUE and rail are
+    // board knowledge: neither end sits in an IO bank, so the rail
+    // MUST be named (100k to V18 — leakage 150nA × 100k = 15mV,
+    // asserted-low sink 18µA, both trivial).
+    u_v_prot.FLT -> hdr.FLT_N;
+    require pullup(u_v_prot.FLT, 100k, V18);
 
     // an INDEPENDENTLY-supplied rail supervisor (DFA-clean by design):
     // divider fed from V18 monitors VCCINT
@@ -380,6 +394,7 @@ entity MbDbgHdr() {
     pin SB0: signal in;
     pin SB1: signal in;
     pin PG:  signal in;
+    pin FLT_N: signal in;    // front-end fault flag, monitored at the header
     pin GND: ground;
     attribute component_class = "connector";
     attribute part_number = "FIXTURE-DBG-HDR";
