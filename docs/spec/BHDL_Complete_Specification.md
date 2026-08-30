@@ -577,14 +577,14 @@ design {
 An intent-scoped form `design for <intent> { inputs {…} outputs {…} … }`
 supplies the analytic first guess for an intent-driven flow; the core's
 generic refine loop (build → solve → measure → adjust, bounded) polishes it.
-For logic the declarative surface can't express, a sandboxed Rhai escape
+For logic the declarative surface can't express, a sandboxed Rune escape
 hatch is available:
 
 ```bhdl
 design for amplifier {
     inputs  { tube; intent; supply; }
     outputs { Rp; Rk; }
-    body rhai r#"
+    body rune r#"
         let v_p = supply.VBB / 2.0;
         // … analytic bias math …
         #{ Rp: v_p / i_p, Rk: (-v_gk) / i_p }
@@ -592,7 +592,7 @@ design for amplifier {
 }
 ```
 
-Rhai is statically linked, sandboxed (no I/O, network, or spawn), and
+Rune is statically linked, sandboxed (no I/O, network, or spawn), and
 fuel-limited for determinism. See
 [Vendor_Design_Blocks.md](Vendor_Design_Blocks.md).
 
@@ -1079,9 +1079,9 @@ generate for if else when where with require optional virtual extends as
 satisfies via expansion internal design variant dnp socket placement
 power_domain aliases body near each distributed`. Booleans: `true false`.
 Contextual (matched by text, not reserved): `from to supply simulation stress
-model check inputs outputs rhai requirements hsi resolve decouple`.
+model check inputs outputs rune requirements hsi resolve decouple`.
 
-Note that `body` (symbol bodies, Rhai `design` bodies), `near`, `each`, and
+Note that `body` (symbol bodies, Rune `design` bodies), `near`, `each`, and
 `distributed` (decoupling placement) are **true lexer keywords**
 (`BODY_KW`/`NEAR_KW`/`EACH_KW`/`DISTRIBUTED_KW` in
 `bhdl-parser/src/lexer.rs`), not contextual identifiers — they cannot be used
@@ -1095,7 +1095,7 @@ inert — `assign`, top-level `component`, statement-form `net`, `connect`,
 
 A value is an optional sign, a number (with `_` grouping and scientific
 notation), and an optional attached unit (§5.2); or a string, or `true`/`false`.
-Raw strings `r#"…"#` carry Rhai `design` bodies. Bus/range suffixes:
+Raw strings `r#"…"#` carry Rune `design` bodies. Bus/range suffixes:
 `[expr]` index, `[expr:expr]` range.
 
 ---

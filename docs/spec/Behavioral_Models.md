@@ -124,7 +124,7 @@ interactions, protocol-level checks).
   in coordination with GLACIER's DC/transient solver.
 - A **testbench surface** with stimuli (`apply`) and temporal
   assertions (`expect`, `forbid`).
-- A **Rhai escape hatch** inside event handlers for arbitrary
+- A **Rune escape hatch** inside event handlers for arbitrary
   computation (DSP, complex stateful algorithms).
 - **PSpice behavioral translation** — read B/E/F/G/H/LAPLACE
   elements, emit `behavior { analog { … } }` blocks.
@@ -186,7 +186,7 @@ interactions, protocol-level checks).
   and intentionally less expressive than SVA.
 
 - **Mixed-language IPC.** No PLI / VPI / DPI shims for calling
-  out to compiled foreign code. The Rhai escape hatch covers
+  out to compiled foreign code. The Rune escape hatch covers
   the legitimate "I need a real algorithm here" case.
 
 - **Distributed-system simulation.** No multi-board, no
@@ -344,7 +344,7 @@ action_statement    = assignment_action
                     | delayed_action
                     | trigger_action
                     | assertion_action
-                    | rhai_escape
+                    | rune_escape
                     | conditional_action
 
 assignment_action   = (signal_name | local_var) "=" expression ";"
@@ -352,7 +352,7 @@ state_transition    = "state" "=" identifier ";"
 delayed_action      = "after" duration "=>" "{" action_statement* "}" ";"
 trigger_action      = "trigger" identifier ";"
 assertion_action    = "assert" expression ("," string_literal)? ";"
-rhai_escape         = "body" "rhai" raw_string
+rune_escape         = "body" "rune" raw_string
 conditional_action  = "if" expression "{" action_statement* "}"
                       [ "else" "{" action_statement* "}" ]
 ```
@@ -489,16 +489,16 @@ on startup_begin {
 }
 ```
 
-### 4.6 `body rhai r#"…"#` — escape hatch
+### 4.6 `body rune r#"…"#` — escape hatch
 
-Inside any handler body, `body rhai r#"..."#` runs a Rhai script with
+Inside any handler body, `body rune r#"..."#` runs a Rune script with
 the entity's state and inputs in scope. The script can read signals,
 modify state, and return values. Reuses the Stage-5 design-block
 machinery — sandboxed, fuel-limited, statically linked.
 
 ```bhdl
 on adc_clk rising {
-    body rhai r#"
+    body rune r#"
         // 4th-order sigma-delta modulator
         let acc = state.integrators;
         acc[0] += V("ain") - state.feedback;
@@ -510,7 +510,7 @@ on adc_clk rising {
 ```
 
 Same trade-off as design blocks: the DSL handles the 80 % case
-where temporal structure is the value; Rhai handles the 20 % case
+where temporal structure is the value; Rune handles the 20 % case
 where you need arbitrary computation inside a known event hook.
 
 ---
@@ -694,9 +694,9 @@ Assertions are allowed inside `behavior { }` blocks on a board
 but only fire when the board is being simulated under a
 testbench. In a synthesis-only run they're inert.
 
-### 6.6 Rhai escape
+### 6.6 Rune escape
 
-`body rhai r#" … "#` — see [§4.6](#46-body-rhai-r--escape-hatch).
+`body rune r#" … "#` — see [§4.6](#46-body-rune-r--escape-hatch).
 
 ### 6.7 Conditional action
 
@@ -925,7 +925,7 @@ Defenses:
   `MAX_INSTANT_DEPTH` firings, the simulator reports a non-
   converged state (rather than silently running forever).
 - **Fuel limit on handler bodies**: each handler invocation runs
-  with a Rhai-style operation budget (default 100k ops). Runaway
+  with a Rune-style operation budget (default 100k ops). Runaway
   computation is bounded.
 
 In practice, well-formed behavioral models converge in 1–5
@@ -1243,7 +1243,7 @@ Each domain block:
   not run dynamically at all (just static checks).
 - Has **its own event language and handlers**, but shares the
   same outer infrastructure (state variables, `on` syntax,
-  Rhai escape, testbench integration).
+  Rune escape, testbench integration).
 
 #### 10.4.2 Cross-domain coupling
 
@@ -1584,8 +1584,8 @@ entity SigmaDelta_ADC_12bit() {
 
         on CLK rising {
             if (state == Sampling) {
-                body rhai r#"
-                    // 4th-order sigma-delta modulator implemented in Rhai
+                body rune r#"
+                    // 4th-order sigma-delta modulator implemented in Rune
                     let v_in = V("AIN");
                     let q = sigma_delta_4th(state.integrators, v_in, 12);
                     state.integrators = q.next_state;
@@ -1611,13 +1611,13 @@ useful; later phases compose on top.
 | Stage | Scope | Approx effort |
 |---|---|---|
 | **B1: Spec** *(this document)* | Architectural design | done |
-| **B2: Parser + AST** | `behavior { analog ... state ... on ... after ... trigger ... body rhai }` block grammar + AST nodes + parser tests | 1 week |
+| **B2: Parser + AST** | `behavior { analog ... state ... on ... after ... trigger ... body rune }` block grammar + AST nodes + parser tests | 1 week |
 | **B3: Analyzer extraction** | `BehavioralModel { entity, signals_read/written, events_listened, states, handlers }` on AnalysisResult | 1 week |
 | **B4: Static analog-source bridge** | Simplest case: `analog { V_out = expr; }` becomes a controlled source that GLACIER stamps at each step | 1 week |
 | **B5: Discrete-event scheduler** | Time-stepping engine, watchpoint registration, event queue, signal-crossing detection, fire handler | 2 weeks |
 | **B6: Domain synchronisation** | Analog → discrete event firing, discrete → analog state changes, causality loop detection, same-time ordering | 2 weeks |
 | **B7: Testbench surface** | `testbench`, `apply`, `expect`, `forbid`, temporal operators, reporter | 1.5 weeks |
-| **B8: Rhai escape in handlers** | `body rhai r#"..."#` inside `on { ... }` blocks; reuses Stage-5 design-block machinery | 3 days |
+| **B8: Rune escape in handlers** | `body rune r#"..."#` inside `on { ... }` blocks; reuses Stage-5 design-block machinery | 3 days |
 | **B9: PSpice behavioral translator** | Read PSpice behavioral subckts (B/E/G/H), emit BHDL `behavior { analog { ... } }` | 1 week |
 | **B10: IBIS importer** | Read `.ibs` files, emit BHDL entity with lookup tables + state enum + analog dispatch | 1 week |
 | **Total estimated effort** | | **~10–11 weeks** |
@@ -1639,7 +1639,7 @@ work lands.
    simulate a state machine with timer-based transitions.
 6. **B6 mixed signal** — full analog ↔ discrete coupling.
 7. **B7 testbench** — assertions become useful tooling.
-8. **B8 Rhai escape** — small additive change.
+8. **B8 Rune escape** — small additive change.
 9. **B9 PSpice translator** — bulk import utility.
 10. **B10 IBIS importer** — bulk import utility.
 
@@ -1810,7 +1810,7 @@ This spec describes a behavioral-modeling surface that:
 - Supports a small DSL with continuous-time `analog { }`
   equations, discrete-event `on { }` handlers, state machines,
   timers, and synthetic events.
-- Provides a Rhai escape hatch for arbitrary computation inside
+- Provides a Rune escape hatch for arbitrary computation inside
   event handlers — same architectural pattern as the design-
   recipe Stage-5 work.
 - Introduces a testbench surface with stimuli (`apply`) and

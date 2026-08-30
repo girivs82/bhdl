@@ -11,7 +11,7 @@
 >   `for INTENT(…)` on nets and connections, including the standalone
 >   `@net for INTENT(…)` form.
 > - **`design { }` / `design for INTENT { }` blocks (§5)** —
->   const/require/child-assignment surface plus the `body rhai` hook
+>   const/require/child-assignment surface plus the `body rune` hook
 >   (see `Vendor_Design_Blocks.md`); virtual pins + `expansion { }`.
 > - **`part_family` (§4)** — grammar, class patterns with wildcards,
 >   `require` E-series/range/set constraints, `mpn_template`
@@ -192,7 +192,7 @@ implementation. Use `(…)` for "I picked it, configure it"; use
 | Form | When | Resolves at | Example |
 |---|---|---|---|
 | `Entity<T1, T2, …>` | Part-defining axes | Monomorphization | `AP2112K<3.3V>()` |
-| `Entity(p1, p2, …)` | Same-part configuration | Designer Rhai, then mono on internals | `LM317(v_out = 5V)` |
+| `Entity(p1, p2, …)` | Same-part configuration | Designer Rune, then mono on internals | `LM317(v_out = 5V)` |
 | `@net for INTENT(…)` | Abstract requirement; impl not chosen | Intent matcher → designer → mono | `@VCC for voltage_regulator(...)` |
 
 ## 3. Entity, class, part — the three-layer model
@@ -391,7 +391,7 @@ named functions over generic-parameter values:
 | Identity | Raw value as default-formatted | `{V}` → `"3.3V"` |
 
 The function set is fixed in v0.2. v0.3 will allow user-defined
-helper functions in BHDL's Rhai scope so manufacturer-specific
+helper functions in BHDL's Rune scope so manufacturer-specific
 codings can be expressed without a synthesizer change.
 
 ### 4.5 Multiple families per class is the normal case
@@ -448,7 +448,7 @@ pin VOUT: power out virtual
 The `@requires` clause makes the contract checkable: if a use site
 instantiates the entity without supplying `v_out` (and there's no
 default), the analyzer rejects the program *at type-check time*,
-before any Rhai runs.
+before any Rune runs.
 
 ### 5.2 Two flavours of `design` block
 
@@ -457,7 +457,7 @@ before any Rhai runs.
 | `design { … }` | Plain runtime computation (scenario A) | Once per instance, after constructor binding |
 | `design for INTENT { … }` | Intent matcher (scenario B) | Once per intent attachment that picks this entity |
 
-Both flavours have the same Rhai surface. The difference is the
+Both flavours have the same Rune surface. The difference is the
 input namespace:
 
 - `design { }` reads from `self.*` (runtime params + generics).
@@ -501,7 +501,7 @@ not ship; expansions instantiate the runtime-argument form.)
             ▼
 ┌──────────────────────┐
 │  2. Designer pass    │  for each instance, run its `design { }` and
-│                      │  `design for INTENT { }` bodies (Rhai). Write
+│                      │  `design for INTENT { }` bodies (Rune). Write
 │                      │  computed values into the instance's locals.
 └──────────────────────┘
             │
@@ -963,7 +963,7 @@ tests continue to gate every step.
   allows opt-in cross-board class merging.
 
 - **User-defined `mpn_template` helper functions.** v0.2 fixes the
-  function set (`e96_code`, `v_short`, etc.). v0.3 allows Rhai-defined
+  function set (`e96_code`, `v_short`, etc.). v0.3 allows Rune-defined
   helpers in stdlib so manufacturer-specific codings can be added
   without a synthesizer change.
 

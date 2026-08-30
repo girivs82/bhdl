@@ -30,15 +30,10 @@ allow = [
 ]
 confidence-threshold = 0.9
 
-# MPL-2.0 is NOT in the global allowlist (cleared 2026-08-30:
-# colored → yansi, dirs → hand-rolled cache dir). The single
-# remaining MPL crate is smartstring, a non-optional dependency of
-# rhai (the `body rhai` design-block engine); file-level copyleft,
-# used unmodified, attributed in NOTICE. Dropping it means dropping
-# rhai — a feature decision, not a licensing one.
-[[licenses.exceptions]]
-name = "smartstring"
-allow = ["MPL-2.0+", "MPL-2.0"]
+# MPL-2.0 is NOT allowed anywhere. Cleared 2026-08-30 in two steps:
+# colored → yansi, dirs → hand-rolled cache dir, and rhai → rune
+# (which removed smartstring, the last MPL crate). The graph is now
+# entirely permissive; any future MPL arrival fails this gate.
 
 [bans]
 multiple-versions = "allow"

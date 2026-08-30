@@ -739,9 +739,9 @@ alias LM1117_33 = LinearRegulator<3.3V>;
     }
 
     #[test]
-    fn parse_design_block_with_body_rhai_hook() {
+    fn parse_design_block_with_body_rune_hook() {
         // The Stage-5 foreign-language hook form. `inputs`/`outputs` are
-        // contextual IDENTs inside the design block; `body rhai r#"..."#`
+        // contextual IDENTs inside the design block; `body rune r#"..."#`
         // captures the script as a raw string. The script body contains
         // `"` and `#` characters that the raw-string delimiter handles.
         let input = r##"
@@ -751,7 +751,7 @@ alias LM1117_33 = LinearRegulator<3.3V>;
                 design for amplifier {
                     inputs  { tube; intent; supply; }
                     outputs { Rp; Rk; }
-                    body rhai r#"
+                    body rune r#"
                         let v_p = supply.VBB / 2.0;
                         #{ Rp: v_p / 0.005, Rk: 200.0 }
                     "#

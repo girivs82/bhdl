@@ -224,7 +224,7 @@ entity SignalTubeStage() {
     design for amplifier {
         inputs  { tube; intent; supply; }
         outputs { Rp; Rk; }
-        body rhai r#"
+        body rune r#"
             let v_p   = supply.VBB / 2.0;
             let i_lo  = 0.5e-3;
             let i_max = plate_current(tube, v_p, 0.0);
@@ -234,9 +234,9 @@ entity SignalTubeStage() {
             let peak_i = i_lo;
             let peak_g = 0.0;
             for k in 0..64 {
-                let frac  = (k.to_float()) / 63.0;
+                let frac  = (k as f64) / 63.0;
                 let ratio = i_hi / i_lo;
-                let i = i_lo * (ratio ** frac);
+                let i = i_lo * ratio.powf(frac);
                 let g = small_signal_gain(tube, v_p, i);
                 if g > peak_g { peak_g = g; peak_i = i; }
             }
@@ -298,7 +298,7 @@ entity SignalTubeStage12AU7() {
     design for amplifier {
         inputs  { tube; intent; supply; }
         outputs { Rp; Rk; }
-        body rhai r#"
+        body rune r#"
             let v_p   = supply.VBB / 2.0;
             let i_lo  = 0.5e-3;
             let i_max = plate_current(tube, v_p, 0.0);
@@ -307,9 +307,9 @@ entity SignalTubeStage12AU7() {
             let peak_i = i_lo;
             let peak_g = 0.0;
             for k in 0..64 {
-                let frac  = (k.to_float()) / 63.0;
+                let frac  = (k as f64) / 63.0;
                 let ratio = i_hi / i_lo;
-                let i = i_lo * (ratio ** frac);
+                let i = i_lo * ratio.powf(frac);
                 let g = small_signal_gain(tube, v_p, i);
                 if g > peak_g { peak_g = g; peak_i = i; }
             }

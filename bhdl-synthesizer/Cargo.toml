@@ -135,7 +135,7 @@ rand = "0.8"
 # runtime: zero install, zero venv, deterministic across machines.
 # Sandboxed by default (no I/O, no module imports unless we register
 # host functions); fuel-limited via set_max_operations.
-rhai = { version = "1.18", default-features = false, features = ["std", "sync"] }
+rune = { version = "0.14", default-features = false, features = ["std", "emit"] }
 
 # Dropped during the 2026-05-26 build-speed audit (Phase J followup):
 #   - ndarray         — 0 uses anywhere in src

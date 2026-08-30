@@ -21,7 +21,7 @@ Concretely a `.bhdl` file with the full surface in play declares:
 - **Design intent** — `for amplifier(gain: 14)`, `for
   current_source(current: 2mA)`. The board declares *what it wants*;
   the synthesizer designs the operating point.
-- **Vendor design recipes** — math (declarative or scripted Rhai)
+- **Vendor design recipes** — math (declarative or scripted Rune)
   that turns intent + device parameters into component values.
 - **Device family information** — Koren parameters for triodes,
   Gummel-Poon for BJTs, etc., carried on the entity as numeric
@@ -49,7 +49,7 @@ per shipped SKU.
             │       socket pairings)                    │
             ├───────────────────────────────────────────┤
             │       Vendor design recipes (declarative  │
-            │       const/require/assign OR body rhai)  │   ← entity-level
+            │       const/require/assign OR body rune)  │   ← entity-level
             ├───────────────────────────────────────────┤
             │       Device-family discovery via         │
             │       `component_class`                   │
@@ -119,14 +119,14 @@ design for current_source {
 
 Read more in `docs/spec/Vendor_Design_Blocks.md` §3.
 
-**Rhai body** (Stage 5) — full embedded scripting language for
+**Rune body** (Stage 5) — full embedded scripting language for
 iterative math (bisection, search, optimization):
 
 ```bhdl
 design for amplifier {
     inputs  { tube; intent; supply; }
     outputs { Rp; Rk; }
-    body rhai r#"
+    body rune r#"
         // log-grid peak find + bisection
         // …
         #{ Rp: v_p / i_p, Rk: (-v_gk) / i_p }
@@ -373,7 +373,7 @@ single source of truth.
 
 | Document | Covers |
 |---|---|
-| `Vendor_Design_Blocks.md` | Design recipe surface (declarative + Rhai), §1–§10, then §11 amendment for the body hook |
+| `Vendor_Design_Blocks.md` | Design recipe surface (declarative + Rune), §1–§10, then §11 amendment for the body hook |
 | `Board_SKU_Variants.md`   | Variants v0.1: DNP + value override + CLI |
 | `Behavioral_Models.md`    | System-level dynamic simulation: `behavior { }` DSL, scheduler, testbench surface, IBIS/PSpice import paths, multi-domain extension architecture |
 | *(this document)*         | The architectural overview — how the pieces compose |

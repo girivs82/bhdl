@@ -3,18 +3,24 @@
 > **Status:** SHIPPED through Stage 5. The `design for <intent> { }`
 > surface (const / require-else / child-assignment), analyzer recipe
 > extraction, and the synthesizer evaluator are implemented, along
-> with the §11 `body rhai` escape hatch (`inputs`/`outputs` decls,
-> raw-string literals, sandboxed fuel-limited Rhai — see
+> with the §11 `body rune` escape hatch (`inputs`/`outputs` decls,
+> raw-string literals, sandboxed fuel-limited Rune — see
 > `bhdl-synthesizer/src/design_evaluator.rs`). The reference
 > designers were migrated to authored blocks in
 > `bhdl-stdlib/actives/triode.bhdl`: current source and switch as
-> declarative blocks, the amplifier as `body rhai`.
+> declarative blocks, the amplifier as `body rune`.
+> Engine note (2026-08-30): the script engine is **Rune**
+> (MIT OR Apache-2.0); it replaced Rhai to clear the last MPL-2.0
+> dependency. Same Rust-like syntax; migration deltas: `**` →
+> `.powf()`, `.to_float()` → `as f64`. The fuel limit (1M VM ops),
+> host primitives, and object-in/object-out contract are unchanged;
+> byte-identity of the designed values verified by guard_ecc83.
 >
 > Divergence from §3 as originally drafted: the shipped declarative
 > surface spells bindings `const` (not `let`), and closures /
 > `bisect_*` primitives never shipped — search loops live in a
-> `body rhai` script instead. Still planned: the per-block fuel
-> override (`runtime rhai(max_operations: …)`, §11.5); the default
+> `body rune` script instead. Still planned: the per-block fuel
+> override (`runtime rune(max_operations: …)`, §11.5); the default
 > 1M-operation limit is fixed today.
 
 ## 1. Motivation
@@ -85,9 +91,9 @@ A new optional block on a tube entity, evaluated when the entity
 expands under a matching intent. (The sketch below is the *original
 proposal* — `let` bindings and closures did not ship; the shipped
 spelling uses `const` and, for search loops like this amplifier, a
-`body rhai` script — see §11 and `bhdl-stdlib/actives/triode.bhdl`.)
+`body rune` script — see §11 and `bhdl-stdlib/actives/triode.bhdl`.)
 
-<!-- doc-check: skip (documents the originally-proposed let/closure surface; shipped amplifier uses body rhai) -->
+<!-- doc-check: skip (documents the originally-proposed let/closure surface; shipped amplifier uses body rune) -->
 ```bhdl
 entity SignalTubeStage() {
     pin IN:  signal in;
@@ -383,7 +389,7 @@ this whole proposal was designed against.
 
 > **Status:** Amendment v2 — SHIPPED (Stage 5). Stages 1–4 shipped
 > the declarative `design { }` block surface (const/require/assign);
-> this amendment's `body rhai` escape hatch is implemented
+> this amendment's `body rune` escape hatch is implemented
 > (parser: `parse_design_body_hook`; evaluator:
 > `bhdl-synthesizer/src/design_evaluator.rs`; canonical user:
 > the amplifier in `bhdl-stdlib/actives/triode.bhdl`).
@@ -435,9 +441,9 @@ The actual answer is **an embedded scripting language baked into the
 BHDL binary**: zero install, zero version selection, zero venv, one
 runtime forever, statically linked.
 
-### 11.3 Choice: Rhai
+### 11.3 Choice: Rune
 
-Concrete language: **Rhai** (`cargo add rhai`).
+Concrete language: **Rune** (`cargo add rune`).
 
 Rationale:
 
@@ -452,7 +458,7 @@ Rationale:
 
 Lua (via `mlua`) is the EDA-precedent runner-up (Synopsys, Mentor
 have used it for decades, though most of their scripting is Tcl).
-We chose Rhai for the Rust-native integration story.
+We chose Rune for the Rust-native integration story.
 
 ### 11.4 Syntax — `body <lang> r#"..."#`
 
@@ -468,7 +474,7 @@ design for amplifier {
     outputs { Rp; Rk; }
 
     // Vendor's imperative code. Single .bhdl file, no sidecar.
-    body rhai r#"
+    body rune r#"
         let v_p = supply.VBB / 2.0;
         let i_lo = 0.5e-3;
         let i_hi = min(30e-3, 0.85 * plate_current(tube, v_p, 0.0));
@@ -531,11 +537,11 @@ Koren parameters are also reachable individually via `tube.mu`,
 `tube.ex`, `tube.kg1`, `tube.kp`, `tube.kvb` for vendors who want
 to do the math themselves.
 
-**Generic numerics** (Rhai-native, no host code):
+**Generic numerics** (Rune-native, no host code):
 
 `min`, `max`, `abs`, `sqrt`, `pow`, `log`, `exp`, `sin`, `cos`,
 trigonometry, `to_float()`, array literals, hash maps. Standard
-Rhai library.
+Rune library.
 
 **Forbidden** (sandboxing):
 
@@ -550,19 +556,19 @@ not shipped** — today the 1M-operation limit is fixed:
 <!-- doc-check: skip (documents planned per-block fuel override; limit is fixed at 1M ops today) -->
 ```bhdl
 design for ddr_train {
-    runtime rhai(max_operations: 10_000_000)
-    body rhai r#" ... "#
+    runtime rune(max_operations: 10_000_000)
+    body rune r#" ... "#
 }
 ```
 
 ### 11.6 Evaluator semantics
 
 When the expansion interpreter encounters a `design for <intent>`
-block with a `body rhai r#"..."#`:
+block with a `body rune r#"..."#`:
 
-1. Build the Rhai `Engine` (cached per process; one-time
+1. Build the Rune `Engine` (cached per process; one-time
    registration of host functions).
-2. Marshal inputs into a Rhai `Scope`:
+2. Marshal inputs into a Rune `Scope`:
    - `tube` — the device-family parameter struct (Triode, BJT, …)
    - `intent` — a map of `{ field: f64 }` from the
      `intent_<param>` attributes
@@ -570,7 +576,7 @@ block with a `body rhai r#"..."#`:
      power-pin nets
 3. Apply the recipe's fuel limit (default 1M ops).
 4. `engine.eval_with_scope::<Map>(&mut scope, source)`.
-5. The script's return value MUST be a Rhai `Map` whose keys are
+5. The script's return value MUST be a Rune `Map` whose keys are
    exactly the entity's `outputs { … }` declaration (or a subset —
    missing outputs keep their literal expansion-block defaults).
 6. Marshal the `Map` back into `HashMap<String, f64>` and feed it to
@@ -586,10 +592,10 @@ captured verbatim.
 
 | Invariant | How it holds |
 |---|---|
-| **Single .bhdl per component family** | The script lives in `body rhai r#"..."#`. No sidecar files. |
-| **No user-managed runtime** | Rhai is statically linked. The user installs BHDL; the runtime is already there. |
-| **Reproducible across machines** | The script is part of the .bhdl, captured by git. The Rhai version is pinned by BHDL's Cargo.lock. |
-| **Sandboxed — vendors cannot escape** | Rhai is sandbox-by-default; we register no I/O host functions. |
+| **Single .bhdl per component family** | The script lives in `body rune r#"..."#`. No sidecar files. |
+| **No user-managed runtime** | Rune is statically linked. The user installs BHDL; the runtime is already there. |
+| **Reproducible across machines** | The script is part of the .bhdl, captured by git. The Rune version is pinned by BHDL's Cargo.lock. |
+| **Sandboxed — vendors cannot escape** | Rune is sandbox-by-default; we register no I/O host functions. |
 | **Bounded execution time** | Fuel limit kills runaway scripts; synthesis never hangs. |
 | **Rust reference still the safety net** | Declarative block / script failure → falls through to the Rust seam (when one exists). |
 | **Worst-case vendor calculation is hostable** | Loops, maps, conditionals, host primitives. Combinatorial search, numerical optimisation, state machines — all expressible. |
@@ -603,11 +609,11 @@ captured verbatim.
    against const/require/assign statements. ≈ 1 day.
 3. **AST/analyzer**: `DesignRecipe` grows a `body: Option<BodyHook
    { lang, source, inputs, outputs }>` variant. ≈ half day.
-4. **Synthesizer Rhai integration**: `cargo add rhai`; build the
+4. **Synthesizer Rune integration**: `cargo add rune`; build the
    `Engine` with host functions registered; marshal context, run
    script, parse map. ≈ 2 days.
 5. **Migrate the amplifier**: `bhdl-stdlib/actives/triode.bhdl`
-   gets `design for amplifier { body rhai r#"..."# }` — direct port
+   gets `design for amplifier { body rune r#"..."# }` — direct port
    of `ReferenceTriodeDesigner::first_guess`. The Rust trait stays
    as fallback / test seam. ≈ 1 day.
 
@@ -619,8 +625,8 @@ buys end-to-end coverage of the worst-case vendor calculation.
 - **Not hosting scipy/numpy/sympy/cvxpy**. Those are designer-time
   interactive tools, not synthesis-time vendor logic.
 - **Not loading user-supplied .so / .dll / .py at synthesis time.**
-  All vendor code lives in the .bhdl file, sandboxed by Rhai.
-- **Not building our own scripting language.** Rhai is mature
+  All vendor code lives in the .bhdl file, sandboxed by Rune.
+- **Not building our own scripting language.** Rune is mature
   enough that reinventing it would be pure ego cost.
 - **Not letting the body do I/O or call out**. Pure function
   `(inputs) → outputs`. Vendor wants reproducibility, BHDL wants

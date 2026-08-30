@@ -2235,7 +2235,7 @@ impl<'t> Parser<'t> {
     }
 
     // body <lang> r#"..."#
-    // <lang> is an IDENT (currently only "rhai"; future languages would
+    // <lang> is an IDENT (currently only "rune"; future languages would
     // be additional matches in the evaluator). The body is a raw-string
     // literal — Rust-flavoured r#"..."# — capturing the foreign-language
     // source verbatim. The closing semicolon is optional; the raw string
@@ -2243,7 +2243,7 @@ impl<'t> Parser<'t> {
     fn parse_design_body_hook(&mut self) {
         self.builder.start_node(SyntaxKind::DESIGN_BODY_HOOK.into());
         self.expect(SyntaxKind::BODY_KW);
-        self.expect(SyntaxKind::IDENT); // language tag, e.g. "rhai"
+        self.expect(SyntaxKind::IDENT); // language tag, e.g. "rune"
         self.expect(SyntaxKind::RAW_STRING);
         self.skip_trivia();
         if self.peek() == Some(SyntaxKind::SEMI) { self.bump(); }
