@@ -425,6 +425,22 @@ longer participates in interface field declarations.
   TX pad on an imported MCU read as a plain input (idle-high
   auto pull-up on a driven pin).
 
+- **F103 IO bank + five-volt-tolerant pins (stdlib, shipped).** The
+  F1 has ONE VDD rail powering every GPIO pad — declared as a
+  `domain VDDIO … io_pins=` bank on all three packages, so ERC004
+  judges the pads at the VDD net's actual voltage, ERC035 refuses
+  pins with VDD unpowered, and configured internal pulls now
+  MATERIALISE against the rail (previously stated but invisible to
+  the DC solve). New vocabulary `attribute ft_pins = "PA8,…";` —
+  the DS pin table's "I/O Level: FT" column (Doc ID 13587 Rev 12
+  Table 5): ERC004 judges an FT input tolerant up to 5.5V under a
+  higher-rail driver (a 5V part on an FT pad is designed-in and
+  silent; on a strict pad it stays an Error). The ERC035
+  bank-coverage advisory exempts declared-signal pins wired to
+  Power/Ground nets (legacy entities model VDD/VBAT as
+  `signal inout`); NRST/BOOT0 are genuine VDD-domain IO and sit in
+  io_pins.
+
 - **Pull requirements (SoC arc, shipped).** "I need a pull-up here",
   declared WHERE THE KNOWLEDGE LIVES — a full resistor entity with
   port mapping is overkill for one pin:

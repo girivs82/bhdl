@@ -306,7 +306,11 @@ pub fn check_io_banks(netlist: &Netlist, _analysis: &AnalysisResult) -> Vec<DRCV
             continue;
         }
         let Some(entry) = module.attributes.get(&format!("io_bank__{pin_name}")) else {
-            // signal pins only — power/ground pins have domains, not banks
+            // signal pins only — power/ground pins have domains, not
+            // banks. A declared-signal pin WIRED TO a Power/Ground
+            // net is serving as a supply (legacy entities model
+            // VDD/VBAT as `signal inout`) — exempt too: no IO level
+            // to verify on a rail.
             let is_signal = netlist.pin_instances.values().any(|pi| {
                 pi.instance == inst_id
                     && netlist
@@ -315,7 +319,26 @@ pub fn check_io_banks(netlist: &Netlist, _analysis: &AnalysisResult) -> Vec<DRCV
                         .map(|p| p.name == pin_name && matches!(p.pin_type, PinType::Signal))
                         .unwrap_or(false)
             });
-            if is_signal && !pin_name.contains('.') {
+            let on_rail = netlist.pin_instances.values().any(|pi| {
+                pi.instance == inst_id
+                    && netlist
+                        .pins
+                        .get(pi.pin_def)
+                        .map(|p| p.name == pin_name)
+                        .unwrap_or(false)
+                    && pi
+                        .net
+                        .and_then(|n| netlist.nets.get(n))
+                        .map(|n| {
+                            matches!(
+                                n.net_class,
+                                bhdl_netlist::types::NetClass::Power { .. }
+                                    | bhdl_netlist::types::NetClass::Ground
+                            )
+                        })
+                        .unwrap_or(false)
+            });
+            if is_signal && !on_rail && !pin_name.contains('.') {
                 out.push(DRCViolation {
                     rule_id: "ERC035".into(),
                     rule_name: "IO bank discipline".into(),
@@ -979,19 +1002,36 @@ pub fn check_voltage_domains(
         }
         // Domains of the ACTIVE members (instances with a resolvable supply);
         // passives bridge domains legitimately (dividers, series R).
-        let mut domains: Vec<(f64, String)> = Vec::new();
+        // (domain voltage, label, INPUT TOLERANCE): a five-volt-
+        // tolerant pin (`ft__<pin>`, datasheet "I/O Level: FT")
+        // still DRIVES at its own rail but tolerates being driven
+        // up to 5.5V — the DS's "5 V tolerant" claim judged at
+        // 5V + 10%.
+        let mut domains: Vec<(f64, String, f64)> = Vec::new();
         let mut heuristic = false;
         for p in pins {
             if matches!(p.dir, PinDirection::Passive) {
                 continue;
             }
+            let is_ft = netlist
+                .instances
+                .values()
+                .find(|i| i.name == p.inst)
+                .and_then(|i| netlist.modules.get(i.definition))
+                .map(|m| {
+                    m.attributes
+                        .contains_key(&format!("{}{}", crate::hierarchical_connectivity::FT_ATTR_PREFIX, p.pin))
+                })
+                .unwrap_or(false);
             // IO BANK (increment 4): a pin covered by a declared bank
             // is judged at ITS bank rail's net voltage — exact, no
             // instance-level heuristic. Checked BEFORE the InOut
             // exemption: a 1.8V-banked pad on a 3.3V net is a real
             // overdrive whichever direction the pad can drive.
             if let Some(v) = bank_voltage(netlist, &p.inst, &p.pin) {
-                domains.push((v, format!("{}.{} @{v:.2}V (bank)", p.inst, p.pin)));
+                let tol = if is_ft { 5.5_f64.max(v) } else { v };
+                let ft_tag = if is_ft { ", FT" } else { "" };
+                domains.push((v, format!("{}.{} @{v:.2}V (bank{ft_tag})", p.inst, p.pin), tol));
                 continue;
             }
             // open-drain (InOut) imposes the PULL-UP's level, not its
@@ -1003,15 +1043,21 @@ pub fn check_voltage_domains(
                 if *n_rails > 1 {
                     heuristic = true;
                 }
-                domains.push((*v, format!("{}.{} @{v:.2}V", p.inst, p.pin)));
+                let tol = if is_ft { 5.5_f64.max(*v) } else { *v };
+                domains.push((*v, format!("{}.{} @{v:.2}V", p.inst, p.pin), tol));
             }
         }
         if domains.len() < 2 {
             continue;
         }
-        let lo = domains.iter().map(|(v, _)| *v).fold(f64::MAX, f64::min);
-        let hi = domains.iter().map(|(v, _)| *v).fold(f64::MIN, f64::max);
-        if hi - lo > 0.05 * hi.max(1.0) {
+        let lo = domains.iter().map(|(v, ..)| *v).fold(f64::MAX, f64::min);
+        let hi = domains.iter().map(|(v, ..)| *v).fold(f64::MIN, f64::max);
+        // overdrive is real only if some BELOW-hi member cannot
+        // tolerate hi — an FT input under a 5V driver is designed-in
+        let overdriven = domains
+            .iter()
+            .any(|(v, _, tol)| *v < hi - 1e-9 && *tol < hi - 1e-9);
+        if hi - lo > 0.05 * hi.max(1.0) && overdriven {
             out.push(DRCViolation {
                 rule_id: "ERC004".into(),
                 rule_name: "Cross-domain signal without level shifter".into(),
@@ -1021,7 +1067,7 @@ pub fn check_voltage_domains(
                      ({}) with no level shifter — a {hi:.2}V output can \
                      overdrive a {lo:.2}V input",
                     net_name(netlist, *net_id),
-                    domains.iter().map(|(_, d)| d.as_str()).collect::<Vec<_>>().join(", "),
+                    domains.iter().map(|(_, d, _)| d.as_str()).collect::<Vec<_>>().join(", "),
                 ),
                 // a multi-rail member's domain came from the highest-
                 // rail HEURISTIC — a claim that strong only warns, and

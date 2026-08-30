@@ -618,6 +618,24 @@ fn parse_pull_requirement_text(text: &str) -> Option<(String, String, Option<f64
 /// Entity-scope pull requirements: `require pullup(INT, 10k);` in the
 /// entity body (datasheet truth — "this open-drain output needs an
 /// external pull-up"). Stamped as `pull_req__<pin>` module attrs.
+fn add_ft_attrs(entity: &bhdl_ast::Entity, module_id: ModuleId, netlist: &mut Netlist) {
+    use rowan::ast::AstNode;
+    let text = entity.syntax().text().to_string();
+    for line in text.lines() {
+        let t = line.trim();
+        let Some(rest) = t.strip_prefix("attribute ft_pins") else { continue };
+        let Some(v) = rest.split_once('=').map(|(_, v)| v) else { continue };
+        let v = v.trim().trim_end_matches(';').trim().trim_matches('"');
+        if let Some(module) = netlist.modules.get_mut(module_id) {
+            for pin in v.split(|c: char| c == ',' || c.is_whitespace()).filter(|p| !p.is_empty()) {
+                module
+                    .attributes
+                    .insert(format!("{FT_ATTR_PREFIX}{pin}"), "true".into());
+            }
+        }
+    }
+}
+
 fn add_pull_req_attrs(entity: &bhdl_ast::Entity, module_id: ModuleId, netlist: &mut Netlist) {
     use rowan::ast::AstNode;
     for node in entity
@@ -3085,6 +3103,11 @@ pub(crate) const PULL_CAP_ATTR_PREFIX: &str = "pull__";
 /// resistor per (net, polarity) — NEVER a parallel network: multiple
 /// requirements dedupe to the strongest (min R) with a stated note.
 pub(crate) const PULL_REQ_ATTR_PREFIX: &str = "pull_req__";
+/// Five-volt-tolerant pins, datasheet truth (`attribute ft_pins =
+/// "PA8,PA9";` — the DS pin table's "I/O Level: FT" column). Stamped
+/// as `ft__<pin>` module attrs; ERC004 judges an FT input tolerant
+/// up to 5.5V instead of its bank rail.
+pub(crate) const FT_ATTR_PREFIX: &str = "ft__";
 /// The CONFIGURED state per pin — `pull_cfg__<pin>` = up|down|off
 /// (instance attr; designer override via the same scoped attribute).
 pub(crate) const PULL_CFG_ATTR_PREFIX: &str = "pull_cfg__";
@@ -3213,6 +3236,7 @@ fn add_interface_field_pins(
     add_io_bank_attrs(entity, module_id, netlist);
     add_internal_pull_attrs(entity, module_id, netlist);
     add_open_drain_attrs(entity, module_id, netlist);
+    add_ft_attrs(entity, module_id, netlist);
     add_pull_req_attrs(entity, module_id, netlist);
     use bhdl_netlist::{PinDirection, PinType, PortDirection};
     use bhdl_parser::SyntaxKind;
