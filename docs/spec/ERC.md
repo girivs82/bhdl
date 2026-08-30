@@ -4,9 +4,10 @@
 > T2 part-carried `check {}` rules (ERC025), T3 policy plugins
 > (`BHDL_ERC_PLUGINS`), severity gating (`--erc-fail-on`), and reasoned
 > waivers (`erc_waive`), the T2 predicate extensions (exists / value-eq /
-> same_net), and the ERC024 absence ledger. The FULL catalog through ERC031 is
-> BUILT — batches 1-4, all three tiers, gating, waivers, the ERC024
-> absence ledger, and the ERC019 solved-DC upgrade.
+> same_net), and the ERC024 absence ledger. The FULL catalog through ERC037 is
+> BUILT — batches 1-4 plus the power arc (ERC032 acceptance, ERC033
+> sequencing) and the SoC arc (ERC034–ERC037), all three tiers, gating,
+> waivers, the ERC024 absence ledger, and the ERC019 solved-DC upgrade.
 
 ## 1. Why BHDL can check more than an EDA netlist tool
 
@@ -39,8 +40,11 @@ connection requirements are device IP and travel WITH the entity, exactly
 like its stress model:
 
 ```bhdl
-entity LP2985(…) {
-    …
+entity LP2985(v_out: voltage = 3.3V) as part {
+    pin VIN:  power in;
+    pin GND:  ground;
+    pin EN:   signal in;
+    pin VOUT: power out;
     simulation {
         check {
             require connected(EN)
@@ -61,8 +65,11 @@ part's snapped value, with `==`/`!=` comparing at engineering tolerance;
 multiple conditions are written as multiple requires —
 each failure is its own finding with its own vendor message (ERC025, Error,
 located on the instance; the message doubles as the fix suggestion). A
-predicate that cannot be resolved (unknown pin, unresolvable identifier)
-SKIPS per the Real-Data Policy. Recipes ride the same extraction/import
+predicate whose substitution fails outright (unknown pin, malformed call)
+SKIPS per the Real-Data Policy; one that substitutes but the evaluator
+cannot resolve emits an Info finding — "require … UNCHECKED — predicate
+unresolvable" — so the trace matrix records "no verifier" as a visible
+row, never a silent pass. Recipes ride the same extraction/import
 plumbing as §4 stress recipes — one vendor-model surface per entity.
 
 Evaluated per instance with net context. Adding a part to the stdlib adds
@@ -112,7 +119,16 @@ across all three tiers.
 - **ERC002** differential polarity: P and N of a pair on one net.
 - **ERC003** UART not crossed: TX↔TX / RX↔RX between devices.
 - **ERC004** cross-domain signal without level shifter (supply resolved by
-  following power pins to rails; `component_class = "level_shifter"` exempts).
+  following power pins to rails; `component_class = "level_shifter"`
+  exempts). Ships the tolerance model: a pin covered by a declared IO
+  bank (`domain … io_pins=`) is judged at its bank rail's exact net
+  voltage (inout included), and a `ft__<pin>` five-volt-tolerant
+  attribute (datasheet "I/O Level: FT") raises that pin's tolerance to
+  5.5V — the rule fires only when some below-hi member cannot TOLERATE
+  hi, so an FT input under a 5V driver is designed-in and silent.
+  Severity: Warning when a member's supply came from the multi-rail
+  highest-rail heuristic (the fix says how to pin the IO domain with
+  `io_voltage`), Error when every domain was resolved exactly.
 - **ERC005** I2C pull-ups missing / pulled to the wrong rail.
 
 ### Batch 2 — connectivity + datasheet + budgets (BUILT)
@@ -200,8 +216,11 @@ across all three tiers.
   vestigial EMPTY duplicate Net object (zero connections). The ERC-side
   defenses stay: `net_members` trusts the `pin_instance.net` back-pointer,
   and ERC008 exempts pins listed in multiple connection lists.
-- VIL/VIH-aware domain rule: replace ERC004's 5% rail comparison with pin
-  `vih_min`/`vil_max`/`io_tolerant_v` attributes when declared.
+- Tolerance-aware domain rule — SHIPPED into ERC004 (see Batch 1): per-pin
+  IO-bank voltages plus `ft__<pin>` five-volt-tolerant attributes replace
+  the bare 5% rail comparison. A full per-pin `vih_min`/`vil_max`
+  threshold model (logic-level compatibility, not just overdrive) remains
+  future scope.
 
 ### Batch 4 — boundaries: rails and the expansion authoring line (BUILT)
 
@@ -215,8 +234,10 @@ across all three tiers.
   pin drives → the declaration claims an external supply that doesn't
   exist on the built board (Error). A power-in port whose net touches no
   connector-class instance → nothing to solder the supply to (Warning).
-  INOUT ports (battery+charger buses) make no single-boundary claim and
-  are unchecked.
+  A power-OUT port on a rail nothing drives → "Generated rail has no
+  generator": the port claims the rail is generated on-board, and with
+  no driver that claim is false (Error). INOUT ports (battery+charger
+  buses) make no single-boundary claim and are unchecked.
 
 The next two rules police the **expansion authoring boundary** — who owns
 a self-expanding entity's application circuit. The contract: wiring the
@@ -273,7 +294,10 @@ by itself:
   covered by a `domain … io_pins=` bank declaration is refused when
   wired while its bank rail has no Power-class net (every pin of the
   bank is dead silicon); a wired signal pin outside a declared bank
-  map is stated as Info (incomplete bank table, never silent). The
+  map is stated as Info (incomplete bank table, never silent); and a
+  bank whose declared supply pin is itself declared `signal` is an
+  Error — a bank's supply must be a power/ground pin, and the
+  declaration is the truth, never the net it happens to touch. The
   same bank data upgrades ERC004: banked pins are judged at their
   bank rail's exact net voltage, `(bank)`-marked, inout included.
 - **ERC034** swizzle discipline — BUILT (Error/Info): the realised
@@ -301,6 +325,30 @@ by itself:
   First corpus scan caught a real one: buck_converter_simple's divider
   (10k/1.87k) programmed 7.81V onto its declared-5V rail — the "5V
   output" comment had been false since the fixture was authored.
+- **ERC032** power-tree acceptance — BUILT (Error/Warning/Info): the
+  power tree's emitted stages carry their sizing ASSUMPTIONS as
+  `powertree_*` attributes — the acceptance contract for the real part
+  that replaces the Generic* placeholder by rename. Enforced at every
+  synthesis: a committed part whose declared rated output current sits
+  BELOW the tree's derated requirement, or whose declared efficiency
+  sits below the assumed one, is an Error (the swap silently shrank the
+  stage); a Generic* placeholder still present is an Info (planned
+  tree, visible, never silent); acceptance figures the part does not
+  declare are UNCHECKED and SAY SO (Real-Data: absent data is a named
+  gap, never a pass). The library model and the acceptance/resolution
+  duality live in Requirements_And_Resolution.md.
+- **ERC033** power sequencing — BUILT (Error/Info): the declared rail
+  power-up ordering (`domain … after=` / `slot=` / `sw_enabled`)
+  reconciled against the netlist's IMPLEMENTING mechanism. A missing or
+  defeated enable path and an unmet `t_min` are Errors; figures the
+  netlist cannot verify are stated UNCHECKED; `sw_enabled` rails are
+  stated as software assumptions (Info) — the ordering exists only if
+  firmware honors it.
+- **ERC-PLUGIN** policy-plugin tooling failure — BUILT (Warning): a T3
+  plugin that can't spawn, exits non-zero, or replies malformed JSON
+  becomes ONE visible finding anchored Global — a broken policy gate
+  must be seen, but a tooling failure never fabricates design errors
+  (§2, Real-Data Policy applied to tooling).
 
 ## 4. Reporting
 

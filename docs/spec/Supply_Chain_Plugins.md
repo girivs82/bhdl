@@ -1,11 +1,13 @@
-# Supply-Chain Plugins — real MPNs from distributor/catalog APIs (audit + design)
+# Supply-Chain Plugins — real MPNs from distributor/catalog APIs
 
-> **Status:** Audit + design (2026-06). The plugin *protocol* already
-> exists (`bhdl-analyzer/src/plugin.rs`, §3); this spec records the
-> EDA-supply-chain API landscape, picks the providers worth implementing,
-> and defines how a provider turns BHDL's parametric selection into a real,
-> orderable part (MPN + manufacturer + stock + price) in the BOM — and how
-> that stays reproducible via `bhdl.lock`.
+> **Status:** Shipped + maintained (audited 2026-06, since built out).
+> The plugin protocol (`bhdl-analyzer/src/plugin.rs`, §3), the jlcparts
+> providers (§4), the live `bom`/`visualize` wiring (§6), and the
+> `bhdl.lock` part pins (§5) all ship. This spec records the
+> EDA-supply-chain API landscape, the providers implemented, and how a
+> provider turns BHDL's parametric selection into a real, orderable
+> part (MPN + manufacturer + stock + price) in the BOM — and how that
+> stays reproducible via `bhdl.lock`.
 
 ## 1. Why
 
@@ -53,8 +55,12 @@ shell), zero-config default is `bhdl_plugin_default`:
   E-series/ranges, ratings, package, per `selections_needed[i]`).
 - **Out:** `PluginResponse { protocol_version, selections, warnings }`,
   each `PluginSelection { class_index, mpn, manufacturer, family, vendor,
-  vendor_sku, qty, unit_price, currency, stock, lead_time_weeks, note,
-  error }`.
+  vendor_sku, qty, unit_price, currency, stock, lead_time_weeks,
+  esr_ohms, esr_test_freq_hz, dielectric, power_rating_w,
+  voltage_rating_v, current_rating_a, note, error, message }` — the
+  electrical-rating fields carry real per-MPN data (published ESR + its
+  test frequency, ceramic dielectric, rated power/voltage/current) so
+  sign-off checks the actual part, not a family fallback stamp.
 
 So a supply-chain provider is exactly: read requirements on stdin → query
 its source → emit `PluginSelection`s with the real `mpn`/`manufacturer`/
@@ -80,10 +86,14 @@ the provider has **zero runtime dependencies** — no Python interpreter, no
 system `libsqlite3`, a single self-contained executable consistent with the
 Rust workspace. DB path from `$BHDL_JLCPARTS_DB` (or argv[1]).
 
-It is the **zero-config default**: when `$BHDL_SUPPLY_PROVIDER` is unset but
-`$BHDL_JLCPARTS_DB` points at a catalogue, the live `bom`/`visualize` path
-auto-resolves `bhdl-jlcparts-provider` (next to the running executable, else
-on `PATH`) — see `glacier_physical_selection::default_provider_spec`.
+It is the **zero-config default**: when `$BHDL_SUPPLY_PROVIDER` is unset,
+the live `bom`/`visualize` path finds the catalogue DB from
+`$BHDL_JLCPARTS_DB`, or — with no env var at all — by walking upward
+from the cwd looking for `data/jlcpcb-components.sqlite3` (then, for a
+foreign cwd, via the shared import search order: input dir + ancestors,
+`-I` roots, `$BHDL_LIB_PATH`). It then auto-resolves
+`bhdl-jlcparts-provider` (next to the running executable, else on
+`PATH`) — see `glacier_physical_selection::default_provider_spec`.
 
 Resolution per requirement: resolve category↔class once to the indexed
 `category_id`s; parse the parametric value out of the `description` text
@@ -310,6 +320,15 @@ mpn          = "RT0603BRC0731K6L"
 manufacturer = "YAGEO"
 vendor_sku   = "C860829"
 provider     = "bhdl-jlcparts-provider"
+# Pinned electrical ratings (when the provider supplied them) — real
+# per-MPN data, kept so a LOCKED rebuild's sign-off still checks the
+# actual part instead of falling back to family stamps / UNCHECKED:
+power_rating_w = 0.1                 # resistors
+# voltage_rating_v = 25.0            # capacitors
+# current_rating_a = 3.0             # inductors
+# dielectric = "X7R"                 # ceramics
+# esr_ohms = 0.012                   # electrolytic/tantalum/polymer
+# esr_test_freq_hz = 100000.0
 ```
 
 Lifecycle (cmd_bom, mirrors Cargo):
@@ -323,8 +342,11 @@ Lifecycle (cmd_bom, mirrors Cargo):
 
 `apply_supply_chain_mpns` returns the selections; `apply_locked_parts`
 applies pins without a provider; `enforce_lockfile` preserves the part
-section when it rewrites library locks (shared file). Only the **MPN/SKU
-identifier** is stored — never stock or price — so no distributor dataset is
+section when it rewrites library locks (shared file). The **MPN/SKU
+identifier plus the part's published electrical ratings** (ESR +
+test frequency, dielectric, rated power/voltage/current — see
+`LockedPart` in `bhdl-common/src/library.rs`) are stored; the volatile
+**stock and price are never stored**, so no distributor dataset is
 redistributed (satisfies e.g. DigiKey's no-redistribution ToS), the same
 contract as source-resolver revision pinning
 (`docs/spec/Source_Resolvers.md`).
@@ -339,10 +361,9 @@ stability.
 
 ## 6. Wiring — BUILT (live `bom`/`visualize` pipeline)
 
-`glacier_physical_selection::apply_supply_chain_mpns(netlist)` is now
+`glacier_physical_selection::apply_supply_chain_mpns(netlist)` is
 invoked from the live `bhdl bom` and `bhdl visualize` paths, right after
-catalogue physical selection. Steps 1–3 below are implemented; pinning
-(step 4) is the remaining piece.
+catalogue physical selection. All steps below are implemented.
 
 1. **Bridge** — ✅ builds the requirement list from the netlist's selected
    passives (`classify_component` + `parse_value_string` of the snapped
@@ -356,10 +377,46 @@ catalogue physical selection. Steps 1–3 below are implemented; pinning
    hardcoded to a `CandidateBundle` input.)
 3. **Apply** — ✅ writes `mpn`/`manufacturer`/`lcsc_pn`/`stock` onto the
    instance; the BOM walker reads `mpn`/`manufacturer`/`lcsc_pn`.
-4. **Pin** — ⏳ record the selected MPN in `bhdl.lock` (§5). Not yet built.
+4. **Pin** — ✅ records the selected MPN (+ ratings) in `bhdl.lock`
+   (§5): `LockedPart` + `Lockfile::set_parts` in
+   `bhdl-common/src/library.rs`, driven by the `cmd_bom` lifecycle
+   (first build resolves + writes pins; rebuilds reuse them without
+   calling the provider; `--update-lock` re-resolves; `--locked`
+   requires committed pins).
 5. **Provider** — ✅ both jlcparts providers shipped; the Rust SQLite binary
    is the zero-config default (§4.1), the Python CSV is the reference
    (§4.2). DigiKey online provider (BYO OAuth) still TODO.
+
+**The live request payload** (what step 2 actually pipes to the
+provider's stdin — `glacier_physical_selection`, not the
+`CandidateBundle` of `plugin.rs::run_plugin`):
+
+```jsonc
+{
+  "protocol": 1,                    // integer, NOT the reply's string protocol_version
+  "objective": "cost",              // optional global default (profile name or weights)
+  "quantity": 100,                  // optional global build quantity
+  "requirements": [
+    {
+      "class_index": 0,
+      "class": "resistor",
+      "value": 10000.0,
+      "package": "0603",
+      "tolerance_pct": 5.0,
+      "max_tolerance_pct": 1.0,     // optional: part-grade hard gate
+      "dielectric": "C0G",          // optional: capacitor Class-I gate
+      "current_a": 3.0,             // optional: inductor current gate
+      "voltage_v": 24.0,            // optional: capacitor voltage gate (derated)
+      "power_w": 0.05,              // optional: resistor power gate (derated)
+      "objective": "grade",         // optional per-requirement override
+      "quantity": 100               // optional per-requirement override
+    }
+  ]
+}
+```
+
+The reply is the shared `PluginResponse` (§3), whose `protocol_version`
+is the string `"1"`.
 
 **Verified end-to-end** — zero-config (only `$BHDL_JLCPARTS_DB` set, no
 `$BHDL_SUPPLY_PROVIDER`), full SQLite, on `tps54331_test.bhdl`:
@@ -380,6 +437,16 @@ field is `protocol_version: "1"` (a string), matching
 genuinely out of stock catalogue-wide (or the value/footprint has no
 equivalent), not a coverage gap of the subset — and the build stays
 MPN-less for that line rather than erroring.
+
+## 6a. Declaring a provider in the manifest — `[providers]` (shipped)
+
+A build can carry its own provider identity instead of riding shell
+state: `bhdl.toml`'s `[providers]` table declares the `supply` (and
+`fit`) provider command, which is AUTHORITATIVE over the ambient
+`$BHDL_SUPPLY_PROVIDER`, and the declared command is pinned in
+`bhdl.lock` (`[[provider]]`) — a changed command is lock drift
+(`ProviderChanged`), refused unless `--update-lock`. See
+`Library_Resolution.md` §3.3 for the table format and semantics.
 
 ## 7. Out of scope
 

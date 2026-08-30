@@ -962,7 +962,8 @@ or cited from a datasheet — the report renders, it never re-derives:
    counts, the final ratio.
 8. **Stress sign-off** — the SOLVED margins table embedded (§7.5 of
    the report): the same DC solve and margin computation
-   `bhdl report --simulate` runs, rating ÷ derated stress per axis,
+   `bhdl <file> bom --simulate` runs (`report` takes no flags and
+   embeds the same output), rating ÷ derated stress per axis,
    junction rows composing P·θJA against the datasheet T_J; a
    non-converging solve is STATED, never silent.
 9. **Final PDN sanity** — the loop-stability envelope verdicts and
@@ -974,6 +975,7 @@ or cited from a datasheet — the report renders, it never re-derives:
 
 Aggregation becomes COMMITTABLE:
 
+<!-- doc-check: skip (fragment — `resolve` is validated against the board's stage-requirement instantiations, elided here) -->
 ```bhdl
 resolve u1, u2, u3 = Pmic_TPS65217B;
 ```

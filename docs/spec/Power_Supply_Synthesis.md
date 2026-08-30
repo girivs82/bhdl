@@ -1,12 +1,13 @@
 # Power-Supply Synthesis — from Requirement to Signed-off BOM
 
-> **Status:** Proposal, phased. S1 (explicit-part `supply` statement + spec
-> threading + requirement sign-off rows + synthesis report skeleton) is built
-> first; S2 (automatic topology/part selection) and S3 (objective ranking by
-> real catalogue prices) follow. Everything below the selection layer is the
-> already-verified stack: part `design{}` sizing, `expansion{}`
-> materialisation, GLACIER solve, §4 `simulation{stress{}}` device models,
-> margin sign-off, and the supplier plugins.
+> **Status:** SHIPPED through S4c (see §6 for the per-stage ledger): the
+> `supply` statement, spec threading, the S2 candidate chooser, S3 price
+> ranking + SVG curves, S4a application-circuit emission, S4b supply
+> trees, and S4c shared input banks + power-up order are all built.
+> Everything below the selection layer is the already-verified stack:
+> part `design{}` sizing, `expansion{}` materialisation, GLACIER solve,
+> §4 `simulation{stress{}}` device models, margin sign-off, and the
+> supplier plugins.
 
 ## 1. Motivation — state the requirement, not the part
 
@@ -109,28 +110,33 @@ derivations, simulation results, and the margin sign-off. It is large
 because the engineer's report is large; that is the point. One report per
 board, one chapter per `supply` statement.
 
-`bhdl <board>.bhdl synth-report [-o out/]` emits Markdown (charts as
-embedded SVG in a later phase):
+`bhdl <file> report` emits Markdown on stdout (no flags — redirect to a
+file for the document form; the design curves render as inline SVG).
+What it emits today, per `supply` statement:
 
-1. **Requirements** — the `supply` spec verbatim, source-located, plus the
-   rail-derived operating point.
-2. **Topology decision** — the closed forms *evaluated with numbers*:
-   `P_linear = (12−3.3)·1.5 = 13.05 W > 2 W/2 ⇒ linear infeasible`,
-   `η_linear = 3.3/12 = 27.5 % < 85 % ⇒ linear excluded`, conclusion.
-3. **Candidate survey** — every regulator in the catalogue, one row per
-   part, every hard gate shown pass/fail *with the computed value* (the
-   UNPOPULATED-diagnostic discipline applied to selection):
-   `LM7805 — REJECT: p_diss 13.1 W > 1.0 W derated; XC6206 — REJECT:
-   i_out 200 mA < 1.5 A; TPS54331 — PASS (all gates)`.
-4. **Ranking** — objective, per-candidate scores, catalogue prices/stock.
-5. **Winner and instantiation** — the desugared BHDL text, verbatim.
-6. **Support-component design** — the winner's `design {}` equations with
-   substituted numbers and snapped values (`L = (12−3.3)·0.275 /
-   (570 kHz · 0.45 A) = 9.3 µH → 10 µH`), divider, seed-vs-snapped table.
-7. **Simulation results** — GLACIER operating point; §4 stress values with
-   `(stress block)` provenance.
-8. **Sign-off** — the existing margin table, plus the requirement rows (§5).
-9. **BOM** — MPNs, manufacturers, LCSC SKUs, unit prices, stock.
+1. **Requirements** — the `supply` spec as a table, plus the
+   rail-derived operating point (`## Requirement: @<rail> from @<rail>`).
+2. **Candidate survey** (S2 chooser) — one row per catalogue part:
+   verdict (CHOSEN / pass / REJECT with the failed gate and computed
+   value), estimated loss, support-part count, IC price, support cost,
+   total, MPN (LCSC); followed by the **per-candidate gate detail**
+   (every hard gate pass/fail with numbers — the UNPOPULATED-diagnostic
+   discipline applied to selection). A `using:` override prints as
+   "engineer override; no candidate survey run".
+3. **Design curves** — inline SVG line charts (efficiency vs load,
+   ripple vs C_out, …) each followed by a compact exact-numbers table.
+4. **Instantiation** — the desugared BHDL text, verbatim, with its
+   import line.
+5. **Power-up order** (S4c) — the staged order the supply tree implies
+   (a rail after its source), when the board has a cascade.
+6. **Design, simulation, sign-off and BOM** — the full `bom --simulate`
+   output embedded: sizing, stress, the margin sign-off table with the
+   §5 requirement rows, and the BOM with MPNs/prices/stock.
+
+A separate **topology-decision** section (the closed forms evaluated
+with numbers, e.g. `P_linear = (12−3.3)·1.5 = 13.05 W ⇒ linear
+infeasible`) is NOT emitted as its own chapter — the same math surfaces
+per candidate as gate rejections in the survey's gate detail.
 
 Report properties: deterministic (same inputs → same bytes, so it diffs in
 review), build output (never committed), and honest — UNCHECKED axes and
@@ -154,12 +160,15 @@ passes.
 
 ## 6. Phases
 
-- **S1** — `supply … { … using: <Part>; }`: parser production (contextual
-  keyword, like `simulation`), desugar to instantiation + wiring, spec →
-  constructor threading, requirement sign-off rows, report skeleton
-  (sections 1, 5–9 — everything except the chooser's 2–4).
-- **S2** — drop `using:`: capability filter + topology rule over the scan
-  index; report sections 2–4 (decision math + full candidate survey).
+- **S1 (BUILT)** — `supply … { … using: <Part>; }`: parser production
+  (contextual keyword, like `simulation`), desugar to instantiation +
+  wiring, spec → constructor threading, requirement sign-off rows, and
+  the report skeleton (§4 sections 1, 4 and 6 — requirements,
+  instantiation, and the embedded bom+simulate output).
+- **S2 (BUILT)** — drop `using:`: capability filter + topology rule over
+  the scan index; the report gains the candidate survey + per-candidate
+  gate detail (§4 section 2). The decision math lives in the gate
+  detail rather than a separate topology chapter.
 - **S3** — `profile: cost` ranked by real jlcparts prices across the whole
   derived BOM; charts (efficiency vs load, ripple vs C_out) as embedded SVG
   — BUILT: each design curve renders as a self-contained inline SVG line

@@ -1,51 +1,60 @@
-> **Early decision notes (2026-02), partly stale — verified 2026-07-09.**
-> The high-level decisions here (`@` for nets, `:` for handles, `for` intents,
-> no `net` keyword) still hold, but specifics have moved: notably, the `@`
-> prefix is **optional** on a declared rail in the shipped grammar
-> (`VIN -> …` and `@VIN -> …` both work; the corpus uses the bare form), not
-> mandatory as stated below. The current, verified net model is in
+> **Early decision notes (2026-02), body rewritten 2026-08-30 to match the
+> shipped grammar.** The high-level decisions (`:` for handles, `for`
+> intents, no `net` keyword, `power`/`ground` declarations) hold. One early
+> decision did NOT survive contact with the corpus: the mandatory `@` prefix.
+> In the shipped grammar `@` is **optional** — see rule 1. The current,
+> verified net model is in
 > [BHDL_Complete_Specification.md](BHDL_Complete_Specification.md) §3.2.
 
 # BHDL Syntax Decisions Summary
 
 ## Final Syntax Rules
 
-### 1. Net References - Always Use @
+### 1. Net References — `@` Is Optional
 
-**All nets must be referenced with @ prefix**, regardless of how they were declared:
+A net can be referenced with or without the `@` prefix. `@name`
+*unambiguously* denotes a net (never a component handle); a bare identifier
+resolves as a net when it is not a declared instance handle — **instance
+names take precedence** over net names for bare identifiers. The corpus
+mostly uses the bare form.
 
 ```bhdl
-// Power/ground declarations create nets
-power VCC = 5V @ 1A;        // Creates net named VCC
-ground GND;                  // Creates net named GND
+board NetRefs {
+    // Power/ground declarations create nets
+    power VCC = 5V @ 1A;         // creates net VCC
+    ground GND;                  // creates net GND
 
-// ALL net references use @
-@VCC -> Res(10k).1 -> led: LED(red).A;
-led.K -> @GND;
+    // @ is OPTIONAL on net references — both forms mean the same net
+    @VCC -> r1: Res(10k).1;
+    r1.2 -> led: LED("red").A;
+    led.K -> GND;                // bare form
 
-// Named nets created inline
-@VCC -> @filtered -> amp: OpAmp().IN+;
-@filtered -> Cap(100n).1 -> @GND;
+    // Named nets created inline (no declaration needed)
+    VCC -> rf: Res(1k).1;
+    rf.2 -> filtered;
+    filtered -> cf: Cap(100n).1;
+    cf.2 -> GND;
+}
 ```
 
-**Rationale**: 
-- Consistent syntax: @ always means net
-- No ambiguity between nets, components, and other entities
-- Power/ground are just nets with special attributes
+**Rationale**:
+- `@` is available for disambiguation whenever a name could shadow an
+  instance handle; it is never *required* on an unambiguous name.
+- Power/ground are just nets with special attributes.
 
 ### 2. Component Handles - Use : Only
 
 **The : operator is exclusively for component handles**:
 
 ```bhdl
-// Create component with handle
+// Create a component with a handle
 @VCC -> r1: Res(10k).1;
 
-// Reference component via handle  
-r1.2 -> led: LED(red).A;
+// Reference the component via its handle
+r1.2 -> led: LED("red").A;
 
 // Anonymous components (no handle)
-@VCC -> Res(4.7k).1 -> LED(blue).A;
+@VCC -> Res(4.7k).1 -> LED("blue").A;
 ```
 
 **Rationale**:
@@ -54,14 +63,13 @@ r1.2 -> led: LED(red).A;
 
 ### 3. No Connection Labels
 
-**Remove the label: syntax for connections**:
+**There is no label: syntax for connections** — a leading identifier before
+a flow would read as a handle. Purpose is documented with a `for` intent
+clause:
 
 ```bhdl
-// DON'T DO THIS - confusing
-protection: @VIN -> fuse.1 -> @protected;
-
-// DO THIS - clear and simple
-@VIN -> fuse.1 -> @protected for overvoltage_protection;
+@VIN -> f1: Fuse(2A).1;
+f1.2 -> protected for overvoltage_protection;
 ```
 
 **Rationale**:
@@ -71,17 +79,19 @@ protection: @VIN -> fuse.1 -> @protected;
 
 ### 4. Intent Syntax - No 'net' Keyword
 
-**Attach intents using 'for' on flows and connections**:
+**Attach intents using 'for' on flows and connections.** (An early draft
+also sketched a named-flow statement — `flow name = …;` — that keyword was
+**never implemented** and does not exist in the shipped grammar. The staged
+power-flow operator `|>` on `power` declarations is the closest shipped
+relative, and it too is unused by the realistic corpus.)
 
 ```bhdl
-// Intent on named flow (if we keep flow names, use different syntax)
-flow power_path = @VIN |> protection |> regulation;
+// Intent on a connection
+@VIN -> f1: Fuse(2A).1;
+f1.2 -> protected for overvoltage_protection;
 
-// Intent on direct connection
-@VIN -> fuse: Fuse(2A).1 -> @protected for overvoltage_protection;
-
-// Intent on anonymous flow
-@VCC -> Res(10k).1 -> LED(red).A for power_indicator;
+// Intent on an anonymous flow
+@VCC -> Res(10k).1 -> LED("red").A for power_indicator;
 ```
 
 **Rationale**:
@@ -99,12 +109,18 @@ board Example {
     power VIN = 12V @ 2A;
     power VCC = 5V @ 1A;
     ground GND;
-    
-    // But reference with @
-    @VIN -> @VCC;
-    @VCC -> @GND;
+
+    // Regulation between the rails is a real circuit, not a shorthand:
+    VIN -> reg: LM7805().VIN;
+    reg.VOUT -> VCC;
+    reg.GND -> GND;
 }
 ```
+
+(Note: a direct rail-to-rail short like `@VCC -> @GND` is *syntactically*
+possible but electrically wrong — ERC009 "rail shorted to ground" refuses
+it. Rails are connected through real circuits, or via the `supply`
+statement.)
 
 **Rationale**:
 - Self-documenting power infrastructure
@@ -113,36 +129,40 @@ board Example {
 
 ## Complete Example
 
+All parts below are real stdlib entities (`Fuse`/`TVSDiode` from
+`bhdl-stdlib/protection/tvs.bhdl`, `LM7805` from
+`bhdl-stdlib/power/regulator.bhdl`, `LED(color: string)` from
+`bhdl-stdlib/optoelectronic/led.bhdl`):
+
 ```bhdl
 board ClearSyntaxExample {
     // Power declarations (create nets with attributes)
     power VIN = 12V @ 2A;
     power VCC = 5V @ 1A;
-    power VCC_3V3 = 3.3V @ 500mA;
     ground GND;
-    ground AGND;
-    
-    // All nets use @ for reference
-    @VIN -> fuse: Fuse(2A).1;
-    fuse.2 -> @protected -> tvs: TVSDiode(15V).K;
-    tvs.A -> @GND;
-    
-    // Intent without labels or 'net' keyword
-    @protected -> reg: LM7805().IN for voltage_regulation;
-    reg.OUT -> @VCC;
-    reg.GND -> @GND;
-    
+
+    // Input protection — bare and @-prefixed net references both work
+    VIN -> f1: Fuse(2A).1;
+    f1.2 -> protected;
+    protected -> tvs: TVSDiode(15V).K;
+    tvs.A -> GND;
+
+    // Intent without labels or a 'net' keyword
+    protected -> reg: LM7805().VIN for voltage_regulation;
+    reg.VOUT -> VCC;
+    reg.GND -> GND;
+
     // Component handles use :
     @VCC -> r1: Res(330).1;
-    r1.2 -> led: LED(green).A;
+    r1.2 -> led: LED("green").A;
     led.K -> @GND;
-    
-    // Anonymous components
-    @VCC_3V3 -> Res(10k).1 -> @pulled_up;
-    
-    // Multiple connections to same net
-    @VCC -> Cap(100uF).+ -> @GND;  // Bulk cap
-    @VCC -> Cap(0.1uF).1 -> @GND;  // Bypass cap
+
+    // Anonymous components in a chain
+    VCC -> Res(10k).1 -> pulled_up;
+
+    // Multiple connections to the same net
+    VCC -> c_bulk: Cap(100uF).1;  c_bulk.2 -> GND;   // bulk cap
+    VCC -> c_byp: Cap(0.1uF).1;   c_byp.2 -> GND;    // bypass cap
 }
 ```
 
@@ -150,17 +170,15 @@ board ClearSyntaxExample {
 
 | Syntax | Purpose | Example |
 |--------|---------|---------|
-| `@name` | Net reference | `@VCC`, `@filtered`, `@GND` |
-| `handle:` | Component handle | `r1: Res(10k)`, `amp: OpAmp()` |
-| `handle.pin` | Component pin | `r1.2`, `amp.OUT` |
+| `name` / `@name` | Net reference (`@` optional; instance names take precedence for bare identifiers) | `VCC`, `@VCC`, `filtered` |
+| `handle:` | Component handle | `r1: Res(10k)`, `reg: LM7805()` |
+| `handle.pin` | Component pin | `r1.2`, `reg.VOUT` |
 | `for intent` | Intent clause | `for overvoltage_protection` |
 | `power/ground` | Net declaration | `power VCC = 5V @ 1A` |
 
 ## Key Principles
 
-1. **One symbol, one meaning**: @ for nets, : for components
-2. **No ambiguity**: Every reference clearly shows its type
-3. **Flow-based**: No declarative keywords beyond power/ground
-4. **Consistent**: Same rules everywhere in the language
-
-This creates a clean, intuitive syntax that's easy to learn and impossible to misuse.
+1. **One symbol, one meaning**: `:` always means component handle; `@`
+   always means net (and is optional where the bare name is unambiguous)
+2. **Flow-based**: No declarative keywords beyond power/ground
+3. **Consistent**: Same rules everywhere in the language

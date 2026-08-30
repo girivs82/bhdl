@@ -1,9 +1,16 @@
-# Library Resolution & Project Manifests — spec v0
+# Library Resolution & Project Manifests
 
-> **Status:** Proposal v0. Defines how BHDL resolves `import { … } from
+> **Status:** Shipped. Describes how BHDL resolves `import { … } from
 > "<namespace>/path.bhdl"` statements against declared libraries —
 > built-in, third-party, and **proprietary/internal** — in a
-> reproducible, Cargo-style way.
+> reproducible, Cargo-style way. Implementation:
+> `bhdl-common/src/library.rs` (manifests, `LibraryResolver`, lockfile),
+> `bhdl-common/src/import_search.rs` (shared search order),
+> `bhdl-synthesizer/src/import_loader.rs` (import wiring), and
+> `bhdl-cli` (`--manifest`, `-I`/`--lib-path`, `--locked`,
+> `--update-lock`, `build_library_resolver`). The one remaining stage
+> is §7 stage 5 — folding the analyzer's component-catalog resolver
+> onto the same `LibraryResolver`.
 >
 > **Motivation:** companies generate proprietary stdlibs and keep them
 > internal; they must be addable without vendoring into the BHDL repo
@@ -11,22 +18,36 @@
 > across machines and CI (you must be able to rebuild the exact netlist
 > you fabbed).
 
-## 1. The problem with what exists today
+## 1. The problem this design fixed (historical)
 
-Two disjoint resolvers, neither reproducible for third-party libs:
+Before this design landed there were two disjoint resolvers, neither
+reproducible for third-party libs:
 
-- **Import resolver** (`bhdl-synthesizer/src/import_loader.rs`) — resolves
-  `./` / `../` relative to the importing file; everything else is a
-  literal path from cwd. `import … from "bhdl-stdlib/…"` only works
-  because tests run at the workspace root. No search path, no env var.
+- **Import resolver** (`bhdl-synthesizer/src/import_loader.rs`) — resolved
+  `./` / `../` relative to the importing file; everything else was a
+  literal path from cwd. `import … from "bhdl-stdlib/…"` only worked
+  because tests ran at the workspace root. No search path, no env var.
 - **Component-library resolver** (`bhdl-analyzer/.../component_library/
-  resolver.rs`) — honours `BHDL_STDLIB_PATH` + exe-relative + cwd, but
+  resolver.rs`) — honoured `BHDL_STDLIB_PATH` + exe-relative + cwd, but
   only for the component *catalog*, not import statements.
 
-Consequence: a proprietary library can only be referenced by hardcoded
+Consequence: a proprietary library could only be referenced by hardcoded
 absolute path in every `import`. Not portable, not reproducible, and a
 same-named part on a different machine's path could silently resolve to
 a different SKU — unacceptable for a tool that emits fabbable hardware.
+
+All of that is fixed on the import side. Today the import loader
+(`import_loader.rs`) resolves absolute-path imports as literal files
+(bypassing namespace resolution — generated boards carry them), keeps
+`./`/`../` file-relative, routes namespaced imports through the
+`LibraryResolver` when one is installed, and otherwise falls back to
+the shared search order in `bhdl-common/src/import_search.rs`
+(importing file's dir, input dir, `-I` roots, `$BHDL_LIB_PATH`,
+input-dir ancestors, then the legacy cwd-literal). Nested imports
+resolve against the importing *file's* directory, and a failed import
+is a hard synthesis error naming every failure. The component-catalog
+resolver's parallel path is the one piece not yet folded in (§7
+stage 5).
 
 ## 2. Design principles (Cargo-shaped)
 
@@ -51,9 +72,11 @@ a different SKU — unacceptable for a tool that emits fabbable hardware.
    manifest format. Resolution version-checks the declared dependency
    against the library's own manifest; mismatch is a hard error.
 5. **Reproducibility is non-negotiable.** CLI flag > env var > bundled,
-   and imports only resolve to declared+version-matched libs. A lockfile
-   (`bhdl.lock`) pinning resolved roots is a v1 addition; the v0
-   manifest + version check already prevents silent SKU drift.
+   and imports only resolve to declared+version-matched libs. The
+   lockfile (`bhdl.lock`, §7a) is shipped — `Lockfile`/`LockDrift`/
+   `hash_library_root` in `library.rs`, enforced by the CLI's
+   `--locked`/`--update-lock` — pinning exact versions + content
+   hashes on top of the manifest's version check.
 
 ## 3. The two manifests
 
@@ -79,14 +102,23 @@ sensor-lib  = { version = "1.4" }
 #
 # Shorthand: bare version string == { version = "…" }, name-resolved:
 fpga-lib    = "0.9"
+#
+# Level-3 source-fetch (Source_Resolvers.md): fetched at a pinned rev:
+remote-lib  = { source = "git:ssh://git.acme/bhdl-libs/remote-lib", rev = "v1.0.0", version = "1.0" }
 ```
 
+- `[project]` `name` is required; `version` is optional
+  (`Option<String>` in `ProjectInfo`).
 - `path` (optional) — explicit root dir, relative to the manifest.
 - `version` (required) — exact match in v0 (`"2.1"` means `==2.1.x`
   patch-flexible; full semver ranges are v1). Checked against the
   library root's own `manifest.toml`.
-- A dep with no `path` is resolved by name against the search path
-  (§4): the first root whose `manifest.toml` declares
+- `source` + `rev` (optional, `Dependency::Detailed`) — a level-3
+  scheme-prefixed source fetched at a pinned revision via a source
+  resolver (`Source_Resolvers.md`). `source` is mutually exclusive
+  with `path` and requires `rev`.
+- A dep with no `path`/`source` is resolved by name against the search
+  path (§4): the first root whose `manifest.toml` declares
   `name = "<dep>"` *and* a matching version wins.
 
 ### 3.2 Library manifest — `manifest.toml` (existing, reused)
@@ -136,8 +168,10 @@ resolution (generated boards carry them).
 
 For an import `from "<ns>/<rel>.bhdl"`:
 
-1. **`<ns>` == `bhdl-stdlib`** → the bundled library (located as today:
-   exe-relative, then cwd, then `BHDL_STDLIB_PATH`). Always available
+1. **`<ns>` == `bhdl-stdlib`** → the bundled library, located through
+   the shared search order (`import_search::locate_dir`): the input
+   file's dir, `-I` roots, `$BHDL_LIB_PATH`, the input dir's
+   ancestors, then the literal cwd-relative path. Always available
    without a manifest entry.
 2. **Otherwise** `<ns>` must be a declared dependency in `bhdl.toml`
    `[libraries]`. If not declared → error: *"import references library
@@ -145,8 +179,11 @@ For an import `from "<ns>/<rel>.bhdl"`:
 3. Resolve the declared dep to a root dir:
    - `path =` given → that dir (relative to the manifest).
    - else → search each root in order: explicit `-I`/`--lib-path` dirs
-     (in CLI order), then `$BHDL_LIB_PATH` (colon-separated). A root
-     *matches* if `root/manifest.toml` has `name == <ns>`.
+     (in CLI order), then `$BHDL_LIB_PATH` (colon-separated). Each
+     search root is tried both as the library dir itself (`base`) and
+     as a parent containing the lib as a subdir (`base/<ns>`); a
+     candidate *matches* if its `manifest.toml` has `name == <ns>` and
+     a compatible version.
    - First match wins; report all searched roots on miss.
 4. **Version-check** the root's `manifest.toml` version against the
    declared `version`; mismatch → hard error naming both.
@@ -165,7 +202,10 @@ the ambient "installed once per dev image" convenience.
 bhdl synth board.bhdl \
     --manifest path/to/bhdl.toml \   # default: discover by walking up
     -I /opt/acme/bhdl-libs \         # repeatable lib search root
-    -I ~/work/sensor-libs
+    -I ~/work/sensor-libs \
+    --locked                         # CI: build against the committed bhdl.lock
+# accept an intentional library change (regenerate bhdl.lock):
+bhdl synth board.bhdl --update-lock
 # env fallback:
 BHDL_LIB_PATH=/opt/acme/bhdl-libs:/usr/share/bhdl-libs  bhdl synth board.bhdl
 ```
@@ -187,26 +227,26 @@ cannot introduce an undeclared dependency.
 
 ## 7. Implementation stages
 
-1. **Manifest types + parsing** (`bhdl-common`): `ProjectManifest`
-   (`[project]`, `[libraries]`), reuse the existing `LibraryManifest`
-   (`[library]`). Pure types + serde + a `discover()` that walks up for
-   `bhdl.toml`.
-2. **`LibraryResolver`** (`bhdl-common` or `bhdl-synthesizer`): builds
-   the namespace→root map from (manifest, `-I` roots, env), with the
-   version check. One resolver both the import loader and the analyzer
-   component resolver consume — unifies today's two mechanisms.
-3. **Import loader** wired to the resolver: `import_loader.rs` asks the
-   resolver to turn `<ns>/<rel>` into a file path.
-4. **CLI**: `--manifest`, `-I`/`--lib-path`; thread resolver config into
-   `NetlistGenerator`.
-5. **Analyzer component resolver** folded onto the same root list (drop
-   the parallel `BHDL_STDLIB_PATH`-only logic; keep the var as an alias
-   for locating the bundled lib).
-6. **End-to-end test**: a fixture proprietary lib (`acme-stdlib/` with
-   its own `manifest.toml` + one entity) declared in a `bhdl.toml`,
-   imported and synthesized, resolved via (a) explicit `path =`,
+1. ✅ **Manifest types + parsing** (`bhdl-common/src/library.rs`):
+   `ProjectManifest` (`[project]`, `[libraries]`, `[providers]`),
+   reuse the existing `LibraryManifest` (`[library]`). Pure types +
+   serde + `discover_project_manifest()` that walks up for `bhdl.toml`.
+2. ✅ **`LibraryResolver`** (`bhdl-common/src/library.rs`): builds the
+   namespace→root map from (manifest, `-I` roots, env), with the
+   version check.
+3. ✅ **Import loader** wired to the resolver: `import_loader.rs` asks
+   the resolver to turn `<ns>/<rel>` into a file path.
+4. ✅ **CLI**: `--manifest`, `-I`/`--lib-path` (plus `--locked`/
+   `--update-lock`); `build_library_resolver` threads the resolver
+   into synthesis.
+5. ⏳ **Analyzer component resolver** folded onto the same root list
+   (drop the parallel `BHDL_STDLIB_PATH`-only logic; keep the var as an
+   alias for locating the bundled lib). **The one remaining stage.**
+6. ✅ **End-to-end tests**: fixture proprietary libs declared in a
+   `bhdl.toml`, imported and resolved via (a) explicit `path =`,
    (b) `-I` flag, (c) `$BHDL_LIB_PATH` — plus the negative cases
-   (undeclared namespace, version mismatch, missing root).
+   (undeclared namespace, version mismatch) — see the tests in
+   `library.rs`.
 
 ## 7a. Lockfile — `bhdl.lock` (landed)
 
@@ -228,6 +268,12 @@ name    = "acme-stdlib"
 version = "2.1.0"                 # exact resolved version, not the loose pin
 hash    = "sha256:9f3a…"          # content digest of the library root
 source  = "path:../acme/acme-stdlib"
+# rev = "…"                       # only for level-3 `source =` deps
+
+# The same lockfile also carries (each managed by its own subsystem):
+#   [[part]]     — supply-chain MPN pins (Supply_Chain_Plugins.md §5)
+#   [[stage]]    — requirement→block bindings (Requirements_And_Resolution.md §3)
+#   [[provider]] — declared-provider pins (role + command, §3.3)
 ```
 
 - **Content hash** = sha256 over every `.bhdl` file + `manifest.toml` in
@@ -250,7 +296,9 @@ source  = "path:../acme/acme-stdlib"
 | lock drifted | **error** (loud) | **error** | regenerate |
 
 Drift is classified: `Content` (same version, different bytes — the
-dangerous silent case), `Version`, `Added`, `Removed`. Default mode
+dangerous silent case), `Version`, `Added`, `Removed`, and
+`ProviderChanged` (a declared `[providers]` command changed, appeared,
+or vanished — §3.3). Default mode
 refuses to build on any drift and names the offending library; the user
 either restores the locked library or passes `--update-lock` to accept
 the change intentionally. **Never a silent substitution** — the
@@ -336,18 +384,21 @@ and work for any VCS:**
    The board's VCS history now pins the exact library bytes; the hash
    double-checks.
 
-3. **Source-fetch dependencies (optional, pluggable — not yet built).**
-   If a shop wants the toolchain to *fetch* automatically (Cargo-style),
-   the dependency/lock gains a scheme-prefixed `source` —
-   `git:<url>#<rev>`, `p4:<depot-path>@<changelist>`, `tarball:<url>` —
-   and resolution dispatches on the scheme to a **source resolver**.
-   This is an open extension point, **not git-only by design**: BHDL
-   may ship a `git` resolver as one built-in, and a company on Perforce
-   supplies a `p4` resolver as an extension (or simply stays on level 1
-   and syncs themselves). The `source` field in `bhdl.lock` is already a
-   free-form scheme-prefixed string (today it records `path:…` /
-   `search:…`), so recording `git:…` / `p4:…` provenance needs no
-   format change — only the optional auto-fetch dispatch is new work.
+3. **Source-fetch dependencies (optional, pluggable — SHIPPED).**
+   For shops that want the toolchain to *fetch* automatically
+   (Cargo-style), a dependency carries `source = "<scheme>:<locator>"`
+   + a pinned `rev`, and resolution dispatches on the scheme to an
+   external **source resolver** helper (`bhdl-source-<scheme>`, JSON
+   stdin/stdout) with a content-addressed cache — implemented in
+   `bhdl-common/src/source.rs` and wired into
+   `LibraryResolver::resolve_namespace_root`. It is **not git-only by
+   design**: every scheme is an external helper today (a company on
+   Perforce ships a ~20-line `bhdl-source-p4`, or simply stays on
+   level 1 and syncs themselves); a built-in `git` convenience scheme
+   is the remaining nicety. `bhdl.lock`'s `source` field is a
+   free-form scheme-prefixed string (`path:…` / `search:…` /
+   `git:…`), plus a `rev` field for fetched deps. Full spec:
+   `Source_Resolvers.md`.
 
 The toolchain's contract is therefore: **declare (manifest) + verify
 (lock content-hash) + record provenance (frozen netlist).** *Retrieving*
@@ -356,13 +407,9 @@ knowing how each company's VCS works.
 
 ## 8. Out of scope for v0
 
-- **Package registry / network fetch** — explicitly *not planned*. VCS
-  is the archive (§7c); we don't reinvent it.
-- **Auto-fetch source resolvers** (level 3, §7c) — a pluggable,
-  scheme-dispatched, VCS-agnostic hook; deferred until a shop wants
-  toolchain-driven fetch instead of sync-then-`path=`. When built, git
-  is one built-in resolver; Perforce/SVN/others are extensions, not
-  core.
+- **Package registry** — explicitly *not planned*. VCS is the archive
+  (§7c); we don't reinvent it. (Auto-fetch source resolvers — level 3,
+  §7c — ARE shipped, but as helper-driven fetch, not a registry.)
 - **Full semver ranges** (`^`, `~`, `>=`) — v0 is exact-with-patch-flex;
   ranges are v1.
 - **Transitive library deps** (a lib depending on another lib) — v0

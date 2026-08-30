@@ -1,8 +1,15 @@
 # Board SKU Variants
 
-> **Status:** Proposal v0.1. Scope: **DNP + value override**. Whole-
-> module gating, MPN override, footprint variants, and cross-variant
-> constraints are explicit non-goals for v0.1; see §4.
+> **Status:** SHIPPED (full v0.1 scope: **DNP + value override**).
+> `variant <Name> { }` blocks with `dnp <inst>;` and
+> `<inst>.value = <expr>;` statements, analyzer extraction, netlist
+> patching (DNP stamps `do_not_populate`, honored by the BOM walker
+> and the SPICE converter), the `--sku` selector (hard error, with a
+> listing, when variants exist but none is selected), and the
+> `list-skus` subcommand are all implemented. Fixture:
+> `tests/circuits/simple/bjt_mirror_variants.bhdl`. The §4 non-goals
+> (whole-module gating, MPN override, footprint variants,
+> cross-variant constraints, variant inheritance) remain planned.
 
 ## 1. Motivation
 
@@ -81,10 +88,12 @@ board ProductFamily {
 
 The v0.1 variant body accepts exactly two statement forms.
 
-**Value override:**
+**Value override** — `<instance_name>.value = <expr>;`:
 
 ```bhdl
-<instance_name>.value = <expr>;
+variant Pro {
+    R_FB.value = 100k;
+}
 ```
 
 Replaces the literal value the base design assigned to that
@@ -93,10 +102,12 @@ instance. `<expr>` uses the same expression grammar as the base
 type-checked against the entity's declared parameter shape — you
 can't put a string where a number is expected.
 
-**Do-not-populate:**
+**Do-not-populate** — `dnp <instance_name>;`:
 
 ```bhdl
-dnp <instance_name>;
+variant EU {
+    dnp C_BACKUP;
+}
 ```
 
 The instance stays in the netlist's *structural* representation

@@ -20,74 +20,81 @@ testbench TB_PowerSupply for PowerSupplyBoard {
         duration: 10ms;
         timestep: 1us;
         solver: adaptive;  // adaptive, fixed, behavioral
-        temperature: 25C;
+        temperature: 25;   // Celsius (plain number)
     }
-    
+
     // Waveform capture specification
     scope "power_rails" {
         signals: @VIN, @VOUT, @VCC_3V3;
         trigger: @VIN > 4.5V;
         capture: continuous;
     }
-    
+
     scope "regulation" {
         signals: U1.FB, U1.COMP, @VOUT;
-        capture: on_change(threshold: 10mV);
+        capture: on_change(10mV);       // positional threshold
     }
-    
+
     scope "current_monitoring" {
         signals: R_SENSE.current, D1.current;
         capture: periodic(interval: 100us);
     }
-    
+
     // Stimulus definition
     stimulus {
         // Voltage ramp
         @VIN: ramp(from: 0V, to: 12V, duration: 1ms);
-        
-        // Load current steps
-        @LOAD.current: steps([
-            (time: 2ms, value: 0mA),
-            (time: 3ms, value: 100mA),
-            (time: 5ms, value: 500mA),
-            (time: 7ms, value: 1A)
+
+        // Load current steps: (time, value) pairs
+        LOAD.current: steps([
+            (2ms, 0mA),
+            (3ms, 100mA),
+            (5ms, 500mA),
+            (7ms, 1A)
         ]);
-        
-        // Temperature sweep
-        ambient_temp: linear(from: -40C, to: 85C, duration: 10ms);
+
+        // Ambient temperature sweep (Celsius)
+        ambient_temp: ramp(from: -40, to: 85, duration: 10ms);
     }
-    
+
     // Assertions and checks
     verify {
-        // Steady-state checks
-        assert @VOUT in range(4.95V, 5.05V) after 2ms
-            message "Output voltage regulation failed";
-            
-        assert U1.junction_temp < 125C always
+        // Steady-state checks (a range = a pair of comparisons)
+        assert @VOUT > 4.95V after 2ms
+            message "Output voltage regulation failed (low)";
+        assert @VOUT < 5.05V after 2ms
+            message "Output voltage regulation failed (high)";
+
+        assert U1.junction_temp < 125 always
             message "Thermal limit exceeded";
-            
+
         // Transient checks
         assert rise_time(@VOUT, 10%, 90%) < 500us
             message "Output rise time too slow";
-            
+
         assert overshoot(@VOUT) < 5%
             message "Excessive output overshoot";
     }
-    
+
     // Measurements
     measure {
         efficiency = (@VOUT * @IOUT) / (@VIN * @IIN) * 100%;
-        ripple = peak_to_peak(@VOUT, window: 100us);
-        phase_margin = stability_margin(U1).phase;
-        load_regulation = (@VOUT[no_load] - @VOUT[full_load]) / @VOUT[no_load] * 100%;
+        ripple = peak_to_peak(@VOUT, 100us);
+        phase_margin = stability_margin(U1);
+        load_regulation = (v_no_load - v_full_load) / v_no_load * 100%;
     }
 }
 ```
 
 ### Advanced Features
 
+Everything in this section (and the capture-mode, simulation-control,
+and output-format examples below) is **planned design surface** — the
+current grammar does not parse these constructs yet.
+
 #### 1. Behavioral Models for Testing
 
+<!-- doc-check: skip (documents planned behavioral-model feature — not yet parsed) -->
 ```bhdl
 testbench TB_Communication for UARTBoard {
     // Define behavioral components for testing
@@ -123,6 +130,7 @@ testbench TB_Communication for UARTBoard {
 
 #### 2. Parametric Sweeps
 
+<!-- doc-check: skip (documents planned parametric-sweep feature — not yet parsed) -->
 ```bhdl
 testbench TB_FilterResponse for FilterCircuit {
     sweep frequency_response {
@@ -146,6 +154,7 @@ testbench TB_FilterResponse for FilterCircuit {
 
 #### 3. Monte Carlo Analysis
 
+<!-- doc-check: skip (documents planned monte-carlo feature — not yet parsed) -->
 ```bhdl
 testbench TB_Tolerance for VoltageReference {
     monte_carlo {
@@ -171,6 +180,7 @@ testbench TB_Tolerance for VoltageReference {
 
 #### 4. Corner Analysis
 
+<!-- doc-check: skip (documents planned corner-analysis feature — not yet parsed) -->
 ```bhdl
 testbench TB_Corners for OpAmpCircuit {
     corners {
@@ -198,6 +208,7 @@ testbench TB_Corners for OpAmpCircuit {
 
 #### 5. Mixed-Signal Testing
 
+<!-- doc-check: skip (documents planned mixed-signal feature — not yet parsed) -->
 ```bhdl
 testbench TB_ADC for ADCBoard {
     simulation {
@@ -236,6 +247,7 @@ testbench TB_ADC for ADCBoard {
 4. **triggered**: Start capture on trigger condition
 5. **windowed**: Capture within time windows
 
+<!-- doc-check: skip (documents planned triggered-capture mode — not yet parsed) -->
 ```bhdl
 scope "detailed_capture" {
     signals: @VOUT, I_LOAD;
@@ -254,6 +266,7 @@ scope "detailed_capture" {
 
 ### Simulation Control
 
+<!-- doc-check: skip (documents planned sequencing/fault-injection features — not yet parsed) -->
 ```bhdl
 testbench TB_PowerSequence for MultiRailSupply {
     // Sequenced startup test
@@ -295,6 +308,7 @@ testbench TB_PowerSequence for MultiRailSupply {
 ### Output Formats
 
 #### 1. VCD (Value Change Dump)
+<!-- doc-check: skip (documents planned output-writer feature — not yet parsed) -->
 ```bhdl
 output vcd {
     file: "simulation.vcd";
@@ -304,6 +318,7 @@ output vcd {
 ```
 
 #### 2. FST (Fast Signal Trace)
+<!-- doc-check: skip (documents planned output-writer feature — not yet parsed) -->
 ```bhdl
 output fst {
     file: "simulation.fst";
@@ -313,6 +328,7 @@ output fst {
 ```
 
 #### 3. CSV for Data Analysis
+<!-- doc-check: skip (documents planned output-writer feature — not yet parsed) -->
 ```bhdl
 output csv {
     file: "measurements.csv";
@@ -323,6 +339,7 @@ output csv {
 ```
 
 #### 4. Custom Format
+<!-- doc-check: skip (documents planned output-writer feature — not yet parsed) -->
 ```bhdl
 output custom {
     format: json;

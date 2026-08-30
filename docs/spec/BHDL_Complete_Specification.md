@@ -64,47 +64,56 @@ blinking LED to a two-MCU Arduino-class board with switching regulators.
 
 ## 2. A Worked Example
 
-A complete, synthesizable buck converter (from
-`tests/circuits/realistic/buck_converter_simple.bhdl`):
+A complete, synthesizable buck converter —
+`tests/circuits/realistic/buck_converter_simple.bhdl`, verbatim:
 
 ```bhdl
 import { Cap } from "bhdl-stdlib/passives/capacitor.bhdl";
 import { SchottkyDiode } from "bhdl-stdlib/passives/diode.bhdl";
 import { Inductor } from "bhdl-stdlib/passives/inductor.bhdl";
 import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
 import { LM2596 } from "bhdl-stdlib/components/power/switching_regulators/LM2596.bhdl";
 
 board SimpleBuckConverter {
-    // Rails
+    // Power domains
     power VIN = 12V @ 3A;
     power VOUT = 5V @ 2A;
     ground GND;
-
+    
     // Input filtering
     VIN -> C1: Cap(100µF, voltage=25V).1;
     C1.2 -> GND;
-
+    VIN -> C2: Cap(0.1µF).1;  
+    C2.2 -> GND;
+    
     // Buck controller
     VIN -> U1: LM2596().VIN;
     U1.GND -> GND;
-    U1.EN -> VIN;                 // always enabled
-
+    U1.EN -> VIN;  // Always enabled
+    
     // Power stage
     U1.SW -> L1: Inductor(33µH).1;
     L1.2 -> VOUT;
+    
+    // Catch diode
     GND -> D1: SchottkyDiode(SS34).A;
     D1.K -> U1.SW;
-
-    // Output filtering + feedback divider (5V = 1.23V·(1 + 10k/3.24k))
+    
+    // Output filtering
     VOUT -> C3: Cap(220µF, voltage=10V).1;
     C3.2 -> GND;
+    VOUT -> C4: Cap(0.1µF).1;
+    C4.2 -> GND;
+    
+    // Feedback divider (5V output): VREF 1.23V · (1 + 10k/3.24k) = 5.03V
     VOUT -> R1: Res(10kΩ, tolerance=1%).1;
     R1.2 -> fb_node;
     fb_node -> R2: Res(3.24kΩ, tolerance=1%).1;
     R2.2 -> GND;
     fb_node -> U1.FB;
-
-    // Load
+    
+    // Load for testing
     VOUT -> RL: Res(2.5Ω, wattage=10W).1;
     RL.2 -> GND;
 }
@@ -122,13 +131,19 @@ arguments with units.
 ### 3.1 Board
 
 ```bhdl
-board Name { … }
+board Name {
+    // …
+}
 ```
 
 A `board` is the top-level design unit. Its body holds rail declarations
 (`power` / `ground` / `port`), component instances, connection/flow
-statements, and — less commonly — `const`, `attribute`, `generate`, `when`,
-`variant`, `power_domain`, and `supply` statements.
+statements, and — less commonly — `const`, `attribute` (plain or
+instance-scoped `attribute u1.x = …;`), `generate`, `when`, `variant`,
+`power_domain`, `supply`, `with`, `satisfies`, `require` (board-scope pull
+requirements), `requirements { }` (project-wide requirement filters),
+`hsi` (hardware–software interface contracts), `resolve` (requirement-
+resolution overrides), and `decouple` statements.
 
 ### 3.2 Nets and the `@` prefix
 
@@ -155,7 +170,8 @@ operators, in the flow direction, are:
 |----------|---------|
 | `->`  | directed connection / flow (the workhorse) |
 | `<->` | bidirectional connection *(rare)* |
-| `\|>` | staged power flow *(rare; see §10)* |
+| `\|>` | staged power flow *(parses; see §10 — no users in the realistic corpus or stdlib, only in `tests/circuits/simple/` power-stage fixtures)* |
+| `<=>` | interface-to-interface connection *(parses; used by the interface test fixtures under `tests/circuits/simple/` and `edge_cases/`, not by the realistic corpus or stdlib)* |
 
 Chained `->` forms a flat series of hops, each hop a net:
 
@@ -166,6 +182,7 @@ Chained `->` forms a flat series of hops, each hop a net:
 A connection may optionally carry a physical `where` constraint and/or a
 design `for` intent (§3.4):
 
+<!-- doc-check: skip (grammar meta-notation, not concrete syntax) -->
 ```bhdl
 EXPR [where c1, c2, …] [for intent(args)] ;
 ```
@@ -222,9 +239,9 @@ Positional and named (keyword) arguments, freely mixed, with the named ones
 following the datasheet parameter names of the entity:
 
 ```bhdl
-Capacitor(22uF, 25V)                    // positional
-Res(10kΩ, tolerance=1%)                 // positional + named
-LM317(v_out=5V)                         // named
+c1: Capacitor(22uF, 25V);               // positional
+r1: Res(10kΩ, tolerance=1%);            // positional + named
+u1: LM317(v_out=5V);                    // named
 ```
 
 Every argument must bind to a declared parameter and satisfy its value domain
@@ -336,6 +353,7 @@ of §8.
 
 ### 6.2 Pins
 
+<!-- doc-check: skip (grammar meta-notation, not concrete syntax) -->
 ```bhdl
 pin NAME[bus]? : KIND [DIR] [virtual] [when EXPR] [@metadata(...)] ;
 ```
@@ -375,10 +393,14 @@ attribute *vocabulary* (`manufacturer`, `mpn`, `component_class`, …),
 resolution/late-binding, and the toolchain-stamped provenance attributes are in
 [Unified_Attribute_System_Specification.md](Unified_Attribute_System_Specification.md).
 
-### 6.4 Generics *(compile-time parameters)*
+### 6.4 Generics *(compile-time parameters — parses, unexercised)*
 
 Angle-bracket generics are resolved at monomorphization, distinct from the
-runtime constructor parameters:
+runtime constructor parameters. **Status honesty:** this form parses, but no
+stdlib or corpus entity currently declares angle-bracket generics — the
+stdlib's `LinearRegulator` uses ordinary constructor parameters
+(`alias LM7805 = LinearRegulator(5V);` in `bhdl-stdlib/power/regulator.bhdl`).
+Treat the syntax below as grammar-supported but unproven in practice:
 
 ```bhdl
 entity LinearRegulator<V_OUT: voltage, HAS_EN: bool = false>(
@@ -389,12 +411,40 @@ entity LinearRegulator<V_OUT: voltage, HAS_EN: bool = false>(
     pin VO: power out;
     pin GND: ground;
     pin EN: signal in when HAS_EN;
-    …
+    // …
 }
 
 alias LM7805       = LinearRegulator<5V>;
 alias LM1117_33_EN = LinearRegulator<3.3V, true>;
 ```
+
+### 6.5 Partness — `entity X as part { }` / `entity X as design { }`
+
+An entity may declare its physical role explicitly (VHDL-flavored role tag,
+`bhdl-parser/src/top_level.rs`):
+
+```bhdl
+entity TPS54560 as part {
+    // vendor truth: pins, package, datasheet attributes
+}
+
+entity Buck_TPS54560() as design where v_in <= 60V {
+    // the designer's subcircuit: the part plus its application circuit
+}
+```
+
+- `as part` — instantiation mints a physical self-part (a BOM line, a
+  refdes).
+- `as design` — a hierarchical design block: only its children are physical.
+- A validity-envelope `where` clause may follow the tag (`as design
+  where …`) — the natural reading for a block; the pre-`as` position stays
+  accepted.
+
+Undeclared entities keep the derived (heuristic) behavior. The tag is the one
+declared bit the phantom-stub heuristics previously reconstructed by
+name-matching. In use across the stdlib power library — the part/design pairs
+in `bhdl-stdlib/power/` (`LP2985`/`Ldo_LP2985`, `TPS54560`/`Buck_TPS54560`,
+`TPS54331`/`Buck_TPS54331`).
 
 ---
 
@@ -402,6 +452,7 @@ alias LM1117_33_EN = LinearRegulator<3.3V, true>;
 
 ### 7.1 Parameter list
 
+<!-- doc-check: skip (grammar meta-notation, not concrete syntax) -->
 ```bhdl
 entity Name(p1: type, p2: type = default, …) [where …] { … }
 ```
@@ -417,14 +468,14 @@ entity's `where` clause. The set is the parameter's *value domain*; supplying
 anything outside it is a hard error (**E0403**), not a silently-ignored value:
 
 ```bhdl
-entity MOSFET(part_no: string = "2N7000", channel: string = "nmos", …)
+entity MOSFET(part_no: string = "2N7000", channel: string = "nmos")
     where channel in ("nmos", "pmos")
-{ … }
+{ }
 ```
 
 ```bhdl
-q1: MOSFET(part_no="FDN340P", channel="pmos")   // ✓
-q2: MOSFET(part_no="FDN340P", channel="P")       // ✗ E0403
+q1: MOSFET(part_no="FDN340P", channel="pmos");   // ✓
+q2: MOSFET(part_no="FDN340P", channel="P");      // ✗ E0403 (caught by analyze)
 ```
 
 The domain check applies to both named and positional arguments (SKU aliases
@@ -589,11 +640,13 @@ predicates extend the expression grammar with netlist queries
 comparison of `self.<attr>` / `<child>.value`:
 
 ```bhdl
-check {
-    require connected(BOOT)
-        else "BOOT needs the 100nF bootstrap cap to SW/PH (datasheet 7.3.1)";
-    require c_boot.value == self.bootstrap_capacitor
-        else "the bootstrap cap must be the datasheet 100nF (7.3.1)";
+simulation {
+    check {
+        require connected(BOOT)
+            else "BOOT needs the 100nF bootstrap cap to SW/PH (datasheet 7.3.1)";
+        require c_boot.value == self.bootstrap_capacitor
+            else "the bootstrap cap must be the datasheet 100nF (7.3.1)";
+    }
 }
 ```
 
@@ -637,7 +690,7 @@ interface SPI spi {
     SCK  = PB5;
     CS   = PB2;
 }
-interface ICSP:slave icsp { … }   // :role selects a perspective
+interface ICSP:slave icsp { }     // :role selects a perspective
 ```
 
 Interface *definitions* carry the perspectives, optional `wires { … }`
@@ -661,13 +714,17 @@ aliases {
 
 ### 9.4 Top-level `alias`
 
-Three forms, all in stdlib use:
+Three forms parse. The plain-rename and constructor-argument (SKU) forms are
+in stdlib use (`bhdl-stdlib/common_components.bhdl`,
+`bhdl-stdlib/actives/mosfet.bhdl`); the generic-specialization form
+(`alias X = Entity<…>`) **parses but has zero stdlib/corpus users** — see the
+§6.4 status note:
 
 ```bhdl
-alias Resistor = Res;                                    // plain rename
-alias LM7805   = LinearRegulator<5V>;                    // bind generics
-alias MOSFET_IRF540 = MOSFET("IRF540N", "nmos", 100V,    // bind ctor args (SKU)
+alias Resistor = Res;                                    // plain rename (stdlib use)
+alias MOSFET_IRF540 = MOSFET("IRF540N", "nmos", 100V,    // bind ctor args / SKU (stdlib use)
                              33A, 44mΩ, 4V, 130W);
+alias LM7805_G = LinearRegulator<5V>;                    // bind generics (parses, unexercised)
 ```
 
 ---
@@ -703,13 +760,20 @@ The `supply` statement asks the toolchain to synthesize a regulator stage
 between two rails, rather than hand-authoring it:
 
 ```bhdl
-supply @VCC_5V from @VIN_12V {
-    ripple_max: 50mV;
-    profile:    efficiency;      // cost | grade | balanced | efficiency
-}
-supply @VCC_3V3 from @VCC_5V {
-    ripple_max: 30mV;
-    using: TPS54331;             // explicit part (escape hatch)
+board SupplyDemo {
+    power VIN_12V = 12V @ 4A;
+    port VCC_5V: power out = 5V @ 1A;
+    port VCC_3V3: power out = 3.3V @ 1A;
+    ground GND;
+
+    supply @VCC_5V from @VIN_12V {
+        ripple_max: 50mV;
+        profile:    efficiency;      // cost | grade | balanced | efficiency
+    }
+    supply @VCC_3V3 from @VIN_12V {
+        ripple_max: 30mV;
+        using: TPS54302;             // explicit part (escape hatch)
+    }
 }
 ```
 
@@ -728,11 +792,13 @@ each stage stamping its computed input draw so downstream rail budgets are
 real. Supplies sharing a source share one input bank. Full model (S1–S4c):
 [Power_Supply_Synthesis.md](Power_Supply_Synthesis.md).
 
-### 10.3 Staged power flow `|>` *(rare)*
+### 10.3 Staged power flow `|>` *(parses, unexercised in the primary corpus)*
 
 The grammar supports a staged power-flow operator for expressing a rail's
-processing chain (`power VIN |> fuse() |> filter() |> …`); the corpus expresses
-the same structure with ordinary flows and `supply`.
+processing chain (`power VIN = 24V @ 5A |> input_protection |> regulation;`).
+Its only users are fixtures under `tests/circuits/simple/`
+(`complex_power_tree.bhdl`, `tps54331_test.bhdl`); the realistic corpus and
+stdlib express the same structure with ordinary flows and `supply`.
 
 ---
 
@@ -789,7 +855,8 @@ separate table — a waiver hides nothing); every finding anchors on the handle
 and lands in a `## Design rule check` table with numbers and a suggested fix;
 a rule that cannot resolve its inputs *skips* rather than inventing a result.
 
-**Tier-1 catalog** (all built):
+**Tier-1 catalog** (built through ERC037; the ids ERC010, ERC012–ERC015 and
+ERC021 are unassigned gaps — no rule carries them):
 
 | Rule | Checks |
 |------|--------|
@@ -817,6 +884,12 @@ a rule that cannot resolve its inputs *skips* rather than inventing a result.
 | ERC029 | Floating duplicated support circuit — an expansion island on a virtual pin |
 | ERC030 | Board part shadows an expansion child — a double-authored circuit (Warning) |
 | ERC031 | Feedback divider contradicts declared rail — `VREF·(1+Rtop/Rbot)` vs `power VOUT` >10% (Error) |
+| ERC032 | Power-tree acceptance at part commit — a resolved stage must honor the placeholder region's recorded assumptions (rating, f_sw, …); an unresolved Generic\* placeholder is reported every build |
+| ERC033 | Power-sequencing verification — declared ordering edges (`order`, PMIC `pmic_seq` promises) verified on the flattened netlist |
+| ERC034 | Swizzle discipline — an emitted swizzle-region permutation must be legal within the declared `swizzle_*` freedoms and match the netlist |
+| ERC035 | IO-bank discipline — banked pins (`domain … io_pins=`) are judged at the bank rail's net voltage; an unpowered bank is dead silicon (Error) |
+| ERC036 | Ambiguous digital input level — a contending pull divider parks an input inside the 30–70% band of its bank voltage (Error) |
+| ERC037 | Open-drain bus pull-up tiers — a wired-AND net needs exactly one external pull-up; a single-OD pin may use an internal one |
 
 ERC025 is the tier-2 surface itself (part-carried `check {}` blocks). Full
 architecture and rule detail: [ERC.md](ERC.md).
@@ -921,29 +994,53 @@ physical part. Sign-off tables print `handle (refdes)`. See
 
 ## 16. The Toolchain (CLI)
 
-`bhdl-cli <FILE> <command>`:
+`bhdl-cli <FILE> <command>` — the 24 subcommands:
 
 | Command | Purpose |
 |---------|---------|
 | `parse` | Parse and check syntax |
-| `analyze` | Analyze for errors and warnings (runs the E0402/E0403 checks) |
-| `synthesize` | Synthesize the netlist |
-| `visualize` | Generate the schematic (HTML/SVG; `--binder` for PDF) |
-| `spice` | Run SPICE/GLACIER analysis |
-| `simulate` | Run a testbench simulation |
-| `bom` | Generate the BOM (`--simulate` runs sizing + sign-off) |
-| `report` | Full synthesis report (requirements → sign-off → BOM) |
-| `freeze` | Emit the frozen as-fabbed netlist |
-| `layout` | PCB place & route, export KiCad PCB |
+| `analyze` | Analyze for errors and warnings (runs the E0402/E0403 checks; `--show-intents`) |
+| `synthesize` | Synthesize the netlist through the default elaborate → synthesize pipeline (see below) |
+| `elaborate` | Desugar every higher-abstraction construct (virtual pins, expansions, defaults) into plain structural bhdl; the output is re-synthesized in-process and proven structurally identical — any mismatch is a hard error |
+| `powerup` | Simulate power-up as a piecewise-linear event timeline (stages as current-limited sources with soft-start, summed bulk capacitance); exits non-zero when a declared sequencing window fails |
+| `powerdown` | Simulate power-down (input loss, C·V/I discharge, `down_before`/`down_t_max`) and sleep entry; exits non-zero on a violated declaration |
+| `pdreport` | Professional power-delivery report (markdown + inline SVG): topology, selections with surveys, sizing, V(t) curves, timelines, decap networks, stability sanity |
+| `powertree` | Harvest power-tree loads + rail budgets and plan tree options; `--emit N` writes the chosen option into the board as a marked placeholder region; `--prereg REASON` requires a protected front end |
+| `freeze` | Emit the frozen as-fabbed structural netlist (stamped with toolchain version + library lock) |
+| `trace` | Requirement trace matrix — every machine-verifiable contract with implementing elements, verifier, status (VERIFIED / VIOLATED / UNVERIFIED / UNRESOLVED) and evidence; `--safety` feeds the fault-campaign evidence in |
+| `safety` | Functional-safety model and gap report; `--baseline`/`--update-baseline` delta runs, `--fmeda` CSV package, `--report` safety-case capstone |
+| `visualize` | Generate the schematic (HTML/SVG; `--svg-v4`, `--binder` for print/PDF) |
+| `spice` | Run SPICE/GLACIER analysis (`--analysis dc\|ac\|transient\|roles`) |
+| `mine-priors` | Mine placement priors (decap/connector/crystal distance medians) from a directory of real KiCad layouts |
+| `transient` | Time-domain simulation of scheduled IBIS buffer edges (`--corners` sweeps typ/min/max) |
+| `pipeline` | analysis → synthesis → visualization → SPICE, artifacts into `--output-dir` (`--no-viz`, `--no-spice`) |
+| `simulate` | Run a testbench simulation (`--testbench`, waveform `--format vcd\|csv\|json`) |
 | `intents` | Analyze design intent and flow tracking |
-| `doc` | Generate power-domain documentation |
+| `layout` | PCB place & route + KiCad export; exit status is the sign-off verdict; `--propose-swizzle`, `--fab`, `--fab-profile`, `--seed` |
+| `mech-import` | Transcribe a MCAD DXF into layout-block mechanical statements (`outline`, `mounting_hole`, `mech_check`); `--flip-y` |
+| `doc` | Generate power-domain documentation; `--mux-header` emits the solved pinmux commitments as a C header |
+| `bom` | Generate the BOM (`--simulate` runs sizing + sign-off; `--supply-profile`, `--supply-qty`, `--supply-net`) |
+| `report` | Full synthesis report (requirements → sign-off → BOM) |
 | `list-skus` | List the board's declared SKU variants |
-| `pipeline` | parse → analyze → synthesize → visualize |
+
+(`bhdl vendor <status|install …>` is a board-independent maintenance mode
+intercepted before the normal `<FILE> <command>` grammar.)
+
+**The default pipeline.** Every netlist-consuming subcommand runs
+**bhdl → elaborate → synthesize**: the board is elaborated to structural
+bhdl, a **round-trip gate** proves the structural form re-synthesizes to a
+structurally identical netlist (instances by name + module, connectivity as
+the net partition over `inst.pin` endpoints with net classes), and that
+verified netlist is what consumers see. The global `--no-elaborate` flag
+skips the gate for one run — the netlist then carries no structural proof,
+and the run says so loudly.
 
 Netlist-producing commands refuse to build on a constructor-argument error
 (§7) or, with `--erc-fail-on error`, on an ERC error (§12). Variant boards
-require `--sku`. Reproducibility flags: `--locked` (CI, no lock changes),
-`--update-lock`, `--offline`.
+require `--sku`. Reproducibility flags: `--locked` (CI: `bhdl.lock` must
+exist and match exactly, never generated or updated) and `--update-lock`
+(regenerate a drifted lock intentionally). Library roots come from
+`--manifest` / `-I, --lib-path` / `$BHDL_LIB_PATH`.
 
 ---
 
@@ -956,7 +1053,8 @@ This section is a condensed, authoritative summary; the parser
 
 `import`, `entity`, `board`, `alias`, `typedef` (empty body), `type`, `const`,
 `enum`, `interface`, `trait`, `impl`, `part_family`, `symbol`, `layout`,
-`safety_goal`, `fault_inject`, `testbench`.
+`safety_goal`, `safety_assumption`, `safety` (the `safety <Name> [of E] as ns
+{ }` model block), `fault_inject`, `testbench`.
 
 ```
 import { A, B } from "lib/path.bhdl";        // destructuring import
@@ -979,9 +1077,15 @@ enum struct match trait impl const import alias part_family symbol layout
 testbench safety_goal fault_inject`. Items/modifiers: `pin port attribute
 generate for if else when where with require optional virtual extends as
 satisfies via expansion internal design variant dnp socket placement
-power_domain aliases`. Booleans: `true false`. Contextual (matched by text, not
-reserved): `from to supply simulation stress model check inputs outputs body
-rhai near each distributed`.
+power_domain aliases body near each distributed`. Booleans: `true false`.
+Contextual (matched by text, not reserved): `from to supply simulation stress
+model check inputs outputs rhai requirements hsi resolve decouple`.
+
+Note that `body` (symbol bodies, Rhai `design` bodies), `near`, `each`, and
+`distributed` (decoupling placement) are **true lexer keywords**
+(`BODY_KW`/`NEAR_KW`/`EACH_KW`/`DISTRIBUTED_KW` in
+`bhdl-parser/src/lexer.rs`), not contextual identifiers — they cannot be used
+as ordinary names.
 
 Note: several keywords are lexer-reserved but have no production and are
 inert — `assign`, top-level `component`, statement-form `net`, `connect`,
@@ -1021,6 +1125,12 @@ current specifications:
 | Attribute vocabulary, resolution, consumers | [Unified_Attribute_System_Specification.md](Unified_Attribute_System_Specification.md) |
 | Net naming | [Net_Naming_Specification.md](Net_Naming_Specification.md) |
 | Board SKU variants | [Board_SKU_Variants.md](Board_SKU_Variants.md) |
+| Requirements, resolution, trace matrix | [Requirements_And_Resolution.md](Requirements_And_Resolution.md) |
+| Functional safety (goals, FMEDA, campaigns) | [Functional_Safety.md](Functional_Safety.md) |
+| Testbench language | [BHDL_Testbench_Specification_v2.md](BHDL_Testbench_Specification_v2.md) |
+| Expansion vs hierarchy doctrine | [Expansion_Vs_Hierarchy.md](Expansion_Vs_Hierarchy.md) |
+| PnR architecture | [PnR_Professional_Architecture.md](PnR_Professional_Architecture.md) |
+| Geometry kernel | [geometry-kernel.md](geometry-kernel.md) |
 | Behavioral / dynamic models *(proposal)* | [Behavioral_Models.md](Behavioral_Models.md) |
 | Product-description model | [Product_Description_Model.md](Product_Description_Model.md) |
 
@@ -1029,7 +1139,8 @@ current specifications:
 Shipped and exercised by the corpus: the full language core, entities with
 `expansion`/`design`/`simulation{stress,model,check}`/`interface`/`symbol`/
 `layout`, `where … in` value domains, ports, `supply` synthesis (through supply
-trees and shared input banks), the ERC catalog (ERC001–ERC031), refdes
+trees and shared input banks), the ERC catalog (through ERC037, with the
+unassigned id gaps ERC010/ERC012–015/ERC021), refdes
 allocation, sign-off, freeze, and the schematic engine. Specified with partial
 or deferred implementation: the `simulation { stability }` loop-margin surface,
 `part_family`/`bom_preferences` catalog resolution, the `behavior {}` dynamic

@@ -164,7 +164,7 @@ rail) the child is dropped along with all its connections.
 expansion {
     // Always-on (VCC + GND are power rails):
     VCC  -> C_vcc:  Cap(100nF).1; C_vcc.2  -> GND1;
-    ...
+    // … remaining always-on decoupling children elided …
 
     // Conditional: only fires when PC4/PC5 are wired:
     PC4  -> R_pu_sda: Res(4.7kΩ).1; R_pu_sda.2 -> VCC;
@@ -193,7 +193,7 @@ should compute its feedback resistors from V_OUT; an op-amp with
 ```bhdl
 entity LM317(v_out: voltage = 5V) {
     pin VIN: power in;
-    ...
+    // … remaining pins as in §2.1 …
 
     design {
         const v_ref = 1.25;
@@ -274,7 +274,7 @@ entity STM32F103Cx(
     kicad_symbol: string = "MCU_ST_STM32F1:STM32F103C8Tx",
 ) {
     pin PA0: signal inout;
-    ...
+    // … remaining pins elided …
     attribute flash_kb     = flash_kb;
     attribute part_number  = part_no;
 }
@@ -335,14 +335,19 @@ pin is what lands in the netlist.
 
 ```bhdl
 entity ATmega328P_DIP28 {
-    pin PB0..PB7: signal inout;
-    pin PC0..PC6: signal inout;
-    pin PD0..PD7: signal inout;
-    ...
+    pin PD0: signal inout;
+    pin PD1: signal inout;
+    pin PB5: signal inout;
+    pin PC0: signal inout;
+    pin PC1: signal inout;
+    pin PC5: signal inout;
+    pin PC6: signal inout;
+    // … remaining PB0..PB7 / PC0..PC6 / PD0..PD7 pins (declared
+    // individually — see bhdl-stdlib/actives/atmega328p.bhdl) …
 
     aliases {
-        gpio0  = PD0;    gpio1  = PD1;    ...   gpio13 = PB5;
-        adc0   = PC0;    adc1   = PC1;    ...   adc5   = PC5;
+        gpio0  = PD0;    gpio1  = PD1;    gpio13 = PB5;  // … gpio2..gpio12 elided
+        adc0   = PC0;    adc1   = PC1;    adc5   = PC5;  // … adc2..adc4 elided
         reset  = PC6;
     }
 }
@@ -469,22 +474,27 @@ entity uses all of them:
 ```bhdl
 entity ATmega328P_DIP28(part_no: string = "ATMEGA328P-PU") {
     pin VCC: signal inout virtual;     // §2 — gate for expansion
-    pin AVCC, AREF, GND1, GND2, ...;
+    pin AVCC: signal inout;
+    pin AREF: signal inout;
+    pin GND1: signal inout;
+    pin GND2: signal inout;
+    // … port pins PB0..PD7 elided …
 
     // §5: SKU-variant constructor arg.
     attribute part_number = part_no;
 
     // v0.7 interfaces — designer writes mcu.spi.MOSI.
-    interface SPI spi { MOSI=PB3; MISO=PB4; SCK=PB5; CS=PB2; }
+    interface SPI spi { MOSI = PB3; MISO = PB4; SCK = PB5; CS = PB2; }
 
     // §6: function aliases — designer writes mcu.gpio11.
-    aliases { gpio0 = PD0; ...  reset = PC6; }
+    aliases { gpio0 = PD0; reset = PC6; }  // … gpio1..gpio13 elided
 
     // §2 + §3: expansion with always-on + conditional children.
     expansion {
         // Always-on (power-rail rule, §3.1.1).
         VCC  -> C_vcc: Cap(100nF).1; C_vcc.2 -> GND1;
-        ...
+        // … remaining decoupling children elided …
+
         // Conditional (board-wired rule, §3.1.2).
         PC4  -> R_pu_sda: Res(4.7kΩ).1; R_pu_sda.2 -> VCC;
         PC5  -> R_pu_scl: Res(4.7kΩ).1; R_pu_scl.2 -> VCC;
@@ -506,6 +516,7 @@ specific names.
 
 ### 8.1 Form
 
+<!-- doc-check: skip (abstract entities are a preprocessor convention (§8.4) — stripped before parse, `abstract` is not in the grammar) -->
 ```bhdl
 abstract entity ATmega328P {
     // Abstract port list — the surface a board author reads to
@@ -617,6 +628,7 @@ PC4 on ATmega328P is GPIO *or* ADC4 *or* I²C SDA — but only one
 role at a time. The abstract entity can expose all three as
 separate ports, with the SKU's pin_map routing all three to PC4:
 
+<!-- doc-check: skip (abstract entities are a preprocessor convention (§8.4) — stripped before parse, `abstract` is not in the grammar) -->
 ```bhdl
 abstract entity ATmega328P {
     pin adc4: signal inout;

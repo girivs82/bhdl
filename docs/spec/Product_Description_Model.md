@@ -140,6 +140,7 @@ Read more in `docs/spec/Vendor_Design_Blocks.md` §11.
 
 The recipe references device parameters via a namespaced prefix:
 
+<!-- doc-check: skip (pseudo-code — device-parameter accessor signatures, not BHDL statements) -->
 ```bhdl
 plate_current(tube, v_pk, v_gk)        // triode
 ic_of_vbe(bjt, v_be, v_ce)             // BJT (future)
@@ -475,6 +476,11 @@ reads.
 
 ### 8.3 What the unified component looks like
 
+This is the aspirational end-state of the planned importer pipeline
+(§8.2) — the `behavior` tables and `thermal` / `mechanical` blocks
+shown here are not yet parsed.
+
+<!-- doc-check: skip (illustrative end-state of the planned importer pipeline — behavior/thermal/mechanical blocks not yet parsed) -->
 ```bhdl
 // Auto-generated from upstream sources:
 //   manufacturer / SKU:  LCSC catalog

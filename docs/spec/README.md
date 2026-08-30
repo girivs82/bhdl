@@ -16,7 +16,9 @@ implementation-grounded unless explicitly marked *Proposal* or *aspirational*.
 |-------|----------|--------|
 | Data-honesty doctrine | [Real_Data_Policy.md](Real_Data_Policy.md) | binding policy |
 | Real-Data enforcement audit | [Real_Data_Enforcement_Worklist.md](Real_Data_Enforcement_Worklist.md) | complete (historical) |
-| ERC architecture + catalog (ERC001–031) | [ERC.md](ERC.md) | all three tiers built |
+| ERC architecture + catalog (ERC001–037; 010/012–015/021 unassigned) | [ERC.md](ERC.md) | all three tiers built |
+| Requirements / blocks / resolution (library model, ERC032) | [Requirements_And_Resolution.md](Requirements_And_Resolution.md) | increments 1–3 landed |
+| Functional safety (FMEDA, FIT, SPFM/LFM/PMHF) | [Functional_Safety.md](Functional_Safety.md) | normative for what is implemented |
 | Handle vs refdes namespaces | [Handles_And_Refdes.md](Handles_And_Refdes.md) | built |
 | `supply` statement + part selection | [Power_Supply_Synthesis.md](Power_Supply_Synthesis.md) | S1–S4c built |
 | Auto-expansion / virtual pins | [Synthesis_Auto_Expansion.md](Synthesis_Auto_Expansion.md) | v0.9 shipped |
@@ -41,10 +43,13 @@ Honestly self-labeled; each states its build status.
 - [Parameterization_And_BOM_Resolution.md](Parameterization_And_BOM_Resolution.md) — parameter/BOM resolution (v0.2).
 - [Board_SKU_Variants.md](Board_SKU_Variants.md) — `variant` / DNP (v0.1).
 - [Behavioral_Models.md](Behavioral_Models.md) — `behavior {}` dynamic simulation (proposal).
+- [PnR_Professional_Architecture.md](PnR_Professional_Architecture.md) — PnR north star + staged plan against the as-built engine.
+- [geometry-kernel.md](geometry-kernel.md) — P1 clearance-by-construction routing kernel (design).
 
 ## Reference / rationale
 
 - [Syntax_Decisions_Summary.md](Syntax_Decisions_Summary.md) — early syntax-decision notes (superseded by the main spec on specifics; see its banner).
+- [Expansion_Vs_Hierarchy.md](Expansion_Vs_Hierarchy.md) — why expansion and hierarchical modules are distinct mechanisms (settled 2026-08-21).
 
 ## Archived / superseded
 
@@ -61,3 +66,8 @@ Every syntax example in the current docs is expected to parse:
 bhdl-cli <file>.bhdl parse       # syntax
 bhdl-cli <file>.bhdl analyze     # + semantic passes
 ```
+
+The mechanical gate is `tools/doc-check.sh` — it extracts every ` ```bhdl `
+fence in these docs and feeds it to `bhdl-cli … parse` (trying entity /
+board / interface wraps for fragments); deliberate pseudo-code is skipped
+with an explicit `<!-- doc-check: skip (reason) -->` marker.

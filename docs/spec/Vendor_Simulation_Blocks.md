@@ -1,6 +1,7 @@
 # Vendor `simulation {}` Blocks — Device Simulation IP as Authored HDL
 
-> **Status:** Proposal. The stress/ripple surface (§4) is built first, for the
+> **Status:** Partially shipped. The stress/ripple surface (§4) is BUILT (stress
+> recipes flow through analysis into the sign-off); the rest remains design surface, for the
 > margin sign-off loop (task #5, see `Simulation_Margin_Signoff.md` §11). The
 > device-model surface (§5) is specified here for coherence but its
 > implementation — migrating the hardcoded regulator/BJT/triode models out of

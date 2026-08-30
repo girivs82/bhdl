@@ -1,8 +1,21 @@
 # Vendor `design { }` Blocks — Intent → Bias as Authored HDL
 
-> **Status:** Proposal (informed by the three reference designers shipped
-> in `bhdl-spice/src/tube_bias.rs`). Implementation is a multi-stage piece
-> of work tracked separately; this document is the spec that defines it.
+> **Status:** SHIPPED through Stage 5. The `design for <intent> { }`
+> surface (const / require-else / child-assignment), analyzer recipe
+> extraction, and the synthesizer evaluator are implemented, along
+> with the §11 `body rhai` escape hatch (`inputs`/`outputs` decls,
+> raw-string literals, sandboxed fuel-limited Rhai — see
+> `bhdl-synthesizer/src/design_evaluator.rs`). The reference
+> designers were migrated to authored blocks in
+> `bhdl-stdlib/actives/triode.bhdl`: current source and switch as
+> declarative blocks, the amplifier as `body rhai`.
+>
+> Divergence from §3 as originally drafted: the shipped declarative
+> surface spells bindings `const` (not `let`), and closures /
+> `bisect_*` primitives never shipped — search loops live in a
+> `body rhai` script instead. Still planned: the per-block fuel
+> override (`runtime rhai(max_operations: …)`, §11.5); the default
+> 1M-operation limit is fixed today.
 
 ## 1. Motivation
 
@@ -69,8 +82,12 @@ shares and vendors do *not* re-author.
 ## 3. Proposed syntax
 
 A new optional block on a tube entity, evaluated when the entity
-expands under a matching intent:
+expands under a matching intent. (The sketch below is the *original
+proposal* — `let` bindings and closures did not ship; the shipped
+spelling uses `const` and, for search loops like this amplifier, a
+`body rhai` script — see §11 and `bhdl-stdlib/actives/triode.bhdl`.)
 
+<!-- doc-check: skip (documents the originally-proposed let/closure surface; shipped amplifier uses body rhai) -->
 ```bhdl
 entity SignalTubeStage() {
     pin IN:  signal in;
@@ -160,34 +177,37 @@ the explicit `Err` returns for "target above peak / below min".
 
 ### 4.2 Current source
 
+Shipped verbatim (modulo comments) in
+`bhdl-stdlib/actives/triode.bhdl`:
+
 ```bhdl
 design for current_source {
-    let i_target = intent.current;
-    let v_pk = 100V;                 // design point — documented
-    let i_max = plate_current(tube.mu, tube.ex, tube.kg1, tube.kp, tube.kvb,
-                              v_pk, 0V);
+    const v_pk = 100.0;              // design point — documented
+    const i_target = intent.current;
+    const i_max = plate_current(tube.mu, tube.ex, tube.kg1, tube.kp, tube.kvb, v_pk, 0.0);
     require i_target < i_max
         else "current target exceeds the tube's zero-bias current at V_pk = 100V";
-
-    let v_gk = koren_inverse_vgk(tube.mu, tube.ex, tube.kg1, tube.kp, tube.kvb,
-                                 v_pk, i_target);
-    Rk = -v_gk / i_target;
+    const v_gk = koren_inverse_vgk(tube.mu, tube.ex, tube.kg1, tube.kp, tube.kvb, v_pk, i_target);
+    Rk = (0.0 - v_gk) / i_target;
 }
 ```
 
 ### 4.3 Digital switch
 
+Shipped verbatim (modulo comments) in
+`bhdl-stdlib/actives/triode.bhdl` — note supply voltages are read
+via the `supply.*` namespace, not the bare pin name:
+
 ```bhdl
 design for digital_switch {
-    let v_sat = 10V;
-    require VBB > v_sat else "V_bb too low for a switch";
-
-    let i_sat = plate_current(tube.mu, tube.ex, tube.kg1, tube.kp, tube.kvb,
-                              v_sat, 0V);
-    require i_sat > 0A
+    const v_sat = 10.0;
+    const v_bb = supply.VBB;
+    require v_bb > v_sat
+        else "switch needs V_bb > 10 V to leave headroom for saturation";
+    const i_sat = plate_current(tube.mu, tube.ex, tube.kg1, tube.kp, tube.kvb, v_sat, 0.0);
+    require i_sat > 0.0
         else "tube draws no current at zero bias — cannot pull plate down";
-
-    Rp = (VBB - v_sat) / i_sat;
+    Rp = (v_bb - v_sat) / i_sat;
 }
 ```
 
@@ -361,10 +381,12 @@ this whole proposal was designed against.
 
 ## 11. Amendment — `body` hook for general-purpose vendor logic
 
-> **Status:** Amendment v2 (post-Stage-4). Stages 1–4 shipped the
-> declarative `design { }` block surface (const/require/assign).
-> This amendment adds the escape hatch for vendor logic the
-> declarative surface cannot express.
+> **Status:** Amendment v2 — SHIPPED (Stage 5). Stages 1–4 shipped
+> the declarative `design { }` block surface (const/require/assign);
+> this amendment's `body rhai` escape hatch is implemented
+> (parser: `parse_design_body_hook`; evaluator:
+> `bhdl-synthesizer/src/design_evaluator.rs`; canonical user:
+> the amplifier in `bhdl-stdlib/actives/triode.bhdl`).
 
 ### 11.1 The problem the declarative surface left open
 
@@ -522,8 +544,10 @@ imports. The script sees `inputs` and emits `outputs` — that is the
 entire surface area.
 
 **Fuel limit**: `set_max_operations(1_000_000)` (≈ 10 ms wall time
-for typical scripts). Vendors who need more declare it explicitly:
+for typical scripts). The per-block override below is **planned,
+not shipped** — today the 1M-operation limit is fixed:
 
+<!-- doc-check: skip (documents planned per-block fuel override; limit is fixed at 1M ops today) -->
 ```bhdl
 design for ddr_train {
     runtime rhai(max_operations: 10_000_000)

@@ -7,19 +7,27 @@ This document specifies the testbench extension to BHDL for simulation control, 
 ## Current Implementation Status
 
 ### Implemented Features
-- ✅ Basic testbench structure
-- ✅ Simulation configuration (duration, timestep, solver, temperature)
-- ✅ Scope definition with signal lists
-- ✅ Stimulus with constant values
-- ✅ Verify block with assertions
-- ✅ Measurement collection
+- ✅ Basic testbench structure (`testbench Name for Board { … }` with
+  `simulation` / `scope` / `stimulus` / `verify` / `measure` blocks)
+- ✅ Simulation configuration (duration, timestep, solver, temperature —
+  temperature is a plain number in Celsius)
+- ✅ Scope definition with signal lists (`@NET`, `inst.pin`) and capture
+  modes `continuous`, `on_change(threshold)`, `periodic(interval: t)`
+- ✅ Stimulus with constant values; waveform calls (`ramp`, `sine`,
+  `pulse`, `steps`, `constant`) parse with named parameters
+- ✅ Verify block with comparison assertions (`<`, `>`, `<=`, `>=`, `==`)
+- ✅ Assertion time constraints (`always`, `after t`) and `message "..."`
+- ✅ Measurement collection (`name = expression;`)
 - ✅ SPICE solver integration
 - ✅ Signal value extraction (voltages, currents)
-- ✅ Assertion checking with time constraints
 
 ### Pending Features
-- ⏳ Waveform stimuli (ramp, pulse, sine)
-- ⏳ Fault injection
+- ⏳ Range assertions (`signal in min..max`, `in range(a, b)`) — not yet
+  parsed; write a pair of comparisons instead
+- ⏳ Tolerance assertions (`signal == value +/- tolerance`) — not yet parsed
+- ⏳ Waveform stimuli simulation (ramp, pulse, sine — the syntax parses,
+  solver playback pending)
+- ⏳ Fault injection (`faults` / scenario blocks — not yet parsed)
 - ⏳ Monte Carlo analysis
 - ⏳ Parametric sweeps
 - ⏳ Mixed-signal simulation
@@ -35,32 +43,33 @@ testbench TB_Name for BoardName {
         duration: 10ms;
         timestep: 1us;
         solver: spice;  // spice, behavioral, mixed
-        temperature: 25;  // Celsius
+        temperature: 25;  // Celsius (plain number)
     }
     
     // Waveform capture specification
     scope "main" {
         signals: @VCC, @GND, R1.current, LED1.voltage;
-        capture: continuous;  // continuous, on_change, periodic
+        capture: continuous;  // continuous, on_change(threshold), periodic(interval: t)
     }
     
     // Stimulus definition
     stimulus {
         @VCC: 5V;  // Constant stimulus (implemented)
-        // Future: @VIN: ramp(from: 0V, to: 12V, duration: 1ms);
+        // Waveform calls also parse: @VIN: ramp(from: 0V, to: 12V, duration: 1ms);
     }
     
-    // Assertions and checks
+    // Assertions and checks (comparisons + always / after t + message)
     verify {
-        assert R1.current in 5mA..15mA always message "Current out of range";
-        assert @VCC == 5V +/- 0.1V always message "VCC unstable";
+        assert R1.current < 15mA always message "Current out of range";
+        assert @VCC >= 4.9V always message "VCC unstable";
         assert LED1.voltage > 1.8V after 1ms message "LED not conducting";
+        // Planned: assert R1.current in 5mA..15mA;  assert @VCC == 5V +/- 0.1V;
     }
     
     // Measurements
     measure {
         avg_current = R1.current;  // Simple assignment (implemented)
-        // Future: efficiency = (@VOUT * @IOUT) / (@VIN * @IIN) * 100%;
+        efficiency = (@VOUT * @IOUT) / (@VIN * @IIN) * 100%;
     }
 }
 ```
@@ -68,25 +77,37 @@ testbench TB_Name for BoardName {
 ### Assertion Syntax
 
 Current implementation supports:
-- **Range assertions**: `signal in min..max`
-- **Equality assertions**: `signal == value +/- tolerance`
-- **Comparison assertions**: `signal < value`, `signal > value`
+- **Comparison assertions**: `signal < value`, `signal > value`,
+  `signal <= value`, `signal >= value`, `signal == value`
 - **Time constraints**: `always`, `after time`
+- **Failure text**: `message "..."`
+
+Planned (not yet parsed):
+- **Range assertions**: `signal in min..max` — write a pair of
+  comparison assertions instead
+- **Tolerance assertions**: `signal == value +/- tolerance`
 
 ```bhdl
-verify {
-    // Range check
-    assert R1.current in 5mA..15mA always message "LED current out of safe range";
-    
-    // Equality with tolerance
-    assert @VOUT == 5V +/- 0.1V always message "Output voltage regulation failed";
-    
-    // Simple comparisons
-    assert Q1.power < 2W always message "Transistor power exceeded";
-    assert C1.voltage > 0V always message "Reverse voltage on capacitor";
-    
-    // Time-based assertions
-    assert @VOUT > 4.5V after 10ms message "Output failed to rise";
+testbench TB_Assertions for LEDBoard {
+    verify {
+        // Simple comparisons
+        assert Q1.p_diss < 2W always message "Transistor power exceeded";
+        assert C1.voltage > 0V always message "Reverse voltage on capacitor";
+
+        // Equality
+        assert @VCC == 5V always message "VCC off nominal";
+
+        // Range check = a pair of comparisons
+        assert R1.current > 5mA always message "LED current too low";
+        assert R1.current < 15mA always message "LED current too high";
+
+        // Time-based assertions
+        assert @VOUT > 4.5V after 10ms message "Output failed to rise";
+
+        // Planned (not yet parsed):
+        //   assert R1.current in 5mA..15mA always message "...";
+        //   assert @VOUT == 5V +/- 0.1V always message "...";
+    }
 }
 ```
 
@@ -94,6 +115,7 @@ verify {
 
 ### Basic Fault Injection
 
+<!-- doc-check: skip (documents planned fault-injection feature — not yet parsed) -->
 ```bhdl
 testbench TB_Fault_Analysis for PowerSupply {
     simulation {
@@ -160,6 +182,7 @@ testbench TB_Fault_Analysis for PowerSupply {
 
 ### Advanced Fault Injection Modes
 
+<!-- doc-check: skip (documents planned fault-injection feature — not yet parsed) -->
 ```bhdl
 testbench TB_Comprehensive_Faults for Circuit {
     // Progressive fault injection
@@ -221,6 +244,7 @@ testbench TB_Comprehensive_Faults for Circuit {
 
 ### Integration with Safety Analysis
 
+<!-- doc-check: skip (documents planned fault-injection feature — not yet parsed) -->
 ```bhdl
 testbench TB_Safety_Integration for HighPowerCircuit {
     simulation {
@@ -368,6 +392,7 @@ impl SafetyAnalyzer {
 ### Practical Examples
 
 #### Example 1: LED Driver Fault Analysis
+<!-- doc-check: skip (documents planned fault-injection feature — not yet parsed) -->
 ```bhdl
 testbench TB_LED_Driver_Faults for LEDDriver {
     faults {
@@ -405,6 +430,7 @@ testbench TB_LED_Driver_Faults for LEDDriver {
 ```
 
 #### Example 2: Power Supply Protection Testing
+<!-- doc-check: skip (documents planned fault-injection feature — not yet parsed) -->
 ```bhdl
 testbench TB_Protection_Test for PowerSupply {
     // Test protection circuits

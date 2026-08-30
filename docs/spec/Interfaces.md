@@ -20,14 +20,18 @@
 >   `DiffPair` as a reusable diff-pair) — §12.
 > - **Interface constraints** (`constraints { … }`) — §13.
 >
-> **`require pullup`/`require decap`** (originally planned as a v0.8
-> interface-syntax addition) was retired in favour of **vendor
-> `expansion { }` blocks with conditional gating**. See
-> [`Synthesis_Auto_Expansion.md`](Synthesis_Auto_Expansion.md) — the
-> chip's stdlib entity owns the recipe and sources passives from
-> the chip's own VCC pin, which avoids the multi-rail I²C-backdrive
-> failure an interface-level `require` would have to solve
-> separately. (Decision recorded 2026-05-28.)
+> **`require pullup(...)` / `require pulldown(...)` shipped** (SoC
+> arc) at **three scopes** — interface body, entity body, and board
+> body — with a net-level satisfier that emits exactly one real BOM
+> resistor per (net, polarity). See §9 "Pull requirements". (An
+> earlier 2026-05-28 decision had retired the interface-level
+> `require` in favour of vendor `expansion { }` blocks; the SoC arc
+> revisited it — the satisfier resolves each requirement to its NET
+> and picks the rail from the named argument or the bank rail, which
+> answers the multi-rail backdrive concern that motivated the
+> retirement. Datasheet-driven decap/support networks remain the
+> domain of vendor `expansion { }` blocks —
+> [`Synthesis_Auto_Expansion.md`](Synthesis_Auto_Expansion.md).)
 
 ## 1. Motivation
 
@@ -126,7 +130,7 @@ entity Foo {
 Grammar:
 
 ```
-INTERFACE_FIELD_DECL := 'interface' IDENT (':' IDENT)? IDENT field_body
+INTERFACE_FIELD_DECL := 'interface' IDENT (':' IDENT)? ('<' type_args '>')? IDENT field_body
 field_body           := ';'
                       | '{' binding_list '}'    // pin bindings — see §5
 ```
@@ -134,6 +138,13 @@ field_body           := ';'
 - `interface IDENT IDENT;` — bare interface name, default
   perspective.
 - `interface IDENT ':' IDENT IDENT;` — explicit perspective.
+- In the **raw grammar the `:perspective` selector comes BEFORE the
+  `<…>` generic-args block** (`bhdl-parser/src/top_level.rs`,
+  `parse_interface_field_decl`). The §11.1 spelling
+  `interface SPI<lanes=4>:slave qspi;` never reaches the parser in
+  that shape: the parametric resolver rewrites it **pre-parse** to
+  `interface SPI__lanes_4:slave qspi;`, which follows the raw
+  grammar. See §11.
 
 The colon form is the only way to opt into a non-default
 perspective. There is no `~Interface` sugar in v0.7.
@@ -257,7 +268,8 @@ The synthesizer's connection pipeline:
 ```ebnf
 interface_decl := 'interface' IDENT '{' interface_body '}'
 
-interface_body := (signal_decl | perspective_decl | wires_block)*
+interface_body := (signal_decl | perspective_decl | wires_block
+                 | constraints_block | require_stmt | field_decl)*
 
 perspective_decl := 'perspective' IDENT '{' signal_decl* '}'
 
@@ -269,12 +281,30 @@ wires_block := 'wires' '{' wire_mapping* '}'
 
 wire_mapping := IDENT '.' IDENT '<->' IDENT '.' IDENT ';'
 
-field_decl := 'interface' IDENT (':' IDENT)? IDENT field_body
+(* v0.8 protocol constraints — see §13. Statement bodies are
+   lenient, text-bearing token spans re-parsed synth-side. *)
+constraints_block := 'constraints' '{' constraint_stmt* '}'
+
+(* Pull requirements — see §9. `require IDENT ( args ) ;` in the
+   grammar; the shipped vocabulary is pullup/pulldown (other
+   requirement names parse and are ignored by the satisfier).
+   The same production is accepted in ENTITY and BOARD bodies. *)
+require_stmt := 'require' IDENT '(' argument_list ')' ';'
+
+(* field_decl doubles as the v0.8 sub-interface field declaration
+   when it appears INSIDE an interface body (§12). Nested interface
+   *definitions* are not supported. Note: `:perspective` before
+   `<generics>` — see §3. *)
+field_decl := 'interface' IDENT (':' IDENT)? ('<' type_args '>')? IDENT field_body
 
 field_body := ';'
-            | '{' binding* '}'
+            | '{' (binding | alt_group)* '}'
 
 binding := IDENT '=' (IDENT | NUMBER) ';'
+
+(* Pinmux alternates — §9 "Pinmux alternates". `alt` is contextual:
+   only an IDENT `alt` followed by a STRING opens a group. *)
+alt_group := 'alt' STRING '{' binding* '}'
 ```
 
 ## 8. Migration
@@ -471,6 +501,25 @@ longer participates in interface field declarations.
   `pull_requirement` attribute) is EXTERNAL: it satisfies ERC037,
   turns the internal pull off, and an explicit requirement is never
   satisfied by a weak internal pull alone.
+  Storage: each entity/interface requirement is stamped as a
+  **`pull_req__<pin>` = `"up|<ohms>"` / `"down|<ohms>"`** module
+  attribute (`PULL_REQ_ATTR_PREFIX`; interface-scope requirements
+  stamp `pull_req__<field>.<signal>`, resolved through the field's
+  binding or chosen mux alternate); board-scope requirements ride
+  the hierarchical context. Grammar note: the parser accepts any
+  `require IDENT(args);` — only `pullup`/`pulldown` are consumed by
+  the satisfier; other names are reserved vocabulary.
+
+- **Open-drain declaration (vendor data, shipped).**
+  `attribute open_drain_pins = "INT,SDA";` — which pads are
+  open-collector/drain, stamped as **`od__<pin>` = `"true"`** module
+  attributes (`OPEN_DRAIN_ATTR_PREFIX`,
+  `bhdl-synthesizer/src/hierarchical_connectivity.rs`). `inout`
+  direction alone CANNOT identify open-drain (a DDR DQ pad is
+  push-pull bidirectional and also `inout`) — the datasheet
+  declares it. These attributes feed **ERC037** (open-drain pull-up
+  tiers): a single-OD net accepts an internal pull-up; a wired-AND
+  net needs exactly ONE external pull-up.
 
 ---
 
@@ -480,17 +529,22 @@ A complete DDR4 byte-laned memory interface, exercising all three
 v0.8 features at once. (Trimmed to 4-bit byte lanes for brevity;
 real DDR4 uses 8.)
 
-> **Shipped in stdlib.** This example is real, not illustrative:
-> `bhdl-stdlib/interfaces/ddr4.bhdl` defines `DiffPair`, `DDR4Data`,
-> `DDR4Ca`, and the parametric `DDR4<byte_lanes>` controller bundle;
-> `bhdl-stdlib/actives/ddr4_sdram.bhdl` is the Micron MT40A x8 SDRAM
-> entity (parametric over density) whose `expansion { }` block adds
-> the 240 Ω ZQ calibration resistor + VPP/VDD/VDDQ decoupling +
-> VREFCA bypass. `test_ddr4_stdlib` validates both the structural
-> materialisation (37-pin controller, 33-pin SDRAM, constraints on
-> every leaf) and the imported full-pipeline path (all six datasheet
-> support components fire). One composition wrinkle surfaced and was
-> fixed: the conditional-gating "always-on support pin" set had to
+> **Fixture-backed; the stdlib interface file was retired.** The
+> historic `bhdl-stdlib/interfaces/ddr4.bhdl` (which defined
+> `DiffPair`, `DDR4Data`, `DDR4Ca`, and the parametric
+> `DDR4<byte_lanes>` bundle) was **deleted in the stdlib
+> consolidation** (commit `bfaa4eda`); re-landing a stdlib copy of
+> the DDR4 interfaces is a recorded follow-up. The worked example's
+> interface stack lives locally in
+> `tests/circuits/realistic/test_ddr_swizzle.bhdl` (as
+> `SwzDiffPair`/`SwzByteLane`/`SwzDdr<byte_lanes>`), which builds
+> today. `bhdl-stdlib/actives/ddr4_sdram.bhdl` — the Micron MT40A
+> x8 SDRAM entity (parametric over density, `expansion { }` block
+> with the 240 Ω ZQ calibration resistor + VPP/VDD/VDDQ decoupling +
+> VREFCA bypass) — survived the consolidation and still names the
+> historic `DDR4Data`/`DDR4Ca` interface fields. One composition
+> wrinkle surfaced and was fixed during the original stdlib landing:
+> the conditional-gating "always-on support pin" set had to
 > learn `ZQ`/`VPP`/`VREF` — see
 > [`Synthesis_Auto_Expansion.md`](Synthesis_Auto_Expansion.md) §3.1.
 >
@@ -568,7 +622,7 @@ Board-level **swizzle** is then expressed with the generalised
 generate primitive — no swizzle-specific syntax (§11.3):
 
 ```bhdl
-board {
+board SwizzledDdr {
     mc:  MemController();
     mem: MemoryChip();
     // Byte swizzle: the list literal IS the permutation table.
@@ -720,11 +774,18 @@ interface DualUART {
 
 Materialisation recurses, producing dotted leaf pins
 (`duart.ch0.TX`, `duart.ch1.RX`). Sub-interface fields **inherit the
-parent's perspective + `~` reversal** (xored), so `DualUART:dte`
-resolves both channels as `dte`. Each sub-interface's `wires { }`
-cross-name mapping is propagated onto the outer field's xwire
-attributes, so a single bundle binding `mcu.duart -> per.duart` fans
-out to the correct pairwise nets across every nested channel.
+parent's perspective selection**, so `DualUART:dte` resolves both
+channels as `dte`. (Internally the recursion carries a reversal flag
+that is xored per level; that is synthesizer machinery only — **`~`
+at a field declaration is a hard parse error since v0.7c**
+(`top_level.rs`, `parse_interface_field_decl`), with a diagnostic
+pointing at the `:perspective` form.) Each sub-interface's
+`wires { }` cross-name mapping is propagated onto the outer field as
+**`intf_xwire__<field>__<signal>` module attributes**
+(`INTERFACE_FIELD_XWIRE_ATTR_PREFIX` in
+`bhdl-synthesizer/src/hierarchical_connectivity.rs`), so a single
+bundle binding `mcu.duart -> per.duart` fans out to the correct
+pairwise nets across every nested channel.
 
 This is the foundation for diff pairs (`DiffPair { P; N }` reused
 across CK/DQS/PCIe-lanes), multi-channel buses (RGMII's TX/RX

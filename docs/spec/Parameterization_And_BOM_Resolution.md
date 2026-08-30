@@ -1,22 +1,41 @@
 # Parameterization and BOM Resolution
 
-> **Status:** Proposal v0.2. Scope: the three-form argument model
-> (generic / runtime / intent), the three-layer **entity / class /
-> part** model with first-class `part_family` catalog declarations,
-> and the user-supplied **plugin protocol** that owns stocking and
-> selection.
+> **Status:** Largely SHIPPED (v0.2 model; originally proposed as
+> `9ee7216`). What ships today:
 >
-> Changes from v0.1 (committed as `9ee7216`):
-> - **Three-layer model** (entity / class / part) supersedes the
->   per-entity `resolution = "class" | "specific"` flag. The flag is
->   removed; resolution kind falls out structurally from how many
->   `part_family` declarations populate a class.
-> - **`mpn_template`** moves off entities and onto `part_family`
->   declarations.
-> - **Stocking is out of BHDL.** A user-supplied plugin (JSON stdin/
->   stdout) owns stock, price, lead time, and vendor SKU lookup.
->   BHDL emits "what's possible"; the plugin returns "what to buy."
-> - New **Pass 4.5 (catalog scan)** sits between expansion and BOM.
+> - **Three argument forms (§2)**: generic `<…>` params with defaults
+>   plus instance-site specialization (`Resistor<10kΩ>()`) and a
+>   monomorphization pass (`bhdl-analyzer/src/passes/monomorphization.rs`);
+>   runtime `(…)` params with positional and `name = value` binding
+>   (unknown ctor args are a hard error); intent attachment
+>   `for INTENT(…)` on nets and connections, including the standalone
+>   `@net for INTENT(…)` form.
+> - **`design { }` / `design for INTENT { }` blocks (§5)** —
+>   const/require/child-assignment surface plus the `body rhai` hook
+>   (see `Vendor_Design_Blocks.md`); virtual pins + `expansion { }`.
+> - **`part_family` (§4)** — grammar, class patterns with wildcards,
+>   `require` E-series/range/set constraints, `mpn_template`
+>   rendering; stdlib catalogs live under `bhdl-stdlib/parts/`.
+> - **Catalog scan (Pass 4.5, §6)** — `bhdl-analyzer/src/catalog_scan.rs`
+>   emits the §7.3 candidate-bundle JSON.
+> - **Plugin protocol (§7)** — `bhdl-analyzer/src/plugin.rs` +
+>   `bhdl-plugin-default` implement the stdin/stdout JSON contract.
+>
+> Divergences and still-planned pieces:
+>
+> - Stdlib passives kept **runtime-parameter constructors**
+>   (`Res(10k)`, `Cap(100nF)`); the §9 Phase-1 migration to generic
+>   form never ran. Expansion blocks instantiate the runtime form —
+>   `Capacitor<10µF>.1` inside `expansion { }` does not parse.
+> - `bhdl-cli bom` resolves real MPNs through **supply-chain
+>   providers** and pins them in `bhdl.lock` (`--update-lock` /
+>   `--locked`); the §7 plugin step is implemented library-side but
+>   is NOT wired into the CLI BOM path.
+> - Planned, not shipped: `@requires(…)` contracts on virtual pins
+>   (§5.1); `bom_policy { }` / `bom_preferences { }` board blocks
+>   (§7.3, §7.8 — MPN pinning is done via `bhdl.lock` instead);
+>   generic-param type bounds spelled with unit keywords
+>   (`R: resistance` — bounds parse for plain identifiers only).
 
 ## 1. Motivation
 
@@ -69,18 +88,22 @@ Used for axes whose value **changes the physical part you order**.
 
 ```bhdl
 entity Resistor<
-    R:   resistance,
-    TOL: percentage = 5%,
-    PKG: package    = "0603",
+    R,
+    TOL = 5%,
+    PKG = "0603",
 >() {
     pin 1: signal inout;
     pin 2: signal inout;
     attribute component_class = "resistor";
     attribute resistance      = R;
     attribute tolerance       = TOL;
-    attribute package         = PKG;
+    attribute physical_package = PKG;
 }
 ```
+
+(Type bounds on generic params parse only for plain identifier type
+names; unit-keyword bounds like `R: resistance` are not accepted, so
+shipped declarations leave the axes unbounded as above.)
 
 - Every distinct generic tuple monomorphises to a distinct class:
   `Resistor<10kΩ, 1%, "0603">` and `Resistor<10kΩ, 5%, "0603">` are
@@ -117,24 +140,25 @@ entity LM317(v_out: voltage = 5V) {
         const v_ref = 1.25;
         require v_out >= v_ref + 0.1
             else "LM317 minimum V_OUT is V_REF + headroom (~1.35V)";
-        r2_value = 240;
-        r1_value = 240 * (v_out / v_ref - 1.0);
+        R2 = 240;
+        R1 = 240 * (v_out / v_ref - 1.0);
     }
 
     expansion {
-        VIN  -> C_in:  Capacitor<10µF>.1;          C_in.2  -> GND;
-        VOUT -> C_out: Capacitor<22µF>.1;          C_out.2 -> GND;
-        VOUT -> R1:    Resistor<r1_value, 1%>.1;   R1.2    -> ADJ;
-        ADJ  -> R2:    Resistor<r2_value, 1%>.1;   R2.2    -> GND;
+        VIN  -> C_in:  Cap(10µF).1;    C_in.2  -> GND;
+        VOUT -> C_out: Cap(22µF).1;    C_out.2 -> GND;
+        VOUT -> R1:    Res(720).1;     R1.2    -> ADJ;
+        ADJ  -> R2:    Res(240).1;     R2.2    -> GND;
     }
 }
 ```
 
 - LM317T is one MPN regardless of `v_out`. `v_out` is therefore
   **not** generic. It's a runtime parameter.
-- The `design { }` block runs the Rhai body to derive `r1_value`
-  and `r2_value`. Those flow into the **generics** of the internal
-  `Resistor<…>` instances. The mono pass then specialises those.
+- The `design { }` block computes values and assigns them to the
+  expansion children by name (`R1 = …;`), overriding the literal
+  defaults the `expansion { }` block declares. The catalog pass
+  then snaps the computed values to real orderable parts.
 - A runtime parameter's value **must be resolvable at synthesis
   time** — it's a compile-time constant in the BHDL sense, not a
   runtime register. The name "runtime" here distinguishes it from
@@ -156,7 +180,7 @@ The intent matcher considers all entities with `design for
 voltage_regulator { }`, picks one by policy (efficiency, cost,
 board area), and emits the picked entity bound to the net.
 
-**Critical distinction**: once the user writes `LM317(v_out: 5V)`,
+**Critical distinction**: once the user writes `LM317(v_out = 5V)`,
 they have *already chosen* the part. The `for voltage_regulator(…)`
 form is **wrong** for that case — it would be expressing a
 requirement against an entity that has already committed to an
@@ -168,7 +192,7 @@ implementation. Use `(…)` for "I picked it, configure it"; use
 | Form | When | Resolves at | Example |
 |---|---|---|---|
 | `Entity<T1, T2, …>` | Part-defining axes | Monomorphization | `AP2112K<3.3V>()` |
-| `Entity(p1, p2, …)` | Same-part configuration | Designer Rhai, then mono on internals | `LM317(v_out: 5V)` |
+| `Entity(p1, p2, …)` | Same-part configuration | Designer Rhai, then mono on internals | `LM317(v_out = 5V)` |
 | `@net for INTENT(…)` | Abstract requirement; impl not chosen | Intent matcher → designer → mono | `@VCC for voltage_regulator(...)` |
 
 ## 3. Entity, class, part — the three-layer model
@@ -410,6 +434,11 @@ expansion point where synthesis materialises supporting components
 (decoupling caps, feedback dividers, snubbers, etc.) based on the
 host entity's `expansion { }` and `design { }` blocks.
 
+The `@requires` contract clause below is **planned, not shipped** —
+today a missing runtime field surfaces when the design block
+evaluates, not at type-check time:
+
+<!-- doc-check: skip (documents planned @requires contract on virtual pins) -->
 ```bhdl
 pin VOUT: power out virtual
     @requires(v_out: voltage);   // declares which runtime/intent
@@ -439,22 +468,25 @@ An entity may have both.
 
 ### 5.3 How values flow into expansion
 
-The `design` block writes locals (`r1_value`, `c_out_value`, …). The
-`expansion { }` block references those locals in generic-parameter
-positions of internal components:
+The `design` block assigns to the expansion children by name
+(`R1 = …;`). The `expansion { }` block declares the children with
+literal default values; a design-block assignment overrides that
+literal:
 
 ```bhdl
 expansion {
-    VOUT -> R1: Resistor<r1_value, 1%>.1; R1.2 -> ADJ;
-    //                  ^^^^^^^^^
-    //                  Set by the design block above.
+    VOUT -> R1: Res(15000).1; R1.2 -> ADJ;
+    //              ^^^^^
+    //              Literal default — overridden by the design
+    //              block's `R1 = …;` assignment above.
 }
 ```
 
-Once the design block runs and locals are bound to concrete values,
-the expansion produces concrete generic tuples on the internal
-components — and those flow into the monomorphisation pass like any
-other generic.
+Once the design block runs, the children carry concrete values and
+flow into monomorphisation / catalog selection like any other
+instance. (The originally-proposed form — referencing design-block
+locals in generic-argument position, `Resistor<r1_value, 1%>` — did
+not ship; expansions instantiate the runtime-argument form.)
 
 ## 6. The synthesis pipeline
 
@@ -604,9 +636,13 @@ write stdout.
 
 `policy_hints` carries user-supplied policy that BHDL doesn't
 interpret but the plugin may want (preferred currency, manufacturing
-location for region-restricted parts, etc.). Per-board hints live in
-the board declaration:
+location for region-restricted parts, etc.). Per-board hints were
+proposed to live in the board declaration — the `bom_policy` block
+is **planned, not shipped** (today's equivalent is the CLI's
+`--supply-profile` / `--supply-net` options and their env
+fallbacks):
 
+<!-- doc-check: skip (documents planned bom_policy board block) -->
 ```bhdl
 board MyBoard {
     bom_policy {
@@ -688,8 +724,10 @@ plugin = "bhdl-plugin-digikey"     # or a path: "./tools/select_parts.py"
 plugin_args = ["--prefer-jit", "--max-lead-weeks", "4"]
 ```
 
-Per-board overrides:
+Per-board overrides (planned — the `bom_policy` block has not
+shipped):
 
+<!-- doc-check: skip (documents planned bom_policy board block) -->
 ```bhdl
 board MyBoard {
     bom_policy {
@@ -716,8 +754,13 @@ no sourcing info). Serious users plug in their own.
 
 ### 7.8 Board-level overrides
 
-Sometimes the user wants to *bypass* the plugin for a specific class:
+Sometimes the user wants to *bypass* the plugin for a specific
+class. The `bom_preferences` block is **planned, not shipped** —
+today hard MPN pinning is done per-refdes through `bhdl.lock`
+(generated by `bom`, enforced by `--locked`, refreshed by
+`--update-lock`):
 
+<!-- doc-check: skip (documents planned bom_preferences board block; shipped pinning = bhdl.lock) -->
 ```bhdl
 board MyBoard {
     bom_preferences {
@@ -760,7 +803,7 @@ entity AP2112K<V_OUT: voltage>() {
     pin VOUT: power out;
     pin GND:  ground;
     pin EN:   signal in;
-    attribute package = "SOT-25";
+    attribute physical_package = "SOT-25";
 }
 
 // In bhdl-stdlib/parts/diodes/ap2112k.bhdl:
@@ -787,7 +830,7 @@ board MyBoard {
 ```bhdl
 entity LM317(v_out: voltage = 5V) {
     pin VIN:  power in;
-    pin VOUT: power out virtual @requires(v_out: voltage);
+    pin VOUT: power out virtual;
     pin ADJ:  feedback in;
     pin GND:  ground;
 
@@ -795,15 +838,15 @@ entity LM317(v_out: voltage = 5V) {
         const v_ref = 1.25;
         require v_out >= v_ref + 0.1
             else "LM317 minimum V_OUT is V_REF + headroom (~1.35V)";
-        r2_value = 240;
-        r1_value = 240 * (v_out / v_ref - 1.0);
+        R2 = 240;
+        R1 = 240 * (v_out / v_ref - 1.0);
     }
 
     expansion {
-        VIN  -> C_in:  Capacitor<10µF,  20%, "X7R", "0603">.1; C_in.2  -> GND;
-        VOUT -> C_out: Capacitor<22µF,  20%, "X7R", "0805">.1; C_out.2 -> GND;
-        VOUT -> R1:    Resistor<r1_value, 1%, "0603">.1;       R1.2    -> ADJ;
-        ADJ  -> R2:    Resistor<r2_value, 1%, "0603">.1;       R2.2    -> GND;
+        VIN  -> C_in:  Cap(10µF).1;  C_in.2  -> GND;
+        VOUT -> C_out: Cap(22µF).1;  C_out.2 -> GND;
+        VOUT -> R1:    Res(720).1;   R1.2    -> ADJ;
+        ADJ  -> R2:    Res(240).1;   R2.2    -> GND;
     }
 }
 
@@ -815,18 +858,17 @@ part_family TI_LM317T : LM317 {
 }
 
 board MyBoard {
-    LDO: LM317(v_out: 5V);
+    LDO: LM317(v_out = 5V);
     @VBUS_9V -> LDO.VIN;
     LDO.VOUT -> @VCC_5V;
 }
 
-// After designer: r1_value = 720, r2_value = 240.
+// After designer: R1 = 720, R2 = 240 (assignments override the
+//   expansion literals).
 // After expansion: C_in, C_out, R1, R2 materialised as children of LDO.
-// After mono: 5 classes — LM317, Capacitor<10µF,20%,X7R,0603>,
-//   Capacitor<22µF,20%,X7R,0805>, Resistor<720Ω,1%,0603>,
-//   Resistor<240Ω,1%,0603>.
-// After catalog: each class collects candidate part_families.
-// After plugin: 5 MPNs selected (one per class) with the user's plugin policy.
+// After catalog selection: each child snaps to a standard value +
+//   smallest adequate package.
+// After MPN resolution: 5 MPNs resolved and pinned in bhdl.lock.
 ```
 
 ### 8.3 Intent-driven

@@ -1,10 +1,12 @@
 # Simulation-Refined Margin & Sign-Off Loop
 
-> **Status:** Proposal — spec for tasks #4 (GLACIER-fed sim-refined stress)
-> and #5 (margin + re-sim sign-off loop). Implementation is gated on review
-> of this document. The single-stage analogue already ships as
-> `bhdl-spice/src/tube_bias.rs::refine` (the bias-network refine loop); this
-> generalises that discipline to whole-netlist passive sizing.
+> **Status:** SHIPPED — implemented in `bhdl-synthesizer/src/signoff.rs`
+> (margin computation, ripple-aware stress, the sign-off report and the
+> Stage A/B/C loop of §11.5), running under `bhdl <file> bom --simulate`
+> (and embedded in `bhdl <file> report`). The single-stage analogue that
+> preceded it is `bhdl-spice/src/tube_bias.rs::refine` (the bias-network
+> refine loop); this document generalises that discipline to
+> whole-netlist passive sizing. §10 records the review decisions.
 
 ## 1. Motivation
 
@@ -15,7 +17,9 @@ design { } seed  →  E-series snap  →  catalogue/supply gate  →  BOM
 ```
 
 The closed-form `design { }` block computes a real-valued seed (L, C, R_top,
-…). `value_snap` rounds it to the nearest E-series value. The supply gate
+…). `bhdl_analyzer::value_snap` rounds it to the nearest E-series value
+(family selection and MPN resolution ride
+`bhdl-synthesizer/src/glacier_physical_selection.rs`). The supply gate
 (`apply_supply_chain_mpns`) then checks the part's *derated* stress against
 catalogue ratings. Two gaps:
 
@@ -46,12 +50,18 @@ In scope: the stress-bearing passives the supply gate already classifies —
 `resistor`, `capacitor`, `inductor` — whose value is either a `design { }`
 output or a literal, and whose stress is one of the existing axes:
 
-| Class | Stress axis | Existing derate (`value_snap.rs`) |
+| Class | Stress axis | Derate (`signoff.rs`) |
 |---|---|---|
 | capacitor | voltage across | `CAP_VOLTAGE_DERATE = 2.0` |
 | resistor | power dissipated | `RES_POWER_DERATE = 2.0` |
-| resistor | voltage across | `RES_VOLTAGE_DERATE = 1.5` |
 | inductor | current through | `IND_CURRENT_DERATE = 1.25` |
+
+The sign-off constants live at the top of
+`bhdl-synthesizer/src/signoff.rs`, kept in sync with
+`bhdl_analyzer::value_snap` (which carries the same factors for
+catalogue family selection, plus a `RES_VOLTAGE_DERATE = 1.5` used
+ONLY there — resistor voltage is a family-selection gate, not a
+sign-off axis).
 
 Out of scope (unchanged): active-device bias (owned by `tube_bias::refine`
 and the `design { }` evaluators), connectivity, package/footprint selection.
@@ -74,8 +84,9 @@ It reuses, not replaces, existing machinery:
 - `SimulationAnnotations { net_voltages, instance_currents, instance_power }`
   — the per-instance stress source (already built by `build_simulation_annotations`).
 - `compute_instance_max_voltages` — voltage stress from node voltages.
-- `value_snap` E-series grid + derate constants — the value lattice and the
-  derate convention margins are measured against.
+- the `bhdl_analyzer::value_snap` E-series grid + the `signoff.rs` derate
+  constants — the value lattice and the derate convention margins are
+  measured against.
 - The #1 DNP/loud-warn path — the terminal state when no E-series value escapes.
 
 ## 4. Margin definition
@@ -97,8 +108,13 @@ margin = r / s          (ratio; ≥ 1.0 is safe, the derate already folded in)
   on top of the derate),
 - **SIGNED_OFF** if `margin ≥ SIGNOFF_MARGIN`.
 
-`SIGNOFF_MARGIN` is a per-class constant beside the derate factors (proposed
-default 1.2 for all three classes; revisit per class in review).
+`SIGNOFF_MARGIN` is a single flat constant beside the derate factors in
+`signoff.rs`: **1.2 for all three classes, deliberately** — the derate
+factors already carry the per-class physics, and the sign-off margin is
+the tool's uniform head-room discipline on top (the ripple-current
+check states this in so many words: "the uniform SIGNOFF_MARGIN
+carries the tool's margin discipline"). The per-class question was
+considered and closed (§10, decision 1).
 
 ### Two-sided specs
 
@@ -197,16 +213,15 @@ sensitivity signal, the same way `refine` reads gain/centring error each pass.
 
 The loop needs a GLACIER solve, so it is bound to the simulate path:
 
-- `bhdl bom --simulate` runs the **full loop** (re-sim + margin + stepping) and
-  prints the sign-off report alongside the BOM.
-- A `--signoff-report` flag (or always, under `--simulate`) emits the per-part
-  table: `refdes, class, seed_value, final_value, stress, derated, rating,
-  margin, verdict`.
+- `bhdl <file> bom --simulate` runs the **full loop** (re-sim + margin +
+  stepping) and ALWAYS prints the sign-off report alongside the BOM —
+  there is no separate flag for it (`bhdl <file> report` embeds the same
+  output).
 - Without `--simulate`, behaviour is unchanged (open-loop seed → snap → BOM);
-  the report header notes that margins were not simulated.
+  margins are not simulated.
 
-Proposed constants live beside the derate factors in `value_snap.rs`:
-`SIGNOFF_MARGIN` (per class), `MAX_PASSES`.
+The constants (`SIGNOFF_MARGIN`, the derate factors) live at the top of
+`bhdl-synthesizer/src/signoff.rs`.
 
 ## 9. Determinism
 
@@ -214,34 +229,31 @@ Proposed constants live beside the derate factors in `value_snap.rs`:
 GLACIER). Given the same inputs it produces the same value trajectory and report,
 so the sign-off result is reproducible and lock-file-stable.
 
-## 10. Open questions for review
+## 10. Decisions taken (settled history — outcomes as built)
 
-1. **`SIGNOFF_MARGIN` per class** — is a flat 1.2 (20 % over derate) right, or
-   should caps (already 2× derated) sign off at exactly 1.0 while inductors
-   (1.25× derate) want more? Proposed: revisit per class with one real buck.
-2. **Where the loop lives** — a new `bhdl-synthesizer/src/signoff.rs` orchestrating
-   convert/solve/snap, or fold into the existing `glacier_physical_selection`
-   path? Proposed: new module, called from the `--simulate` arm in `main.rs`,
-   so the open-loop path is untouched.
-3. **Stepping the family vs the value** — for resistor power and inductor
-   current, the fix is often a higher-rated part at the *same nominal value*
-   (a larger package), not a different value. Should the loop step the
-   *catalogue family* (rating axis) rather than the E-series value in those
-   cases? This couples the loop to the supply gate ordering. Proposed: step
-   value for cap-voltage / divider-ratio cases; defer family-stepping to the
-   supply gate (which already filters by derated rating) and only DNP if the
-   gate then finds nothing — i.e. the loop owns *value* margin, the supply gate
-   owns *rating* coverage. **This is the main architectural choice to confirm.**
-4. **Two-sided window source** — infer the target window from the `design { }`
-   `require` clauses (e.g. `require vout < v_in`), or from explicit
-   `tolerance`/window attributes? Proposed: explicit attributes first; `require`
-   mining is a later enhancement.
-5. **AC / transient stress** — output-cap selection is dominated by load-transient
-   droop, which a DC solve doesn't capture (the `tps54331` header flags this).
-   Is DC-only sign-off acceptable for v1, with transient deferred? **Resolved:
-   no — DC alone is too thin to give value-stepping teeth (see §11).** The loop
-   adds an analytic *ripple* stress model so a reactive part's value genuinely
-   sets its stress.
+1. **`SIGNOFF_MARGIN` per class** — DECIDED: a single flat `1.2` for all
+   classes (`signoff.rs`). The derate factors already carry the
+   per-class physics; the sign-off margin is the tool's uniform
+   head-room discipline on top. Not revisiting per class.
+2. **Where the loop lives** — DECIDED as proposed: a new
+   `bhdl-synthesizer/src/signoff.rs`, called from the `--simulate` arm
+   in `main.rs`; the open-loop path is untouched. The E-series/family/
+   MPN machinery stayed in `glacier_physical_selection.rs`.
+3. **Stepping the family vs the value** — DECIDED as proposed: the loop
+   owns *value* margin (the Stage-C analytic reactive step —
+   `apply_inductor_stepping` mutates the netlist before MPN resolution,
+   so the BOM carries the stepped value), the supply gate owns *rating*
+   coverage (it filters by derated rating and DNPs when nothing
+   clears).
+4. **Two-sided window source** — DECIDED: explicit attributes
+   (`tolerance`, ripple targets); `require`-clause mining was not
+   built.
+5. **AC / transient stress** — DECIDED: DC-only was rejected as too
+   thin to give value-stepping teeth; the shipped loop carries the
+   analytic *ripple* stress model of §11, so a reactive part's value
+   genuinely sets its stress. Load-transient droop beyond the ripple
+   forms remains with the PDN/decap machinery
+   (Requirements_And_Resolution.md), not this loop.
 
 ---
 

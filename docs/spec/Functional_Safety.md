@@ -8,6 +8,10 @@ Primary frame ISO 26262 (ASIL, SPFM/LFM/PMHF); IEC 61508 (SIL, SFF/PFH)
 shares the same model and differs only in metric definitions and
 targets.
 
+> Reading order note: sections are numbered by topic, not by file
+> position — §2.13–§2.15 sit between §2.9 and §3, and §2.10–§2.12 are
+> appended after §5.
+
 ## 1. Principles
 
 1. **Observable effects, not per-part labels.** A safety goal declares
@@ -16,13 +20,14 @@ targets.
    produce; nobody hand-labels the effect of a part failing.
 2. **Measured, not assumed.** Diagnostic coverage, effect classes and
    convergence come from simulating the real netlist with the vendor's
-   behavioral models in the loop *(Phase 3)*. A claimed DC may be
-   declared; a measured DC always wins and both are reported.
+   behavioral models in the loop (shipped — the whole-universe
+   campaign, §2.4/§2.9). A claimed DC may be declared; a measured DC
+   always wins and both are reported.
 3. **No invented data.** FIT, failure-mode fractions and DC come only
    from a named source (datasheet, vendor safety manual / qualification
    report, named handbook table, field data). Missing data is a
    reported **gap**, never a default.
-4. **Three kinds of part** *(Phase 2)*: behavioral model with declared
+4. **Three kinds of part** (shipped — §2.7): behavioral model with declared
    failure states; black box with SEooC data (λ, classes, internal DC,
    assumptions of use, terminal contract); or nothing (gap, QM-only).
 5. **Deterministic.** The same source regenerates the same report
@@ -45,6 +50,7 @@ targets.
 
 ### 2.1 The `safety` block — one new top-level form
 
+<!-- doc-check: skip (bodies deliberately elided as `{ ... }`) -->
 ```bhdl
 safety SupervisedReg5V as dut { ... }                       // short form: block named after the entity
 safety Reg5V_ASIL_B of SupervisedReg5V as dut { ... }       // long form: a differently named analysis of the entity
@@ -102,9 +108,11 @@ kwargs. Unbound formal, unknown formal, unknown kwarg: hard errors.
 Inline one-off goals:
 
 ```bhdl
+safety DualRail as brd {
     goal SG_SUPPLY: ASIL_B "Neither 5V rail overvolts undetected" (id="SG-SYS-010", ftti=10ms) {
         effect any_ov = brd.V5_A > 5.5V || brd.V5_B > 5.5V   severity S3;
     }
+}
 ```
 
 Level: `ASIL_A`..`ASIL_D`, `QM`, `SIL1`..`SIL4` (standard implied;
@@ -118,16 +126,19 @@ entity → sub-entity.
 `effect <name> = <expr> severity <S0|S1|S2|S3>;` inside a goal. The
 expression grammar is the board's own (`when (cond)`, `stress`):
 `<ns>.<net|port|inst.PIN>`, numbers with units, comparisons,
-`&&`/`||`/`!`. *(Phase 3)* adds `for > <duration>`. Duplicate effect
-names within a goal are errors.
+`&&`/`||`/`!`. A duration qualifier (`for > <duration>`) is **NOT YET
+IMPLEMENTED** — unlike the shipped Phase-3 items below, no code parses
+or evaluates it today. Duplicate effect names within a goal are errors.
 
 ### 2.4 Mechanisms
 
 ```bhdl
+safety SupervisedReg5V as dut {
     mechanism dut.mon: psm(SG_OV, detects=[overvoltage, silent_ov], dc=0.90,
                            source="TPS3700 datasheet §7.3");
     mechanism dut.wdt: lsm(SG_OV, protects=dut.mon, interval=100ms, latency=1ms,
                            dc=0.85, source="TPS3430 datasheet §8.2");
+}
 ```
 
 `mechanism <ns>.<handle>: psm(<Goal>, ...) | lsm(<Goal>, ...);` —
@@ -219,6 +230,7 @@ of a placement artifact when one exists.
 ### 2.5 Faults, waivers, assumptions
 
 ```bhdl
+safety SupervisedReg5V as dut {
     fault short(dut.r_fb_bot.1, dut.r_fb_bot.2) expect SG_OV.overvoltage detected_by dut.mon within 10ms;
     fault open(dut.r_pu)                        expect SG_UV.silent_uv;
     fault state(dut.reg, "ref_drift_high")      expect SG_OV.overvoltage detected_by dut.mon;
@@ -227,6 +239,7 @@ of a placement artifact when one exists.
 
     assume ASM_SUPPLY_WITHIN_ABSMAX(dut.VIN, 36V);             // from an assumptions catalogue
     assume ASM_LOCAL_007 "EN is driven, never left floating";   // inline
+}
 ```
 
 `fault <kind>(<targets>) expect <Goal>.<effect> [detected_by <ns>.<h>] [within <duration>];`
@@ -498,7 +511,7 @@ all explicit, none guessed:
    engine implements the shared equation shape
    λ = λ_base · π_T(Ea, T_ref, T_amb) · π_S((S/S_ref)^n); the standard
    is a *data* choice (`per="IEC62380"`), not a code fork — an SN 29500
-   run is a new table file, not a new engine. Five model forms exist:
+   run is a new table file, not a new engine. Six model forms exist:
    `model = "arrhenius_stress"` (λ_base·π_T·π_S, the 62380/61709/29500
    family shape), `model = "mil217f_resistor"`
    (λ_p = λ_b·π_R·π_Q·π_E per MIL-HDBK-217F §9) and
@@ -508,24 +521,71 @@ all explicit, none guessed:
    stays uncomputed), `model = "mil217f_semiconductor"` (§6 diodes /
    BJTs / FETs: λ_p = λ_b·π_T·π_A·π_R·π_S·π_C·π_Q·π_E with
    T_J = T_A + θ_JA·P — the power is sim-derived, θ_JA comes from the
-   `theta_ja` attribute, and COTS default quality is "plastic") and
+   `theta_ja` attribute, and COTS default quality is "plastic"),
    `model = "mil217f_inductive"` (§11 coils/transformers:
    λ_p = λ_b·π_C·π_Q·π_E at the hot spot T_HS = T_A + 1.1·ΔT, §11.3;
-   ΔT from the `temp_rise` attribute). FIT = 1000·λ_p for every 217F
+   ΔT from the `temp_rise` attribute) and
+   `model = "mil217f_resnetwork"` (§9.4 resistor networks, RZ /
+   MIL-R-83401: λ_p = λ_b·π_T·π_NR·π_Q·π_E with the case temperature
+   estimated as T_C = T_A + 55·S per the handbook when unmeasured, and
+   π_NR = the number of film resistors IN USE from the `n_resistors`
+   attribute — unused elements are not counted, per the handbook's own
+   note; T_C above 125 °C is OVERSTRESSED and refuses).
+   FIT = 1000·λ_p for every 217F
    form; a missing θ_JA, power, or temp_rise is a FIT_UNCOMPUTED gap
    naming the attribute, never a guessed thermal path.
 
-The entity declares its class once (`handbook class="res_film_low_dissipation"
-per="IEC62380" source="..."` on the stdlib `Res`), and every instance
-gets its own computed FIT with the full basis printed:
+The entity declares its class once (the stdlib `Res` declares
+`handbook class="res_fixed_film" per="MILHDBK217F"
+source="MIL-HDBK-217F §9.2 fixed film (RL/RLR model)";`), and every
+instance gets its own computed FIT with the full basis printed
+(illustrative values, real basis shape for the 217F resistor form):
 
 ```
-r_hot  Res  handbook res_film_low_dissipation per IEC62380: λ=0.32 FIT = 0.10·π_T(1.29)·π_S(2.45) @ S=1.23, Ta=55°C ...
+r_hot  Res  handbook res_fixed_film per MILHDBK217F: λ=1.2 FIT = 1000·λb(0.00110)·π_R(1.0@10000Ω)·π_Q(3 lower)·π_E(1 GB) @ S=0.61, Ta=55°C ...
 ```
 
-Any missing ingredient (no mission, unconverged solve, no table, class
-not in the table, unrated part) leaves the FIT uncomputed and adds a
-FIT_UNCOMPUTED gap naming exactly what is missing.
+A standard with NO local coefficient table is first offered to the
+external **FIT-provider** below (mission and sim-derived stress are
+still required — they are the provider's inputs). Only when neither a
+table nor a provider produces a number — no mission, unconverged
+solve, no table and no provider answer, class not in the table,
+unrated part — does the FIT stay uncomputed, with a FIT_UNCOMPUTED
+gap naming exactly what is missing.
+
+**External FIT-provider executables** *(implemented,
+`reliability.rs::fit_via_provider`)*: a standard whose data is
+registration-gated or proprietary (FIDES, an OEM handbook, a paid
+prediction tool) plugs in as an EXECUTABLE instead of a coefficient
+table. Discovery order: `$BHDL_FIT_PROVIDER` (explicit path — applies
+to every standard without a local table), else
+`bhdl-fit-provider-<standard lowercased>` next to the CLI binary,
+else the same name on `PATH`. A project can also pin the provider in
+its manifest — `bhdl.toml [providers] fit = "<command>"` (see
+Library_Resolution.md §3.3) — so the build carries its own provider
+identity instead of riding shell state. Protocol v1 is one JSON
+request on stdin, one JSON response on stdout:
+
+```
+request  { "protocol": 1, "standard", "class", "instance",
+           "inputs": { stress_ratio?, ambient_c, resistance_ohm?,
+                       capacitance_f?, power_w?, theta_ja_c_per_w?,
+                       rated_power_w?, temp_rise_c?, quality?,
+                       environment? },
+           "mission": { ambient_c, lifetime_h?, on_hours?, cycles?,
+                        time_basis?,
+                        phases: [{name, frac, ambient_c, powered}] } }
+response { "fit": <FIT>, "basis": "<full audit string>",
+           "source": "<standard + edition + tool>" }
+       | { "error": "<why>" }
+```
+
+The provider OWNS its methodology — FIDES-class standards do their
+own per-phase π composition, so the WHOLE mission is handed over and
+the returned λ is taken as the final number; the engine records
+fit + basis + source verbatim, exactly like a table row (the basis is
+suffixed `[provider: <source>]`). No provider found, a non-zero exit,
+or a malformed response is the usual NAMED gap, never a default.
 
 **The shipped default is MIL-HDBK-217F** (`milhdbk217f.toml`): a US
 government work in the public domain, so its real §9.1/§9.2 resistor
@@ -675,16 +735,19 @@ and the same source regenerates it byte-for-byte. Sections:
 8. The DFA table with per-finding disposition status.
 9. Assumptions of use with their status.
 
-**The pin program is a FUNCTIONAL contract, not a safety AoU.** A
-wrong mux or pull program (an I²C pad left GPIO, a UART on the
-other home) breaks the board's FUNCTION — so the solved pin
-program signs off in the REPORT ("Firmware contract (functional
-pin program)" section: every mux choice with its resolved
-signal→pin map, every enabled internal pull), with
-`bhdl doc --mux-header` as the machine artifact. The safety model
-does not carry it wholesale; where a specific pin is
-safety-relevant, the designer's safety block names it (as the
-megaboard's AOU_PG names PGOOD_IN).
+**The pin program is a FUNCTIONAL contract, not a safety AoU — and
+its sign-off artifact is NOT this capstone report.** A wrong mux or
+pull program (an I²C pad left GPIO, a UART on the other home) breaks
+the board's FUNCTION — so the solved pin program signs off in the
+electrical SIGN-OFF report (the "Firmware contract (functional pin
+program)" section that `signoff.rs::format_firmware_contract` appends
+to the margin table under `bhdl <file> bom --simulate` /
+`bhdl <file> report`: every mux choice with its resolved signal→pin
+map, every enabled internal pull), with `bhdl doc --mux-header` as
+the machine artifact. The safety model — and this capstone report —
+does not carry it wholesale; where a specific pin is safety-relevant,
+the designer's safety block names it (as the megaboard's AOU_PG names
+PGOOD_IN).
 10. The gap register — the assessor's to-do, one row per open gap.
 
 The FMEDA CSV package (`--fmeda`) remains the worksheet; this report
@@ -744,14 +807,15 @@ netlist exists, for each board that has ≥1 `safety` block:
 - `gaps[]`: every reason the analysis cannot claim a goal at its
   level, each with location and a one-line fix.
 
-## 4. Gap report (Phase 1 output)
+## 4. Gap report
 
-`bhdl-cli safety <file>` prints, per goal: level, effects with/without
-a detecting PSM, mechanisms (claimed DC + source), faults
+`bhdl <file> safety` (the input file is the CLI's global positional
+argument, BEFORE the subcommand) prints, per goal: level, effects
+with/without a detecting PSM, mechanisms (claimed DC + source), faults
 (declared/run), assumptions (satisfied/waived/open), and the gap list;
 then a parts table (handle, kind of safety data, source). Exit status 1
-when any goal has gaps, unless `BHDL_SIGNOFF_ADVISORY=1`. Phase 1 gap
-classes:
+when any goal has gaps, unless `BHDL_SIGNOFF_ADVISORY=1`. Gap classes
+(`bhdl_common::safety::GapClass`):
 
 | class | meaning |
 |---|---|
@@ -760,10 +824,18 @@ classes:
 | `DC_UNSOURCED` | mechanism claims a DC without a source |
 | `ASSUMPTION_OPEN` | assumption of use neither satisfied nor waived |
 | `PART_NO_SAFETY_DATA` | physical part with neither failure states nor SEooC data |
-| `FAULT_UNRUN` | declared `fault`, campaign not implemented yet |
+| `FAULT_UNRUN` | declared `fault` that did not run, OR ran and its expectation did not hold (wrong effect fired, ran without verdict, or the `within` FTTI check failed/was unverifiable) — the gap's fix line says exactly which (§2.5) |
+| `FIT_UNCOMPUTED` | handbook part names a prediction standard but its FIT could not be computed (missing mission profile, unsolved stress, no coefficient table / provider answer, missing attribute) — §2.8 |
+| `CONFIG_MISMATCH` | the vendor safety data declares the configuration it was computed for (`config k=v … source=…`) and this instance's actual configuration differs — the FIT/failure split does not apply — §2.7 |
+| `AOU_VIOLATED` | a vendor assumption of use (PDN mask, droop window, supply capability, clock contract) is VIOLATED by the measured board — §2.10/§2.15 |
+| `METRIC_MISSED` | a measured architectural metric (SPFM/LFM/PMHF, SFF/PFH) misses its target, or the measurement is incomplete at a level that has one — §2.9 |
+| `DEPENDENT_FAILURE` | a strong DFA finding: the mechanism shares a supply rail or a die with the function it monitors — §2.13 |
 
-Metrics (SPFM/LFM/PMHF, SFF/PFH) are *not* computed in Phase 1; a
-report that cannot compute them says so rather than printing a number.
+Metrics (SPFM/LFM/PMHF, SFF/PFH) ARE computed, from the measured
+whole-universe campaign (§2.9), and printed with their targets and
+verdict; a metric that cannot be measured (unmeasured faults, no
+targets at the goal's level) is stated as such rather than printed as
+a number.
 
 ## 5. Baseline and delta — change detection as a property of the design
 
@@ -787,26 +859,30 @@ change detector with no process overhead:
    safe faults with no human step. A designer may still waive a part
    with `safety=qm` + reason on the instance (ERC-waiver idiom).
 
-`bhdl-cli safety --baseline <file>` writes (or, if the file exists,
-compares against) a baseline of `{ parts, fault universe, per-fault
-classification, mechanisms, assumptions, metrics, verdict }` — the
-same discipline as `freeze` for the netlist. Every build then prints
-the delta since baseline:
+`bhdl <file> safety --baseline <path>` writes (when the path does not
+exist yet) or compares against (when it does) a baseline of
+`{ parts, goals, effects, mechanisms, assumptions, faults, gaps,
+verdict_pass }` (`bhdl_common::safety::Baseline` — BTreeMaps, so
+serialisation is deterministic) — the same discipline as `freeze` for
+the netlist. `--update-baseline` rewrites an existing baseline with
+this run instead of comparing. A compare prints the per-section delta
+since baseline (added/removed/changed per section, then the verdict
+transition):
 
 ```
-since baseline reg5v.safety-baseline.json (2026-08-18, 4f740f1):
-  parts      +1  R27 (Res 10k, net FB / GND)          ← new
-  faults     +3  R27.open, R27.short, R27.drift
-  classes    R27.short → SG_OVP.silent_ov  UNDETECTED  (new single-point fault)
-  mechanisms  unchanged
-  SPFM       not computed (Phase 1)          verdict PASS → FAIL (1 new gap)
+since baseline reg5v.safety-baseline.json:
+  parts        +1 -0 ~0
+    + R27  Res
+  faults       +1 -0 ~0
+    + short(R27.1,R27.2)  SG_OVP.silent_ov
+  gaps         +1 -0 ~0
+    + PART_NO_SAFETY_DATA:board:R27  declare failure data or waive
+  verdict      PASS -> FAIL
 ```
 
 The baseline is what an assessor signs; the delta is the impact
 analysis (ISO 26262-8 §8) — produced by the build, reviewed by the
-safety engineer, no re-derivation. Phase 1 already emits the baseline
-for `{ parts, mechanisms, assumptions, gaps, verdict }`; Phase 3 adds
-fault classes and metrics.
+safety engineer, no re-derivation.
 
 ### 2.10 PDN power-domain checks (design + AoU)
 

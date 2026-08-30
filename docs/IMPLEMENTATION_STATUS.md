@@ -4,12 +4,19 @@
 
 This document tracks the implementation status of BHDL (Board Hardware Description Language) - a complete toolchain for electronic circuit design, analysis, and manufacturing.
 
-> **Status note (refreshed 2026-06-11):** the earlier "is the BHDL→netlist
-> pipeline real?" open questions below are resolved — the full
+> **Status note (refreshed 2026-08-30):** the full
 > source→analysis→netlist→synthesis→GLACIER DC solve→sign-off→BOM flow runs
-> end-to-end today (`bhdl-cli … bom --simulate`). Sections marked with the old
-> ❓ have been corrected. Visualization/PnR exist as crates but their
-> end-to-end SVG output was not re-verified in this pass and is left as-is.
+> end-to-end (`bhdl-cli … bom --simulate`), and since the 2026-06 refresh the
+> default pipeline has grown a front half: every netlist-consuming command
+> runs **bhdl → elaborate → synthesize** with a round-trip gate that proves
+> the elaborated structural form re-synthesizes identically
+> (`--no-elaborate` skips the gate, loudly). Also live today: the ERC
+> catalog through ERC037, functional-safety modeling (`safety`/`trace`),
+> power-tree planning + power-up/down simulation
+> (`powertree`/`powerup`/`powerdown`/`pdreport`), PnR + fab export
+> (`layout --fab`), and the schematic V4 engine. The frozen test counts and
+> performance/cost numbers that used to live in this file were snapshots of
+> a 2025 pass; the live gate is `cargo test --workspace`.
 
 ## Architecture Overview
 
@@ -20,10 +27,16 @@ BHDL Source Code
       ↓
    AST + Analysis    (bhdl-ast, bhdl-analyzer: multi-pass; recipes, attrs, power)
       ↓
+   Elaboration       (default pipeline front half: desugar to structural bhdl,
+      ↓               round-trip gate proves re-synthesis identity; --no-elaborate)
    Synthesis         (bhdl-synthesizer: analysis → structural netlist;
-      ↓               design/expansion/simulation recipes; value snapping)
-   Netlist           (bhdl-netlist)
-      ↓
+      ↓               design/expansion/simulation recipes; value snapping;
+      ↓               requirement/stage resolution; refdes allocation at
+      ↓               phase 12.7, persisted in <board>.bhdl.refdes;
+      ↓               ERC — rules through ERC037 across three tiers)
+   Netlist           (bhdl-netlist; `freeze` emits the immutable as-fabbed
+      ↓               record; bhdl-safety + `safety`/`trace` build the
+      ↓               functional-safety model and requirement trace matrix)
    ┌─────────────────┴───────────────────────────────┐
    ↓                                                   ↓
    Component Intelligence          Circuit Simulation & Sign-off
@@ -40,7 +53,7 @@ BHDL Source Code
 ## Phase 1: BHDL Foundation ✅ **COMPLETE**
 
 ### Core Language Implementation
-- **BHDL Parser**: Full S-expression parsing with `rowan` CST
+- **BHDL Parser**: Full parsing of the v2.0 flow syntax with `rowan` CST
 - **AST Generation**: Typed abstract syntax tree with semantic wrappers
 - **Multi-pass Analysis**: 4-pass semantic analysis pipeline
 - **Error Recovery**: Robust error handling and diagnostic reporting
@@ -92,7 +105,7 @@ BHDL Source Code
 - **Nexar API**: GraphQL-based Octopart supplier data access
 - **Rate Limiting**: Token bucket algorithm (8/min DigiKey, 5/min Nexar)
 - **Multi-level Caching**: Memory LRU → SQLite persistent → API fallback
-- **90% API Call Reduction**: Intelligent volatility-based caching
+  (the old "90% API call reduction" figure is a historical, unverified claim)
 
 ### ⚙️ Two-Stage Component Synthesis
 - **Stage 1**: Local database fuzzy matching with electrical constraints
@@ -106,25 +119,26 @@ BHDL Source Code
 - **Package Constraints**: SMD/THT preferences (0402, 0603, 0805, etc.)
 - **Supply Chain Risk**: Multi-supplier sourcing and availability analysis
 
-### 📊 Performance Metrics
-- **Cache Hit Ratio**: 85-95% reducing API costs dramatically
-- **Response Time**: <200ms cached, ~2s fresh API calls  
-- **Database Search**: ~50ms for 10k+ components with FTS5
-- **End-to-End Pipeline**: 3-5s requirements → procurement data
-- **Cost Savings**: $75-$908 volume optimization demonstrated
+### 📊 Performance (historical, unverified)
+> The cache-hit ratios, millisecond latencies, and dollar-savings figures
+> that used to be listed here were one-off measurements from the 2025
+> Phase-3 pass and have not been re-measured since. They are not current
+> claims and should not be quoted; re-measure before relying on any of them.
 
 ### 🧪 Testing & Validation
-- **44/44 Unit Tests**: Comprehensive coverage across all modules
+- **Live gate**: `cargo test --workspace` is the authoritative test status —
+  this file no longer carries frozen per-module counts (the old "44/44"
+  snapshot predated most of the current toolchain).
 - **Integration Tests**: Real KiCad library import and API validation
 - **Real-World Testing**: Confirmed with actual DigiKey API responses
-- **Demo System**: Complete end-to-end functionality showcase
 
 ### Codebase Structure
 - `bhdl-components/` - Complete component intelligence system
   - `src/database/` - SQLite backend with migrations
   - `src/supplier/` - Multi-backend API integration with caching  
   - `src/synthesis/` - Two-stage synthesis and optimization engine
-  - `src/kicad/` - KiCad symbol library import and parsing
+  - `src/kicad/` - KiCad symbol library import and parsing (there is no
+    separate `bhdl-kicad-import/` crate — KiCad import lives here)
   - `tests/integration/` - Real-world integration test suite
 
 ## Phase 4: Synthesis → Netlist ✅ **WORKING**
@@ -142,6 +156,22 @@ and drives the value/part resolution loop. This is exercised on every
   foreign-language body hook).
 - **Value snapping** to E-series, attribute stamping onto instances,
   variant/SKU patches.
+- **Elaborate round-trip gate**: the default pipeline elaborates the board to
+  structural bhdl and proves it re-synthesizes to a structurally identical
+  netlist before consumers see it (`--no-elaborate` opts out).
+- **ERC**: three-tier rule engine (core rules through ERC037, part-carried
+  `check {}` blocks, policy plugins) with severity gating and reasoned
+  waivers.
+- **Refdes allocation**: one deterministic allocator at synthesis phase 12.7,
+  persisted in the `<board>.bhdl.refdes` sidecar; every consumer reads, none
+  mints.
+- **Requirement/stage resolution**: stage requirements, `resolve` overrides,
+  and the `trace` matrix (VERIFIED / VIOLATED / UNVERIFIED / UNRESOLVED).
+- **Freeze**: `bhdl <board> freeze` emits the immutable as-fabbed structural
+  record stamped with the toolchain version + library lock.
+- **Functional safety**: `safety` / `trace --safety` resolve `safety` model
+  blocks against the synthesized board — gap reports, FMEDA package,
+  safety-case capstone (bhdl-safety + bhdl-synthesizer).
 
 ## Phase 5: Circuit Simulation & Sign-off ✅ **WORKING**
 
@@ -175,12 +205,15 @@ bom --simulate` reports per-part margins.
   selection backend for `bom --simulate`.
 - Selections are pinned in `bhdl.lock` for reproducibility.
 
-## Phase 7: Layout & Visualization 🔄 **PRESENT, not re-verified this pass**
+## Phase 7: Layout & Visualization ✅ **WORKING** (layout campaign parked)
 
-- `bhdl-pnr` — placement + routing engine.
-- `bhdl-schematic` — schematic extraction / SVG.
-- These crates exist and build; their end-to-end SVG output was not exercised
-  in this refresh, so their status is left conservative.
+- `bhdl-pnr` — placement + routing, KiCad `.kicad_pcb` export, and a direct
+  Gerber/Excellon fab package (`layout --fab`); exit status is the sign-off
+  verdict. The active layout-quality campaign is parked — current state and
+  resume notes in `bhdl-pnr/docs/LAYOUT-STATUS.md`.
+- `bhdl-schematic` — the V4 idiom-composition engine (`visualize`,
+  `--svg-v4`, `--binder` print/PDF): deterministic Rust-computed SVG,
+  residue-region absence ledger.
 
 ## Integration Status
 
@@ -195,8 +228,9 @@ bom --simulate` reports per-part margins.
    on entities drive sizing, topology, and device-simulation IP.
 
 ### 🔄 **Not re-verified / remaining**
-1. **Netlist → Layout → SVG** — PnR/schematic crates present; end-to-end not
-   re-checked in this pass.
+1. **Layout quality campaign** — PnR/schematic run end-to-end
+   (`layout`/`visualize`), but the layout-quality campaign is parked; see
+   `bhdl-pnr/docs/LAYOUT-STATUS.md`.
 2. **§5 `builtin`/`vendor spice` model forms** — deferred by spec (only the
    primitive `node source/draws` composition is built).
 3. **Data sourcing** — the standing Real-Data constraint: where the catalogue/
@@ -205,6 +239,8 @@ bom --simulate` reports per-part margins.
 
 ## File Structure
 
+Workspace members (from the root `Cargo.toml`):
+
 ```
 bhdl-new/
 ├── bhdl-parser/             # Lexing + rowan CST
@@ -212,20 +248,34 @@ bhdl-new/
 ├── bhdl-analyzer/           # Multi-pass analysis; recipe extraction
 ├── bhdl-common/             # Shared recipe/data types (design/stress/model/…)
 ├── bhdl-netlist/            # Structural circuit representation
-├── bhdl-synthesizer/        # Analysis → Netlist; design/stress/model evaluators ✅
-├── bhdl-spice/              # Netlist → SPICE; GLACIER DC solver; sign-off ✅
-├── bhdl-components/         # Component DB + supplier synthesis ✅
-├── bhdl-digikey-provider/   # Live DigiKey ESR/stock provider ✅
-├── bhdl-jlcparts-provider/  # JLCPARTS selection backend ✅
+├── bhdl-synthesizer/        # Analysis → Netlist; design/stress/model evaluators;
+│                            #   ERC; refdes allocation; stage/requirement resolution
+├── bhdl-spice/              # Netlist → SPICE; GLACIER DC solver; sign-off
+├── bhdl-components/         # Component DB + supplier synthesis + KiCad import (src/kicad/)
+├── bhdl-digikey-provider/   # Live DigiKey ESR/stock provider
+├── bhdl-jlcparts-provider/  # JLCPARTS selection backend
 ├── bhdl-stdlib/             # Vendor entity library (.bhdl)
-├── bhdl-kicad-import/       # KiCad symbol/footprint import
-├── bhdl-pnr/                # Placement + routing 🔄
-├── bhdl-schematic/          # Schematic extraction / SVG 🔄
+├── bhdl-pnr/                # Placement + routing; KiCad/Gerber export
+├── bhdl-schematic/          # Schematic V4 idiom engine / SVG
 ├── bhdl-sim/ bhdl-simulation/ bhdl-testbench/  # transient/testbench sim
 ├── bhdl-safety/             # safety_goal / fault analysis
-├── bhdl-cli/                # Command-line interface (`bom`, `bom --simulate`, `doc`, …)
+├── bhdl-cli/                # Command-line interface (24 subcommands, see below)
 └── bhdl-lsp/                # Language server
 ```
+
+Note: a `bhdl-core/` directory exists on disk but is **not** a workspace
+member — it is an orphan not built by `cargo build`/`test`.
+
+### CLI subcommands (`bhdl-cli <FILE> <command>`)
+
+`parse`, `analyze`, `synthesize`, `elaborate`, `powerup`, `powerdown`,
+`pdreport`, `powertree`, `freeze`, `trace`, `safety`, `visualize`, `spice`,
+`mine-priors`, `transient`, `pipeline`, `simulate`, `intents`, `layout`,
+`mech-import`, `doc`, `bom`, `report`, `list-skus` — plus the
+board-independent `bhdl vendor <status|install …>` maintenance mode.
+One-line semantics for each are in
+[spec/BHDL_Complete_Specification.md](spec/BHDL_Complete_Specification.md)
+§16; the ground truth is the `Commands` enum in `bhdl-cli/src/main.rs`.
 
 ## Technology Stack
 
@@ -234,21 +284,21 @@ bhdl-new/
 - **Database**: SQLite with FTS5 for component search
 - **APIs**: REST (DigiKey) and GraphQL (Nexar) integration
 - **Caching**: Multi-tier with LRU memory + persistent storage
-- **Testing**: 44+ unit tests with real-world integration validation
+- **Testing**: `cargo test --workspace` (live gate) plus real-world integration validation
 - **Visualization**: SVG generation with placement/routing algorithms
 
-## Recent Achievements (Phase 3)
+## Phase-3 Achievements (historical record, 2025)
 
 - **Real DigiKey Integration**: Confirmed working with live component data
-- **Intelligent Caching**: 90% API call reduction through smart caching
-- **Volume Cost Analysis**: $75-$908 savings across production scales
 - **Alternative Selection**: Intelligent component substitution engine
-- **Complete Test Coverage**: 44/44 tests passing with integration validation
+- (The caching-percentage, dollar-savings, and "44/44 tests" figures that
+  used to be repeated here were unverified snapshots — see the Performance
+  and Testing notes above.)
 
 ## Next Steps
 
-1. **🖼️ Visualization end-to-end**: re-verify (or build out) the netlist →
-   PnR → schematic-SVG path; mark its real status.
+1. **🖼️ Layout campaign resume**: pick the parked layout-quality work back
+   up from `bhdl-pnr/docs/LAYOUT-STATUS.md`.
 2. **🔌 Data sourcing**: enrich catalogue/datasheet coverage (ceramic ESR,
    diode/LED Vf·Is, regulator rds_on/t_sw/i_q) so fewer analyses go
    `UNCHECKED` — the standing Real-Data unblocker.
