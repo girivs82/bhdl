@@ -35,7 +35,7 @@ impl ModuleCache {
         }
         
         // Use system cache directory
-        if let Some(cache_dir) = dirs::cache_dir() {
+        if let Some(cache_dir) = platform_cache_dir() {
             return Ok(cache_dir.join("bhdl"));
         }
         
@@ -146,3 +146,19 @@ pub struct CacheStats {
 // - dirs = "5.0"
 // - bincode = "1.3"
 // - md5 = "0.7"
+
+/// Platform cache directory — replaces the `dirs` crate (dropped to
+/// clear its MPL-2.0 transitive `option-ext`). Honors $XDG_CACHE_HOME,
+/// then the platform convention under $HOME.
+fn platform_cache_dir() -> Option<std::path::PathBuf> {
+    if let Ok(x) = std::env::var("XDG_CACHE_HOME") {
+        if !x.is_empty() {
+            return Some(std::path::PathBuf::from(x));
+        }
+    }
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from)?;
+    #[cfg(target_os = "macos")]
+    return Some(home.join("Library").join("Caches"));
+    #[cfg(not(target_os = "macos"))]
+    return Some(home.join(".cache"));
+}

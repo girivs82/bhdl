@@ -13,7 +13,7 @@ use clap::{Parser, Subcommand};
 mod value_deriver;
 mod mech_check;
 use anyhow::{Result, Context};
-use colored::*;
+use yansi::Paint as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
@@ -556,6 +556,10 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Color only when stdout is a tty and NO_COLOR is unset — the
+    // same default the previous color crate had; piped output stays
+    // plain (tests and logs depend on it).
+    yansi::whenever(yansi::Condition::TTY_AND_COLOR);
     // `bhdl vendor <status|install ...>` is board-independent — intercept
     // before clap, whose grammar requires an input FILE for every other
     // command.
@@ -1591,7 +1595,7 @@ async fn run_intents_analysis(
                             }
                         }
                     } else {
-                        println!("   Intent: {}", "none".dimmed());
+                        println!("   Intent: {}", "none".dim());
                     }
 
                     println!();
@@ -6394,7 +6398,7 @@ async fn cmd_list_skus(source_file: &SourceFile) -> Result<()> {
     all_names.dedup();
 
     if all_names.is_empty() {
-        println!("{}", "default".dimmed());
+        println!("{}", "default".dim());
         println!("  (no `variant` blocks declared on this board — single implicit SKU)");
     } else {
         for n in &all_names {

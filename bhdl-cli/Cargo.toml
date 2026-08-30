@@ -25,7 +25,10 @@ anyhow = "1.0"
 log = "0.4"
 env_logger = "0.10"
 serde_json = "1.0"
-colored = "2.0"
+# yansi (MIT) replaces colored (MPL-2.0) — zero-copyleft graph; the
+# detect features reproduce colored's pipe-safe behavior (no ANSI when
+# not a tty / NO_COLOR set), which the test suite's greps rely on.
+yansi = { version = "1.0", features = ["detect-tty", "detect-env"] }
 
 # Async runtime
 tokio = { version = "1.35", features = ["rt", "macros", "fs"] }

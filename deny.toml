@@ -25,13 +25,20 @@ allow = [
     "0BSD",
     "BSL-1.0",
     "CDLA-Permissive-2.0",
-    # File-level copyleft, used unmodified; attributed in NOTICE.
-    # Do NOT extend this to GPL/LGPL/AGPL without a licensing review.
-    "MPL-2.0",
     # r-efi is (MIT OR Apache-2.0 OR LGPL-2.1-or-later) — cargo-deny
     # picks the permissive arm; listed here only as documentation.
 ]
 confidence-threshold = 0.9
+
+# MPL-2.0 is NOT in the global allowlist (cleared 2026-08-30:
+# colored → yansi, dirs → hand-rolled cache dir). The single
+# remaining MPL crate is smartstring, a non-optional dependency of
+# rhai (the `body rhai` design-block engine); file-level copyleft,
+# used unmodified, attributed in NOTICE. Dropping it means dropping
+# rhai — a feature decision, not a licensing one.
+[[licenses.exceptions]]
+name = "smartstring"
+allow = ["MPL-2.0+", "MPL-2.0"]
 
 [bans]
 multiple-versions = "allow"

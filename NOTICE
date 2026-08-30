@@ -35,9 +35,9 @@ dual-licensed MIT OR Apache-2.0. Attributions the licenses ask for, per
 - nalgebra (https://nalgebra.org/) — BSD-3-Clause
 - petgraph (https://github.com/petgraph/petgraph) — Apache-2.0 OR MIT
 - tokio (https://tokio.rs/) — MIT
-- colored — MPL-2.0 (unmodified; source at https://crates.io/crates/colored)
-- smartstring (via rhai) — MPL-2.0+ (unmodified)
-- option-ext (via dirs) — MPL-2.0 (unmodified)
+- smartstring (via rhai) — MPL-2.0+ (unmodified; the one MPL crate,
+  non-optional under rhai; source at https://crates.io/crates/smartstring)
+- yansi — MIT
 - ring — Apache-2.0 AND ISC
 - rustls-webpki, untrusted, libloading — ISC
 - webpki-roots (Mozilla CA bundle) — CDLA-Permissive-2.0
@@ -46,8 +46,8 @@ dual-licensed MIT OR Apache-2.0. Attributions the licenses ask for, per
 - ICU/idna family (18 crates) — Unicode-3.0
 - ryu — Apache-2.0 OR BSL-1.0
 
-The MPL-2.0 crates are used unmodified; their source is available at the
-listed locations per MPL §3.2(b). No GPL/AGPL/LGPL code is linked.
+smartstring is used unmodified; its source is available at the listed
+location per MPL §3.2(b). No GPL/AGPL/LGPL code is linked.
 
 Data provenance: MIL-HDBK-217F reliability constants
 (bhdl-stdlib/safety/milhdbk217f.toml) are a US Government work in the

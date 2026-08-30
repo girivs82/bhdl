@@ -262,8 +262,8 @@ pub fn find_kicad_libraries() -> Result<Vec<PathBuf>> {
         PathBuf::from("/opt/kicad/share/kicad/symbols"),
         PathBuf::from("C:\\Program Files\\KiCad\\share\\kicad\\symbols"),
         // User libraries
-        dirs::home_dir().map(|h| h.join("Documents/KiCad/symbols")).unwrap_or_default(),
-        dirs::home_dir().map(|h| h.join("KiCad/symbols")).unwrap_or_default(),
+        std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Documents/KiCad/symbols")).unwrap_or_default(),
+        std::env::var_os("HOME").map(|h| PathBuf::from(h).join("KiCad/symbols")).unwrap_or_default(),
     ];
 
     for path in possible_paths {
