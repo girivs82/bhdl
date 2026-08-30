@@ -424,6 +424,16 @@ fn parse_domain_item(ename: &str, toks: &[String], d: &mut EntityData) {
                             sw_enabled: kv.get("sw_enabled").map(|v| v == "true" || v == "1").unwrap_or(false),
                             i_sleep_a: amps("i_sleep"),
                             sleep_off: kv.get("sleep_off").map(|v| v == "true" || v == "1").unwrap_or(false),
+                            io_pins: kv
+                                .get("io_pins")
+                                .map(|s| {
+                                    s.trim_matches('"')
+                                        .split(|c: char| c == ',' || c.is_whitespace())
+                                        .filter(|t| !t.is_empty())
+                                        .map(String::from)
+                                        .collect()
+                                })
+                                .unwrap_or_default(),
                             seq_down_before: kv
                                 .get("down_before")
                                 .map(|s| {

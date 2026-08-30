@@ -257,6 +257,12 @@ impl DesignRuleChecker {
                 crate::erc::check_rail_anchoring,
             ),
             (
+                "ERC035",
+                "IO bank discipline",
+                "Banked signal pins (domain io_pins=) refused when their bank rail is unpowered; used pins outside an entity's declared bank map stated as Info",
+                crate::erc::check_io_banks,
+            ),
+            (
                 "ERC034",
                 "Swizzle discipline",
                 "Realised interface permutation reconciled against declared swizzle freedoms (bijection, byte atomicity, member legality, across-bytes gate); a legal non-identity permutation is recorded as Info",

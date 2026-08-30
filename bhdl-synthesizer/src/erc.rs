@@ -251,6 +251,107 @@ pub fn check_driver_conflicts(
 }
 
 
+// ──────────────────── IO banks (SoC arc increment 4) ────────────────────
+
+/// The bank rail's net voltage for (instance, pin), when the entity
+/// declares `domain … io_pins="…"` covering the pin. None = unbanked.
+fn bank_voltage(netlist: &Netlist, inst_name: &str, pin_name: &str) -> Option<f64> {
+    let (inst_id, inst) = netlist.instances.iter().find(|(_, i)| i.name == inst_name)?;
+    let module = netlist.modules.get(inst.definition)?;
+    let entry = module.attributes.get(&format!("io_bank__{pin_name}"))?;
+    let (_bank, rail_pin) = entry.split_once('|')?;
+    // the rail pin's net on THIS instance → Power-class voltage
+    let pi = netlist.pin_instances.values().find(|pi| {
+        pi.instance == inst_id
+            && netlist
+                .pins
+                .get(pi.pin_def)
+                .map(|p| p.name == rail_pin)
+                .unwrap_or(false)
+    })?;
+    let net = netlist.nets.get(pi.net?)?;
+    match net.net_class {
+        bhdl_netlist::types::NetClass::Power { voltage, .. } => Some(voltage),
+        _ => None,
+    }
+}
+
+/// ERC035 — IO bank discipline. A `domain … io_pins="…"` declaration
+/// is the vendor's bank map: a signal pin is only alive when its bank
+/// rail is powered. Using a banked pin (the pin is on a net with other
+/// members) while its bank rail has NO Power-class net = Error — the
+/// interface is wired to a dead bank. A used signal pin on an entity
+/// that declares banks but is covered by none = Info (bank map
+/// incomplete — stated, never silent).
+pub fn check_io_banks(netlist: &Netlist, _analysis: &AnalysisResult) -> Vec<DRCViolation> {
+    let mut out = Vec::new();
+    let members = net_members(netlist);
+    // (inst, pin) used on some net with ≥2 members
+    let mut used: Vec<(String, String)> = Vec::new();
+    for (_, pins) in &members {
+        if pins.len() < 2 {
+            continue;
+        }
+        for p in pins {
+            used.push((p.inst.clone(), p.pin.clone()));
+        }
+    }
+    used.sort();
+    used.dedup();
+    for (inst_name, pin_name) in used {
+        let Some((inst_id, inst)) = netlist.instances.iter().find(|(_, i)| i.name == inst_name) else { continue };
+        let Some(module) = netlist.modules.get(inst.definition) else { continue };
+        let has_banks = module.attributes.keys().any(|k| k.starts_with("io_bank__"));
+        if !has_banks {
+            continue;
+        }
+        let Some(entry) = module.attributes.get(&format!("io_bank__{pin_name}")) else {
+            // signal pins only — power/ground pins have domains, not banks
+            let is_signal = netlist.pin_instances.values().any(|pi| {
+                pi.instance == inst_id
+                    && netlist
+                        .pins
+                        .get(pi.pin_def)
+                        .map(|p| p.name == pin_name && matches!(p.pin_type, PinType::Signal))
+                        .unwrap_or(false)
+            });
+            if is_signal && !pin_name.contains('.') {
+                out.push(DRCViolation {
+                    rule_id: "ERC035".into(),
+                    rule_name: "IO bank discipline".into(),
+                    category: RuleCategory::Electrical,
+                    description: format!(
+                        "'{inst_name}.{pin_name}' is wired but belongs to NO declared IO bank — the entity's bank map (`domain … io_pins=`) does not cover it, so its IO voltage is unverifiable"
+                    ),
+                    severity: ViolationSeverity::Info,
+                    location: ViolationLocation::Component(inst_id),
+                    fix_suggestion: "add the pin to the domain that powers it (io_pins=), per the datasheet's bank table".into(),
+                    standard_reference: None,
+                });
+            }
+            continue;
+        };
+        let (bank, rail_pin) = entry.split_once('|').unwrap_or((entry.as_str(), ""));
+        if bank_voltage(netlist, &inst_name, &pin_name).is_none() {
+            out.push(DRCViolation {
+                rule_id: "ERC035".into(),
+                rule_name: "IO bank discipline".into(),
+                category: RuleCategory::Electrical,
+                description: format!(
+                    "'{inst_name}.{pin_name}' is wired but its IO bank '{bank}' is UNPOWERED — rail pin '{rail_pin}' has no Power-class net, so every pin of the bank is dead silicon"
+                ),
+                severity: ViolationSeverity::Error,
+                location: ViolationLocation::Component(inst_id),
+                fix_suggestion: format!(
+                    "power the bank: wire '{inst_name}.{rail_pin}' to the rail the datasheet's bank table names"
+                ),
+                standard_reference: None,
+            });
+        }
+    }
+    out
+}
+
 // ──────────────────── ERC034: swizzle discipline ────────────────────
 //
 // Interface constraints DECLARE the legal permutation freedoms
@@ -743,9 +844,21 @@ pub fn check_voltage_domains(
         let mut domains: Vec<(f64, String)> = Vec::new();
         let mut heuristic = false;
         for p in pins {
-            // passives bridge; open-drain (InOut) imposes the PULL-UP's
-            // level, not its own supply's — neither is an aggressor
-            if matches!(p.dir, PinDirection::Passive | PinDirection::InOut) {
+            if matches!(p.dir, PinDirection::Passive) {
+                continue;
+            }
+            // IO BANK (increment 4): a pin covered by a declared bank
+            // is judged at ITS bank rail's net voltage — exact, no
+            // instance-level heuristic. Checked BEFORE the InOut
+            // exemption: a 1.8V-banked pad on a 3.3V net is a real
+            // overdrive whichever direction the pad can drive.
+            if let Some(v) = bank_voltage(netlist, &p.inst, &p.pin) {
+                domains.push((v, format!("{}.{} @{v:.2}V (bank)", p.inst, p.pin)));
+                continue;
+            }
+            // open-drain (InOut) imposes the PULL-UP's level, not its
+            // own supply's — not an aggressor (unbanked case only)
+            if matches!(p.dir, PinDirection::InOut) {
                 continue;
             }
             if let Some((v, n_rails)) = supply.get(&p.inst) {

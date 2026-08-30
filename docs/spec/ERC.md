@@ -254,6 +254,13 @@ by itself:
   silent. First corpus scan caught a real one: buck_converter_tps54331's
   hand-authored catch diode had silently paralleled the entity's own
   after the TPS54331 expansion grew one.
+- **ERC035** IO bank discipline — BUILT (Error/Info): a signal pin
+  covered by a `domain … io_pins=` bank declaration is refused when
+  wired while its bank rail has no Power-class net (every pin of the
+  bank is dead silicon); a wired signal pin outside a declared bank
+  map is stated as Info (incomplete bank table, never silent). The
+  same bank data upgrades ERC004: banked pins are judged at their
+  bank rail's exact net voltage, `(bank)`-marked, inout included.
 - **ERC034** swizzle discipline — BUILT (Error/Info): the realised
   interface permutation (recovered from net partnerships between
   interface leaves) reconciled against the declared

@@ -2280,6 +2280,55 @@ fn topup_interface_field_pins(
     }
 }
 
+/// IO banks (SoC arc increment 4): a `domain … io_pins="PA9 PA10"`
+/// declaration names the SIGNAL pins the rail powers. Stamped as
+/// `io_bank__<pin>` = "<domain>|<first rail pin>" module attrs so the
+/// AST-less DRC (ERC004 per-bank voltages, ERC035 unpowered-bank
+/// refusal) and the mux-table artifact can read them.
+pub(crate) const IO_BANK_ATTR_PREFIX: &str = "io_bank__";
+
+fn add_io_bank_attrs(entity: &bhdl_ast::Entity, module_id: ModuleId, netlist: &mut Netlist) {
+    use bhdl_parser::SyntaxKind;
+    use rowan::ast::AstNode;
+    let grab_list = |text: &str, key: &str| -> Vec<String> {
+        let pat = format!("{key}=\"");
+        let Some(i) = text.find(&pat) else { return Vec::new() };
+        let rest = &text[i + pat.len()..];
+        let Some(e) = rest.find('"') else { return Vec::new() };
+        rest[..e]
+            .split(|c: char| c == ',' || c.is_whitespace())
+            .filter(|t| !t.is_empty())
+            .map(String::from)
+            .collect()
+    };
+    for node in entity
+        .syntax()
+        .descendants()
+        .filter(|n| n.kind() == SyntaxKind::DOMAIN_DECL)
+    {
+        let text = node.text().to_string();
+        let io_pins = grab_list(&text, "io_pins");
+        if io_pins.is_empty() {
+            continue;
+        }
+        let rail_pins = grab_list(&text, "pins");
+        let name = text
+            .split_whitespace()
+            .nth(1)
+            .unwrap_or("")
+            .to_string();
+        let rail = rail_pins.first().cloned().unwrap_or_default();
+        if let Some(module) = netlist.modules.get_mut(module_id) {
+            for p in io_pins {
+                module.attributes.insert(
+                    format!("{IO_BANK_ATTR_PREFIX}{p}"),
+                    format!("{name}|{rail}"),
+                );
+            }
+        }
+    }
+}
+
 fn add_interface_field_pins(
     entity: &bhdl_ast::Entity,
     module_id: ModuleId,
@@ -2287,6 +2336,7 @@ fn add_interface_field_pins(
     context: &HierarchicalContext,
     import_preprocessor: Option<&crate::import_preprocessor::ImportPreprocessor>,
 ) {
+    add_io_bank_attrs(entity, module_id, netlist);
     use bhdl_netlist::{PinDirection, PinType, PortDirection};
     use bhdl_parser::SyntaxKind;
     use rowan::ast::AstNode;

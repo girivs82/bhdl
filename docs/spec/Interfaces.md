@@ -359,6 +359,26 @@ longer participates in interface field declarations.
   I2C, the by-hand assignment a firmware engineer makes from the AF
   table.
 
+- **IO banks + the firmware artifact (SoC arc increment 4,
+  shipped).** A power `domain` declaration may carry
+  `io_pins="PA9 PA10 …"` — the vendor's bank table: the SIGNAL pins
+  this rail powers. Consequences: (a) **ERC004 judges each banked pin
+  at ITS bank rail's actual net voltage** (marked `(bank)` in the
+  finding) instead of the instance-level highest-rail heuristic —
+  and a banked pin participates even when physically `inout` (a
+  1.8V-banked pad on a 3.3V net is a real overdrive whichever
+  direction the pad drives; the open-drain exemption applies to
+  unbanked pins only); (b) **ERC035** refuses wiring any pin whose
+  bank rail has no Power-class net ("dead silicon", Error) and
+  states used pins outside a declared bank map as Info; (c)
+  **`bhdl doc --mux-header <file.h>`** emits the board's pinmux
+  commitments for firmware — one define per solved field naming the
+  chosen alternate, one per signal naming the physical pin, with
+  fixed bindings riding along so the header is each chip's whole pin
+  story. "Record it in the bring-up code", made mechanical. Storage:
+  `io_bank__<pin>` = "<bank>|<rail pin>" module attributes, stamped
+  from the DOMAIN_DECLs at module creation.
+
 ---
 
 ## 10. v0.8 worked example: DDR4

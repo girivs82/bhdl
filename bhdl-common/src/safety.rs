@@ -430,6 +430,13 @@ pub struct PowerDomain {
     /// fully down.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seq_down_t_max_s: Option<f64>,
+    /// IO BANK (SoC arc increment 4): the SIGNAL pins this rail
+    /// powers (`io_pins="PA9 PA10 …"`). ERC004 then judges each such
+    /// pin at ITS bank rail's net voltage instead of the instance-
+    /// level heuristic, and ERC035 refuses using a pin whose bank
+    /// rail is absent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub io_pins: Vec<String>,
     pub source: String,
 }
 

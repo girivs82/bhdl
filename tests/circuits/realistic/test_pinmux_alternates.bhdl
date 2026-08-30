@@ -25,6 +25,8 @@ interface MuxSPI {
 }
 
 entity MuxMcu() {
+    pin VDDIO_A: power in;
+    pin VDDIO_B: power in;
     pin PA5:  signal inout;
     pin PA6:  signal inout;
     pin PA7:  signal inout;
@@ -35,6 +37,17 @@ entity MuxMcu() {
     pin GND:  ground;
     attribute component_class = "mcu";
     attribute part_number = "FIXTURE-MUX-MCU";
+
+    // IO BANKS (increment 4): each rail declares the SIGNAL pins it
+    // powers — the vendor's bank table (FIXTURE values). ERC004 then
+    // judges every banked pin at its own bank rail's net voltage;
+    // ERC035 refuses using a pin whose bank rail is unpowered.
+    domain BANK_A pins="VDDIO_A" v=3.3V i_nom=10mA i_max=50mA
+        io_pins="PA5 PA6 PA7 PA9 PA10"
+        source="FIXTURE — port A bank";
+    domain BANK_B pins="VDDIO_B" v=3.3V i_nom=10mA i_max=50mA
+        io_pins="PB6 PB7"
+        source="FIXTURE — port B bank";
 
     // UART1: two homes (FIXTURE AF table — declaration order is the
     // solver's preference order)
@@ -88,6 +101,8 @@ board PinmuxBoard {
     peer: MuxPeer();
     mcu.GND -> @GND;
     peer.GND -> @GND;
+    @VDD -> mcu.VDDIO_A;
+    @VDD -> mcu.VDDIO_B;
 
     // all three peripherals wired — the solver must fit them
     mcu.uart1.TX -> peer.RX;
