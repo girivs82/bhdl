@@ -504,6 +504,13 @@ pub enum SyntaxKind {
     // whether instantiation mints a physical self-part.
     ENTITY_KIND,        // as part | as design
 
+    // Pinmux alternates (SoC arc increment 3): a named group of
+    // bindings inside an interface-field binding block —
+    // `alt "AF5" { MOSI = PA7; ... }`. The vendor's alternate-function
+    // table, transcribed; the assignment solver picks one per
+    // instance.
+    INTERFACE_FIELD_ALT,      // alt "NAME" { SIG = PIN; ... }
+
     // ERROR must be the last variant for the assertion in kind_from_raw
     ERROR = 65534, // Represents a parsing error node
 }

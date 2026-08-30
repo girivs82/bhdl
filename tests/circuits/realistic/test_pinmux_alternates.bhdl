@@ -1,0 +1,103 @@
+// Pinmux alternates fixture (SoC arc increment 3) — an STM32-shaped
+// MCU whose peripherals offer ALTERNATE pin bindings (`alt "AFn"
+// { … }`, the vendor's alternate-function table transcribed; FIXTURE
+// values with a realistic shape). The board wires UART + I2C + SPI;
+// UART's default alternate (AF_A on PB6/PB7) collides with I2C's only
+// home (PB6/PB7), so the solver must move UART to AF_B (PA9/PA10) —
+// exactly the assignment a firmware engineer performs by hand from
+// the AF table. The chosen mux lands as `mux__<field>` instance
+// attributes and the survey prints every choice.
+
+interface MuxUART {
+    perspective dev  { signal TX: out; signal RX: in; }
+    perspective host { signal TX: out; signal RX: in; }
+    wires { dev.TX <-> host.RX; dev.RX <-> host.TX; }
+}
+
+interface MuxI2C {
+    signal SDA: inout;
+    signal SCL: inout;
+}
+
+interface MuxSPI {
+    perspective master { signal SCK: out; signal MOSI: out; signal MISO: in; }
+    perspective slave  { signal SCK: in;  signal MOSI: in;  signal MISO: out; }
+}
+
+entity MuxMcu() {
+    pin PA5:  signal inout;
+    pin PA6:  signal inout;
+    pin PA7:  signal inout;
+    pin PA9:  signal inout;
+    pin PA10: signal inout;
+    pin PB6:  signal inout;
+    pin PB7:  signal inout;
+    pin GND:  ground;
+    attribute component_class = "mcu";
+    attribute part_number = "FIXTURE-MUX-MCU";
+
+    // UART1: two homes (FIXTURE AF table — declaration order is the
+    // solver's preference order)
+    interface MuxUART:dev uart1 {
+        alt "AF_A" {
+            TX = PB6;
+            RX = PB7;
+        }
+        alt "AF_B" {
+            TX = PA9;
+            RX = PA10;
+        }
+    }
+
+    // I2C1: one home — and it is UART1's preferred one
+    interface MuxI2C i2c1 {
+        alt "AF_A" {
+            SDA = PB7;
+            SCL = PB6;
+        }
+    }
+
+    // SPI1: fixed binding (no alternates) on PA5..PA7
+    interface MuxSPI:master spi1 {
+        SCK  = PA5;
+        MISO = PA6;
+        MOSI = PA7;
+    }
+}
+
+entity MuxPeer() {
+    pin RX:  signal in;
+    pin TX:  signal out;
+    pin SDA: signal inout;
+    pin SCL: signal inout;
+    pin SCK: signal in;
+    pin SDI: signal in;
+    pin SDO: signal out;
+    pin GND: ground;
+    attribute component_class = "ic";
+    attribute part_number = "FIXTURE-MUX-PEER";
+}
+
+import { Res } from "bhdl-stdlib/passives/resistor.bhdl";
+
+board PinmuxBoard {
+    power VDD = 3.3V @ 1A;
+    ground GND;
+
+    mcu:  MuxMcu();
+    peer: MuxPeer();
+    mcu.GND -> @GND;
+    peer.GND -> @GND;
+
+    // all three peripherals wired — the solver must fit them
+    mcu.uart1.TX -> peer.RX;
+    peer.TX -> mcu.uart1.RX;
+    mcu.i2c1.SDA -> peer.SDA;
+    mcu.i2c1.SCL -> peer.SCL;
+    // I2C pull-ups (ERC005)
+    @VDD -> rp_sda: Res(4.7kΩ, tolerance = 1%).1; rp_sda.2 -> peer.SDA;
+    @VDD -> rp_scl: Res(4.7kΩ, tolerance = 1%).1; rp_scl.2 -> peer.SCL;
+    mcu.spi1.SCK -> peer.SCK;
+    mcu.spi1.MOSI -> peer.SDI;
+    peer.SDO -> mcu.spi1.MISO;
+}

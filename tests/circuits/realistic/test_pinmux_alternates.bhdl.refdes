@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "mappings": {
+    "R": {
+      "rp_scl": "R1",
+      "rp_sda": "R2"
+    },
+    "U": {
+      "mcu": "U1",
+      "peer": "U2"
+    }
+  }
+}

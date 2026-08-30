@@ -33,6 +33,14 @@ pub struct DeferredAccessor {
 pub struct HierarchicalContext {
     /// Deferred hierarchical-accessor connections (see DeferredAccessor).
     pub deferred_accessors: std::cell::RefCell<Vec<DeferredAccessor>>,
+    /// Pinmux solver output: (instance name, field name) → chosen
+    /// alternate. Stamped as `mux__<field>` instance attributes at
+    /// instance creation; binding resolution reads them.
+    pub pinmux_choices: HashMap<(String, String), String>,
+    /// Pinmux harvest (AST, Phase 1.7): instance → wired field names.
+    pub pinmux_used: HashMap<String, HashSet<String>>,
+    /// Pinmux overrides: (instance, field) → forced alternate.
+    pub pinmux_overrides: HashMap<(String, String), String>,
     /// Stack of module contexts (for nested modules)
     module_stack: Vec<ModuleContext>,
     /// Map from module name to ModuleId
@@ -66,6 +74,9 @@ impl HierarchicalContext {
     pub fn new() -> Self {
         Self {
             deferred_accessors: std::cell::RefCell::new(Vec::new()),
+            pinmux_choices: HashMap::new(),
+            pinmux_used: HashMap::new(),
+            pinmux_overrides: HashMap::new(),
             module_stack: Vec::new(),
             module_name_to_id: HashMap::new(),
             instance_path_to_id: HashMap::new(),
@@ -254,6 +265,13 @@ pub fn extract_hierarchical_connectivity(
     info!("=== Phase 1: Creating module definitions ===");
     create_module_definitions(ast, analysis, netlist, &mut context, import_preprocessor)?;
     
+    // Phase 1.7: PINMUX HARVEST (SoC arc increment 3). Which
+    // (instance, field) pairs the board wires, and any designer
+    // overrides (`attribute <inst>.mux__<field> = "ALT";`) — read from
+    // the AST now; the per-instance SOLVE runs at instance creation,
+    // when the entity's alternate tables are stamped on its module.
+    harvest_pinmux_inputs(ast, &mut context);
+
     // Second pass: Process module instances and connections
     println!("=== Phase 2: Processing module hierarchy ===");
     info!("=== Phase 2: Processing module hierarchy ===");
@@ -271,6 +289,203 @@ pub fn extract_hierarchical_connectivity(
     println!("=== COMPLETED hierarchical connectivity extraction ===");
     info!("=== COMPLETED hierarchical connectivity extraction ===");
     Ok(context.deferred_accessors.into_inner())
+}
+
+/// Pinmux harvest (SoC arc increment 3): which (instance, field)
+/// pairs the board's connections wire, and the designer's forced
+/// alternates. AST-only — runs before any instantiation.
+fn harvest_pinmux_inputs(ast: &bhdl_ast::SourceFile, context: &mut HierarchicalContext) {
+    use bhdl_parser::SyntaxKind;
+    use rowan::ast::AstNode;
+    for item in ast.items() {
+        let bhdl_ast::Item::Board(board) = item else { continue };
+        for node in board.syntax().descendants() {
+            match node.kind() {
+                SyntaxKind::CONNECTION_STMT => {
+                    harvest_field_references(&node.text().to_string(), &mut context.pinmux_used);
+                }
+                SyntaxKind::SCOPED_ATTRIBUTE => {
+                    // `attribute <inst>.mux__<field> = "ALT";`
+                    let text = node.text().to_string();
+                    if let Some(idx) = text.find(&format!(".{}", PINMUX_CHOICE_ATTR_PREFIX)) {
+                        let head = text[..idx].trim();
+                        let inst = head.rsplit(|c: char| c.is_whitespace()).next().unwrap_or("");
+                        let tail = &text[idx + 1 + PINMUX_CHOICE_ATTR_PREFIX.len()..];
+                        if let Some((field, val)) = tail.split_once('=') {
+                            let alt = val.trim().trim_end_matches(';').trim().trim_matches('"');
+                            context.pinmux_overrides.insert(
+                                (inst.to_string(), field.trim().to_string()),
+                                alt.to_string(),
+                            );
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Pinmux assignment solve for ONE instance, at instance-creation time
+/// (the entity's alternate tables are on its module by now).
+///
+/// Every wired alt-field must receive exactly one alternate such that
+/// all claimed physical pins are disjoint — including the pins claimed
+/// by wired FIXED-binding fields. Backtracking over fields ordered by
+/// fewest candidates; candidate order = declaration order
+/// (deterministic). An override pins the choice. Unsatisfiable = a
+/// hard error naming every wired field's candidate set and what
+/// blocks each candidate — the survey pattern.
+fn solve_pinmux_for_instance(
+    inst_name: &str,
+    module: &bhdl_netlist::ModuleDefinition,
+    context: &HierarchicalContext,
+) -> Result<Vec<(String, String)>> {
+    if std::env::var("BHDL_MUX_DEBUG").is_ok() {
+        eprintln!(
+            "mux-dbg solve inst={inst_name} module={} used={:?} alt_attrs={}",
+            module.name,
+            context.pinmux_used.get(inst_name),
+            module.attributes.keys().filter(|k| k.contains("alts__")).count()
+        );
+    }
+    let Some(fields) = context.pinmux_used.get(inst_name) else { return Ok(Vec::new()) };
+
+    // alt fields: field → [(alt, pins)] in declaration order
+    let mut alt_fields: Vec<(String, Vec<(String, Vec<String>)>)> = Vec::new();
+    for f in fields {
+        let alts_key = format!("{}{}", INTERFACE_FIELD_ALTS_ATTR_PREFIX, f);
+        let Some(alt_list) = module.attributes.get(&alts_key) else { continue };
+        let mut alts = Vec::new();
+        for alt in alt_list.split(',') {
+            let prefix = format!("{}{}__{}__", INTERFACE_FIELD_ALT_ATTR_PREFIX, f, alt);
+            let mut pins: Vec<String> = module
+                .attributes
+                .iter()
+                .filter(|(k, _)| k.starts_with(&prefix))
+                .map(|(_, v)| v.clone())
+                .collect();
+            pins.sort();
+            alts.push((alt.to_string(), pins));
+        }
+        alt_fields.push((f.clone(), alts));
+    }
+    if alt_fields.is_empty() {
+        return Ok(Vec::new());
+    }
+    alt_fields.sort_by_key(|(f, alts)| (alts.len(), f.clone()));
+
+    // fixed claims from wired fixed-binding fields
+    let mut claimed: HashMap<String, String> = HashMap::new();
+    for f in fields {
+        let prefix = format!("{}{}.", INTERFACE_FIELD_BINDING_ATTR_PREFIX, f);
+        for (k, pin) in &module.attributes {
+            if k.starts_with(&prefix) {
+                claimed.insert(pin.clone(), format!("{f} (fixed binding)"));
+            }
+        }
+    }
+
+    fn backtrack(
+        fields: &[(String, Vec<(String, Vec<String>)>)],
+        idx: usize,
+        claimed: &mut HashMap<String, String>,
+        overrides: &HashMap<(String, String), String>,
+        inst: &str,
+        out: &mut Vec<(String, String)>,
+    ) -> bool {
+        let Some((field, alts)) = fields.get(idx) else { return true };
+        let forced = overrides.get(&(inst.to_string(), field.clone()));
+        for (alt, pins) in alts {
+            if let Some(f) = forced {
+                if f != alt {
+                    continue;
+                }
+            }
+            if pins.iter().any(|p| claimed.contains_key(p)) {
+                continue;
+            }
+            for p in pins {
+                claimed.insert(p.clone(), format!("{field} via alt \"{alt}\""));
+            }
+            out.push((field.clone(), alt.clone()));
+            if backtrack(fields, idx + 1, claimed, overrides, inst, out) {
+                return true;
+            }
+            out.pop();
+            for p in pins {
+                claimed.remove(p);
+            }
+        }
+        false
+    }
+
+    let mut chosen: Vec<(String, String)> = Vec::new();
+    if !backtrack(
+        &alt_fields,
+        0,
+        &mut claimed,
+        &context.pinmux_overrides,
+        inst_name,
+        &mut chosen,
+    ) {
+        // Backtracking unwound `claimed` on the way out — rebuild the
+        // HARD commitments (fixed bindings, single-candidate fields,
+        // forced overrides) so the survey can say what blocks what.
+        for (f, alts) in &alt_fields {
+            let forced = context.pinmux_overrides.get(&(inst_name.to_string(), f.clone()));
+            let hard: Option<&(String, Vec<String>)> = if let Some(fa) = forced {
+                alts.iter().find(|(a, _)| a == fa)
+            } else if alts.len() == 1 {
+                alts.first()
+            } else {
+                None
+            };
+            if let Some((alt, pins)) = hard {
+                for p in pins {
+                    claimed
+                        .entry(p.clone())
+                        .or_insert_with(|| format!("{f} via alt \"{alt}\"{}", if forced.is_some() { " (override)" } else { "" }));
+                }
+            }
+        }
+        let mut survey = String::new();
+        for (f, alts) in &alt_fields {
+            survey.push_str(&format!("\n    {f}:"));
+            for (alt, pins) in alts {
+                let blockers: Vec<String> = pins
+                    .iter()
+                    .filter_map(|p| claimed.get(p).map(|by| format!("{p} claimed by {by}")))
+                    .collect();
+                if blockers.is_empty() {
+                    survey.push_str(&format!("\n      alt \"{alt}\" → pins {pins:?}"));
+                } else {
+                    survey.push_str(&format!(
+                        "\n      alt \"{alt}\" → pins {pins:?} — BLOCKED: {}",
+                        blockers.join("; ")
+                    ));
+                }
+            }
+        }
+        anyhow::bail!(
+            "pinmux: no assignment satisfies '{inst_name}' ({}) — the wired fields cannot coexist on the pins:{survey}\n  free a field, choose different alternates (`attribute {inst_name}.mux__<field> = \"ALT\";`), or use a package with more alternate functions",
+            module.name
+        );
+    }
+    for (field, alt) in &chosen {
+        println!(
+            "  pinmux: {inst_name}.{field} → alt \"{alt}\"{}",
+            if context
+                .pinmux_overrides
+                .contains_key(&(inst_name.to_string(), field.clone()))
+            {
+                " (designer override)"
+            } else {
+                ""
+            }
+        );
+    }
+    Ok(chosen)
 }
 
 /// v0.6: walk the board(s) for connection statements, harvest
@@ -681,6 +896,29 @@ fn process_entity_instance(
                         instance.attributes.insert(key.clone(), value.clone());
                     }
                 }
+            }
+        }
+        // Pinmux: solve THIS instance's mux assignment (the module's
+        // alternate tables are stamped by now) and record the choices
+        // as `mux__<field>` instance attributes — binding resolution
+        // and downstream consumers (the mux-table report) read them.
+        {
+            let choices = {
+                let module = netlist
+                    .modules
+                    .get(module_id)
+                    .ok_or_else(|| anyhow::anyhow!("module vanished"))?;
+                solve_pinmux_for_instance(&instance_name, module, context)?
+            };
+            if let Some(instance) = netlist.instances.get_mut(instance_id) {
+                for (f, a) in &choices {
+                    instance
+                        .attributes
+                        .insert(format!("{}{}", PINMUX_CHOICE_ATTR_PREFIX, f), a.clone());
+                }
+            }
+            for (f, a) in choices {
+                context.pinmux_choices.insert((instance_name.clone(), f), a);
             }
         }
 
@@ -1180,6 +1418,40 @@ fn create_component_instance(
             context,
             import_preprocessor,
         );
+        // Pinmux: the pre-existing instance (created by the earlier
+        // database-component pass) got its alternate tables topped up
+        // just above — solve its mux assignment now, once.
+        let inst_lookup = netlist
+            .instances
+            .iter()
+            .find(|(_, i)| i.name == instance_name || i.name == local_name)
+            .map(|(id, i)| (id, i.name.clone()));
+        if let Some((inst_id, inst_nm)) = inst_lookup {
+            let already = netlist
+                .instances
+                .get(inst_id)
+                .map(|i| i.attributes.keys().any(|k| k.starts_with(PINMUX_CHOICE_ATTR_PREFIX)))
+                .unwrap_or(false);
+            if !already {
+                let choices = {
+                    let module = netlist
+                        .modules
+                        .get(module_id)
+                        .ok_or_else(|| anyhow::anyhow!("module vanished"))?;
+                    solve_pinmux_for_instance(&inst_nm, module, context)?
+                };
+                if let Some(instance) = netlist.instances.get_mut(inst_id) {
+                    for (f, a) in &choices {
+                        instance
+                            .attributes
+                            .insert(format!("{}{}", PINMUX_CHOICE_ATTR_PREFIX, f), a.clone());
+                    }
+                }
+                for (f, a) in choices {
+                    context.pinmux_choices.insert((inst_nm.clone(), f), a);
+                }
+            }
+        }
         return Ok(());
     }
     
@@ -1199,6 +1471,29 @@ fn create_component_instance(
                     instance.attributes.insert(key.clone(), value.clone());
                 }
             }
+        }
+    }
+
+    // Pinmux: solve this instance's mux assignment (the module's
+    // alternate tables are stamped by now) and record the choices as
+    // `mux__<field>` instance attributes.
+    {
+        let choices = {
+            let module = netlist
+                .modules
+                .get(module_id)
+                .ok_or_else(|| anyhow::anyhow!("module vanished"))?;
+            solve_pinmux_for_instance(&instance_name, module, context)?
+        };
+        if let Some(instance) = netlist.instances.get_mut(instance_id) {
+            for (f, a) in &choices {
+                instance
+                    .attributes
+                    .insert(format!("{}{}", PINMUX_CHOICE_ATTR_PREFIX, f), a.clone());
+            }
+        }
+        for (f, a) in choices {
+            context.pinmux_choices.insert((instance_name.clone(), f), a);
         }
     }
 
@@ -1888,6 +2183,13 @@ fn check_chain_directions(
 /// netlist field) so we don't have to thread additional mutable
 /// state through the existing pin-population call chain.
 pub(crate) const INTERFACE_FIELD_BINDING_ATTR_PREFIX: &str = "intf_bind__";
+/// Pinmux alternates: the field's alt-name list, declaration order —
+/// `intf_bind_alts__<field>` = "AF2,AF5".
+pub(crate) const INTERFACE_FIELD_ALTS_ATTR_PREFIX: &str = "intf_bind_alts__";
+/// One alternate's signal binding — `intf_bind_alt__<field>__<ALT>__<SIG>` = pin.
+pub(crate) const INTERFACE_FIELD_ALT_ATTR_PREFIX: &str = "intf_bind_alt__";
+/// The solver's per-instance choice — `mux__<field>` = ALT (instance attr).
+pub(crate) const PINMUX_CHOICE_ATTR_PREFIX: &str = "mux__";
 
 /// Prefix for storing the *logical* interface-signal direction on
 /// the module's attributes. `intf_dir__spi.MOSI = "out"` means
@@ -2037,6 +2339,10 @@ fn add_interface_field_pins(
         // field aliases existing pins instead of materialising new
         // ones.
         let mut bindings: HashMap<String, String> = HashMap::new();
+        // Pinmux alternates (SoC arc increment 3): `alt "AF5" { … }`
+        // groups — the vendor's alternate-function table. Declaration
+        // order is the deterministic tie-break of the solver.
+        let mut alt_bindings: Vec<(String, HashMap<String, String>)> = Vec::new();
         for child in field_node.children() {
             if child.kind() != SyntaxKind::INTERFACE_FIELD_BINDINGS { continue; }
             for binding in child.children().filter(|n| n.kind() == SyntaxKind::INTERFACE_FIELD_BINDING) {
@@ -2048,6 +2354,44 @@ fn add_interface_field_pins(
                     .collect();
                 if idents.len() >= 2 {
                     bindings.insert(idents[0].clone(), idents[1].clone());
+                }
+            }
+            for alt in child.children().filter(|n| n.kind() == SyntaxKind::INTERFACE_FIELD_ALT) {
+                let name = alt
+                    .children_with_tokens()
+                    .filter_map(|el| el.into_token())
+                    .find(|t| t.kind() == SyntaxKind::STRING)
+                    .map(|t| t.text().trim_matches('"').to_string());
+                let mut map = HashMap::new();
+                for binding in alt.children().filter(|n| n.kind() == SyntaxKind::INTERFACE_FIELD_BINDING) {
+                    let idents: Vec<String> = binding
+                        .children_with_tokens()
+                        .filter_map(|el| el.into_token())
+                        .filter(|t| t.kind() == SyntaxKind::IDENT || t.kind() == SyntaxKind::NUMBER)
+                        .map(|t| t.text().to_string())
+                        .collect();
+                    if idents.len() >= 2 {
+                        map.insert(idents[0].clone(), idents[1].clone());
+                    }
+                }
+                if let Some(n) = name {
+                    alt_bindings.push((n, map));
+                }
+            }
+        }
+        if !alt_bindings.is_empty() {
+            if let Some(module) = netlist.modules.get_mut(module_id) {
+                module.attributes.insert(
+                    format!("{}{}", INTERFACE_FIELD_ALTS_ATTR_PREFIX, field_name),
+                    alt_bindings.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>().join(","),
+                );
+                for (alt, map) in &alt_bindings {
+                    for (sig, pin) in map {
+                        module.attributes.insert(
+                            format!("{}{}__{}__{}", INTERFACE_FIELD_ALT_ATTR_PREFIX, field_name, alt, sig),
+                            pin.clone(),
+                        );
+                    }
                 }
             }
         }
@@ -2195,6 +2539,11 @@ fn add_interface_field_pins(
                     );
                     module.attributes.insert(key, target_pin.clone());
                 }
+            } else if alt_bindings.iter().any(|(_, m)| m.contains_key(&sig_name)) {
+                // Alternate-bound: no pin either — which physical pin
+                // this signal lands on is the PER-INSTANCE mux choice;
+                // resolution consults the instance's `mux__<field>`
+                // attribute (stamped by the pinmux solver).
             } else {
                 netlist.add_port(module_id, pin_name.clone(), port_direction, None);
                 netlist.add_pin(module_id, pin_name, pin_direction, PinType::Signal);
@@ -2935,6 +3284,34 @@ fn resolve_field_binding_alias<'a>(
     let key = format!("{}{}", INTERFACE_FIELD_BINDING_ATTR_PREFIX, pin_name);
     if let Some(physical) = module.attributes.get(&key) {
         return Some(physical.as_str());
+    }
+    // Pinmux alternates: the field's binding is the PER-INSTANCE mux
+    // choice. Fall back to the first declared alternate when no choice
+    // was stamped (an unsolved reference — stated loudly, never silent).
+    if let Some((field, sig)) = pin_name.split_once('.') {
+        let alts_key = format!("{}{}", INTERFACE_FIELD_ALTS_ATTR_PREFIX, field);
+        if let Some(alts) = module.attributes.get(&alts_key) {
+            let choice_key = format!("{}{}", PINMUX_CHOICE_ATTR_PREFIX, field);
+            let chosen = inst.attributes.get(&choice_key).cloned().or_else(|| {
+                let first = alts.split(',').next().map(str::to_string);
+                if let Some(f) = &first {
+                    warn!(
+                        "pinmux: '{}.{}' referenced with no solved mux choice — falling back to the FIRST declared alternate '{}' (stated)",
+                        inst.name, field, f
+                    );
+                }
+                first
+            });
+            if let Some(alt) = chosen {
+                let key = format!(
+                    "{}{}__{}__{}",
+                    INTERFACE_FIELD_ALT_ATTR_PREFIX, field, alt, sig
+                );
+                if let Some(physical) = module.attributes.get(&key) {
+                    return Some(physical.as_str());
+                }
+            }
+        }
     }
     // Then try the v0.9 entity-alias form: `alias__gpio0`.
     let key = format!("{}{}", ENTITY_ALIAS_ATTR_PREFIX, pin_name);

@@ -336,6 +336,29 @@ longer participates in interface field declarations.
   selection. The v0.6 conflict check enforces "one pin can serve
   one role at a time."
 
+- **Pinmux alternates + assignment solver (SoC arc increment 3,
+  shipped).** A field's binding block may carry `alt "AFn" { SIG =
+  PIN; … }` groups — the vendor's alternate-function table,
+  transcribed and cited. Signals bound in any alternate materialise
+  no pins of their own: which physical pin serves them is a
+  PER-INSTANCE choice. At instance creation the solver assigns one
+  alternate to every WIRED alt-field (unwired fields claim nothing)
+  such that all claimed pins are disjoint — including pins claimed by
+  wired fixed-binding fields. Deterministic: fields by fewest
+  candidates, candidates in declaration order. The board overrides a
+  choice with `attribute <inst>.mux__<field> = "AFn";` (honored and
+  labelled); an unsatisfiable wired set is a hard error carrying the
+  full survey — every field's candidate alternates, their pins, and
+  what blocks each one. Choices land as `mux__<field>` instance
+  attributes (the future firmware mux-table artifact reads them);
+  every choice prints as `pinmux: <inst>.<field> → alt "AFn"`.
+  Storage: `intf_bind_alts__<field>` (alt list, declaration order) +
+  `intf_bind_alt__<field>__<ALT>__<SIG>` = pin, on the module.
+  Fixture: `tests/circuits/realistic/test_pinmux_alternates.bhdl` —
+  UART with two homes yields its preferred one to the single-home
+  I2C, the by-hand assignment a firmware engineer makes from the AF
+  table.
+
 ---
 
 ## 10. v0.8 worked example: DDR4

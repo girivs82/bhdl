@@ -476,6 +476,51 @@ impl<'t> Parser<'t> {
             self.skip_trivia();
             match self.peek() {
                 Some(SyntaxKind::R_BRACE) | None => break,
+                // Pinmux alternates: `alt "AF5" { SIG = PIN; ... }`.
+                // `alt` is a CONTEXTUAL keyword — only when followed by
+                // a string literal (a signal literally named `alt`
+                // still parses as `alt = PIN;`).
+                Some(SyntaxKind::IDENT)
+                    if self.peek_text().as_deref() == Some("alt")
+                        && self.peek_nth_nontrivia(1) == Some(SyntaxKind::STRING) =>
+                {
+                    self.builder.start_node(SyntaxKind::INTERFACE_FIELD_ALT.into());
+                    self.expect(SyntaxKind::IDENT); // `alt`
+                    self.expect(SyntaxKind::STRING); // the alternate's name
+                    self.expect(SyntaxKind::L_BRACE);
+                    loop {
+                        self.skip_trivia();
+                        match self.peek() {
+                            Some(SyntaxKind::R_BRACE) | None => break,
+                            Some(SyntaxKind::IDENT) => {
+                                self.builder
+                                    .start_node(SyntaxKind::INTERFACE_FIELD_BINDING.into());
+                                self.expect(SyntaxKind::IDENT);
+                                self.expect(SyntaxKind::EQ);
+                                if self.peek() == Some(SyntaxKind::IDENT)
+                                    || self.peek() == Some(SyntaxKind::NUMBER)
+                                {
+                                    self.bump();
+                                } else {
+                                    self.error(
+                                        "Expected pin name or pin number after `=` in interface binding"
+                                            .to_string(),
+                                    );
+                                }
+                                self.expect(SyntaxKind::SEMI);
+                                self.builder.finish_node();
+                            }
+                            _ => {
+                                self.error(
+                                    "Expected signal name in alt binding group".to_string(),
+                                );
+                                self.bump_any();
+                            }
+                        }
+                    }
+                    self.expect(SyntaxKind::R_BRACE);
+                    self.builder.finish_node();
+                }
                 Some(SyntaxKind::IDENT) => {
                     self.builder.start_node(SyntaxKind::INTERFACE_FIELD_BINDING.into());
                     self.expect(SyntaxKind::IDENT); // signal name
