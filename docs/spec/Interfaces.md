@@ -519,6 +519,29 @@ are legal*; the generate form realises *one specific choice*. Hybrid
 use (bulk generate + hand-locked exceptions via a trailing explicit
 connection, last-wins) works too.
 
+> **ERC034 — swizzle discipline (shipped).** The realised permutation
+> is now *verified* against the declaration, closing the loop this
+> section leaves open: the check recovers the actual permutation from
+> net partnerships between interface leaves and enforces (a) it IS a
+> permutation (a leaf pairing with two counterparts = short/fanout),
+> (b) leaf-name changes only where BOTH endpoints hold the
+> within-byte membership (a freedom must be granted by every party
+> that trains), (c) byte atomicity — a lane moves as one unit,
+> strobe included, with non-members (DQS.P/N) keeping their relative
+> path (no polarity-swap vocabulary exists yet), (d) lane-index
+> changes only when both sides declare `swizzle_across_bytes`, and
+> (e) constrained-but-unswizzlable leaves under the same root field
+> (CA/CMD lines) pair name-to-name. A legal non-identity permutation
+> is reported as one Info row per instance pair — the as-built
+> swizzle table for layout/bring-up documentation. Fixtures:
+> `tests/circuits/realistic/test_ddr_swizzle.bhdl` (legal) and
+> `tests/circuits/erc/erc034_swizzle_violations.bhdl` (every class).
+>
+> The same increment wired the v0.8 **parametric resolver into the
+> CLI**: it previously ran only in `synthesize_from_source` and the
+> test binaries, so a parametric/generate board could not build
+> through `bhdl-cli` at all.
+
 ---
 
 ## 12. Hierarchical sub-interfaces (v0.8)

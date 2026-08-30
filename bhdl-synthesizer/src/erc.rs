@@ -250,6 +250,339 @@ pub fn check_driver_conflicts(
     out
 }
 
+
+// ──────────────────── ERC034: swizzle discipline ────────────────────
+//
+// Interface constraints DECLARE the legal permutation freedoms
+// (`swizzle_within_byte` on the members of a byte group,
+// `swizzle_across_bytes` on the leaves of swappable lane units); the
+// board's generate table REALISES one concrete permutation. Nothing
+// verified the realisation stayed inside the declaration until this
+// check: it recovers the actual permutation from net partnerships
+// between interface leaves and reconciles it against the declared
+// freedoms of BOTH endpoints (a freedom is granted only when every
+// party declares it — training happens at both ends of the link).
+//
+// Violations (Error):
+//   - a leaf paired with two counterparts on one side (not a
+//     permutation — fanout/short inside a swizzle group);
+//   - differing leaf names where either endpoint lacks the
+//     within-byte membership (DQ→DM against an undeclared side, a
+//     DQS polarity swap, CA lines cross-wired);
+//   - a byte unit split across two counterpart units (byte atomicity);
+//   - unit indices swapped when either side does not declare
+//     `swizzle_across_bytes` for those units.
+// A recovered non-identity permutation that IS legal is reported as
+// one Info line per instance pair — the as-built swizzle table.
+
+/// Per-instance swizzle declaration, reconstructed from the module's
+/// `intf_const__<path>__swizzle_*` attributes.
+struct SwizzleDecl {
+    /// unit prefix (e.g. "ddr.lane0") → within-byte member leaf paths
+    within: HashMap<String, std::collections::BTreeSet<String>>,
+    /// unit prefixes whose leaves declare `swizzle_across_bytes`
+    across_units: std::collections::BTreeSet<String>,
+    /// every leaf path that carries ANY swizzle metadata
+    leaves: std::collections::BTreeSet<String>,
+    /// every leaf path with ANY interface-constraint metadata whose
+    /// root field also carries swizzle metadata — the CA/CMD lines of
+    /// a swizzle-bearing bundle, held to exact-name pairing
+    constrained_same_root: std::collections::BTreeSet<String>,
+}
+
+fn parent_prefix(path: &str) -> Option<String> {
+    path.rsplit_once('.').map(|(p, _)| p.to_string())
+}
+
+fn swizzle_decl_of(netlist: &Netlist, module: bhdl_netlist::types::ModuleId) -> Option<SwizzleDecl> {
+    let m = netlist.modules.get(module)?;
+    let mut within: HashMap<String, std::collections::BTreeSet<String>> = HashMap::new();
+    let mut across_leaves: Vec<String> = Vec::new();
+    let mut leaves = std::collections::BTreeSet::new();
+    let mut all_constrained = std::collections::BTreeSet::new();
+    for (k, _) in &m.attributes {
+        if let Some(rest) = k.strip_prefix("intf_const__") {
+            if let Some((path, _prop)) = rest.rsplit_once("__") {
+                all_constrained.insert(path.to_string());
+            }
+        }
+    }
+    for (k, v) in &m.attributes {
+        let Some(rest) = k.strip_prefix("intf_const__") else { continue };
+        if v != "true" {
+            continue;
+        }
+        if let Some(path) = rest.strip_suffix("__swizzle_within_byte") {
+            if let Some(unit) = parent_prefix(path) {
+                within.entry(unit).or_default().insert(path.to_string());
+                leaves.insert(path.to_string());
+            }
+        } else if let Some(path) = rest.strip_suffix("__swizzle_across_bytes") {
+            across_leaves.push(path.to_string());
+            leaves.insert(path.to_string());
+        }
+    }
+    if leaves.is_empty() {
+        return None;
+    }
+    // Unit reconstruction: the within-byte group prefix IS the unit
+    // (the strobe pair rides with its byte). An across-leaf outside
+    // any within group falls back to <common-prefix>+1 segment.
+    let mut across_units = std::collections::BTreeSet::new();
+    for leaf in &across_leaves {
+        let unit = within
+            .keys()
+            .filter(|u| leaf.starts_with(&format!("{u}.")))
+            .max_by_key(|u| u.len())
+            .cloned()
+            .or_else(|| {
+                // fall back: root field + one segment
+                let segs: Vec<&str> = leaf.split('.').collect();
+                (segs.len() >= 2).then(|| segs[..2].join("."))
+            });
+        if let Some(u) = unit {
+            across_units.insert(u);
+        }
+    }
+    let roots: std::collections::BTreeSet<String> = leaves
+        .iter()
+        .filter_map(|l| l.split('.').next().map(str::to_string))
+        .collect();
+    let constrained_same_root = all_constrained
+        .into_iter()
+        .filter(|p| p.split('.').next().map(|r| roots.contains(r)).unwrap_or(false))
+        .collect();
+    Some(SwizzleDecl { within, across_units, leaves, constrained_same_root })
+}
+
+/// The unit prefix containing a leaf (longest within-group or
+/// across-unit prefix), if any.
+fn unit_of<'a>(decl: &'a SwizzleDecl, leaf: &str) -> Option<&'a str> {
+    decl.within
+        .keys()
+        .chain(decl.across_units.iter())
+        .filter(|u| leaf.starts_with(&format!("{u}.")))
+        .max_by_key(|u| u.len())
+        .map(|s| s.as_str())
+}
+
+fn is_within_member(decl: &SwizzleDecl, leaf: &str) -> bool {
+    decl.within.values().any(|set| set.contains(leaf))
+}
+
+/// Trailing integer of a unit's last segment ("ddr.lane2" → 2).
+fn unit_index(unit: &str) -> Option<u32> {
+    let last = unit.rsplit('.').next()?;
+    let digits: String = last.chars().rev().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return None;
+    }
+    digits.chars().rev().collect::<String>().parse().ok()
+}
+
+pub fn check_swizzle_discipline(
+    netlist: &Netlist,
+    _analysis: &AnalysisResult,
+) -> Vec<DRCViolation> {
+    let mut out = Vec::new();
+    // instance name → (decl, module id) for instances carrying swizzle metadata
+    let mut decls: HashMap<String, SwizzleDecl> = HashMap::new();
+    for (_, inst) in &netlist.instances {
+        if let Some(d) = swizzle_decl_of(netlist, inst.definition) {
+            decls.insert(inst.name.clone(), d);
+        }
+    }
+    if decls.len() < 1 {
+        return out;
+    }
+
+    // Links between interface leaves of DIFFERENT instances where at
+    // least one side carries swizzle metadata for its leaf. A link is
+    // (instA, leafA, instB, leafB), deduplicated per net.
+    let members = net_members(netlist);
+    // (A, B) → Vec<(a_leaf, b_leaf)>; keyed with A < B for stability
+    let mut pair_links: std::collections::BTreeMap<(String, String), Vec<(String, String)>> =
+        Default::default();
+    for (_, pins) in &members {
+        // interface leaves on this net: dotted pin names only
+        let leaves: Vec<&NetPin> = pins.iter().filter(|p| p.pin.contains('.')).collect();
+        if leaves.len() < 2 {
+            continue;
+        }
+        for i in 0..leaves.len() {
+            for j in (i + 1)..leaves.len() {
+                let (a, b) = (leaves[i], leaves[j]);
+                if a.inst == b.inst {
+                    continue;
+                }
+                let relevant = |inst: &str, pin: &String| {
+                    decls
+                        .get(inst)
+                        .map(|d| {
+                            d.leaves.contains(pin)
+                                || unit_of(d, pin).is_some()
+                                || d.constrained_same_root.contains(pin)
+                        })
+                        .unwrap_or(false)
+                };
+                let a_has = relevant(&a.inst, &a.pin);
+                let b_has = relevant(&b.inst, &b.pin);
+                if !a_has && !b_has {
+                    continue;
+                }
+                let (key, link) = if a.inst <= b.inst {
+                    ((a.inst.clone(), b.inst.clone()), (a.pin.clone(), b.pin.clone()))
+                } else {
+                    ((b.inst.clone(), a.inst.clone()), (b.pin.clone(), a.pin.clone()))
+                };
+                pair_links.entry(key).or_default().push(link);
+            }
+        }
+    }
+
+    let leaf_name = |p: &str| p.rsplit('.').next().unwrap_or(p).to_string();
+    let empty = SwizzleDecl { within: HashMap::new(), across_units: Default::default(), leaves: Default::default(), constrained_same_root: Default::default() };
+
+    for ((ia, ib), mut links) in pair_links {
+        links.sort();
+        links.dedup();
+        let da = decls.get(&ia).unwrap_or(&empty);
+        let db = decls.get(&ib).unwrap_or(&empty);
+        let loc = netlist
+            .instances
+            .iter()
+            .find(|(_, x)| x.name == ia)
+            .map(|(id, _)| ViolationLocation::Component(id))
+            .unwrap_or(ViolationLocation::Global);
+        let mut err = |desc: String, fix: &str| {
+            out.push(DRCViolation {
+                rule_id: "ERC034".into(),
+                rule_name: "Swizzle discipline".into(),
+                category: RuleCategory::Electrical,
+                description: desc,
+                severity: ViolationSeverity::Error,
+                location: loc.clone(),
+                fix_suggestion: fix.into(),
+                standard_reference: None,
+            });
+        };
+
+        // 1. permutation: each leaf appears in exactly one link
+        let mut seen_a: HashMap<&String, usize> = HashMap::new();
+        let mut seen_b: HashMap<&String, usize> = HashMap::new();
+        for (la, lb) in &links {
+            *seen_a.entry(la).or_default() += 1;
+            *seen_b.entry(lb).or_default() += 1;
+        }
+        for (leaf, n) in seen_a.iter().chain(seen_b.iter()) {
+            if *n > 1 {
+                err(
+                    format!(
+                        "'{ia}'↔'{ib}': interface leaf '{leaf}' pairs with {n} counterparts — a swizzle is a PERMUTATION; this is a short or fanout inside the group"
+                    ),
+                    "one leaf, one counterpart — fix the generate table / connections",
+                );
+            }
+        }
+
+        // 2. per-link legality + unit map accumulation
+        let mut unit_map: std::collections::BTreeMap<String, std::collections::BTreeSet<String>> =
+            Default::default();
+        let mut bit_swaps: Vec<String> = Vec::new();
+        for (la, lb) in &links {
+            let na = leaf_name(la);
+            let nb = leaf_name(lb);
+            let ma = is_within_member(da, la);
+            let mb = is_within_member(db, lb);
+            let ua = unit_of(da, la);
+            let ub = unit_of(db, lb);
+            if let (Some(ua), Some(ub)) = (ua, ub) {
+                unit_map.entry(ua.to_string()).or_default().insert(ub.to_string());
+                // non-members inside matched units must keep their
+                // relative path (a DQS polarity swap is NOT a declared
+                // freedom — that vocabulary does not exist yet)
+                let ra = la.strip_prefix(&format!("{ua}.")).unwrap_or(la);
+                let rb = lb.strip_prefix(&format!("{ub}.")).unwrap_or(lb);
+                if !(ma && mb) && ra != rb {
+                    err(
+                        format!(
+                            "'{ia}.{la}' ↔ '{ib}.{lb}': relative paths differ ('{ra}' vs '{rb}') and the pair is not within-byte-swizzlable on both sides — an undeclared swap (strobe polarity / non-member signal)"
+                        ),
+                        "wire like-for-like within the unit, or declare the freedom on BOTH interfaces",
+                    );
+                    continue;
+                }
+                if ma && mb && ra != rb {
+                    bit_swaps.push(format!("{la}↔{}", lb));
+                }
+            } else if na != nb {
+                // one side grants no freedom for this leaf: names must match
+                err(
+                    format!(
+                        "'{ia}.{la}' ↔ '{ib}.{lb}': leaf names differ but {} declares no swizzle freedom for its side — the counterparty cannot train this permutation",
+                        if ua.is_none() { format!("'{ia}'") } else { format!("'{ib}'") }
+                    ),
+                    "connect matching signals, or declare swizzle_within_byte / swizzle_across_bytes on both interfaces",
+                );
+            }
+        }
+
+        // 3. byte atomicity + across gate
+        let mut lane_moves: Vec<String> = Vec::new();
+        let multi_a = unit_map.len() > 1;
+        let multi_b = unit_map.values().flatten().collect::<std::collections::BTreeSet<_>>().len() > 1;
+        for (ua, ubs) in &unit_map {
+            if ubs.len() > 1 {
+                err(
+                    format!(
+                        "'{ia}' unit '{ua}' splits across {} counterpart units on '{ib}' ({:?}) — a byte lane moves as ONE unit (the strobe trains the whole byte)",
+                        ubs.len(), ubs
+                    ),
+                    "keep every signal of a byte lane on one counterpart lane",
+                );
+                continue;
+            }
+            let ub = ubs.iter().next().unwrap();
+            if let (Some(xa), Some(xb)) = (unit_index(ua), unit_index(ub)) {
+                if xa != xb && multi_a && multi_b {
+                    let a_ok = da.across_units.contains(ua);
+                    let b_ok = db.across_units.contains(ub);
+                    if !(a_ok && b_ok) {
+                        err(
+                            format!(
+                                "'{ia}.{ua}' ↔ '{ib}.{ub}': byte units with different indices, but {} does not declare swizzle_across_bytes — lane reordering is not a granted freedom here",
+                                if !a_ok { format!("'{ia}'") } else { format!("'{ib}'") }
+                            ),
+                            "map lanes index-to-index, or declare swizzle_across_bytes on both interfaces",
+                        );
+                        continue;
+                    }
+                    lane_moves.push(format!("{ua}→{ub}"));
+                }
+            }
+        }
+
+        // 4. as-built swizzle table (Info) when a legal permutation exists
+        if !lane_moves.is_empty() || !bit_swaps.is_empty() {
+            out.push(DRCViolation {
+                rule_id: "ERC034".into(),
+                rule_name: "Swizzle discipline".into(),
+                category: RuleCategory::Electrical,
+                description: format!(
+                    "'{ia}'↔'{ib}' as-built swizzle (all moves within declared freedoms): lanes [{}], bit swaps [{}]",
+                    lane_moves.join(", "),
+                    bit_swaps.join(", ")
+                ),
+                severity: ViolationSeverity::Info,
+                location: loc.clone(),
+                fix_suggestion: "none needed — recorded for layout/bring-up documentation".into(),
+                standard_reference: None,
+            });
+        }
+    }
+    out
+}
+
 // ─────────────────── ERC002: differential-pair polarity ───────────────────
 
 /// Classify a pin name's differential polarity: `X_P`/`XP`/`X+`/`DP` → Pos,

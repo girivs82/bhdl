@@ -257,6 +257,12 @@ impl DesignRuleChecker {
                 crate::erc::check_rail_anchoring,
             ),
             (
+                "ERC034",
+                "Swizzle discipline",
+                "Realised interface permutation reconciled against declared swizzle freedoms (bijection, byte atomicity, member legality, across-bytes gate); a legal non-identity permutation is recorded as Info",
+                crate::erc::check_swizzle_discipline,
+            ),
+            (
                 "ERC029",
                 "Floating duplicated support circuit",
                 "Expansion children on a net whose only other member is their parent's virtual pin — duplicated application circuitry the board never consumes (Error)",

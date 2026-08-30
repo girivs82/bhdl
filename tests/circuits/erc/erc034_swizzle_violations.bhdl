@@ -1,0 +1,82 @@
+// ERC034 violation probes — every class of illegal swizzle in one
+// board (this fixture is EXPECTED to produce ERC034 Errors; it lives
+// under tests/circuits/erc/, not the clean corpus):
+//
+//   1. CA cross-wire: A0↔A1 with no declared freedom.
+//   2. DQS polarity swap: P↔N inside a lane (no polarity freedom
+//      exists in the vocabulary).
+//   3. Byte split: lane0's DQ0 sent to lane1 while the rest of lane0
+//      stays — a byte must move as one unit.
+//   4. Lane swap without the across-bytes grant: the *_NoAcross
+//      interface omits swizzle_across_bytes, yet lanes are crossed.
+
+interface VDiffPair {
+    signal P: inout;
+    signal N: inout;
+    constraints {
+        *: differential 80ohm;
+    }
+}
+
+interface VByteLane {
+    signal DQ0: inout; signal DQ1: inout;
+    interface VDiffPair DQS;
+    constraints {
+        DQ0, DQ1: swizzle_within_byte true;
+    }
+}
+
+// lanes may NOT be reordered: no swizzle_across_bytes here
+interface VDdrNoAcross<byte_lanes: int = 2> {
+    signal A0: inout; signal A1: inout;
+    generate for i in 0..<byte_lanes> {
+        interface VByteLane lane<i>;
+    }
+    constraints {
+        A0, A1: signal_class ADDR;
+    }
+}
+
+entity VCtrl() {
+    interface VDdrNoAcross<byte_lanes=2> ddr;
+    pin GND: ground;
+    attribute component_class = "ic";
+    attribute part_number = "FIXTURE-V-CTRL";
+}
+
+entity VDram() {
+    interface VDdrNoAcross<byte_lanes=2> ddr;
+    pin GND: ground;
+    attribute component_class = "ic";
+    attribute part_number = "FIXTURE-V-DRAM";
+}
+
+board SwizzleViolations {
+    power VDD = 1.2V @ 1A;
+    ground GND;
+
+    mc:  VCtrl();
+    mem: VDram();
+    mc.GND -> @GND;
+    mem.GND -> @GND;
+
+    // 1. CA cross-wire — no freedom declared for A0/A1
+    mc.ddr.A0 -> mem.ddr.A1;
+    mc.ddr.A1 -> mem.ddr.A0;
+
+    // 2. DQS polarity swap inside lane0 (lane held in place)
+    mc.ddr.lane0.DQS.P -> mem.ddr.lane0.DQS.N;
+    mc.ddr.lane0.DQS.N -> mem.ddr.lane0.DQS.P;
+
+    // 3. byte split: lane0.DQ0 defects to mem lane1 while lane0.DQ1
+    //    stays home
+    mc.ddr.lane0.DQ0 -> mem.ddr.lane1.DQ0;
+    mc.ddr.lane0.DQ1 -> mem.ddr.lane0.DQ1;
+
+    // 4. lane swap without across-bytes grant: lane1 moved wholesale
+    //    to mem lane0 (atomic, so no split error — but NO across grant)
+    mc.ddr.lane1.DQ0 -> mem.ddr.lane0.DQ0;
+    mc.ddr.lane1.DQ1 -> mem.ddr.lane0.DQ1;
+    mc.ddr.lane1.DQS.P -> mem.ddr.lane0.DQS.P;
+    mc.ddr.lane1.DQS.N -> mem.ddr.lane0.DQS.N;
+}

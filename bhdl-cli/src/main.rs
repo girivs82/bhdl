@@ -598,6 +598,13 @@ async fn main() -> Result<()> {
     let input_content = fs::read_to_string(&cli.input)
         .with_context(|| format!("Failed to read file: {}", cli.input.display()))?;
 
+    // v0.8 parametric interfaces + generate-loop unrolling (swizzle
+    // permutation tables) — identity for boards using none of it. This
+    // pass previously ran only in  and the test
+    // binaries; the main CLI path never saw it.
+    let input_content = bhdl_synthesizer::parametric_resolver::preprocess(&input_content)
+        .with_context(|| format!("parametric resolution in {}", cli.input.display()))?;
+
     // Power-supply synthesis (docs/spec/Power_Supply_Synthesis.md): desugar
     // any `supply` requirement statements into the equivalent hand-written
     // instantiation + wiring BEFORE the main parse, so every downstream pass
@@ -1207,6 +1214,13 @@ fn enforce_lockfile(
 /// type: LdoStage") — a board must build identically no matter which
 /// command reaches it. Returns the transformed text and its parse.
 fn preprocess_board_text(text: String, path: &Path) -> Result<(SourceFile, String)> {
+    // v0.8 parametric interfaces + generate-loop unrolling (the swizzle
+    // permutation tables). Identity when the file uses none of it —
+    // this pass existed only in  and the test
+    // binaries; the CLI never ran it, so parametric boards could not
+    // build through  at all.
+    let text = bhdl_synthesizer::parametric_resolver::preprocess(&text)
+        .map_err(|e| anyhow::anyhow!("parametric resolution in {}: {e:#}", path.display()))?;
     let text = match bhdl_synthesizer::supply_synthesis::desugar_supplies(
         &text,
         &bhdl_common::import_search::locate_dir("bhdl-stdlib")

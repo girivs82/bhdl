@@ -254,6 +254,16 @@ by itself:
   silent. First corpus scan caught a real one: buck_converter_tps54331's
   hand-authored catch diode had silently paralleled the entity's own
   after the TPS54331 expansion grew one.
+- **ERC034** swizzle discipline — BUILT (Error/Info): the realised
+  interface permutation (recovered from net partnerships between
+  interface leaves) reconciled against the declared
+  `swizzle_within_byte` / `swizzle_across_bytes` freedoms: bijection,
+  member legality on BOTH endpoints, byte atomicity (strobe rides its
+  lane, relative paths keep — no polarity freedom exists), the
+  across-bytes gate on lane-index changes, and name-to-name pairing
+  for constrained-but-unswizzlable leaves (CA/CMD) under a
+  swizzle-bearing root. A legal non-identity permutation emits one
+  Info row — the as-built swizzle table. See Interfaces.md §11.3.
 - **ERC031** feedback divider contradicts declared rail — BUILT (Error):
   an FB-referenced regulator regulates VOUT = VREF·(1 + Rtop/Rbot); the
   `power VOUT = 5V` declaration is intent, the placed divider is what

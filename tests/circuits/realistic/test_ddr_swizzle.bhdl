@@ -1,0 +1,85 @@
+// ERC034 fixture — DDR byte/bit swizzle DISCIPLINE, the legal case.
+//
+// The interfaces DECLARE the permutation freedoms (swizzle_within_byte
+// on the DQ/DM members, swizzle_across_bytes on the lane units); the
+// board's generate tables REALISE one concrete permutation:
+//   - byte swizzle: controller lane0↔lane1 (legal — both sides declare
+//     swizzle_across_bytes),
+//   - bit swizzle inside the (swapped) lanes: DQ0↔DQ3, DQ1↔DQ2
+//     (legal — members of swizzle_within_byte on both sides),
+//   - DQS pairs ride with their lanes, polarity kept (no polarity
+//     freedom exists in the vocabulary),
+//   - CA lines (A0/A1) wired straight (no freedom declared).
+// ERC034 recovers the permutation from the netlist and must report it
+// as the as-built Info table with ZERO errors.
+
+interface SwzDiffPair {
+    signal P: inout;
+    signal N: inout;
+    constraints {
+        *: differential 80ohm;
+    }
+}
+
+interface SwzByteLane {
+    signal DQ0: inout; signal DQ1: inout;
+    signal DQ2: inout; signal DQ3: inout;
+    signal DM:  inout;
+    interface SwzDiffPair DQS;
+    constraints {
+        DQ0, DQ1, DQ2, DQ3, DM: single_ended 40ohm;
+        DQ0, DQ1, DQ2, DQ3, DM: swizzle_within_byte true;
+    }
+}
+
+interface SwzDdr<byte_lanes: int = 2> {
+    signal A0: inout; signal A1: inout;
+    generate for i in 0..<byte_lanes> {
+        interface SwzByteLane lane<i>;
+    }
+    constraints {
+        A0, A1: single_ended 50ohm, signal_class ADDR;
+        lane*:  swizzle_across_bytes true;
+    }
+}
+
+entity SwzController() {
+    interface SwzDdr<byte_lanes=2> ddr;
+    pin GND: ground;
+    attribute component_class = "ic";
+    attribute part_number = "FIXTURE-SWZ-CTRL";
+}
+
+entity SwzDram() {
+    interface SwzDdr<byte_lanes=2> ddr;
+    pin GND: ground;
+    attribute component_class = "ic";
+    attribute part_number = "FIXTURE-SWZ-DRAM";
+}
+
+board SwizzleBoard {
+    power VDD = 1.2V @ 1A;
+    ground GND;
+
+    mc:  SwzController();
+    mem: SwzDram();
+    mc.GND -> @GND;
+    mem.GND -> @GND;
+
+    // CA: straight (no declared freedom — must be like-for-like)
+    mc.ddr.A0 -> mem.ddr.A0;
+    mc.ddr.A1 -> mem.ddr.A1;
+
+    // BYTE swizzle: the list literal is the lane permutation table
+    generate for (j, i) in [1, 0] {
+        mc.ddr.lane<j>.DQS.P -> mem.ddr.lane<i>.DQS.P;
+        mc.ddr.lane<j>.DQS.N -> mem.ddr.lane<i>.DQS.N;
+        mc.ddr.lane<j>.DM    -> mem.ddr.lane<i>.DM;
+    }
+    // BIT swizzle inside the swapped lanes: DQ0↔DQ3, DQ1↔DQ2
+    generate for (j, i) in [1, 0] {
+        generate for (a, b) in [3, 2, 1, 0] {
+            mc.ddr.lane<j>.DQ<a> -> mem.ddr.lane<i>.DQ<b>;
+        }
+    }
+}
