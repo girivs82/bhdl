@@ -52,6 +52,9 @@
     "D": {
       "u_v12q_D_catch": "D1"
     },
+    "J": {
+      "hdr": "J1"
+    },
     "L": {
       "u_v12q_L_out": "L1",
       "u_v18_L_out": "L2",
@@ -67,6 +70,9 @@
       "bleed_vtt": "R1",
       "mon_bot": "R2",
       "mon_top": "R3",
+      "pullcfg_fpga_dbg_a": "R23",
+      "pullcfg_fpga_dbg_b": "R24",
+      "pullcfg_fpga_pgood_in": "R22",
       "seq_vtt_r": "R4",
       "seqr_u_v12q": "R5",
       "seqr_u_v18": "R6",

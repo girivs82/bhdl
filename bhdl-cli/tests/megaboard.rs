@@ -109,6 +109,17 @@ fn megaboard_stages_resolved_to_real_parts() {
     // no stage left Generic
     assert!(!text.contains("is still the Generic"), "unresolved stage:\n{}",
         text.lines().filter(|l| l.contains("ERC032")).collect::<Vec<_>>().join("\n"));
+    // SoC features on the board: the debug UART is forced OFF its
+    // preferred home by the directly-wired sideband straps; PGOOD is
+    // held down by the designer override; the strap inputs auto
+    // pull-up; the banks are powered (no ERC035 Error)
+    assert!(text.contains("pinmux: fpga.dbg"), "mux not solved");
+    assert!(text.contains("alt \"IOB\""), "straps did not force the alternate:\n{}",
+        text.lines().filter(|l| l.contains("pinmux")).collect::<Vec<_>>().join("\n"));
+    assert!(text.contains("pull: fpga.PGOOD_IN → down (designer override)"), "PGOOD hold-down missing");
+    assert!(text.contains("pull: fpga.DBG_A → up"), "strap auto pull-up missing");
+    assert!(!text.contains("IO bank discipline | Error"), "bank error:\n{}",
+        text.lines().filter(|l| l.contains("ERC035")).collect::<Vec<_>>().join("\n"));
 }
 
 #[test]

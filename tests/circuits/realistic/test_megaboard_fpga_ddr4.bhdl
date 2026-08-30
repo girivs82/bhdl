@@ -25,6 +25,13 @@ import { Efuse_TPS26630 } from "bhdl-stdlib/protection/tps2663.bhdl";
 import { DecapBulk100u } from "./tests/circuits/realistic/decap_lib_fixture.bhdl";
 import { DecapJumbo220uLow3v3 } from "./tests/circuits/realistic/decap_lib_fixture.bhdl";
 
+// Debug UART protocol for the FPGA's muxed sideband (FIXTURE).
+interface MbDbgUart {
+    perspective dev  { signal TX: out; signal RX: in; }
+    perspective host { signal TX: out; signal RX: in; }
+    wires { dev.TX <-> host.RX; dev.RX <-> host.TX; }
+}
+
 // ── The FPGA (SEooC black box, Xilinx-style rail ladder) ────────────
 entity Fpga_Seooc() {
     pin VCCINT: power in;
@@ -32,7 +39,30 @@ entity Fpga_Seooc() {
     pin VCCO:   power in;   // 1.2V bank shared with the DDR4 VDDQ net
     pin REFCLK: signal in;
     pin PGOOD_IN: signal in;
+    pin DBG_A:  signal inout;
+    pin DBG_B:  signal inout;
+    pin DBG_C:  signal inout;
+    pin DBG_D:  signal inout;
     pin GND:    ground;
+
+    // Internal PU/PD capability on the IO pads (FIXTURE figures) —
+    // the tool configures them from the connections; configured
+    // pulls become real resistors in the DC solve.
+    attribute internal_pull = "pins=PGOOD_IN,DBG_A,DBG_B,DBG_C,DBG_D pu=25kΩ pd=25kΩ source=FIXTURE";
+
+    // Debug UART with TWO homes (the FPGA's pinmux table, FIXTURE):
+    // the sideband strap interface below holds DBG_A/DBG_B fixed, so
+    // the solver must place the UART on its second home.
+    interface MbDbgUart:dev dbg {
+        alt "IOA" {
+            TX = DBG_A;
+            RX = DBG_B;
+        }
+        alt "IOB" {
+            TX = DBG_C;
+            RX = DBG_D;
+        }
+    }
 
     attribute component_class = "asic";
     attribute part_number     = "FIXTURE-FPGA-7X";
@@ -52,7 +82,8 @@ entity Fpga_Seooc() {
     // IO bank on the shared 1.2V net; sleepable
     domain IO pins="VCCO" v=1.2V tol=5% i_nom=500mA i_max=1.5A
         slot=3 after="AUX" i_sleep=5mA
-        source="FIXTURE — VCCO bank";
+        io_pins="REFCLK PGOOD_IN DBG_A DBG_B DBG_C DBG_D"
+        source="FIXTURE — VCCO bank powers the clock + debug IO";
 
     safety {
         clock_in REFCLK_100 pins="REFCLK" freq=100MHz rise_max=1.2ns ppm=100 c_in=3pF
@@ -86,7 +117,8 @@ entity Ddr4_Seooc() {
         step=1.8A rise=50us dur=400us period=7.8ms droop_max=4% overshoot_max=4%
         pdn_r=0.3m pdn_l=0.05n
         slot=2 after="VPP25" t_min=0us
-        source="FIXTURE — JESD79-4-style VDD/VDDQ shape";
+        io_pins="CK"
+        source="FIXTURE — JESD79-4-style VDD/VDDQ shape; CK is VDDQ-referenced";
     domain VPP25 pins="VPP" v=2.5V tol=6% i_nom=40mA i_max=150mA
         slot=1
         source="FIXTURE — JESD79-4 VPP-first ordering";
@@ -201,6 +233,23 @@ board MegaBoard {
     // generic controller declares none; the sim's UVLO floor needs it
     attribute u_vccint.vin_min = 4.5V;
     attribute u_vccint.vin_max = 27V;
+
+    // Debug header: UART (host side) + the sideband straps that
+    // occupy the UART's PREFERRED mux home, forcing the solver onto
+    // alt IOB — plus the configuration-hold strap.
+    hdr: MbDbgHdr();
+    hdr.GND -> @GND;
+    fpga.dbg.TX -> hdr.RX;
+    hdr.TX -> fpga.dbg.RX;
+    // sideband straps hold DBG_A/DBG_B (fixed wiring, no interface)
+    fpga.DBG_A -> hdr.SB0;
+    fpga.DBG_B -> hdr.SB1;
+    // configuration hold: PGOOD_IN strapped to the header; the
+    // DESIGNER forces the internal pull DOWN (hold config off until
+    // the header or supervisor drives it) — auto-config would have
+    // chosen idle-high
+    fpga.PGOOD_IN -> hdr.PG;
+    attribute fpga.pull__PGOOD_IN = "down";
 
     // an INDEPENDENTLY-supplied rail supervisor (DFA-clean by design):
     // divider fed from V18 monitors VCCINT
@@ -323,6 +372,17 @@ board MegaBoard {
     @V_PROT -> seqbulk_v_prot_16: DecapBulk100u().1; seqbulk_v_prot_16.2 -> @GND;
     @V_PROT -> seqbulk_v_prot_17: DecapBulk100u().1; seqbulk_v_prot_17.2 -> @GND;
     // ── END GENERATED POWER TREE ──
+}
+
+entity MbDbgHdr() {
+    pin RX:  signal in;
+    pin TX:  signal out;
+    pin SB0: signal in;
+    pin SB1: signal in;
+    pin PG:  signal in;
+    pin GND: ground;
+    attribute component_class = "connector";
+    attribute part_number = "FIXTURE-DBG-HDR";
 }
 
 entity MbOsc() {

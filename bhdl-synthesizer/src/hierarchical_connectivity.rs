@@ -385,6 +385,7 @@ fn harvest_pinmux_inputs(ast: &bhdl_ast::SourceFile, context: &mut HierarchicalC
 fn solve_pinmux_for_instance(
     inst_name: &str,
     module: &bhdl_netlist::ModuleDefinition,
+    phys_pin_names: &std::collections::HashSet<String>,
     context: &HierarchicalContext,
 ) -> Result<Vec<(String, String)>> {
     if std::env::var("BHDL_MUX_DEBUG").is_ok() {
@@ -429,6 +430,18 @@ fn solve_pinmux_for_instance(
             if k.starts_with(&prefix) {
                 claimed.insert(pin.clone(), format!("{f} (fixed binding)"));
             }
+        }
+    }
+    // DIRECTLY-WIRED physical pins claim too: a board statement like
+    // `fpga.DBG_A -> hdr.SB0;` uses the pad outright — an alternate
+    // must not land its signals there. (The megaboard's sideband
+    // straps flushed this: the solver placed the UART on top of the
+    // straps because bare pin wiring registered no claim.)
+    for f in fields {
+        if phys_pin_names.contains(f.as_str()) {
+            claimed
+                .entry(f.clone())
+                .or_insert_with(|| format!("{f} (directly wired)"));
         }
     }
 
@@ -1190,7 +1203,12 @@ fn process_entity_instance(
                     .modules
                     .get(module_id)
                     .ok_or_else(|| anyhow::anyhow!("module vanished"))?;
-                solve_pinmux_for_instance(&instance_name, module, context)?
+                let phys: std::collections::HashSet<String> = module
+                    .pins
+                    .iter()
+                    .filter_map(|pid| netlist.pins.get(*pid).map(|p| p.name.clone()))
+                    .collect();
+                solve_pinmux_for_instance(&instance_name, module, &phys, context)?
             };
             if let Some(instance) = netlist.instances.get_mut(instance_id) {
                 for (f, a) in &choices {
@@ -1722,7 +1740,12 @@ fn create_component_instance(
                         .modules
                         .get(module_id)
                         .ok_or_else(|| anyhow::anyhow!("module vanished"))?;
-                    solve_pinmux_for_instance(&inst_nm, module, context)?
+                    let phys: std::collections::HashSet<String> = module
+                        .pins
+                        .iter()
+                        .filter_map(|pid| netlist.pins.get(*pid).map(|p| p.name.clone()))
+                        .collect();
+                    solve_pinmux_for_instance(&inst_nm, module, &phys, context)?
                 };
                 for ((oi, of), oa) in &context.pinmux_overrides {
                     if oi == &inst_nm && !choices.iter().any(|(f, _)| f == of) {
@@ -1772,7 +1795,12 @@ fn create_component_instance(
                 .modules
                 .get(module_id)
                 .ok_or_else(|| anyhow::anyhow!("module vanished"))?;
-            solve_pinmux_for_instance(&instance_name, module, context)?
+            let phys: std::collections::HashSet<String> = module
+                .pins
+                .iter()
+                .filter_map(|pid| netlist.pins.get(*pid).map(|p| p.name.clone()))
+                .collect();
+            solve_pinmux_for_instance(&instance_name, module, &phys, context)?
         };
         if let Some(instance) = netlist.instances.get_mut(instance_id) {
             for (f, a) in &choices {
