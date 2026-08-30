@@ -1,6 +1,0 @@
-import { ScBoard } from "./sc_board.bhdl";
-safety ScBoard as brd {
-    goal SG_V33: ASIL_B "V33 stays in regulation" (id="SG-SC-1") {
-        effect overvoltage = brd.R_LOAD.1 > 3.6V severity S2;
-    }
-}

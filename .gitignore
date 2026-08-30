@@ -98,6 +98,7 @@ bhdl-stdlib/safety/*.local.toml
 # Local Claude Code permission settings — never publish
 .claude/settings.local.json
 
-# Prebuilt binaries and standard-document scratch — never track
-scratch/*.pdf
+# Local probe/working directory — never track (probes graduate to
+# tests/circuits/ fixtures; generated sidecars and reports live here)
+scratch/
 *.dSYM/
