@@ -1,3 +1,6 @@
+// Attribution: transcribed from the Arduino Uno R3 reference design
+// (arduino.cc, CC-BY-SA) — topology re-expressed in BHDL; no schematic
+// artwork reproduced.
 // Arduino Uno R3 — a real, shipping design transcribed from the published
 // schematic (arduino.cc, Uno R3 reference design). USB-C in place of the
 // original USB-B (the one liberty taken; modern clones ship exactly this).

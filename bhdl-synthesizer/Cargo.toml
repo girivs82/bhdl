@@ -1,5 +1,6 @@
 [package]
 name = "bhdl-synthesizer"
+license.workspace = true
 version = "0.1.0"
 edition = "2021"
 description = "BHDL synthesizer - converts semantic analysis to netlists with preserved context"

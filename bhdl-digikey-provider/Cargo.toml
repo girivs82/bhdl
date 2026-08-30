@@ -1,5 +1,6 @@
 [package]
 name = "bhdl-digikey-provider"
+license.workspace = true
 version = "0.1.0"
 edition = "2021"
 description = "BHDL supply-chain provider — DigiKey Product Information API v4. Resolves parametric passives to real, orderable DigiKey parts (MPN + manufacturer + stock + price) AND extracts real per-MPN ESR for electrolytic/tantalum/polymer capacitors (Real-Data Policy). OAuth2 client-credentials over a self-contained Rust HTTP/TLS client (ureq + rustls) — no external `curl`/`fetch`, no system TLS, no async runtime."

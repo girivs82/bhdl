@@ -1,5 +1,6 @@
 [package]
 name = "bhdl-jlcparts-provider"
+license.workspace = true
 version = "0.1.0"
 edition = "2021"
 description = "BHDL supply-chain provider — resolves parametric passives to real LCSC/JLCPCB parts from an offline jlcparts SQLite catalogue. Zero runtime dependencies (SQLite statically linked)."

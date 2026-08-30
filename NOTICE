@@ -1,5 +1,5 @@
 BHDL - Board Hardware Description Language
-Copyright 2024 [Your Name]
+Copyright 2024-2026 The BHDL Authors
 
 This product includes software developed with AI assistance.
 
@@ -26,16 +26,38 @@ creative control, direction, and validation of all work.
 
 ## Third-Party Components
 
-This software includes components from the following open source projects:
+This software depends on ~420 Rust crates from crates.io, overwhelmingly
+dual-licensed MIT OR Apache-2.0. Attributions the licenses ask for, per
+`cargo metadata` (regenerate this list when dependencies change; a
+`cargo-deny` license gate runs in CI):
 
-- rowan (https://github.com/rust-analyzer/rowan) - Apache-2.0 OR MIT
-- nalgebra (https://nalgebra.org/) - Apache-2.0
-- petgraph (https://github.com/petgraph/petgraph) - Apache-2.0 OR MIT
-- tokio (https://tokio.rs/) - MIT
-- Various other Rust crates under MIT and/or Apache-2.0 licenses
+- rowan (https://github.com/rust-analyzer/rowan) — Apache-2.0 OR MIT
+- nalgebra (https://nalgebra.org/) — BSD-3-Clause
+- petgraph (https://github.com/petgraph/petgraph) — Apache-2.0 OR MIT
+- tokio (https://tokio.rs/) — MIT
+- colored — MPL-2.0 (unmodified; source at https://crates.io/crates/colored)
+- smartstring (via rhai) — MPL-2.0+ (unmodified)
+- option-ext (via dirs) — MPL-2.0 (unmodified)
+- ring — Apache-2.0 AND ISC
+- rustls-webpki, untrusted, libloading — ISC
+- webpki-roots (Mozilla CA bundle) — CDLA-Permissive-2.0
+- encoding_rs — (Apache-2.0 OR MIT) AND BSD-3-Clause
+- subtle, zerocopy — BSD-3-Clause / BSD-2-Clause dual forms
+- ICU/idna family (18 crates) — Unicode-3.0
+- ryu — Apache-2.0 OR BSL-1.0
 
-For a complete list of dependencies and their licenses, see Cargo.toml files
-throughout the project.
+The MPL-2.0 crates are used unmodified; their source is available at the
+listed locations per MPL §3.2(b). No GPL/AGPL/LGPL code is linked.
+
+Data provenance: MIL-HDBK-217F reliability constants
+(bhdl-stdlib/safety/milhdbk217f.toml) are a US Government work in the
+public domain. Proprietary reliability standards (SN 29500, IEC TR 62380,
+FIDES) are NOT included — they plug in via gitignored local overlays or
+external provider executables. Vendor IBIS models are not redistributed;
+`bhdl vendor install` fetches them under the vendors' own terms.
+
+For the complete dependency list and licenses, run `cargo metadata` or
+`cargo deny list`.
 
 ## Patent Notice
 

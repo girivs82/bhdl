@@ -94,3 +94,10 @@ vendor/ibis/
 # standards (IEC 62380, FIDES, SN 29500, ...) are NOT redistributable —
 # users supply their own. Only FIXTURE demo tables are committed.
 bhdl-stdlib/safety/*.local.toml
+
+# Local Claude Code permission settings — never publish
+.claude/settings.local.json
+
+# Prebuilt binaries and standard-document scratch — never track
+scratch/*.pdf
+*.dSYM/

@@ -27,6 +27,11 @@ resolver = "2"
 # Line tables keep readable backtraces (file:line) for panics and
 # profilers; full variable/type info is only needed under an actual
 # debugger session — flip to `debug = 2` locally when stepping through.
+[workspace.package]
+license = "MIT OR Apache-2.0"
+authors = ["The BHDL Authors"]
+repository = "https://github.com/girivs82/bhdl"
+
 [profile.dev]
 debug = "line-tables-only"
 

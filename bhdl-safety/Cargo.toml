@@ -1,5 +1,6 @@
 [package]
 name = "bhdl-safety"
+license.workspace = true
 version = "0.1.0"
 edition = "2021"
 description = "Electrical safety analysis for BHDL circuits"

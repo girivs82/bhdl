@@ -1,3 +1,6 @@
+// Attribution: transcribed from the Arduino Uno R3 reference design
+// (arduino.cc, CC-BY-SA) — topology re-expressed in BHDL; no schematic
+// artwork reproduced.
 // UNO-SCALE MEASURED-EDGE BOARD — the Arduino Uno R3 transcription with
 // the P4/P5 measured loop armed at REAL density: the 16U2's UART TX
 // carries a SCHEDULED vendor-IBIS edge (the transient solver measures

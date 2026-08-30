@@ -1,5 +1,6 @@
 [package]
 name = "bhdl-analyzer"
+license.workspace = true
 version = "0.1.0"
 edition = "2021"
 # `src/bin/` holds ~70 historical demo/debug binaries (test_*.rs, debug_*.rs).

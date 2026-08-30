@@ -45,5 +45,28 @@
     "tinytapeout-demo",
     "video",
     "vme-wren"
-  ]
+  ],
+  "provenance_note": "The priors are AGGREGATE STATISTICS (median/p90/count) mined from the source boards' .kicad_pcb layouts — statistical facts, no copyrightable expression from any source layout is reproduced. The layouts themselves are NOT distributed with bhdl. Per-board origins below; boards marked UNVERIFIED must have their upstream recorded (or be re-mined without them) before the priors are shipped in a release.",
+  "source_board_origins": {
+    "CM5_MINIMA_3": "UNVERIFIED — record upstream URL (open-hardware CM5 carrier; confirm source before release)",
+    "ESP32-PoE_Rev_B2": "Olimex ESP32-PoE open hardware — https://github.com/OLIMEX/ESP32-POE",
+    "Fomu_pvt": "Fomu FPGA board — https://github.com/im-tomu/fomu-hardware",
+    "Glasgow": "Glasgow Interface Explorer — https://github.com/GlasgowEmbedded/glasgow",
+    "One-Air-Max": "UNVERIFIED — record upstream URL before release",
+    "OrangeCrab_r0.2.1": "OrangeCrab — https://github.com/orangecrab-fpga/orangecrab-hardware",
+    "RoyalBlue54L-Feather": "UNVERIFIED — record upstream URL before release",
+    "StickHub": "UNVERIFIED — record upstream URL before release",
+    "ULX3S": "ULX3S FPGA board — https://github.com/emard/ulx3s",
+    "complex_hierarchy": "KiCad official demos — https://gitlab.com/kicad/code/kicad (demos/)",
+    "interf_u": "KiCad official demos — https://gitlab.com/kicad/code/kicad (demos/)",
+    "jetson-agx-thor-baseboard": "UNVERIFIED — confirm this came from NVIDIA's PUBLISHED open design files (not click-through/NDA material) before release",
+    "kit-dev-coldfire-xilinx_5213": "KiCad official demos — https://gitlab.com/kicad/code/kicad (demos/)",
+    "microwave": "KiCad official demos — https://gitlab.com/kicad/code/kicad (demos/)",
+    "multichannel_mixer": "KiCad official demos — https://gitlab.com/kicad/code/kicad (demos/)",
+    "pic_programmer": "KiCad official demos — https://gitlab.com/kicad/code/kicad (demos/)",
+    "sonde_xilinx": "KiCad official demos — https://gitlab.com/kicad/code/kicad (demos/)",
+    "tinytapeout-demo": "Tiny Tapeout demo PCB — https://github.com/TinyTapeout",
+    "video": "KiCad official demos — https://gitlab.com/kicad/code/kicad (demos/)",
+    "vme-wren": "KiCad official demos — https://gitlab.com/kicad/code/kicad (demos/)"
+  }
 }

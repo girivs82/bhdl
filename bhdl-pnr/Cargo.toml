@@ -1,5 +1,6 @@
 [package]
 name = "bhdl-pnr"
+license.workspace = true
 version = "0.1.0"
 edition = "2021"
 description = "Concurrent semantically-aware PCB place & route engine for BHDL"

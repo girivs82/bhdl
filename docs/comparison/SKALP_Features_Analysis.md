@@ -11,7 +11,7 @@ SKALP is a modern hardware description language focused on:
 - Strong typing with traits and generics
 - Inline physical and timing constraints
 
-**Repository:** Hardware HLS project at `/Users/girivs/src/hw/hls/`
+**Repository:** Hardware HLS project at `the SKALP project (a sibling HDL by the same author; repo path: hw/hls) — `
 
 ---
 

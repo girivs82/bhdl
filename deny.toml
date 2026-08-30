@@ -1,0 +1,42 @@
+# cargo-deny configuration — the LICENSE GATE.
+#
+# The open-source audit (2026-08-30) found the dependency graph clean:
+# no GPL/AGPL/LGPL anywhere, three unmodified MPL-2.0 crates (file-level
+# copyleft — allowed deliberately, attributed in NOTICE), and permissive
+# everything else. This allowlist pins that state: a future dependency
+# bump that pulls strong copyleft FAILS CI instead of slipping in.
+#
+# Run locally: cargo install cargo-deny && cargo deny check licenses
+
+[licenses]
+version = 2
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+    "Unlicense",
+    "0BSD",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0",
+    # File-level copyleft, used unmodified; attributed in NOTICE.
+    # Do NOT extend this to GPL/LGPL/AGPL without a licensing review.
+    "MPL-2.0",
+    # r-efi is (MIT OR Apache-2.0 OR LGPL-2.1-or-later) — cargo-deny
+    # picks the permissive arm; listed here only as documentation.
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "allow"
+
+[advisories]
+# Advisories are tracked but do not gate this config; the license gate
+# is the purpose of this file. Tighten when a security-audit CI lands.
+version = 2

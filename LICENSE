@@ -1,12 +1,17 @@
-Apache License
-Version 2.0, January 2004
-http://www.apache.org/licenses/
+BHDL - Board Hardware Description Language
 
-See LICENSE-APACHE for the full license text.
+Copyright 2024-2026 The BHDL Authors
 
-Copyright 2024 [Your Name]
+Licensed under either of
 
-This project was developed with AI assistance (Claude) under human direction
-and specification. All architectural decisions, design specifications, and
-validation were performed by human developers. AI was used as an implementation
-tool similar to an advanced IDE or code generator.
+  * Apache License, Version 2.0 (see LICENSE-APACHE or
+    http://www.apache.org/licenses/LICENSE-2.0)
+  * MIT license (see LICENSE-MIT or
+    http://opensource.org/licenses/MIT)
+
+at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally
+submitted for inclusion in this work by you, as defined in the Apache-2.0
+license, shall be dual licensed as above, without any additional terms or
+conditions.
