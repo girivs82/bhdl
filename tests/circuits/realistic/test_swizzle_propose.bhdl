@@ -1,0 +1,78 @@
+// Increment-2 fixture — `bhdl layout --propose-swizzle`.
+//
+// Both chips are PINNED (fixtures may carry pinned placements), with
+// the memory rotated 180°: its pin sequence then runs OPPOSITE to the
+// controller's, so the identity pairing in the marked swizzle region
+// below is geometrically crossed by construction — free placement
+// would simply absorb the gain, which is exactly why swizzle matters
+// on constrained boards (pinned connectors, real ball maps). The
+// proposal must find a LEGAL permutation that removes crossings,
+// rewrite ONLY the marked region, and the next build's ERC034
+// verifies it.
+
+interface PDiffPair {
+    signal P: inout;
+    signal N: inout;
+    constraints {
+        *: differential 80ohm;
+    }
+}
+
+interface PByteLane {
+    signal DQ0: inout;
+    signal DQ1: inout;
+    interface PDiffPair DQS;
+    constraints {
+        DQ0, DQ1: swizzle_within_byte true;
+    }
+}
+
+interface PSwz {
+    generate for i in [0, 1] {
+        interface PByteLane lane<i>;
+    }
+    constraints {
+        lane*: swizzle_across_bytes true;
+    }
+}
+
+entity PCtrl() {
+    interface PSwz ddr;
+    pin GND: ground;
+    attribute component_class = "ic";
+    attribute part_number = "FIXTURE-P-CTRL";
+}
+
+entity PMem() {
+    interface PSwz ddr;
+    pin GND: ground;
+    attribute component_class = "ic";
+    attribute part_number = "FIXTURE-P-MEM";
+}
+
+board SwizzlePropose {
+    power VDD = 1.2V @ 1A;
+    ground GND;
+
+    mc:  PCtrl();
+    mem: PMem();
+    mc.GND -> @GND;
+    mem.GND -> @GND;
+
+    // ── BEGIN GENERATED SWIZZLE (bhdl layout --propose-swizzle — regenerate, never hand-edit) ──
+    mc.ddr.lane0.DQ0 -> mem.ddr.lane0.DQ0;
+    mc.ddr.lane0.DQ1 -> mem.ddr.lane0.DQ1;
+    mc.ddr.lane0.DQS.P -> mem.ddr.lane0.DQS.P;
+    mc.ddr.lane0.DQS.N -> mem.ddr.lane0.DQS.N;
+    mc.ddr.lane1.DQ0 -> mem.ddr.lane1.DQ0;
+    mc.ddr.lane1.DQ1 -> mem.ddr.lane1.DQ1;
+    mc.ddr.lane1.DQS.P -> mem.ddr.lane1.DQS.P;
+    mc.ddr.lane1.DQS.N -> mem.ddr.lane1.DQS.N;
+    // ── END GENERATED SWIZZLE ──
+}
+
+layout SwizzlePropose {
+    outline rect 40 40;
+    place U1 at (12.0, 20.0);
+    place U2 at (28.0, 20.0) rot 180;
+}

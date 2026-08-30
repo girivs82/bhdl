@@ -541,6 +541,27 @@ connection, last-wins) works too.
 > CLI**: it previously ran only in `synthesize_from_source` and the
 > test binaries, so a parametric/generate board could not build
 > through `bhdl-cli` at all.
+>
+> **Increment 2 — `bhdl layout --propose-swizzle` (shipped).** Swizzle
+> as a placement degree of freedom: on the PLACED board, the optimizer
+> (`bhdl-pnr/src/swizzle_proposal.rs`) searches the declared freedoms
+> for the best pairing — lane-unit candidates from min-centroid
+> assignment and rank-order (planar) pairing when both sides grant
+> `swizzle_across_bytes`, within-byte members by min-cost assignment
+> AND rank-order pairing per matched unit, riders by relative path —
+> judged LEXICOGRAPHICALLY by (straight-line crossings, wirelength):
+> crossings are what DDR swizzle exists to remove, wirelength breaks
+> ties. The winner is emitted into the board's marked region
+> (`BEGIN GENERATED SWIZZLE`, powertree-emit ownership — the tool only
+> ever rewrites its own region; connections MERGE nets, so emitting
+> alongside the designer's statements would short old and new pairings:
+> absent markers, the region is printed for adoption). ERC034 verifies
+> the emitted permutation on the next build; a second run is a
+> no-change fixpoint. Note: FREE placement absorbs the gain (the
+> placer pulls counterparts into matching order) — swizzle pays on
+> CONSTRAINED boards (pinned connectors, ball-mapped BGAs), which is
+> exactly the fixture (`test_swizzle_propose.bhdl`, both chips pinned,
+> memory rotated 180 degrees: crossings 28 to 0).
 
 ---
 

@@ -28,6 +28,7 @@
 //! ```
 
 pub mod det;
+pub mod swizzle_proposal;
 pub mod priors;
 pub mod constraint;
 pub mod geom;

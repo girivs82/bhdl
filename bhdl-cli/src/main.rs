@@ -413,6 +413,15 @@ enum Commands {
         #[arg(short, long)]
         output: Option<PathBuf>,
 
+        /// After placement, propose the wirelength-minimizing LEGAL
+        /// swizzle permutation (within the declared swizzle_* freedoms)
+        /// for every swizzle-bearing instance pair, and emit it into
+        /// the board's marked swizzle region (created before the board
+        /// close if absent). ERC034 verifies the emitted permutation on
+        /// the next build.
+        #[arg(long, default_value = "false")]
+        propose_swizzle: bool,
+
         /// Number of placement trials (best-of-N selection)
         #[arg(short, long, default_value = "3")]
         trials: usize,
@@ -850,8 +859,8 @@ async fn main() -> Result<()> {
             run_simulation(&source_file, &input_content, &cli.input, testbench, output, &format, cli.no_elaborate).await?;
         }
 
-        Some(Commands::Layout { output, trials, max_iterations, html, fab, seed, fab_profile }) => {
-            run_layout(&source_file, &input_content, cli.no_elaborate, output, trials, max_iterations, html, fab, &cli.input, seed, fab_profile.as_deref()).await?;
+        Some(Commands::Layout { output, trials, max_iterations, html, fab, seed, fab_profile, propose_swizzle }) => {
+            run_layout(&source_file, &input_content, cli.no_elaborate, output, trials, max_iterations, html, fab, &cli.input, seed, fab_profile.as_deref(), propose_swizzle).await?;
         }
 
         Some(Commands::Doc { output, bom_only, budget_only, no_tree, no_patterns }) => {
@@ -5142,6 +5151,108 @@ async fn run_visualization(source_file: &SourceFile, input_content: &str, output
     Ok(())
 }
 
+/// SoC-features arc increment 2: swizzle as a placement degree of
+/// freedom. Builds the per-instance swizzle specs from the SAME
+/// `intf_const__*__swizzle_*` reconstruction ERC034 verifies against,
+/// asks the optimizer for the wirelength-minimizing LEGAL permutation
+/// on the placed board, prints the evidence (wirelength + straight-
+/// line crossings, before/after), and emits the winning pairing into
+/// the board file's marked swizzle region — created before the board's
+/// closing brace when absent, replaced in place when present. The
+/// designer's own connection statements are never touched: the region
+/// coexists with them, and last-wins connection semantics plus ERC034
+/// on the next build judge the combined result.
+fn propose_and_emit_swizzle(
+    netlist: &bhdl_netlist::Netlist,
+    placed: &bhdl_pnr::types::Board,
+    source_path: &Path,
+) -> Result<()> {
+    use bhdl_pnr::swizzle_proposal::{propose, SwizzleSpec};
+    println!("\n{}", "Swizzle proposal (declared freedoms only)".bold().cyan());
+    let mut specs: std::collections::BTreeMap<String, SwizzleSpec> = Default::default();
+    for (_, inst) in &netlist.instances {
+        if let Some(d) = bhdl_synthesizer::erc::swizzle_decl_of(netlist, inst.definition) {
+            specs.insert(
+                inst.name.clone(),
+                SwizzleSpec {
+                    within: d.within.into_iter().map(|(k, v)| (k, v)).collect(),
+                    across_units: d.across_units,
+                },
+            );
+        }
+    }
+    if specs.is_empty() {
+        println!("  no instance declares swizzle freedoms — nothing to propose");
+        return Ok(());
+    }
+    let props = propose(placed, &specs);
+    if props.is_empty() {
+        println!("  no swizzle-bearing instance pairs are connected — nothing to propose");
+        return Ok(());
+    }
+    let mut emit_lines: Vec<String> = Vec::new();
+    for p in &props {
+        for n in &p.notes {
+            println!("  note: {n}");
+        }
+        if !p.improved {
+            println!(
+                "  '{}'↔'{}': as-built pairing is already optimal (wirelength {:.2}mm, {} crossing(s)) — no change",
+                p.inst_a, p.inst_b, p.wirelength_before_mm, p.crossings_before
+            );
+            continue;
+        }
+        println!(
+            "  '{}'↔'{}': wirelength {:.2}mm → {:.2}mm, crossings {} → {}",
+            p.inst_a, p.inst_b, p.wirelength_before_mm, p.wirelength_after_mm,
+            p.crossings_before, p.crossings_after
+        );
+        for (ua, ub) in &p.lane_map {
+            if ua.rsplit('.').next() != ub.rsplit('.').next() {
+                println!("    lane {ua} → {ub}");
+            }
+        }
+        for (la, lb) in &p.leaf_map {
+            emit_lines.push(format!("    {}.{la} -> {}.{lb};", p.inst_a, p.inst_b));
+        }
+    }
+    if emit_lines.is_empty() {
+        return Ok(());
+    }
+    emit_lines.sort();
+    const BEGIN: &str = "    // ── BEGIN GENERATED SWIZZLE (bhdl layout --propose-swizzle — regenerate, never hand-edit) ──";
+    const END: &str = "    // ── END GENERATED SWIZZLE ──";
+    let region = format!(
+        "{BEGIN}\n    // wirelength-minimizing pairing within the DECLARED swizzle\n    // freedoms; ERC034 verifies it on every build\n{}\n{END}\n",
+        emit_lines.join("\n")
+    );
+    let src = fs::read_to_string(source_path)?;
+    // Connections MERGE nets — an emitted region ALONGSIDE the
+    // designer's original statements would short old and new pairings
+    // together. The tool therefore only ever rewrites its OWN marked
+    // region: the designer moves the swizzlable connections into it
+    // once (initially the identity pairing); absent markers, the
+    // region is PRINTED for adoption, never spliced.
+    let new_src = if let (Some(b), Some(e)) = (src.find(BEGIN), src.find(END)) {
+        let e_end = src[e..].find('\n').map(|i| e + i + 1).unwrap_or(src.len());
+        format!("{}{}{}", &src[..b], region, &src[e_end..])
+    } else {
+        println!(
+            "  no marked swizzle region in {} — REPLACE your swizzlable connection statements with this region (the tool rewrites only its own region on later runs):\n{region}",
+            source_path.display()
+        );
+        return Ok(());
+    };
+    fs::write(source_path, &new_src)?;
+    println!(
+        "  {} emitted the swizzle region into {} ({} connection(s)) — the next build's ERC034 verifies it",
+        "✓".green(),
+        source_path.display(),
+        emit_lines.len()
+    );
+    Ok(())
+}
+
 async fn run_layout(
     source_file: &SourceFile,
     input_content: &str,
@@ -5154,6 +5265,7 @@ async fn run_layout(
     source_path: &Path,
     seed: u64,
     fab_profile: Option<&str>,
+    propose_swizzle: bool,
 ) -> Result<()> {
     use bhdl_pnr::semantic::{self, SemanticConfig};
     use bhdl_pnr::types::PnrConfig;
@@ -5564,6 +5676,10 @@ async fn run_layout(
         ..PnrConfig::default()
     };
     let result = bhdl_pnr::place_and_route_best_of(board, config, trials, seed)?;
+
+    if propose_swizzle {
+        propose_and_emit_swizzle(&netlist, &result.board, source_path)?;
+    }
 
     // 9. Results
     println!("\n{}", "PnR Results".bold().cyan());

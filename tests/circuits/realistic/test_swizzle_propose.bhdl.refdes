@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "mappings": {
+    "U": {
+      "mc": "U1",
+      "mem": "U2"
+    }
+  }
+}

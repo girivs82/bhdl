@@ -276,25 +276,27 @@ pub fn check_driver_conflicts(
 // one Info line per instance pair — the as-built swizzle table.
 
 /// Per-instance swizzle declaration, reconstructed from the module's
-/// `intf_const__<path>__swizzle_*` attributes.
-struct SwizzleDecl {
+/// `intf_const__<path>__swizzle_*` attributes. Public: the CLI's
+/// `layout --propose-swizzle` builds the optimizer's group specs from
+/// the same reconstruction ERC034 verifies against — one vocabulary.
+pub struct SwizzleDecl {
     /// unit prefix (e.g. "ddr.lane0") → within-byte member leaf paths
-    within: HashMap<String, std::collections::BTreeSet<String>>,
+    pub within: HashMap<String, std::collections::BTreeSet<String>>,
     /// unit prefixes whose leaves declare `swizzle_across_bytes`
-    across_units: std::collections::BTreeSet<String>,
+    pub across_units: std::collections::BTreeSet<String>,
     /// every leaf path that carries ANY swizzle metadata
-    leaves: std::collections::BTreeSet<String>,
+    pub leaves: std::collections::BTreeSet<String>,
     /// every leaf path with ANY interface-constraint metadata whose
     /// root field also carries swizzle metadata — the CA/CMD lines of
     /// a swizzle-bearing bundle, held to exact-name pairing
-    constrained_same_root: std::collections::BTreeSet<String>,
+    pub constrained_same_root: std::collections::BTreeSet<String>,
 }
 
 fn parent_prefix(path: &str) -> Option<String> {
     path.rsplit_once('.').map(|(p, _)| p.to_string())
 }
 
-fn swizzle_decl_of(netlist: &Netlist, module: bhdl_netlist::types::ModuleId) -> Option<SwizzleDecl> {
+pub fn swizzle_decl_of(netlist: &Netlist, module: bhdl_netlist::types::ModuleId) -> Option<SwizzleDecl> {
     let m = netlist.modules.get(module)?;
     let mut within: HashMap<String, std::collections::BTreeSet<String>> = HashMap::new();
     let mut across_leaves: Vec<String> = Vec::new();
