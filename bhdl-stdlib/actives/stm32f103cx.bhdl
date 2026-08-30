@@ -98,15 +98,15 @@ entity STM32F103Cx(
     // block (decoupling network, NRST RC, conditional I²C
     // pullups). The pin itself is still wired normally at
     // the board level.
-    pin VDD_1: signal inout virtual;  //                        (pin 24)
-    pin VDD_2: signal inout;          //                        (pin 36)
-    pin VDD_3: signal inout;          //                        (pin 48)
-    pin VDDA:  signal inout;          // analog VDD             (pin 9)
-    pin VBAT:  signal inout;          // backup-domain VDD      (pin 1)
-    pin VSS_1: signal inout;          //                        (pin 23)
-    pin VSS_2: signal inout;          //                        (pin 35)
-    pin VSS_3: signal inout;          //                        (pin 47)
-    pin VSSA:  signal inout;          // analog VSS             (pin 8)
+    pin VDD_1: power in virtual;   //                        (pin 24)
+    pin VDD_2: power in;              //                        (pin 36)
+    pin VDD_3: power in;              //                        (pin 48)
+    pin VDDA:  power in;             // analog VDD             (pin 9)
+    pin VBAT:  power in;             // backup-domain VDD      (pin 1)
+    pin VSS_1: ground;                //                        (pin 23)
+    pin VSS_2: ground;                //                        (pin 35)
+    pin VSS_3: ground;                //                        (pin 47)
+    pin VSSA:  ground;                // analog VSS             (pin 8)
 
     // ─── Peripheral interfaces — REAL AFIO remap tables ─────
     // The F1 muxes by PER-PERIPHERAL remap register bits

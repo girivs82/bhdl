@@ -435,11 +435,12 @@ longer participates in interface field declarations.
   the DS pin table's "I/O Level: FT" column (Doc ID 13587 Rev 12
   Table 5): ERC004 judges an FT input tolerant up to 5.5V under a
   higher-rail driver (a 5V part on an FT pad is designed-in and
-  silent; on a strict pad it stays an Error). The ERC035
-  bank-coverage advisory exempts declared-signal pins wired to
-  Power/Ground nets (legacy entities model VDD/VBAT as
-  `signal inout`); NRST/BOOT0 are genuine VDD-domain IO and sit in
-  io_pins.
+  silent; on a strict pad it stays an Error). The pin
+  DECLARATION is the truth, never the net it touches (one side of
+  every pull-up touches a rail too): the F103 supply pins are
+  correctly typed `power in`/`ground`, a domain whose rail pin is
+  declared `signal` is an ERC035 **Error** naming the fix, and
+  NRST/BOOT0 — genuine VDD-domain IO — sit in io_pins.
 
 - **Pull requirements (SoC arc, shipped).** "I need a pull-up here",
   declared WHERE THE KNOWLEDGE LIVES — a full resistor entity with

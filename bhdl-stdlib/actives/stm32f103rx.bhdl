@@ -99,17 +99,17 @@ entity STM32F103Rx(
 
     // ─── Power and analog reference (4 digital pairs) ───────
     // VDD_1 is virtual to gate the expansion (same pattern as Cx).
-    pin VDD_1: signal inout virtual;  //                        (pin 32)
-    pin VDD_2: signal inout;          //                        (pin 48)
-    pin VDD_3: signal inout;          //                        (pin 64)
-    pin VDD_4: signal inout;          //                        (pin 19)
-    pin VDDA:  signal inout;          // analog VDD             (pin 13)
-    pin VBAT:  signal inout;          // backup-domain VDD      (pin 1)
-    pin VSS_1: signal inout;          //                        (pin 31)
-    pin VSS_2: signal inout;          //                        (pin 47)
-    pin VSS_3: signal inout;          //                        (pin 63)
-    pin VSS_4: signal inout;          //                        (pin 18)
-    pin VSSA:  signal inout;          // analog VSS             (pin 12)
+    pin VDD_1: power in virtual;   //                        (pin 32)
+    pin VDD_2: power in;              //                        (pin 48)
+    pin VDD_3: power in;              //                        (pin 64)
+    pin VDD_4: power in;              //                        (pin 19)
+    pin VDDA:  power in;             // analog VDD             (pin 13)
+    pin VBAT:  power in;             // backup-domain VDD      (pin 1)
+    pin VSS_1: ground;                //                        (pin 31)
+    pin VSS_2: ground;                //                        (pin 47)
+    pin VSS_3: ground;                //                        (pin 63)
+    pin VSS_4: ground;                //                        (pin 18)
+    pin VSSA:  ground;                // analog VSS             (pin 12)
 
     // ─── Peripheral interfaces — REAL AFIO remap tables ─────
     // The F1 muxes by PER-PERIPHERAL remap register bits

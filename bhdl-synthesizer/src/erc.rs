@@ -285,6 +285,48 @@ fn bank_voltage(netlist: &Netlist, inst_name: &str, pin_name: &str) -> Option<f6
 /// incomplete — stated, never silent).
 pub fn check_io_banks(netlist: &Netlist, _analysis: &AnalysisResult) -> Vec<DRCViolation> {
     let mut out = Vec::new();
+    // A domain's RAIL pin declared `signal` is a modelling ERROR in
+    // the entity, not something to paper over with net heuristics —
+    // being wired to a power net proves nothing (one side of every
+    // pull-up touches the rail too). The pin's declaration is the
+    // truth: a bank's supply must be a power or ground pin.
+    {
+        let mut seen: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+        for (inst_id, inst) in &netlist.instances {
+            let Some(module) = netlist.modules.get(inst.definition) else { continue };
+            for (k, v) in &module.attributes {
+                if !k.starts_with("io_bank__") {
+                    continue;
+                }
+                let Some((bank, rail_pin)) = v.split_once('|') else { continue };
+                if !seen.insert((module.name.clone(), rail_pin.to_string())) {
+                    continue;
+                }
+                let rail_is_signal = netlist.pins.values().any(|pd| {
+                    pd.module == inst.definition
+                        && pd.name == rail_pin
+                        && matches!(pd.pin_type, PinType::Signal)
+                });
+                if rail_is_signal {
+                    out.push(DRCViolation {
+                        rule_id: "ERC035".into(),
+                        rule_name: "IO bank discipline".into(),
+                        category: RuleCategory::Electrical,
+                        description: format!(
+                            "'{}' declares bank '{bank}' supplied by pin '{rail_pin}', but '{rail_pin}' is declared `signal` — a bank's supply must be a power/ground pin; the declaration is the truth, never the net it happens to touch",
+                            module.name
+                        ),
+                        severity: ViolationSeverity::Error,
+                        location: ViolationLocation::Component(inst_id),
+                        fix_suggestion: format!(
+                            "declare `pin {rail_pin}: power in;` (or `ground`) in the entity"
+                        ),
+                        standard_reference: None,
+                    });
+                }
+            }
+        }
+    }
     let members = net_members(netlist);
     // (inst, pin) used on some net with ≥2 members
     let mut used: Vec<(String, String)> = Vec::new();
@@ -307,10 +349,11 @@ pub fn check_io_banks(netlist: &Netlist, _analysis: &AnalysisResult) -> Vec<DRCV
         }
         let Some(entry) = module.attributes.get(&format!("io_bank__{pin_name}")) else {
             // signal pins only — power/ground pins have domains, not
-            // banks. A declared-signal pin WIRED TO a Power/Ground
-            // net is serving as a supply (legacy entities model
-            // VDD/VBAT as `signal inout`) — exempt too: no IO level
-            // to verify on a rail.
+            // banks. The pin's DECLARED type decides, never its net:
+            // a signal pin wired to a rail proves nothing (one side
+            // of a pull-up touches the rail too) — an entity whose
+            // supply pins are declared `signal` is a modelling
+            // error, refused below.
             let is_signal = netlist.pin_instances.values().any(|pi| {
                 pi.instance == inst_id
                     && netlist
@@ -319,26 +362,7 @@ pub fn check_io_banks(netlist: &Netlist, _analysis: &AnalysisResult) -> Vec<DRCV
                         .map(|p| p.name == pin_name && matches!(p.pin_type, PinType::Signal))
                         .unwrap_or(false)
             });
-            let on_rail = netlist.pin_instances.values().any(|pi| {
-                pi.instance == inst_id
-                    && netlist
-                        .pins
-                        .get(pi.pin_def)
-                        .map(|p| p.name == pin_name)
-                        .unwrap_or(false)
-                    && pi
-                        .net
-                        .and_then(|n| netlist.nets.get(n))
-                        .map(|n| {
-                            matches!(
-                                n.net_class,
-                                bhdl_netlist::types::NetClass::Power { .. }
-                                    | bhdl_netlist::types::NetClass::Ground
-                            )
-                        })
-                        .unwrap_or(false)
-            });
-            if is_signal && !on_rail && !pin_name.contains('.') {
+            if is_signal && !pin_name.contains('.') {
                 out.push(DRCViolation {
                     rule_id: "ERC035".into(),
                     rule_name: "IO bank discipline".into(),

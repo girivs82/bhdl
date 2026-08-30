@@ -129,21 +129,21 @@ entity STM32F103Vx(
 
     // ─── Power, analog reference (5 digital pairs + VREF) ───
     // VDD_1 is virtual to gate the expansion (same as Cx/Rx).
-    pin VDD_1: signal inout virtual;  //                        (pin 50)
-    pin VDD_2: signal inout;          //                        (pin 75)
-    pin VDD_3: signal inout;          //                        (pin 100)
-    pin VDD_4: signal inout;          //                        (pin 28)
-    pin VDD_5: signal inout;          //                        (pin 11)
-    pin VDDA:  signal inout;          // analog VDD             (pin 22)
+    pin VDD_1: power in virtual;   //                        (pin 50)
+    pin VDD_2: power in;              //                        (pin 75)
+    pin VDD_3: power in;              //                        (pin 100)
+    pin VDD_4: power in;              //                        (pin 28)
+    pin VDD_5: power in;              //                        (pin 11)
+    pin VDDA:  power in;             // analog VDD             (pin 22)
     pin VREF_P: signal inout;         // ADC reference +        (pin 21)
     pin VREF_N: signal inout;         // ADC reference −        (pin 20)
-    pin VBAT:  signal inout;          // backup-domain VDD      (pin 6)
-    pin VSS_1: signal inout;          //                        (pin 49)
-    pin VSS_2: signal inout;          //                        (pin 74)
-    pin VSS_3: signal inout;          //                        (pin 99)
-    pin VSS_4: signal inout;          //                        (pin 27)
-    pin VSS_5: signal inout;          //                        (pin 10)
-    pin VSSA:  signal inout;          // analog VSS             (pin 19)
+    pin VBAT:  power in;             // backup-domain VDD      (pin 6)
+    pin VSS_1: ground;                //                        (pin 49)
+    pin VSS_2: ground;                //                        (pin 74)
+    pin VSS_3: ground;                //                        (pin 99)
+    pin VSS_4: ground;                //                        (pin 27)
+    pin VSS_5: ground;                //                        (pin 10)
+    pin VSSA:  ground;                // analog VSS             (pin 19)
 
     // ─── Peripheral interfaces — REAL AFIO remap tables ─────
     // The F1 muxes by PER-PERIPHERAL remap register bits

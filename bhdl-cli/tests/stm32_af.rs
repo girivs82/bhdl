@@ -135,8 +135,51 @@ board FtProbe {
         "5V into the strict pad not refused:\n{}", erc()
     );
     assert!(!erc().contains("auto_lg_Y0"), "5V into the FT pad falsely refused:\n{}", erc());
-    // supply pins modelled as `signal inout` sit on rails — the
-    // bank-coverage advisory must not nag about them
-    assert!(!text.contains("'mcu.VDD_1' is wired but belongs to NO declared IO bank"),
-        "supply pin nagged by the bank-coverage advisory");
+    // the F103 supply pins are DECLARED power/ground (no
+    // wired-to-a-rail heuristic — one side of a pull-up touches the
+    // rail too), so the bank-coverage advisory has nothing to nag
+    assert!(!text.contains("belongs to NO declared IO bank"),
+        "bank-coverage advisory nagged a correctly-typed entity:\n{}",
+        text.lines().filter(|l| l.contains("ERC035")).collect::<Vec<_>>().join("\n"));
+}
+
+#[test]
+fn signal_typed_rail_pin_is_an_error() {
+    // The declaration is the truth: a domain whose rail pin is
+    // declared `signal` is a modelling ERROR in the entity — never
+    // papered over by looking at what net the pin touches.
+    let src = r#"
+entity BadRail() {
+    pin VCC: signal inout;
+    pin IO1: signal inout;
+    pin GND: ground;
+    attribute component_class = "ic";
+    attribute part_number = "FIXTURE-BADRAIL";
+    domain MAIN pins="VCC" v=3.3V i_nom=10mA i_max=50mA
+        io_pins="IO1" source="FIXTURE";
+}
+entity RailPeer() {
+    pin A: signal in;
+    pin GND: ground;
+    attribute component_class = "ic";
+    attribute part_number = "FIXTURE-RAILPEER";
+}
+board RailProbe {
+    power VDD = 3.3V @ 100mA;
+    ground GND;
+    u1: BadRail();
+    p1: RailPeer();
+    @VDD -> u1.VCC;
+    u1.GND -> @GND;
+    p1.GND -> @GND;
+    u1.IO1 -> p1.A;
+}
+"#;
+    let text = run_src(src, "bad_rail.bhdl");
+    assert!(
+        text.contains("'VCC' is declared `signal` — a bank's supply must be a power/ground pin"),
+        "signal-typed rail pin not refused:\n{}",
+        text.lines().filter(|l| l.contains("ERC035")).collect::<Vec<_>>().join("\n")
+    );
+    assert!(text.contains("IO bank discipline | Error"), "not an Error severity");
 }
