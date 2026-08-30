@@ -149,4 +149,12 @@ fn megaboard_safety_catches_the_planted_clock_violation() {
     assert!(text.contains("270.0 FIT composed from SEooC vendor ATTESTATIONS"), "attestation");
     // route 1H rows on the SIL goal
     assert!(text.contains("route 1H"), "route-1H row missing");
+    // the solved PIN PROGRAM is a firmware obligation — every mux
+    // choice and enabled internal pull lands in the AoU register,
+    // satisfied by the exported `doc --mux-header` contract
+    assert!(text.contains("mux:fpga.dbg"), "mux choice missing from the AoU register:\n{}",
+        text.lines().filter(|l| l.contains("mux:")).collect::<Vec<_>>().join("\n"));
+    assert!(text.contains("pull:fpga.PGOOD_IN") && text.contains("internal pull-down on fpga.PGOOD_IN"),
+        "pull program missing from the AoU register");
+    assert!(text.contains("exported pin-program contract"), "AoU not tied to the mux-header artifact");
 }
