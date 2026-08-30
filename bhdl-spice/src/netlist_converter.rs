@@ -1236,10 +1236,19 @@ impl NetlistToSpiceConverter {
                 // recipe, which land as Component. Flushed by the ecc83-pp
                 // demo transcription (SRPP solved as a pure resistor
                 // network, converged in 1 iteration with no tube current).
+                // PASSIVES too (the third instance of this silent-drop
+                // factory): a two-pin R/C/L instance can bind to a
+                // variant module of kind Module (elaborated round-trip
+                // text) and was dropped from the solve — the pinmux
+                // arc's internal-pull resistor solved to 0V and the
+                // ambiguous-level check saw a live divider as ground.
                 if matches!(
                     extracted_model.component_type,
                     crate::components::ComponentType::VoltageRegulator
                         | crate::components::ComponentType::Triode
+                        | crate::components::ComponentType::Resistor
+                        | crate::components::ComponentType::Capacitor
+                        | crate::components::ComponentType::Inductor
                 ) {
                     self.add_physical_component(
                         circuit,

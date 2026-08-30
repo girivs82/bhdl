@@ -125,6 +125,87 @@ fn mux_header_carries_the_full_pin_story() {
 }
 
 #[test]
+fn internal_pulls_configure_from_connections() {
+    let text = run_file("tests/circuits/realistic/test_pinmux_alternates.bhdl");
+    // the open-drain IRQ gets the internal pull-up (idle-high, stated)
+    assert!(
+        text.contains("pull: mcu.PA4 → up"),
+        "IRQ pull missing:
+{}",
+        text.lines().filter(|l| l.contains("pull:")).collect::<Vec<_>>().join("
+")
+    );
+    // the UART TX pin serves a peripheral OUTPUT — no pull; the I2C
+    // pins have EXTERNAL pulls — internal off. Neither prints (off is
+    // silent) and neither materialises a resistor.
+    assert!(!text.contains("pull: mcu.PA9"), "TX pin pulled");
+    assert!(!text.contains("pull: mcu.PB6"), "ext-pulled pin pulled");
+    assert!(text.contains("pullcfg_mcu_pa4"), "pull resistor not materialised");
+    assert!(!text.contains("pullcfg_mcu_pa9"), "spurious pull resistor");
+}
+
+#[test]
+fn pull_header_and_midpoint_contradiction() {
+    let root = workspace_root();
+    // header: the firmware pull program rides with the mux commitments
+    let dir = std::env::temp_dir().join("bhdl_pull_hdr_test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let hdr = dir.join("mux.h");
+    let md = dir.join("pd.md");
+    let mut c = Command::new(env!("CARGO_BIN_EXE_bhdl-cli"));
+    c.current_dir(&root)
+        .arg("-I")
+        .arg(&root)
+        .arg("tests/circuits/realistic/test_pinmux_alternates.bhdl")
+        .arg("doc")
+        .arg("--mux-header")
+        .arg(&hdr)
+        .arg("-o")
+        .arg(&md);
+    assert!(c.output().expect("spawn").status.success());
+    let h = std::fs::read_to_string(&hdr).unwrap();
+    assert!(h.contains("#define BHDL_MUX_MCU_PA4_PULL UP"), "{h}");
+    assert!(h.contains("#define BHDL_MUX_MCU_PB6_PULL OFF"), "{h}");
+
+    // midpoint contradiction: board pull-DOWN + designer-forced
+    // internal pull-up, equal strengths — NO pull-specific logic
+    // exists; the DC solve computes the divider and ERC036 refuses
+    // the ambiguous band
+    let src = std::fs::read_to_string(
+        root.join("tests/circuits/realistic/test_pinmux_alternates.bhdl"),
+    )
+    .unwrap();
+    let clash = src.replace(
+        "    peer.INT -> mcu.PA4;",
+        "    peer.INT -> mcu.PA4;
+    attribute mcu.pull__PA4 = \"up\";
+    @GND -> rp_int: Res(40kΩ, tolerance = 1%).1; rp_int.2 -> mcu.PA4;",
+    );
+    assert_ne!(clash, src);
+    let f = dir.join("pull_clash.bhdl");
+    std::fs::write(&f, &clash).unwrap();
+    let mut c = Command::new(env!("CARGO_BIN_EXE_bhdl-cli"));
+    c.current_dir(&root).arg("-I").arg(&root).arg(&f).arg("report");
+    let out = c.output().expect("spawn");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        text.contains("ERC036") && text.contains("ambiguous 30–70% band"),
+        "midpoint not refused:
+{}",
+        text.lines().filter(|l| l.contains("ERC036") || l.contains("PA4")).collect::<Vec<_>>().join("
+")
+    );
+    assert!(text.contains("50%"), "not at midpoint:
+{}",
+        text.lines().filter(|l| l.contains("ERC036")).collect::<Vec<_>>().join("
+"));
+}
+
+#[test]
 fn override_forces_the_alternate_and_conflicts_survey_loudly() {
     let root = workspace_root();
     let src = std::fs::read_to_string(

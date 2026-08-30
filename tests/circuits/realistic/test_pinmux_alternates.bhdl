@@ -27,6 +27,7 @@ interface MuxSPI {
 entity MuxMcu() {
     pin VDDIO_A: power in;
     pin VDDIO_B: power in;
+    pin PA4:  signal inout;
     pin PA5:  signal inout;
     pin PA6:  signal inout;
     pin PA7:  signal inout;
@@ -37,13 +38,19 @@ entity MuxMcu() {
     pin GND:  ground;
     attribute component_class = "mcu";
     attribute part_number = "FIXTURE-MUX-MCU";
+    // Internal pull capability (increment 4b) — the datasheet's
+    // per-pin programmable pulls (FIXTURE figures). The tool
+    // configures them from the CONNECTIONS; configured pulls are
+    // modelled as real resistors so the DC solve owns contradiction
+    // detection (ERC036 ambiguous-band refusal).
+    attribute internal_pull = "pins=PA4,PA9,PA10,PB6,PB7 pu=40kΩ pd=40kΩ source=FIXTURE";
 
     // IO BANKS (increment 4): each rail declares the SIGNAL pins it
     // powers — the vendor's bank table (FIXTURE values). ERC004 then
     // judges every banked pin at its own bank rail's net voltage;
     // ERC035 refuses using a pin whose bank rail is unpowered.
     domain BANK_A pins="VDDIO_A" v=3.3V i_nom=10mA i_max=50mA
-        io_pins="PA5 PA6 PA7 PA9 PA10"
+        io_pins="PA4 PA5 PA6 PA7 PA9 PA10"
         source="FIXTURE — port A bank";
     domain BANK_B pins="VDDIO_B" v=3.3V i_nom=10mA i_max=50mA
         io_pins="PB6 PB7"
@@ -81,6 +88,7 @@ entity MuxMcu() {
 entity MuxPeer() {
     pin RX:  signal in;
     pin TX:  signal out;
+    pin INT: signal inout;
     pin SDA: signal inout;
     pin SCL: signal inout;
     pin SCK: signal in;
@@ -112,6 +120,9 @@ board PinmuxBoard {
     // I2C pull-ups (ERC005)
     @VDD -> rp_sda: Res(4.7kΩ, tolerance = 1%).1; rp_sda.2 -> peer.SDA;
     @VDD -> rp_scl: Res(4.7kΩ, tolerance = 1%).1; rp_scl.2 -> peer.SCL;
+    // open-drain IRQ from the peer: no external pull — the tool
+    // configures the MCU's internal pull-up (idle-high, stated)
+    peer.INT -> mcu.PA4;
     mcu.spi1.SCK -> peer.SCK;
     mcu.spi1.MOSI -> peer.SDI;
     peer.SDO -> mcu.spi1.MISO;

@@ -379,6 +379,34 @@ longer participates in interface field declarations.
   `io_bank__<pin>` = "<bank>|<rail pin>" module attributes, stamped
   from the DOMAIN_DECLs at module creation.
 
+- **Internal pull-up/pull-down (SoC arc increment 4b, shipped).**
+  The datasheet's per-pin programmable pulls:
+  `attribute internal_pull = "pins=PA4,PA9 pu=40kΩ pd=40kΩ source=…";`
+  (stamped as `pull__<pin>` = "<pu>|<pd>" module attrs). The tool
+  CONFIGURES each capable pin from the connections — the pin's
+  NATURE first: a pin serving a logically-OUT interface signal
+  (through the fixed binding or the chosen mux alternate) gets `off`;
+  a driven net gets `off`; a net with an EXTERNAL pull gets `off`
+  (consistency — designers add strong external pulls precisely
+  because internal ones are weak, and the external dominates either
+  way); a pull-less input-only net gets the internal pull-up
+  (idle-high policy, stated). Override:
+  `attribute <inst>.pull__<pin> = "up"|"down"|"off";`. A configured
+  pull is MATERIALISED as a real resistor (pin net → bank rail for
+  up, → ground for down; `virtual_component`, never a BOM line) so
+  the DC SOLVE owns contradiction detection — there is NO
+  pull-specific conflict logic anywhere. **ERC036 (ambiguous input
+  level)** then reads the SOLVED voltage of every digital input on an
+  undriven net against its IO-bank rail and refuses the 30–70% band:
+  a board-pull-vs-internal-pull divider (equal strengths = exact
+  midpoint, both input stages half-on) is caught by simulation, as is
+  ANY other divider-parked input. Same-direction external+internal
+  coexistence is naturally quiet (the parallel combination holds a
+  solid level). Decisions ride the elaborated round-trip as
+  provenance (`pull_cfg__`/`mux__` scoped attributes; the pass skips
+  already-decided pins), and firmware receives the pull program in
+  the `--mux-header` defines (`…_PULL UP|DOWN|OFF`).
+
 ---
 
 ## 10. v0.8 worked example: DDR4

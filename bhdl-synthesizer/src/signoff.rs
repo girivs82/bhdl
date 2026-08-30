@@ -2200,6 +2200,101 @@ _{skipped} derivation(s) SKIPPED (seed kept) — see the basis column; a skipped
     Some(out)
 }
 
+/// ERC036 — ambiguous digital input level (SoC arc 4b). No pull-
+/// specific contradiction logic exists anywhere: configured internal
+/// pulls are REAL resistors in the netlist, so the DC solve computes
+/// the actual node voltage of every resistor network. This check then
+/// reads the SOLVED voltage of each digital input pin on an
+/// undriven (pull-only) net and refuses the ambiguous band
+/// 30–70 % of the pin's IO-bank rail voltage — a board-pull-vs-
+/// internal-pull divider parks the input exactly there, the worst
+/// place for a digital pin (both input stages half-on, shoot-through
+/// and metastable reads). Generic: ANY divider-parked input is
+/// caught, whatever built it.
+pub fn check_ambiguous_inputs(
+    netlist: &Netlist,
+    net_voltages: &std::collections::HashMap<String, f64>,
+) -> Vec<String> {
+    use bhdl_netlist::types::{NetClass, PinDirection, PinType};
+    let mut out = Vec::new();
+    for (net_id, net) in &netlist.nets {
+        if matches!(net.net_class, NetClass::Power { .. } | NetClass::Ground) {
+            continue;
+        }
+        let Some(name) = &net.name else { continue };
+        let Some(v) = net_voltages.get(name) else { continue };
+        // members: skip driven nets (a driver's DC level is a state,
+        // not a parked divider)
+        let mut has_driver = false;
+        let mut inputs: Vec<(String, String)> = Vec::new();
+        for pi in netlist.pin_instances.values() {
+            if pi.net != Some(net_id) {
+                continue;
+            }
+            let Some(p) = netlist.pins.get(pi.pin_def) else { continue };
+            let Some(inst) = netlist.instances.get(pi.instance) else { continue };
+            match p.direction {
+                PinDirection::Out => has_driver = true,
+                PinDirection::In | PinDirection::InOut
+                    if matches!(p.pin_type, PinType::Signal) =>
+                {
+                    inputs.push((inst.name.clone(), p.name.clone()));
+                }
+                _ => {}
+            }
+        }
+        if has_driver || inputs.is_empty() {
+            continue;
+        }
+        for (inst_name, pin_name) in inputs {
+            // the pin's reference level: its IO bank rail's solved/
+            // declared voltage (increment 4); no bank = no reference,
+            // stated skip (the absence ledger philosophy)
+            let bank_v = netlist
+                .instances
+                .iter()
+                .find(|(_, i)| i.name == inst_name)
+                .and_then(|(id, i)| {
+                    let m = netlist.modules.get(i.definition)?;
+                    let entry = m.attributes.get(&format!("io_bank__{pin_name}"))?;
+                    let (_, rail_pin) = entry.split_once('|')?;
+                    let rail_net = netlist.pin_instances.values().find_map(|pi| {
+                        (pi.instance == id
+                            && netlist
+                                .pins
+                                .get(pi.pin_def)
+                                .map(|p| p.name == rail_pin)
+                                .unwrap_or(false))
+                        .then_some(pi.net)
+                        .flatten()
+                    })?;
+                    let rn = netlist.nets.get(rail_net)?;
+                    rn.name
+                        .as_ref()
+                        .and_then(|n| net_voltages.get(n).copied())
+                        .or(match rn.net_class {
+                            NetClass::Power { voltage, .. } => Some(voltage),
+                            _ => None,
+                        })
+                });
+            let Some(vb) = bank_v else { continue };
+            if vb <= 0.0 {
+                continue;
+            }
+            let frac = v / vb;
+            if frac > 0.3 && frac < 0.7 {
+                out.push(format!(
+                    "DRC ERC036 [Ambiguous input level] Error: '{inst_name}.{pin_name}' parks at {v:.2}V = {:.0}% of its {vb:.2}V bank — inside the ambiguous 30–70% band (a contending pull divider: both input stages half-on; fix the pull configuration so ONE side owns the level)",
+                    frac * 100.0
+                ));
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
 pub fn format_signoff_report(rows: &[SignoffRow]) -> Option<String> {
     if rows.is_empty() {
         return None;

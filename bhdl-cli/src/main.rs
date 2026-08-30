@@ -2783,6 +2783,12 @@ fn solved_signoff_text(
         &analysis.entity_attribute_index,
         &analysis.stress_recipes,
     );
+    // ERC036: solved-voltage ambiguous-input refusal — the DC solve
+    // (which includes the materialised internal pulls) is the oracle.
+    for line in bhdl_synthesizer::signoff::check_ambiguous_inputs(netlist, &sv) {
+        log::warn!("{line}");
+        println!("| {} |", line.trim_start_matches("DRC "));
+    }
     bhdl_synthesizer::signoff::format_signoff_report(&rows)
 }
 
@@ -7348,6 +7354,14 @@ async fn cmd_bom(
                         {
                             print!("{report}");
                         }
+                        // ERC036: the DC solve (incl. materialised
+                        // internal pulls) is the contradiction oracle
+                        for line in
+                            bhdl_synthesizer::signoff::check_ambiguous_inputs(&netlist, &sv)
+                        {
+                            log::warn!("{line}");
+                            println!("| {} |", line.trim_start_matches("DRC "));
+                        }
                         if let Some(derived) =
                             bhdl_synthesizer::signoff::format_derived_values(&netlist)
                         {
@@ -7563,6 +7577,22 @@ fn emit_mux_header(netlist: &bhdl_netlist::Netlist, path: &Path) -> Result<()> {
                     pin
                 ));
             }
+        }
+        // configured internal pulls — firmware must program them
+        let mut pulls: Vec<(String, String)> = inst
+            .attributes
+            .iter()
+            .filter_map(|(k, v)| k.strip_prefix("pull_cfg__").map(|p| (p.to_string(), v.clone())))
+            .collect();
+        pulls.sort();
+        for (pin, state) in pulls {
+            any = true;
+            lines.push(format!(
+                "#define BHDL_MUX_{}_{}_PULL {}",
+                up(&inst.name),
+                up(&pin),
+                state.to_uppercase()
+            ));
         }
         // fixed bindings of fields this instance has (context: only
         // meaningful for parts that also carry alternates — the mux

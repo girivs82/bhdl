@@ -2,6 +2,10 @@
   "version": 1,
   "mappings": {
     "R": {
+      "pullcfg_mcu_pa4": "R3",
+      "pullcfg_mcu_pa9": "R4",
+      "pullcfg_mcu_pb6": "R5",
+      "pullcfg_mcu_pb7": "R6",
       "rp_scl": "R1",
       "rp_sda": "R2"
     },

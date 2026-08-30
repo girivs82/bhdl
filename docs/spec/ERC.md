@@ -254,6 +254,13 @@ by itself:
   silent. First corpus scan caught a real one: buck_converter_tps54331's
   hand-authored catch diode had silently paralleled the entity's own
   after the TPS54331 expansion grew one.
+- **ERC036** ambiguous input level — BUILT (Error, signoff-side): the
+  DC solve (which includes materialised internal-pull resistors) is
+  the oracle; a digital input pin on an undriven net whose SOLVED
+  voltage sits in 30–70% of its IO-bank rail is refused — a
+  contending pull divider parks exactly there. No pull-specific
+  contradiction logic exists; simulation catches it, and any other
+  divider-parked input with it.
 - **ERC035** IO bank discipline — BUILT (Error/Info): a signal pin
   covered by a `domain … io_pins=` bank declaration is refused when
   wired while its bank rail has no Power-class net (every pin of the

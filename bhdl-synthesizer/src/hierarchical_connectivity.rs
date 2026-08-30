@@ -33,6 +33,12 @@ pub struct DeferredAccessor {
 pub struct HierarchicalContext {
     /// Deferred hierarchical-accessor connections (see DeferredAccessor).
     pub deferred_accessors: std::cell::RefCell<Vec<DeferredAccessor>>,
+    /// Designer pull overrides: (instance, pin) → up|down|off.
+    pub pull_overrides: HashMap<(String, String), String>,
+    /// Pins whose pull is ALREADY DECIDED (elaborated round-trip:
+    /// `attribute <inst>.pull_cfg__<pin> = …;` provenance) — the pass
+    /// must not re-decide or re-materialise them.
+    pub pull_decided: HashSet<(String, String)>,
     /// Pinmux solver output: (instance name, field name) → chosen
     /// alternate. Stamped as `mux__<field>` instance attributes at
     /// instance creation; binding resolution reads them.
@@ -75,6 +81,8 @@ impl HierarchicalContext {
         Self {
             deferred_accessors: std::cell::RefCell::new(Vec::new()),
             pinmux_choices: HashMap::new(),
+            pull_overrides: HashMap::new(),
+            pull_decided: HashSet::new(),
             pinmux_used: HashMap::new(),
             pinmux_overrides: HashMap::new(),
             module_stack: Vec::new(),
@@ -277,6 +285,19 @@ pub fn extract_hierarchical_connectivity(
     info!("=== Phase 2: Processing module hierarchy ===");
     process_module_hierarchy(ast, analysis, netlist, &mut context, import_preprocessor)?;
 
+    // Phase 2.8: INTERNAL PULL AUTO-CONFIGURATION (SoC arc 4b). For
+    // every pin with a declared pull capability, decide the state
+    // from the CONNECTIONS (a driven or externally-pulled net turns
+    // the internal pull OFF for consistency; a pull-less input-only
+    // net gets the internal pull-up, idle-high policy stated; a
+    // designer override wins verbatim). A configured pull is
+    // MATERIALISED as a real resistor to the pin's bank rail / GND —
+    // no specialized contradiction logic anywhere: the DC solve sees
+    // the actual resistor network, and the ambiguous-level signoff
+    // check catches a board-pull-vs-internal-pull divider parking a
+    // digital input at midpoint (the worst place for a digital pin).
+    configure_internal_pulls(netlist, &context)?;
+
     // Third pass: detect interface-field pin conflicts (v0.6).
     // When an entity declares multiple bindings sharing a physical
     // pin (PB3 = SPI.MOSI AND PB3 = ICSP.MOSI), a board using more
@@ -305,8 +326,33 @@ fn harvest_pinmux_inputs(ast: &bhdl_ast::SourceFile, context: &mut HierarchicalC
                     harvest_field_references(&node.text().to_string(), &mut context.pinmux_used);
                 }
                 SyntaxKind::SCOPED_ATTRIBUTE => {
-                    // `attribute <inst>.mux__<field> = "ALT";`
                     let text = node.text().to_string();
+                    // provenance from a prior decision (elaborated
+                    // form): `attribute <inst>.pull_cfg__<pin> = …;`
+                    if let Some(idx) = text.find(&format!(".{}", PULL_CFG_ATTR_PREFIX)) {
+                        let head = text[..idx].trim();
+                        let inst = head.rsplit(|c: char| c.is_whitespace()).next().unwrap_or("");
+                        let tail = &text[idx + 1 + PULL_CFG_ATTR_PREFIX.len()..];
+                        if let Some((pin, _)) = tail.split_once('=') {
+                            context
+                                .pull_decided
+                                .insert((inst.to_string(), pin.trim().to_string()));
+                        }
+                    }
+                    // `attribute <inst>.pull__<pin> = "up"|"down"|"off";`
+                    if let Some(idx) = text.find(&format!(".{}", PULL_CAP_ATTR_PREFIX)) {
+                        let head = text[..idx].trim();
+                        let inst = head.rsplit(|c: char| c.is_whitespace()).next().unwrap_or("");
+                        let tail = &text[idx + 1 + PULL_CAP_ATTR_PREFIX.len()..];
+                        if let Some((pin, val)) = tail.split_once('=') {
+                            let v = val.trim().trim_end_matches(';').trim().trim_matches('"');
+                            context.pull_overrides.insert(
+                                (inst.to_string(), pin.trim().to_string()),
+                                v.to_string(),
+                            );
+                        }
+                    }
+                    // `attribute <inst>.mux__<field> = "ALT";`
                     if let Some(idx) = text.find(&format!(".{}", PINMUX_CHOICE_ATTR_PREFIX)) {
                         let head = text[..idx].trim();
                         let inst = head.rsplit(|c: char| c.is_whitespace()).next().unwrap_or("");
@@ -486,6 +532,242 @@ fn solve_pinmux_for_instance(
         );
     }
     Ok(chosen)
+}
+
+/// Internal pull auto-configuration (see the Phase 2.8 comment).
+fn configure_internal_pulls(netlist: &mut Netlist, context: &HierarchicalContext) -> Result<()> {
+    use bhdl_netlist::types::{InstanceId, NetClass, NetId, PinDirection, PinType};
+    // (instance id, inst name, pin name, cap "pu|pd", net)
+    let mut work: Vec<(InstanceId, String, String, String, Option<NetId>)> = Vec::new();
+    for (inst_id, inst) in &netlist.instances {
+        let Some(module) = netlist.modules.get(inst.definition) else { continue };
+        for (k, cap) in &module.attributes {
+            let Some(pin) = k.strip_prefix(PULL_CAP_ATTR_PREFIX) else { continue };
+            let net = netlist.pin_instances.values().find_map(|pi| {
+                (pi.instance == inst_id
+                    && netlist.pins.get(pi.pin_def).map(|p| p.name == *pin).unwrap_or(false))
+                .then_some(pi.net)
+            });
+            let Some(net) = net else { continue };
+            work.push((inst_id, inst.name.clone(), pin.to_string(), cap.clone(), net));
+        }
+    }
+    for (inst_id, inst_name, pin, cap, net) in work {
+        // already decided (elaborated round-trip provenance): the
+        // materialised resistor is in the text, the cfg attribute is
+        // restored by phase 4.45 — nothing to do here
+        if context.pull_decided.contains(&(inst_name.clone(), pin.clone())) {
+            continue;
+        }
+        let (pu_s, pd_s) = cap.split_once('|').unwrap_or((cap.as_str(), ""));
+        let pu_ohm: Option<f64> = pu_s.parse().ok();
+        let pd_ohm: Option<f64> = pd_s.parse().ok();
+
+        // The pin's NATURE first: a pin serving a logically-OUT
+        // interface signal (`intf_dir__<field>.<SIG> = out` resolved
+        // through the fixed binding or the chosen mux alternate) is a
+        // peripheral OUTPUT — internal pull off, whatever the net
+        // looks like (the physical pad is inout; the logical role is
+        // what decides).
+        let drives_out = {
+            let module = netlist
+                .instances
+                .get(inst_id)
+                .and_then(|i| netlist.modules.get(i.definition));
+            module
+                .map(|m| {
+                    m.attributes.iter().any(|(k, dir)| {
+                        if dir != "out" {
+                            return false;
+                        }
+                        let Some(dotted) = k.strip_prefix(INTERFACE_FIELD_DIRECTION_ATTR_PREFIX)
+                        else {
+                            return false;
+                        };
+                        // dotted = "<field>.<SIG>" → its physical pin
+                        let fixed = m
+                            .attributes
+                            .get(&format!("{INTERFACE_FIELD_BINDING_ATTR_PREFIX}{dotted}"));
+                        if fixed.map(|p| p == &pin).unwrap_or(false) {
+                            return true;
+                        }
+                        let Some((field, sig)) = dotted.split_once('.') else { return false };
+                        let chosen = netlist
+                            .instances
+                            .get(inst_id)
+                            .and_then(|i| i.attributes.get(&format!("{PINMUX_CHOICE_ATTR_PREFIX}{field}")));
+                        chosen
+                            .and_then(|alt| {
+                                m.attributes.get(&format!(
+                                    "{INTERFACE_FIELD_ALT_ATTR_PREFIX}{field}__{alt}__{sig}"
+                                ))
+                            })
+                            .map(|p| p == &pin)
+                            .unwrap_or(false)
+                    })
+                })
+                .unwrap_or(false)
+        };
+
+        // net context: driver? external pull to a rail / GND? A
+        // resistor-CLASS member whose other pin sits on a rail is an
+        // external pull (stdlib Res pins are declared `inout`, so pin
+        // direction cannot identify it — the first cut looked for
+        // Passive and saw nothing).
+        let mut has_driver = false;
+        let mut ext_pull = false;
+        let mut member_count = 0usize;
+        if let Some(net_id) = net {
+            for pi in netlist.pin_instances.values() {
+                if pi.net != Some(net_id) {
+                    continue;
+                }
+                member_count += 1;
+                let Some(p) = netlist.pins.get(pi.pin_def) else { continue };
+                if pi.instance != inst_id && matches!(p.direction, PinDirection::Out) {
+                    has_driver = true;
+                }
+                if pi.instance != inst_id {
+                    let is_res = netlist
+                        .instances
+                        .get(pi.instance)
+                        .map(|other| {
+                            let by_class = other
+                                .attributes
+                                .get("component_class")
+                                .map(|c| c.contains("resistor"))
+                                .unwrap_or(false);
+                            let by_module = netlist
+                                .modules
+                                .get(other.definition)
+                                .map(|m| m.name == "Res" || m.name == "Resistor")
+                                .unwrap_or(false);
+                            by_class || by_module
+                        })
+                        .unwrap_or(false);
+                    if is_res {
+                        let other_on_rail = netlist.pin_instances.values().any(|pj| {
+                            pj.instance == pi.instance
+                                && pj.net != Some(net_id)
+                                && pj
+                                    .net
+                                    .and_then(|n| netlist.nets.get(n))
+                                    .map(|n| {
+                                        matches!(
+                                            n.net_class,
+                                            NetClass::Power { .. } | NetClass::Ground
+                                        )
+                                    })
+                                    .unwrap_or(false)
+                        });
+                        if other_on_rail {
+                            ext_pull = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        let over = context.pull_overrides.get(&(inst_name.clone(), pin.clone()));
+        let (state, why) = match over {
+            Some(v) => (v.as_str().to_string(), "designer override".to_string()),
+            None if drives_out => ("off".into(), "pin serves a peripheral OUTPUT".into()),
+            None if has_driver => ("off".into(), "net is driven".into()),
+            None if ext_pull => ("off".into(), "external pull present — internal off for consistency".into()),
+            None if net.is_some() && member_count > 1 => {
+                ("up".into(), "input-only net with no pull — idle-high policy (stated)".into())
+            }
+            None => ("off".into(), "unwired".into()),
+        };
+        if let Some(instance) = netlist.instances.get_mut(inst_id) {
+            instance
+                .attributes
+                .insert(format!("{PULL_CFG_ATTR_PREFIX}{pin}"), state.clone());
+        }
+        if state == "off" {
+            continue;
+        }
+        // MATERIALISE the configured pull as a real resistor so the DC
+        // solve sees the actual network. Pull-up needs the pin's bank
+        // rail net (io_bank__); pull-down goes to a Ground net.
+        let Some(net_id) = net else { continue };
+        let (target_net, r_ohm): (Option<NetId>, Option<f64>) = if state == "up" {
+            let rail_net = netlist
+                .instances
+                .get(inst_id)
+                .and_then(|i| netlist.modules.get(i.definition))
+                .and_then(|m| m.attributes.get(&format!("{IO_BANK_ATTR_PREFIX}{pin}")))
+                .and_then(|e| e.split_once('|').map(|(_, r)| r.to_string()))
+                .and_then(|rail_pin| {
+                    netlist.pin_instances.values().find_map(|pi| {
+                        (pi.instance == inst_id
+                            && netlist
+                                .pins
+                                .get(pi.pin_def)
+                                .map(|p| p.name == rail_pin)
+                                .unwrap_or(false))
+                        .then_some(pi.net)
+                        .flatten()
+                    })
+                });
+            (rail_net, pu_ohm)
+        } else {
+            let gnd = netlist
+                .nets
+                .iter()
+                .find(|(_, n)| matches!(n.net_class, NetClass::Ground))
+                .map(|(id, _)| id);
+            (gnd, pd_ohm)
+        };
+        let (Some(target), Some(r)) = (target_net, r_ohm) else {
+            info!(
+                "internal pull {inst_name}.{pin}: configured '{state}' but {} — NOT materialised (stated; the DC solve will not see it)",
+                if r_ohm.is_none() { "the capability declares no resistance" } else { "no bank rail / ground net to pull to" }
+            );
+            continue;
+        };
+        let mod_id = netlist
+            .modules
+            .iter()
+            .find(|(_, m)| m.name == "Res")
+            .map(|(id, _)| id)
+            .unwrap_or_else(|| {
+                let id = netlist.add_module("Res".into(), bhdl_netlist::ModuleKind::PhysicalComponent);
+                netlist.add_pin(id, "1".into(), PinDirection::Passive, PinType::Passive);
+                netlist.add_pin(id, "2".into(), PinDirection::Passive, PinType::Passive);
+                id
+            });
+        for pn in ["1", "2"] {
+            let has = netlist.pins.values().any(|p| p.module == mod_id && p.name == pn);
+            if !has {
+                netlist.add_pin(mod_id, pn.into(), PinDirection::Passive, PinType::Passive);
+            }
+        }
+        let rname = format!("pullcfg_{}_{}", inst_name, pin.to_lowercase());
+        let Some(r_id) = netlist.add_instance(rname.clone(), mod_id) else { continue };
+        if let Some(ri) = netlist.instances.get_mut(r_id) {
+            ri.attributes.insert("component_class".into(), "resistor".into());
+            ri.attributes.insert("spice_model".into(), "resistor".into());
+            ri.attributes.insert("value".into(), format!("{r}"));
+            ri.attributes.insert("resistance".into(), format!("{r}"));
+            // NOT a BOM part: this resistor lives INSIDE the chip —
+            // it models the configured internal pull for simulation
+            ri.attributes.insert("internal_pull_model".into(), format!("{inst_name}.{pin} {state}"));
+            ri.attributes.insert("virtual_component".into(), "true".into());
+        }
+        let pis = netlist
+            .create_pin_instances(r_id)
+            .map_err(|e| anyhow::anyhow!("internal pull pins: {e}"))?;
+        crate::virtual_pin_expander::connect_pin_instance_by_name(netlist, r_id, &pis, "1", net_id)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        crate::virtual_pin_expander::connect_pin_instance_by_name(netlist, r_id, &pis, "2", target)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        info!(
+            "internal pull {inst_name}.{pin}: configured '{state}' ({why}) — {r:.0}Ω modelled into the solve"
+        );
+        println!("  pull: {inst_name}.{pin} → {state} ({why})");
+    }
+    Ok(())
 }
 
 /// v0.6: walk the board(s) for connection statements, harvest
@@ -1420,7 +1702,9 @@ fn create_component_instance(
         );
         // Pinmux: the pre-existing instance (created by the earlier
         // database-component pass) got its alternate tables topped up
-        // just above — solve its mux assignment now, once.
+        // just above — solve its mux assignment now, once. Overrides
+        // (including the elaborated form's provenance) stamp verbatim
+        // even when no field reference survives in the text.
         let inst_lookup = netlist
             .instances
             .iter()
@@ -1433,13 +1717,18 @@ fn create_component_instance(
                 .map(|i| i.attributes.keys().any(|k| k.starts_with(PINMUX_CHOICE_ATTR_PREFIX)))
                 .unwrap_or(false);
             if !already {
-                let choices = {
+                let mut choices = {
                     let module = netlist
                         .modules
                         .get(module_id)
                         .ok_or_else(|| anyhow::anyhow!("module vanished"))?;
                     solve_pinmux_for_instance(&inst_nm, module, context)?
                 };
+                for ((oi, of), oa) in &context.pinmux_overrides {
+                    if oi == &inst_nm && !choices.iter().any(|(f, _)| f == of) {
+                        choices.push((of.clone(), oa.clone()));
+                    }
+                }
                 if let Some(instance) = netlist.instances.get_mut(inst_id) {
                     for (f, a) in &choices {
                         instance
@@ -2287,6 +2576,64 @@ fn topup_interface_field_pins(
 /// refusal) and the mux-table artifact can read them.
 pub(crate) const IO_BANK_ATTR_PREFIX: &str = "io_bank__";
 
+/// Internal pull capability (SoC arc increment 4b): the entity
+/// declares, from the datasheet,
+/// `attribute internal_pull = "pins=PA4,PA5 pu=40kΩ pd=40kΩ source=…";`
+/// (any attribute whose name starts with `internal_pull`). Stamped as
+/// `pull__<pin>` = "<pu_ohms>|<pd_ohms>" module attrs; the
+/// auto-configuration pass and the firmware artifact read them.
+pub(crate) const PULL_CAP_ATTR_PREFIX: &str = "pull__";
+/// The CONFIGURED state per pin — `pull_cfg__<pin>` = up|down|off
+/// (instance attr; designer override via the same scoped attribute).
+pub(crate) const PULL_CFG_ATTR_PREFIX: &str = "pull_cfg__";
+
+fn add_internal_pull_attrs(entity: &bhdl_ast::Entity, module_id: ModuleId, netlist: &mut Netlist) {
+    use rowan::ast::AstNode;
+    let text = entity.syntax().text().to_string();
+    // find every `attribute internal_pull... = "...";`
+    let mut decls: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("attribute internal_pull") {
+            if let Some(v) = rest.split_once('=').map(|(_, v)| v) {
+                decls.push(v.trim().trim_end_matches(';').trim().trim_matches('"').to_string());
+            }
+        }
+    }
+    if decls.is_empty() {
+        return;
+    }
+    let num = |kv: &str, key: &str| -> Option<f64> {
+        let pat = format!("{key}=");
+        let i = kv.find(&pat)?;
+        let rest = &kv[i + pat.len()..];
+        let tok = rest.split_whitespace().next()?;
+        crate::stage_acceptance::parse_si(tok)
+    };
+    for d in decls {
+        let pins: Vec<String> = {
+            let Some(i) = d.find("pins=") else { continue };
+            let rest = &d[i + 5..];
+            let tok = rest.split_whitespace().next().unwrap_or("");
+            tok.split(',').filter(|t| !t.is_empty()).map(String::from).collect()
+        };
+        let pu = num(&d, "pu");
+        let pd = num(&d, "pd");
+        if let Some(module) = netlist.modules.get_mut(module_id) {
+            for p in pins {
+                module.attributes.insert(
+                    format!("{PULL_CAP_ATTR_PREFIX}{p}"),
+                    format!(
+                        "{}|{}",
+                        pu.map(|v| v.to_string()).unwrap_or_default(),
+                        pd.map(|v| v.to_string()).unwrap_or_default()
+                    ),
+                );
+            }
+        }
+    }
+}
+
 fn add_io_bank_attrs(entity: &bhdl_ast::Entity, module_id: ModuleId, netlist: &mut Netlist) {
     use bhdl_parser::SyntaxKind;
     use rowan::ast::AstNode;
@@ -2337,6 +2684,7 @@ fn add_interface_field_pins(
     import_preprocessor: Option<&crate::import_preprocessor::ImportPreprocessor>,
 ) {
     add_io_bank_attrs(entity, module_id, netlist);
+    add_internal_pull_attrs(entity, module_id, netlist);
     use bhdl_netlist::{PinDirection, PinType, PortDirection};
     use bhdl_parser::SyntaxKind;
     use rowan::ast::AstNode;
