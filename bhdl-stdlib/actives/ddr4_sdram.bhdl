@@ -24,7 +24,7 @@
 //     );
 //
 // The data path and command/address bus are exposed as DDR4
-// interface fields (historic interfaces/ddr4.bhdl, retired). Pins are materialised
+// interface fields (bhdl-stdlib/interfaces/ddr4.bhdl). Pins are materialised
 // from the interface (dat.DQ0 … dat.DQS.N, ca.CK_t …); ball-map
 // bindings to physical FBGA designators are a follow-up once the
 // v0.4 binding grammar supports hierarchical (`DQS.P = ball`) names.
@@ -33,6 +33,12 @@
 // (the activation pump rail new in DDR4), VREFCA externally
 // supplied. ODT and on-die VREFDQ are mode-register configured and
 // need no board components.
+
+// The DDR4 interface stack (re-landed after the stdlib
+// consolidation dropped it — the fields below were resolving no
+// interface definition, silently). Imports are transitive, so the
+// nested DiffPair rides along.
+import { DiffPair, DDR4Data, DDR4Ca } from "bhdl-stdlib/interfaces/ddr4.bhdl";
 
 entity DDR4_SDRAM_x8(
     part_no: string      = "MT40A1G8",

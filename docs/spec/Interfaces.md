@@ -529,20 +529,22 @@ A complete DDR4 byte-laned memory interface, exercising all three
 v0.8 features at once. (Trimmed to 4-bit byte lanes for brevity;
 real DDR4 uses 8.)
 
-> **Fixture-backed; the stdlib interface file was retired.** The
-> historic `bhdl-stdlib/interfaces/ddr4.bhdl` (which defined
-> `DiffPair`, `DDR4Data`, `DDR4Ca`, and the parametric
-> `DDR4<byte_lanes>` bundle) was **deleted in the stdlib
-> consolidation** (commit `bfaa4eda`); re-landing a stdlib copy of
-> the DDR4 interfaces is a recorded follow-up. The worked example's
-> interface stack lives locally in
+> **Shipped in stdlib (re-landed).** `bhdl-stdlib/interfaces/
+> ddr4.bhdl` defines `DiffPair`, `DDR4Data`, `DDR4Ca`, and the
+> parametric `DDR4<byte_lanes>` bundle. It was collateral of the
+> stdlib consolidation (commit `bfaa4eda` — the file only "failed
+> to parse" because the IMPORT paths skipped the parametric
+> pre-parse rewrite; both loaders now run it) and is restored
+> verbatim from history. `bhdl-stdlib/actives/ddr4_sdram.bhdl` —
+> the Micron MT40A x8 SDRAM entity (parametric over density,
+> `expansion { }` block with the 240 Ω ZQ calibration resistor +
+> VPP/VDD/VDDQ decoupling + VREFCA bypass) — imports it, and its
+> `dat`/`ca` interface fields materialize the full leaf set again
+> (proven by `test_ddr4_stdlib` and `bhdl-cli/tests/ddr4_stdlib.rs`).
+> The ERC034 worked example additionally keeps a local
+> swizzle-vocabulary variant in
 > `tests/circuits/realistic/test_ddr_swizzle.bhdl` (as
-> `SwzDiffPair`/`SwzByteLane`/`SwzDdr<byte_lanes>`), which builds
-> today. `bhdl-stdlib/actives/ddr4_sdram.bhdl` — the Micron MT40A
-> x8 SDRAM entity (parametric over density, `expansion { }` block
-> with the 240 Ω ZQ calibration resistor + VPP/VDD/VDDQ decoupling +
-> VREFCA bypass) — survived the consolidation and still names the
-> historic `DDR4Data`/`DDR4Ca` interface fields. One composition
+> `SwzDiffPair`/`SwzByteLane`/`SwzDdr<byte_lanes>`). One composition
 > wrinkle surfaced and was fixed during the original stdlib landing:
 > the conditional-gating "always-on support pin" set had to
 > learn `ZQ`/`VPP`/`VREF` — see

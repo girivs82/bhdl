@@ -138,6 +138,17 @@ impl ImportLoader {
             let content = fs::read_to_string(&full_path)
                 .with_context(|| format!("Failed to read import file: {}", full_path.display()))?;
 
+            // The SAME pipeline as the input file: parametric
+            // interfaces (`interface DDR4<byte_lanes: int = 8>`) are
+            // a pre-parse text rewrite — without it any imported
+            // file using them "failed to parse" (which is how the
+            // stdlib DDR4 interface stack got dropped in the
+            // consolidation). Identity for files using none of it.
+            let content = bhdl_common::parametric_resolver::preprocess(&content)
+                .with_context(|| {
+                    format!("parametric preprocess failed for import {}", full_path.display())
+                })?;
+
             let parse_result = parse(&content);
             if !parse_result.errors().is_empty() {
                 for error in parse_result.errors() {

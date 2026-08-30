@@ -26,6 +26,7 @@ pub mod sku;
 pub mod variant;
 pub mod import_search;
 pub mod library;
+pub mod parametric_resolver;
 pub mod source;
 pub mod constraint_provenance;
 

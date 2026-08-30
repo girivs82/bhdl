@@ -65,7 +65,10 @@ pub mod signoff;
 // Import loader for handling BHDL imports
 pub mod abstract_resolver;
 
-pub mod parametric_resolver;
+// Moved to bhdl-common so the ANALYZER's import loader can
+// preprocess parametric interfaces too (a pure text transform with
+// zero synthesizer deps); re-exported so callers keep their path.
+pub use bhdl_common::parametric_resolver;
 
 pub mod import_loader;
 pub mod freeze;
@@ -3339,8 +3342,15 @@ pub async fn synthesize_from_source(source: &str) -> Result<(String, Netlist)> {
     }
     let sf = SourceFile::cast(pr.syntax())
         .ok_or_else(|| anyhow::anyhow!("Could not cast to SourceFile"))?;
-    let analysis = bhdl_analyzer::analyze(&sf);
+    // Same shape as the CLI: analyze WITH the import preprocessor so
+    // imported entity definitions are known to the generator. Without
+    // it, an imported passive's entity DEFINITION leaked into the
+    // netlist as a bare instance (the test_ddr4_stdlib bin caught a
+    // stray instance literally named "Res").
+    let (analysis, preprocessor) =
+        crate::import_preprocessor::preprocess_and_analyze(&sf, ".")?;
     let mut gen = NetlistGenerator::new();
+    gen.set_import_preprocessor(preprocessor);
     let mut netlist = gen.generate_from_ast_and_analysis(&sf, &analysis).await?;
 
     // Stamp the v0.9b resolution choice on each abstract-resolved

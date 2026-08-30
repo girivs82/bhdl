@@ -210,9 +210,18 @@ board DDR4TestBoard {
             fail(&format!("imported full-pipeline missing expansion child `{}`. Instances: {:?}", c, sorted));
         }
     }
-    // No stray leaked passive-entity definitions as instances.
-    if inst_names.iter().any(|n| n == "Cap" || n == "Res") {
-        fail("imported full-pipeline leaked a bare Cap/Res entity as an instance");
+    // Definition-template stubs (`Res: Res`) are a DELIBERATE
+    // analyzer artifact — but each must be template-marked and
+    // unconnected (is_template_stub) so every consumer (elaborate,
+    // freeze, powertree, safety) can filter it. A bare Cap/Res that
+    // is NOT a marked stub is a leak.
+    let unmarked_leak = full_nl.instances.iter().find(|(id, i)| {
+        (i.name == "Cap" || i.name == "Res")
+            && !bhdl_synthesizer::is_template_stub(&full_nl, *id)
+    });
+    if let Some((_, i)) = unmarked_leak {
+        let mut sorted = inst_names.clone(); sorted.sort();
+        fail(&format!("imported full-pipeline leaked `{}` as a real (non-template-stub) instance. Instances: {:?}", i.name, sorted));
     }
     println!("✓ imported SDRAM through full synthesize_from_source: all 6 datasheet support components materialise (ZQ + VPP + VREFCA + 3× decoupling), no leaked passives");
 

@@ -1418,6 +1418,11 @@ fn load_and_parse_module(path: &Path) -> Result<SourceFile, String> {
         .map_err(|e| format!("Failed to read file {:?}: {}", path, e))?;
     
     // Parse it
+    // Same pre-parse rewrite the input file gets: parametric
+    // interfaces are a text transform; identity when unused.
+    let content = bhdl_common::parametric_resolver::preprocess(&content)
+        .map_err(|e| format!("parametric preprocess failed for {:?}: {}", path, e))?;
+
     let parsed = bhdl_parser::parse(&content);
     
     if !parsed.errors().is_empty() {

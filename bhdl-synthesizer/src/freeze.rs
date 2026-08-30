@@ -109,6 +109,12 @@ pub fn freeze_netlist(netlist: &Netlist, provenance: Provenance) -> FrozenNetlis
     // ── Components ────────────────────────────────────────────────
     let mut components: Vec<FrozenComponent> = Vec::new();
     for (_id, inst) in netlist.instances.iter() {
+        // Definition-template stubs (`Res: Res`, template=true and
+        // unconnected — see is_template_stub) are analyzer scaffolding,
+        // not parts: the as-fabbed record must not carry phantoms.
+        if crate::is_template_stub(netlist, _id) {
+            continue;
+        }
         let component_type = netlist
             .modules
             .get(inst.definition)
