@@ -496,10 +496,8 @@ fn parse_literal(text: &str) -> Result<f64, String> {
 ///
 /// The engine is **Rune** (MIT OR Apache-2.0 — it replaced Rhai to
 /// clear the last MPL-2.0 crate, smartstring, from the dependency
-/// graph). `language = "rune"` is dispatched; `"rhai"` gets a
-/// targeted migration error (the port is mechanical: `**` →
-/// `.powf()`, `.to_float()` → `as f64`); anything else a clear
-/// unknown-language error.
+/// graph). `language = "rune"` is dispatched; anything else gets a
+/// clear unknown-language error.
 ///
 /// Execution model: the body is wrapped as a function whose
 /// parameters are the variables the old Rhai scope pushed —
@@ -538,13 +536,6 @@ fn evaluate_body_hook(
             "internal: evaluate_body_hook called without a body".to_string())
     })?;
 
-    if body.language == "rhai" {
-        return Err(DesignEvalError::ScriptFailed(format!(
-            "body language 'rhai' was replaced by 'rune' (same Rust-like syntax; \
-             port: `**` → `.powf()`, `.to_float()` → `as f64`) — update the \
-             `body rhai r#\"…\"#` block in '{}' to `body rune r#\"…\"#`",
-            recipe.entity_name)));
-    }
     if body.language != "rune" {
         return Err(DesignEvalError::ScriptFailed(format!(
             "unknown body language '{}' — only 'rune' is supported in this build",
